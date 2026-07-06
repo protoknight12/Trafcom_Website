@@ -10,7 +10,7 @@ from ezdxf import bbox, path
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'REDACTED_ROTATED_SECRET_KEY'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://postgres:REDACTED_ROTATED_PASSWORD@localhost:5432/cnc_calculator_db'
 app.config['UPLOAD_FOLDER'] = os.path.join(os.getcwd(), 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
@@ -23,12 +23,12 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # ----------------- МОДЕЛИ В БАЗАТА ДАННИ -----------------
 
-class User(UserMixin, db.Model):
+class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(150), unique=True, nullable=False)
-    password = db.Column(db.String(150), nullable=False)
-    is_admin = db.Column(db.Boolean, default=False)  # Флаг за администратор
-    files = db.relationship('DxfFile', backref='owner', cascade="all, delete-orphan", lazy=True)
+    username = db.Column(db.String(50), unique=True, nullable=False)
+    # Change 150 to 255 here:
+    password = db.Column(db.String(255), nullable=False)
+    is_admin = db.Column(db.Boolean, default=False)
 
 
 class DxfFile(db.Model):
