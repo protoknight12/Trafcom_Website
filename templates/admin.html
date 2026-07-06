@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <title>Административен Панел</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header class="navbar">
+        <h2>Административен контролен панел (ADMIN)</h2>
+        <a href="{{ url_for('logout') }}" class="logout-btn">Изход</a>
+    </header>
+
+    <main class="dashboard-grid">
+        <section class="panel">
+            <h3>Създай нов потребител</h3>
+            {% with messages = get_flashed_messages() %}
+                {% if messages %}<div class="flash-message">{{ messages[0] }}</div>{% endif %}
+            {% endwith %}
+            <form action="{{ url_for('admin_create_user') }}" method="POST">
+                <div class="form-group">
+                    <input type="text" name="username" placeholder="Потребителско име" required>
+                </div>
+                <div class="form-group">
+                    <input type="password" name="password" placeholder="Парола" required>
+                </div>
+                <button type="submit" class="btn">Добави акаунт</button>
+            </form>
+        </section>
+
+        <section class="panel">
+            <h3>Всички регистрирани потребители</h3>
+            <table class="library-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Потребителско име</th>
+                        <th>Действие</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for user in users %}
+                    <tr>
+                        <td>{{ user.id }}</td>
+                        <td>{{ user.username }}</td>
+                        <td>
+                            <form action="{{ url_for('admin_delete_user', user_id=user.id) }}" method="POST" onsubmit="return confirm('Изтриването на потребителя ще премахне и цялата му библиотека с чертежи! Потвърждавате ли?');">
+                                <button type="submit" class="btn-danger-small">Изтрий</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+    </main>
+</body>
+</html>

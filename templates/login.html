@@ -2,36 +2,22 @@
 <html lang="bg">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CNC Портал - Вход</title>
+    <title>CNC Системи - Вход</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
     <div class="auth-container">
-        <h2>CNC Автоматизирано Ценообразуване</h2>
-
+        <h2>Вход в CNC Портал</h2>
         {% with messages = get_flashed_messages() %}
-            {% if messages %}
-                <div class="flash-message">{{ messages[0] }}</div>
-            {% endif %}
+            {% if messages %}<div class="flash-message">{{ messages[0] }}</div>{% endif %}
         {% endwith %}
-
-        <div class="auth-box">
-            <h3>Вход в системата</h3>
-            <form action="{{ url_for('login') }}" method="POST">
-                <input type="text" name="username" placeholder="Потребителско име" required>
-                <input type="password" name="password" placeholder="Парола" required>
-                <button type="submit" class="btn">Влизане</button>
-            </form>
-        </div>
-
-        <div class="auth-box border-top">
-            <h3>Създаване на профил</h3>
-            <form action="{{ url_for('register') }}" method="POST">
-                <input type="text" name="username" placeholder="Изберете потребителско име" required>
-                <input type="password" name="password" placeholder="Изберете парола" required>
-                <button type="submit" class="btn btn-secondary">Регистрация</button>
-            </form>
+        <form action="{{ url_for('login') }}" method="POST">
+            <input type="text" name="username" placeholder="Потребителско име" required>
+            <input type="password" name="password" placeholder="Парола" required>
+            <button type="submit" class="btn">Влез</button>
+        </form>
+        <div class="redirect-link">
+            Нямате профил? <a href="{{ url_for('register') }}">Регистрирайте се тук</a>
         </div>
     </div>
 </body>

@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <title>CNC Системи - Регистрация</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="auth-container">
+        <h2>Регистрация на нов потребител</h2>
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}<div class="flash-message">{{ messages[0] }}</div>{% endif %}
+        {% endwith %}
+        <form action="{{ url_for('register') }}" method="POST">
+            <input type="text" name="username" placeholder="Изберете потребителско име" required>
+            <input type="password" name="password" placeholder="Изберете сигурна парола" required>
+            <button type="submit" class="btn btn-secondary">Създай акаунт</button>
+        </form>
+        <div class="redirect-link">
+            Вече имате профил? <a href="{{ url_for('login') }}">Влезте оттук</a>
+        </div>
+    </div>
+</body>
+</html>
