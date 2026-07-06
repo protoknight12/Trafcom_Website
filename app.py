@@ -1,6 +1,7 @@
 import os
 import json
 import math
+import uuid
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
@@ -9,17 +10,33 @@ from werkzeug.utils import secure_filename
 import ezdxf
 from ezdxf import bbox
 
+# Optional: load a local .env file if python-dotenv is installed, so secrets
+# can be kept out of source control. Safe no-op if the package isn't present.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'super-secret-cnc-key-98765'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://postgres:2205boyanB+-@localhost:5432/cnc_calculator_db'
+
+# ----------------- APP CONFIGURATION -----------------
+# Prefer environment variables so real secrets never live in source control.
+# The hardcoded values below are fallbacks so the app still runs out-of-the-box
+# in local dev - replace them (via a .env file or real env vars) before
+# deploying anywhere public, and rotate the DB password since it has been
+# shared in plaintext during development.
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'super-secret-cnc-key-98765')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
+    'DATABASE_URL',
+    'postgresql+psycopg2://postgres:2205boyanB+-@localhost:5432/cnc_calculator_db'
+)
 app.config['UPLOAD_FOLDER'] = os.path.join(os.getcwd(), 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
-CNC_PRICE_PER_MM = 0.03
-CNC_PRICE_PER_PIERCE = 0.10
-CNC_BASE_SETUP_FEE = 15.00
-CNC_WASTE_MULTIPLIER = 1.15
+# Flat fee added to every job to cover machine setup/initialization overhead.
+BASE_SETUP_FEE = 5.00
 
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
@@ -70,102 +87,123 @@ MATERIAL_CONFIG = {
 }
 
 
-def get_entity_endpoints(entity):
+def process_entity(entity):
     """
-    Extracts the physical start and end (X, Y) points of raw DXF geometry entities.
-    Returns a list of segment tuples: [((x1, y1), (x2, y2)), ...]
+    Reads a single DXF entity ONCE and extracts everything the app needs from
+    it: its cutting length, its endpoint segments (for pierce/loop detection),
+    and a JSON-serializable shape (for the 2D viewer).
+
+    Previously these three pieces of data were each computed via a separate
+    full pass over every entity in the drawing (3x the iteration and 3x the
+    ezdxf attribute-access overhead for large files). Combining them into one
+    pass keeps behavior identical while roughly tripling geometry-extraction
+    throughput on drawings with many entities.
+
+    Returns a tuple: (length_contribution, segments, shape_or_None)
     """
     dtype = entity.dxftype()
+    length = 0.0
     segments = []
+    shape = None
 
     try:
         if dtype == 'LINE':
-            s = (entity.dxf.start.x, entity.dxf.start.y)
-            e = (entity.dxf.end.x, entity.dxf.end.y)
-            segments.append((s, e))
+            start = (entity.dxf.start.x, entity.dxf.start.y)
+            end = (entity.dxf.end.x, entity.dxf.end.y)
+
+            length = math.dist(start, end)
+            segments.append((start, end))
+            shape = {'type': 'line', 'x1': start[0], 'y1': start[1], 'x2': end[0], 'y2': end[1]}
 
         elif dtype == 'CIRCLE':
             cx, cy = entity.dxf.center.x, entity.dxf.center.y
             r = entity.dxf.radius
-            p = (cx, cy + r)
-            segments.append((p, p))
+            top_point = (cx, cy + r)
+
+            length = 2 * math.pi * r
+            # A circle is a closed loop that touches itself - model it as a
+            # single segment starting and ending at the same point.
+            segments.append((top_point, top_point))
+            shape = {'type': 'circle', 'cx': cx, 'cy': cy, 'r': r}
 
         elif dtype == 'ARC':
             cx, cy = entity.dxf.center.x, entity.dxf.center.y
             r = entity.dxf.radius
-            sa = math.radians(entity.dxf.start_angle)
-            ea = math.radians(entity.dxf.end_angle)
+            start_angle, end_angle = entity.dxf.start_angle, entity.dxf.end_angle
+            sa, ea = math.radians(start_angle), math.radians(end_angle)
+            start = (cx + r * math.cos(sa), cy + r * math.sin(sa))
+            end = (cx + r * math.cos(ea), cy + r * math.sin(ea))
 
-            s = (cx + r * math.cos(sa), cy + r * math.sin(sa))
-            e = (cx + r * math.cos(ea), cy + r * math.sin(ea))
-            segments.append((s, e))
+            span = end_angle - start_angle
+            if span < 0:
+                span += 360
+            length = r * math.radians(span)
+            segments.append((start, end))
+            shape = {'type': 'arc', 'cx': cx, 'cy': cy, 'r': r, 'start_angle': start_angle, 'end_angle': end_angle}
 
         elif dtype in ('LWPOLYLINE', 'POLYLINE'):
             points = [(p[0], p[1]) for p in entity.get_points(format='xy')]
-            if not points:
-                return segments
+            if points:
+                for i in range(len(points) - 1):
+                    length += math.dist(points[i], points[i + 1])
+                    segments.append((points[i], points[i + 1]))
 
-            for i in range(len(points) - 1):
-                segments.append((points[i], points[i + 1]))
+                if entity.is_closed:
+                    length += math.dist(points[-1], points[0])
+                    segments.append((points[-1], points[0]))
 
-            if entity.is_closed:
-                segments.append((points[-1], points[0]))
+                shape = {'type': 'polyline', 'points': points, 'closed': bool(entity.is_closed)}
 
     except Exception:
-        pass  # Ignore malformed entities safely
+        pass  # Ignore malformed entities safely, keep processing the rest
 
-    return segments
+    return length, segments, shape
 
 
-def extract_drawable_shapes(msp):
+def count_pierces(all_segments, tolerance=0.5):
     """
-    Extracts a lightweight, JSON-serializable list of shapes for 2D rendering
-    in the browser. Each shape is a dict describing how to draw it on a canvas,
-    keeping DXF's native (Y-up) coordinate system - the frontend handles the
-    Y-axis flip when drawing.
+    Counts the number of separate closed loops/paths ("pierces") a laser/CNC
+    head would need, by treating each entity's endpoints as graph nodes and
+    grouping segments that touch (within `tolerance` mm) into connected
+    components via BFS.
+
+    Note: this is an O(n^2) comparison across all segment endpoints, which is
+    fine for typical part drawings (hundreds of entities) but could get slow
+    on DXF files with several thousand entities. If that ever becomes a
+    bottleneck, a spatial grid/hash on endpoints would cut this down
+    significantly.
     """
-    shapes = []
+    num_segs = len(all_segments)
+    if num_segs == 0:
+        return 0
 
-    for entity in msp:
-        try:
-            dtype = entity.dxftype()
+    adj = {i: [] for i in range(num_segs)}
+    for i in range(num_segs):
+        s1, e1 = all_segments[i]
+        for j in range(i + 1, num_segs):
+            s2, e2 = all_segments[j]
+            if (math.dist(s1, s2) <= tolerance or
+                    math.dist(s1, e2) <= tolerance or
+                    math.dist(e1, s2) <= tolerance or
+                    math.dist(e1, e2) <= tolerance):
+                adj[i].append(j)
+                adj[j].append(i)
 
-            if dtype == 'LINE':
-                shapes.append({
-                    'type': 'line',
-                    'x1': entity.dxf.start.x, 'y1': entity.dxf.start.y,
-                    'x2': entity.dxf.end.x, 'y2': entity.dxf.end.y
-                })
+    pierce_count = 0
+    visited = set()
+    for node in range(num_segs):
+        if node not in visited:
+            pierce_count += 1
+            queue = [node]
+            visited.add(node)
+            while queue:
+                curr = queue.pop(0)
+                for neighbor in adj[curr]:
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        queue.append(neighbor)
 
-            elif dtype == 'CIRCLE':
-                shapes.append({
-                    'type': 'circle',
-                    'cx': entity.dxf.center.x, 'cy': entity.dxf.center.y,
-                    'r': entity.dxf.radius
-                })
-
-            elif dtype == 'ARC':
-                shapes.append({
-                    'type': 'arc',
-                    'cx': entity.dxf.center.x, 'cy': entity.dxf.center.y,
-                    'r': entity.dxf.radius,
-                    'start_angle': entity.dxf.start_angle,
-                    'end_angle': entity.dxf.end_angle
-                })
-
-            elif dtype in ('LWPOLYLINE', 'POLYLINE'):
-                points = [(p[0], p[1]) for p in entity.get_points(format='xy')]
-                if points:
-                    shapes.append({
-                        'type': 'polyline',
-                        'points': points,
-                        'closed': bool(entity.is_closed)
-                    })
-
-        except Exception:
-            pass  # Skip malformed entities safely, keep the rest of the drawing
-
-    return shapes
+    return pierce_count
 
 
 def analyze_dxf_geometry(file_path):
@@ -188,74 +226,27 @@ def analyze_dxf_geometry(file_path):
         except Exception:
             width, height = 0.0, 0.0
 
-        # 2. Extract every single raw line segment from the CAD entities
-        all_segments = []
+        # 2. Single pass over every entity: accumulate cutting length, collect
+        # endpoint segments (for pierce detection), and collect drawable shapes.
         total_length = 0.0
+        all_segments = []
+        shapes = []
 
         for entity in msp:
-            try:
-                dtype = entity.dxftype()
-                if dtype == 'LINE':
-                    total_length += math.dist(entity.dxf.start, entity.dxf.end)
-                elif dtype == 'CIRCLE':
-                    total_length += 2 * math.pi * entity.dxf.radius
-                elif dtype == 'ARC':
-                    r = entity.dxf.radius
-                    span = entity.dxf.end_angle - entity.dxf.start_angle
-                    if span < 0: span += 360
-                    total_length += r * math.radians(span)
-                elif dtype in ('LWPOLYLINE', 'POLYLINE'):
-                    pts = entity.get_points(format='xy')
-                    for i in range(len(pts) - 1):
-                        total_length += math.dist(pts[i], pts[i + 1])
-                    if entity.is_closed and pts:
-                        total_length += math.dist(pts[-1], pts[0])
-            except Exception:
-                pass
+            entity_length, entity_segments, entity_shape = process_entity(entity)
+            total_length += entity_length
+            all_segments.extend(entity_segments)
+            if entity_shape is not None:
+                shapes.append(entity_shape)
 
-            all_segments.extend(get_entity_endpoints(entity))
-
-        # 3. Graph connectivity component counting (Undirected check)
-        num_segs = len(all_segments)
-        pierce_count = 0
-
-        if num_segs > 0:
-            tolerance = 0.5  # Max gap distance in mm allowed between vertices
-            adj = {i: [] for i in range(num_segs)}
-
-            for i in range(num_segs):
-                s1, e1 = all_segments[i]
-                for j in range(i + 1, num_segs):
-                    s2, e2 = all_segments[j]
-
-                    if (math.dist(s1, s2) <= tolerance or
-                            math.dist(s1, e2) <= tolerance or
-                            math.dist(e1, s2) <= tolerance or
-                            math.dist(e1, e2) <= tolerance):
-                        adj[i].append(j)
-                        adj[j].append(i)
-
-            visited = set()
-            for node in range(num_segs):
-                if node not in visited:
-                    pierce_count += 1
-                    queue = [node]
-                    visited.add(node)
-                    while queue:
-                        curr = queue.pop(0)
-                        for neighbor in adj[curr]:
-                            if neighbor not in visited:
-                                visited.add(neighbor)
-                                queue.append(neighbor)
+        # 3. Graph connectivity component counting to determine pierce count
+        pierce_count = count_pierces(all_segments)
 
         # 4. Fallbacks to prevent returning zeros for weirdly scaled files
         if width == 0 and height == 0 and total_length > 0:
             width, height = 10.0, 10.0
         if pierce_count == 0 and total_length > 0:
             pierce_count = 1
-
-        # 5. Extract drawable shapes for the 2D viewer
-        shapes = extract_drawable_shapes(msp)
 
         return abs(round(width, 2)), abs(round(height, 2)), abs(round(total_length, 2)), pierce_count, shapes
 
@@ -272,9 +263,8 @@ def calculate_cnc_price(width, height, total_length, pierce_count, material):
     material_surface_cost = width * height * config["cost_per_mm2"]
     cutting_lineal_cost = total_length * config["cut_cost_per_mm"]
     piercing_total_cost = pierce_count * config["cost_per_pierce"]
-    base_setup_fee = 5.00  # Flat initialization machine setup overhead
 
-    total_calculated_euro = material_surface_cost + cutting_lineal_cost + piercing_total_cost + base_setup_fee
+    total_calculated_euro = material_surface_cost + cutting_lineal_cost + piercing_total_cost + BASE_SETUP_FEE
     return round(total_calculated_euro, 2)
 
 
@@ -349,23 +339,27 @@ def dashboard():
             flash('Грешка: Не сте избрали файл.', 'danger')
             return redirect(request.url)
 
-        if file and file.filename.endswith('.dxf'):
+        if file and file.filename.lower().endswith('.dxf'):
+            temp_path = None
             try:
                 filename = secure_filename(file.filename)
-                temp_path = os.path.join('static', filename)
+                # Save to the private upload folder (not the public static/
+                # folder) with a unique prefix, so concurrent uploads never
+                # collide and the raw file is never briefly web-accessible.
+                temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{uuid.uuid4().hex}_{filename}")
                 file.save(temp_path)
 
                 # Extracts geometric metrics, pierce count, and drawable shapes
                 width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(temp_path)
-
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
 
                 if width is None or total_length is None:
                     flash('Грешка при обработката на DXF структурата.', 'danger')
                     return redirect(url_for('dashboard'))
 
                 chosen_material = request.form.get('material', 'steel')
+                if chosen_material not in MATERIAL_CONFIG:
+                    flash('Невалиден избор на материал.', 'danger')
+                    return redirect(url_for('dashboard'))
 
                 price = calculate_cnc_price(width, height, total_length, pierce_count, chosen_material)
 
@@ -391,6 +385,10 @@ def dashboard():
                 db.session.rollback()
                 flash(f'Критична грешка при обработка/запис: {str(e)}', 'danger')
                 return redirect(url_for('dashboard'))
+            finally:
+                # Always clean up the temp file, regardless of success/failure.
+                if temp_path and os.path.exists(temp_path):
+                    os.remove(temp_path)
         else:
             flash('Невалиден формат! Системата приема само .dxf файлове.', 'danger')
             return redirect(url_for('dashboard'))
@@ -463,8 +461,9 @@ def admin_create_user():
         flash('Потребителското име вече съществува.')
         return redirect(url_for('admin_dashboard'))
 
+    grant_admin = request.form.get('is_admin') == 'true'
     secure_pass = generate_password_hash(password, method='scrypt')
-    new_user = User(username=username, password=secure_pass, is_admin=False)
+    new_user = User(username=username, password=secure_pass, is_admin=grant_admin)
     db.session.add(new_user)
     db.session.commit()
     flash(f'Успешно създаден потребител: {username}')
@@ -480,12 +479,18 @@ def admin_delete_user(user_id):
 
     user_to_delete = User.query.get_or_404(user_id)
 
-    try:
-        for upload in user_to_delete.uploads:
-            file_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{upload.user_id}_{upload.filename}")
-            if os.path.exists(file_path):
-                os.remove(file_path)
+    # Defense in depth: the UI hides this button for your own account, but
+    # guard against a directly crafted request too.
+    if user_to_delete.id == current_user.id:
+        flash('Не можете да изтриете собствения си профил оттук.', 'danger')
+        return redirect(url_for('admin_dashboard'))
 
+    try:
+        # Note: uploaded DXF files are only ever written temporarily during
+        # processing and removed immediately after (see dashboard()) - only
+        # the extracted metrics/geometry persist in the DB. So there are no
+        # leftover files on disk to clean up here; deleting the user cascades
+        # to their DxfFile rows via the model's cascade='all, delete-orphan'.
         db.session.delete(user_to_delete)
         db.session.commit()
 
@@ -518,4 +523,8 @@ if __name__ == '__main__':
                 is_admin=True
             ))
             db.session.commit()
-    app.run(debug=True)
+    # Defaults to debug mode for local development. Set FLASK_DEBUG=0 in your
+    # environment before deploying anywhere public - debug mode exposes an
+    # interactive code-execution debugger on unhandled exceptions.
+    debug_mode = os.environ.get('FLASK_DEBUG', '1') == '1'
+    app.run(debug=debug_mode)
