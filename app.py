@@ -7,7 +7,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import ezdxf
 from ezdxf import bbox, path
-
+import math
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'REDACTED_ROTATED_SECRET_KEY'
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://postgres:REDACTED_ROTATED_PASSWORD@localhost:5432/cnc_calculator_db'
@@ -65,12 +65,68 @@ MATERIAL_CONFIG = {
 }
 
 
+def get_entity_endpoints(entity):
+    """
+    Extracts the physical start and end (X, Y) points of raw DXF geometry entities.
+    Returns a list of segment tuples: [((x1, y1), (x2, y2)), ...]
+    """
+    dtype = entity.dxftype()
+    segments = []
+
+    try:
+        if dtype == 'LINE':
+            s = (entity.dxf.start.x, entity.dxf.start.y)
+            e = (entity.dxf.end.x, entity.dxf.end.y)
+            segments.append((s, e))
+
+        elif dtype == 'CIRCLE':
+            # A circle is a closed loop that touches itself.
+            # We can model it as a single segment starting and ending at the same top point.
+            cx, cy = entity.dxf.center.x, entity.dxf.center.y
+            r = entity.dxf.radius
+            p = (cx, cy + r)
+            segments.append((p, p))
+
+        elif dtype == 'ARC':
+            # Calculate actual start/end coordinates of the arc using trigonometry
+            cx, cy = entity.dxf.center.x, entity.dxf.center.y
+            r = entity.dxf.radius
+            sa = math.radians(entity.dxf.start_angle)
+            ea = math.radians(entity.dxf.end_angle)
+
+            s = (cx + r * math.cos(sa), cy + r * math.sin(sa))
+            e = (cx + r * math.cos(ea), cy + r * math.sin(ea))
+            segments.append((s, e))
+
+        elif dtype in ('LWPOLYLINE', 'POLYLINE'):
+            # Explode polyline points into individual consecutive line segments
+            points = [(p[0], p[1]) for p in entity.get_points(format='xy')]
+            if not points:
+                return segments
+
+            for i in range(len(points) - 1):
+                segments.append((points[i], points[i + 1]))
+
+            # If the polyline is explicitly flagged as closed, bridge back to the start
+            if entity.is_closed:
+                segments.append((points[-1], points[0]))
+
+    except Exception:
+        pass  # Ignore malformed entities safely
+
+    return segments
+
+
 def analyze_dxf_geometry(file_path):
+    """
+    Parses a DXF file to determine outer dimensions, total cutting length,
+    and a precise pierce count using direct entity extraction and graph matching.
+    """
     try:
         doc = ezdxf.readfile(file_path)
         msp = doc.modelspace()
 
-        # Calculate bounding box bounds
+        # 1. Calculate Bounding Box Dimensions
         try:
             extents = bbox.extents(msp, fast=True)
             if extents.has_data:
@@ -80,62 +136,81 @@ def analyze_dxf_geometry(file_path):
         except Exception:
             width, height = 0.0, 0.0
 
+        # 2. Extract every single raw line segment from the CAD entities
+        all_segments = []
         total_length = 0.0
+
+        for entity in msp:
+            # Accumulate lengths using raw definitions to keep length tracking alive
+            try:
+                dtype = entity.dxftype()
+                if dtype == 'LINE':
+                    total_length += math.dist(entity.dxf.start, entity.dxf.end)
+                elif dtype == 'CIRCLE':
+                    total_length += 2 * math.pi * entity.dxf.radius
+                elif dtype == 'ARC':
+                    r = entity.dxf.radius
+                    span = entity.dxf.end_angle - entity.dxf.start_angle
+                    if span < 0: span += 360
+                    total_length += r * math.radians(span)
+                elif dtype in ('LWPOLYLINE', 'POLYLINE'):
+                    pts = entity.get_points(format='xy')
+                    for i in range(len(pts) - 1):
+                        total_length += math.dist(pts[i], pts[i + 1])
+                    if entity.is_closed and pts:
+                        total_length += math.dist(pts[-1], pts[0])
+            except Exception:
+                pass
+
+            # Extract geometric points for pierce grouping
+            all_segments.extend(get_entity_endpoints(entity))
+
+        # 3. Graph connectivity component counting (Undirected check)
+        num_segs = len(all_segments)
         pierce_count = 0
 
-        # High-precision vector path grouping tracking
-        try:
-            all_paths = path.make_paths(msp)
-            total_length = sum(p.length() for p in all_paths)
-            pierce_count = len(all_paths)  # Each distinct continuous path sequence is 1 pierce
-        except Exception:
-            pass
+        if num_segs > 0:
+            tolerance = 0.5  # Max gap distance in mm allowed between vertices
+            adj = {i: [] for i in range(num_segs)}
 
-        # Fallback raw entity scanning loop
-        if total_length == 0.0:
-            for entity in msp:
-                try:
-                    dtype = entity.dxftype()
-                    if dtype == 'LINE':
-                        start, end = entity.dxf.start, entity.dxf.end
-                        total_length += ((end[0] - start[0]) ** 2 + (end[1] - start[1]) ** 2) ** 0.5
-                    elif dtype == 'CIRCLE':
-                        total_length += 2 * 3.1415926535 * entity.dxf.radius
-                        pierce_count += 1  # Standard closed internal or independent circles
-                    elif dtype == 'ARC':
-                        r = entity.dxf.radius
-                        span = entity.dxf.end_angle - entity.dxf.start_angle
-                        if span < 0: span += 360
-                        total_length += r * (span * 3.1415926535 / 180.0)
-                    elif dtype in ('LWPOLYLINE', 'POLYLINE'):
-                        total_length += path.make_path(entity).length()
-                        pierce_count += 1
-                except Exception:
-                    continue
+            # Map out which fragments touch at their boundaries
+            for i in range(num_segs):
+                s1, e1 = all_segments[i]
+                for j in range(i + 1, num_segs):
+                    s2, e2 = all_segments[j]
 
-        # Safe fallback defaults
-        if width == 0 and height == 0:
-            xs, ys = [], []
-            for e in msp:
-                try:
-                    if e.dxftype() == 'LINE':
-                        xs.extend([e.dxf.start[0], e.dxf.end[0]])
-                        ys.extend([e.dxf.start[1], e.dxf.end[1]])
-                except Exception:
-                    continue
-            if xs and ys:
-                width, height = max(xs) - min(xs), max(ys) - min(ys)
+                    # Check all 4 endpoint possibilities to capture undirected connections
+                    if (math.dist(s1, s2) <= tolerance or
+                            math.dist(s1, e2) <= tolerance or
+                            math.dist(e1, s2) <= tolerance or
+                            math.dist(e1, e2) <= tolerance):
+                        adj[i].append(j)
+                        adj[j].append(i)
 
+            # Standard Breadth-First Search (BFS) to identify connected loops
+            visited = set()
+            for node in range(num_segs):
+                if node not in visited:
+                    pierce_count += 1
+                    queue = [node]
+                    visited.add(node)
+                    while queue:
+                        curr = queue.pop(0)
+                        for neighbor in adj[curr]:
+                            if neighbor not in visited:
+                                visited.add(neighbor)
+                                queue.append(neighbor)
+
+        # 4. Fallbacks to prevent returning zeros for weirdly scaled files
         if width == 0 and height == 0 and total_length > 0:
             width, height = 10.0, 10.0
-
-        # A physical job with cutting length always has at least 1 entry puncture
         if pierce_count == 0 and total_length > 0:
             pierce_count = 1
 
         return abs(round(width, 2)), abs(round(height, 2)), abs(round(total_length, 2)), pierce_count
+
     except Exception as e:
-        print(f"DXF Parsing Error: {e}")
+        print(f"Critical DXF Parsing Error: {e}")
         return None, None, None, None
 
 
@@ -370,7 +445,8 @@ def admin_delete_user(user_id):
     try:
         # 1. (Your existing code that removes files from the disk goes here)
         for upload in user_to_delete.uploads:
-            if upload.file_path and os.path.exists(upload.file_path):
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'],f"{upload.user_id}{upload.filename}")
+            if os.path.exists(file_path):
                 os.remove(upload.file_path)
 
         # 2. Complete the database deletion
