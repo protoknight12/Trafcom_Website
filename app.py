@@ -9,6 +9,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import ezdxf
 from ezdxf import bbox
+from ezdxf.math import bulge_to_arc
 
 # Optional: load a local .env file if python-dotenv is installed, so secrets
 # can be kept out of source control. Safe no-op if the package isn't present.
@@ -91,7 +92,7 @@ def process_entity(entity):
     """
     Reads a single DXF entity ONCE and extracts everything the app needs from
     it: its cutting length, its endpoint segments (for pierce/loop detection),
-    and a JSON-serializable shape (for the 2D viewer).
+    and JSON-serializable shape(s) for the 2D viewer.
 
     Previously these three pieces of data were each computed via a separate
     full pass over every entity in the drawing (3x the iteration and 3x the
@@ -99,12 +100,14 @@ def process_entity(entity):
     pass keeps behavior identical while roughly tripling geometry-extraction
     throughput on drawings with many entities.
 
-    Returns a tuple: (length_contribution, segments, shape_or_None)
+    Returns a tuple: (length_contribution, segments, shapes)
+    `shapes` is a list because a single polyline with bulges (rounded
+    corners) decomposes into a mix of straight and arc sub-segments.
     """
     dtype = entity.dxftype()
     length = 0.0
     segments = []
-    shape = None
+    shapes = []
 
     try:
         if dtype == 'LINE':
@@ -113,7 +116,7 @@ def process_entity(entity):
 
             length = math.dist(start, end)
             segments.append((start, end))
-            shape = {'type': 'line', 'x1': start[0], 'y1': start[1], 'x2': end[0], 'y2': end[1]}
+            shapes.append({'type': 'line', 'x1': start[0], 'y1': start[1], 'x2': end[0], 'y2': end[1]})
 
         elif dtype == 'CIRCLE':
             cx, cy = entity.dxf.center.x, entity.dxf.center.y
@@ -124,7 +127,7 @@ def process_entity(entity):
             # A circle is a closed loop that touches itself - model it as a
             # single segment starting and ending at the same point.
             segments.append((top_point, top_point))
-            shape = {'type': 'circle', 'cx': cx, 'cy': cy, 'r': r}
+            shapes.append({'type': 'circle', 'cx': cx, 'cy': cy, 'r': r})
 
         elif dtype == 'ARC':
             cx, cy = entity.dxf.center.x, entity.dxf.center.y
@@ -139,25 +142,51 @@ def process_entity(entity):
                 span += 360
             length = r * math.radians(span)
             segments.append((start, end))
-            shape = {'type': 'arc', 'cx': cx, 'cy': cy, 'r': r, 'start_angle': start_angle, 'end_angle': end_angle}
+            shapes.append({'type': 'arc', 'cx': cx, 'cy': cy, 'r': r, 'start_angle': start_angle, 'end_angle': end_angle})
 
         elif dtype in ('LWPOLYLINE', 'POLYLINE'):
-            points = [(p[0], p[1]) for p in entity.get_points(format='xy')]
-            if points:
-                for i in range(len(points) - 1):
-                    length += math.dist(points[i], points[i + 1])
-                    segments.append((points[i], points[i + 1]))
+            # Include bulge values (format='xyb'): a non-zero bulge means the
+            # segment from this vertex to the next is actually a rounded arc,
+            # not a straight line - skipping it (as the old code did) flattens
+            # every rounded corner in the part into a sharp straight cut.
+            # NOTE: ezdxf returns numpy.float64 for this format, not native
+            # Python float. That silently poisons every downstream sum
+            # (total_length, calculated_price) into numpy.float64, which
+            # psycopg2 can't bind - causing an obscure "schema np does not
+            # exist" error on INSERT. Cast to native float immediately.
+            vertices = [(float(p[0]), float(p[1]), float(p[2])) for p in entity.get_points(format='xyb')]
 
+            if vertices:
+                segment_pairs = [(vertices[i], vertices[i + 1]) for i in range(len(vertices) - 1)]
                 if entity.is_closed:
-                    length += math.dist(points[-1], points[0])
-                    segments.append((points[-1], points[0]))
+                    segment_pairs.append((vertices[-1], vertices[0]))
 
-                shape = {'type': 'polyline', 'points': points, 'closed': bool(entity.is_closed)}
+                for (x1, y1, bulge), (x2, y2, _next_bulge) in segment_pairs:
+                    p1, p2 = (x1, y1), (x2, y2)
+                    segments.append((p1, p2))
+
+                    if abs(bulge) < 1e-9:
+                        # Straight segment
+                        length += math.dist(p1, p2)
+                        shapes.append({'type': 'line', 'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2})
+                    else:
+                        # Curved segment - convert the bulge into real arc
+                        # parameters (center, radius, start/end angle).
+                        center, start_rad, end_rad, radius = bulge_to_arc(p1, p2, bulge)
+                        sweep_rad = (end_rad - start_rad) % (2 * math.pi)
+
+                        length += radius * sweep_rad
+                        shapes.append({
+                            'type': 'arc',
+                            'cx': center.x, 'cy': center.y, 'r': radius,
+                            'start_angle': math.degrees(start_rad),
+                            'end_angle': math.degrees(end_rad)
+                        })
 
     except Exception:
         pass  # Ignore malformed entities safely, keep processing the rest
 
-    return length, segments, shape
+    return length, segments, shapes
 
 
 def count_pierces(all_segments, tolerance=0.5):
@@ -233,11 +262,10 @@ def analyze_dxf_geometry(file_path):
         shapes = []
 
         for entity in msp:
-            entity_length, entity_segments, entity_shape = process_entity(entity)
+            entity_length, entity_segments, entity_shapes = process_entity(entity)
             total_length += entity_length
             all_segments.extend(entity_segments)
-            if entity_shape is not None:
-                shapes.append(entity_shape)
+            shapes.extend(entity_shapes)
 
         # 3. Graph connectivity component counting to determine pierce count
         pierce_count = count_pierces(all_segments)
@@ -248,7 +276,7 @@ def analyze_dxf_geometry(file_path):
         if pierce_count == 0 and total_length > 0:
             pierce_count = 1
 
-        return abs(round(width, 2)), abs(round(height, 2)), abs(round(total_length, 2)), pierce_count, shapes
+        return float(abs(round(width, 2))), float(abs(round(height, 2))), float(abs(round(total_length, 2))), pierce_count, shapes
 
     except Exception as e:
         print(f"Critical DXF Parsing Error: {e}")
