@@ -1,0 +1,372 @@
+/* ==========================================================================
+   GLOBAL VARIABLES & THEMING (Cyber-Dark & Glow Purple)
+   ========================================================================== */
+:root {
+    --bg-base: #0b0d13;           /* Dark slate black background */
+    --bg-surface: #141824;        /* Lighter dark surface for cards/containers */
+    --bg-input: #1a1f30;          /* Distinct dark fill for form inputs */
+
+    --accent-primary: #7c3aed;    /* Core vivid purple */
+    --accent-secondary: #a855f7;  /* Light violet for gradients */
+    --gradient-purple: linear-gradient(135deg, #6d28d9 0%, #a855f7 100%);
+    --gradient-purple-hover: linear-gradient(135deg, #5b21b6 0%, #9333ea 100%);
+
+    --text-main: #f8fafc;         /* Bright off-white for high legibility */
+    --text-muted: #94a3b8;        /* Slate gray for secondary text */
+
+    /* Status Colors (Optimized for Dark Backgrounds) */
+    --success-border: #10b981;
+    --success-text: #34d399;
+    --success-bg: rgba(16, 185, 129, 0.12);
+
+    --danger-border: #ef4444;
+    --danger-text: #f87171;
+    --danger-bg: rgba(239, 68, 68, 0.12);
+
+    --border-radius-sm: 8px;
+    --border-radius-md: 12px;
+    --border-radius-lg: 16px;
+
+    --border-color: #262f45;      /* Low-contrast border for clean gridlines */
+    --glow-shadow: 0 0 15px rgba(124, 58, 237, 0.25);
+}
+
+/* Base Body Reset */
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background-color: var(--bg-base);
+    color: var(--text-main);
+    margin: 0;
+    padding: 0;
+    line-height: 1.5;
+}
+
+/* Custom Scrollbar for Premium Feel */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+::-webkit-scrollbar-track {
+    background: var(--bg-base);
+}
+::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: var(--border-radius-sm);
+}
+::-webkit-scrollbar-thumb:hover {
+    background: var(--accent-primary);
+}
+
+/* ==========================================================================
+   NAVIGATION LAYER
+   ========================================================================== */
+.navbar {
+    background-color: var(--bg-surface);
+    border-bottom: 1px solid var(--border-color);
+    padding: 16px 0;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+.nav-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.navbar h2 {
+    margin: 0;
+    font-size: 1.3rem;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    background: var(--gradient-purple);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+.nav-links {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.nav-links a {
+    text-decoration: none;
+    font-size: 0.88rem;
+    font-weight: 600;
+    padding: 10px 18px;
+    border-radius: var(--border-radius-sm);
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ==========================================================================
+   LAYOUT CONTAINERS & CARDS
+   ========================================================================== */
+.admin-container, .dashboard-container {
+    max-width: 1200px;
+    margin: 40px auto;
+    padding: 0 24px;
+    box-sizing: border-box;
+}
+
+.admin-card, .dashboard-card {
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    padding: 28px;
+    margin-bottom: 32px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
+}
+.admin-card h3, .dashboard-card h3 {
+    margin-top: 0;
+    margin-bottom: 16px;
+    font-size: 1.25rem;
+    font-weight: 600;
+    letter-spacing: -0.3px;
+}
+.section-subtitle {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    margin-top: -10px;
+    margin-bottom: 24px;
+}
+
+/* ==========================================================================
+   FORMS & INPUT ARCHITECTURE
+   ========================================================================== */
+.admin-form, .login-form {
+    max-width: 100%;
+}
+.form-group {
+    margin-bottom: 20px;
+    display: flex;
+    flex-direction: column;
+}
+.form-group label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.form-group input[type="text"],
+.form-group input[type="password"],
+.form-group input[type="number"] {
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    padding: 12px 16px;
+    border-radius: var(--border-radius-sm);
+    font-size: 0.95rem;
+    outline: none;
+    transition: all 0.2s ease;
+}
+.form-group input:focus {
+    border-color: var(--accent-secondary);
+    box-shadow: var(--glow-shadow);
+}
+.checkbox-group {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    margin: 24px 0;
+}
+.checkbox-group input[type="checkbox"] {
+    accent-color: var(--accent-primary);
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+.checkbox-group label {
+    margin-bottom: 0;
+    cursor: pointer;
+    text-transform: none;
+    letter-spacing: normal;
+}
+
+/* ==========================================================================
+   BUTTON INTERACTION STATES
+   ========================================================================== */
+button, .btn {
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    border: none;
+}
+
+/* Master Purple Gradients */
+.btn-submit, .btn-primary {
+    background: var(--gradient-purple);
+    color: var(--text-main);
+    padding: 12px 24px;
+    border-radius: var(--border-radius-sm);
+    box-shadow: 0 4px 12px rgba(124, 58, 237, 0.2);
+}
+.btn-submit:hover, .btn-primary:hover {
+    background: var(--gradient-purple-hover);
+    transform: translateY(-1px);
+    box-shadow: var(--glow-shadow);
+}
+
+/* Secondary Button Framework */
+.btn-secondary {
+    background-color: rgba(255, 255, 255, 0.05);
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+}
+.btn-secondary:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-color: var(--text-muted);
+}
+
+/* Action Log Deletion Buttons (Red Alert Theme) */
+.btn-delete, .btn-logout {
+    background-color: rgba(239, 68, 68, 0.06);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: var(--danger-text);
+    padding: 8px 16px;
+    border-radius: var(--border-radius-sm);
+}
+.btn-delete:hover {
+    background-color: var(--danger-border);
+    color: #ffffff;
+    border-color: var(--danger-border);
+    box-shadow: 0 0 15px rgba(239, 68, 68, 0.3);
+}
+.btn-logout:hover {
+    background-color: rgba(239, 68, 68, 0.15);
+}
+
+/* ==========================================================================
+   TABLES & DATA LAYOUTS
+   ========================================================================== */
+.table-responsive {
+    overflow-x: auto;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background-color: rgba(0, 0, 0, 0.1);
+}
+.users-table, .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+    font-size: 0.92rem;
+}
+.users-table th, .data-table th {
+    background-color: rgba(255, 255, 255, 0.02);
+    padding: 16px;
+    font-weight: 600;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border-color);
+}
+.users-table td, .data-table td {
+    padding: 16px;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-main);
+}
+.users-table tr:last-child td, .data-table tr:last-child td {
+    border-bottom: none;
+}
+.users-table tr:hover td, .data-table tr:hover td {
+    background-color: rgba(255, 255, 255, 0.01);
+}
+.username-cell strong {
+    color: var(--text-main);
+}
+
+/* ==========================================================================
+   BADGES & UI STATUS ANCHORS
+   ========================================================================== */
+.badge {
+    padding: 4px 12px;
+    border-radius: 50px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    display: inline-block;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+}
+.badge-admin {
+    background-color: rgba(124, 58, 237, 0.15);
+    color: #c084fc;
+    border: 1px solid rgba(124, 58, 237, 0.3);
+}
+.badge-user {
+    background-color: rgba(255, 255, 255, 0.05);
+    color: var(--text-muted);
+    border: 1px solid var(--border-color);
+}
+
+/* Utility Positioning Hooks */
+.text-right { text-align: right; }
+.text-center { text-align: center; }
+.text-muted { color: var(--text-muted); }
+.text-small { font-size: 0.85rem; }
+.no-data { padding: 40px !important; color: var(--text-muted); font-style: italic; }
+
+/* ==========================================================================
+   DYNAMIC NOTIFICATION BANNERS (Flashed Alerts)
+   ========================================================================== */
+.flash-messages {
+    margin-bottom: 24px;
+    width: 100%;
+}
+.alert {
+    padding: 14px 20px;
+    border-radius: var(--border-radius-md);
+    margin-bottom: 14px;
+    font-size: 0.92rem;
+    font-weight: 600;
+    border: 1px solid transparent;
+    display: flex;
+    align-items: center;
+    box-sizing: border-box;
+    animation: slideDownFadeIn 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Green Status Rulesets */
+.alert-success {
+    background-color: var(--success-bg);
+    color: var(--success-text);
+    border-color: rgba(16, 185, 129, 0.3);
+    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.05);
+}
+
+/* Red Status Rulesets */
+.alert-danger {
+    background-color: var(--danger-bg);
+    color: var(--danger-text);
+    border-color: rgba(239, 68, 68, 0.3);
+    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.05);
+}
+
+/* Keyframe Render Mechanics */
+@keyframes slideDownFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* ==========================================================================
+   DXF EXTENSION SPECIFIC SECTIONS (Drag & Drop Zone Layouts)
+   ========================================================================== */
+.upload-dropzone {
+    border: 2px dashed var(--border-color);
+    padding: 40px 20px;
+    border-radius: var(--border-radius-lg);
+    text-align: center;
+    background-color: rgba(0, 0, 0, 0.1);
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+.upload-dropzone:hover {
+    border-color: var(--accent-secondary);
+    background-color: rgba(124, 58, 237, 0.02);
+    box-shadow: var(--glow-shadow);
+}

@@ -2,76 +2,109 @@
 <html lang="bg">
 <head>
     <meta charset="UTF-8">
-    <title>CNC Производствен Панел</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Табло - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
-    <header class="navbar">
-        <h2>Добре дошли, {{ current_user.username }}</h2>
-        <div>
-            <form action="{{ url_for('delete_account') }}" method="POST" style="display:inline;" onsubmit="return confirm('Наистина ли искате да изтриете акаунта си безвъзвратно?');">
-                <button type="submit" class="btn-danger-small">Изтрий моя профил</button>
-            </form>
-            <a href="{{ url_for('logout') }}" class="logout-btn" style="margin-left: 20px;">Изход</a>
-        </div>
-    </header>
 
-    <main class="dashboard-grid">
-        <section class="panel upload-panel">
-            <h3>Анализиране на нов .DXF модел</h3>
-            <form id="uploadForm" enctype="multipart/form-data">
-                <div class="form-group">
-                    <label for="dxf_file">Изберете DXF файл:</label>
-                    <input type="file" id="dxf_file" name="dxf_file" accept=".dxf" required>
+    <nav class="navbar">
+        <div class="nav-container">
+            <h2>Trafcom DXF Калкулатор</h2>
+            <div class="nav-links">
+                {% if current_user.is_admin %}
+                    <a href="{{ url_for('admin_dashboard') }}" class="btn-secondary" style="border: 1px solid var(--accent-primary);">Админ Панел</a>
+                {% endif %}
+                <span class="text-muted text-small">Здравей, <strong>{{ current_user.username }}</strong></span>
+                <a href="{{ url_for('logout') }}" class="btn-logout">Изход</a>
+            </div>
+        </div>
+    </nav>
+
+    <main class="dashboard-container">
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            <div class="flash-messages">
+              {% for category, message in messages %}
+                <div class="alert alert-{{ category }}">
+                  {{ message }}
                 </div>
-                <div class="form-group">
-                    <label for="material">Материал за изрязване:</label>
-                    <select id="material" name="material" required>
-                        {% for key, value in materials.items() %}
-                            <option value="{{ key }}">{{ value.name }}</option>
-                        {% endfor %}
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endwith %}
+
+        <section class="admin-card">
+            <h3>Изчисляване на нов DXF чертеж</h3>
+            <p class="section-subtitle">Изберете индустриален материал и качете .dxf файл за пълно ценообразуване.</p>
+
+            <form action="{{ url_for('dashboard') }}" method="POST" enctype="multipart/form-data" class="admin-form">
+
+                <div class="form-group" style="margin-bottom: 1.5rem;">
+                    <label for="material" style="display: block; margin-bottom: 0.5rem; font-weight: 500;">1. Изберете материал:</label>
+                    <select id="material" name="material" style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px; font-size: 1rem; cursor: pointer;">
+                        <option value="wood">Дървесен материал / МДФ (Wood)</option>
+                        <option value="steel">Въглеродна стомана (Steel)</option>
+                        <option value="stainless_steel">Неръждаема стомана (Stainless Steel)</option>
+                        <option value="aluminum">Алуминий (Aluminum)</option>
+                        <option value="copper">Мед (Copper)</option>
+                        <option value="brass">Месинг (Brass)</option>
+                        <option value="galvanized">Поцинкована ламарина (Galvanized)</option>
                     </select>
                 </div>
-                <button type="submit" class="btn action-btn">Изчисли цена</button>
-            </form>
 
-            <div id="resultModal" class="result-display hidden">
-                <h4>Резултат от калкулацията</h4>
-                <p><strong>Файл:</strong> <span id="res_file"></span></p>
-                <p><strong>Материал:</strong> <span id="res_mat"></span></p>
-                <p><strong>Размери:</strong> <span id="res_dim"></span> mm</p>
-                <p><strong>Дължина на рязане:</strong> <span id="res_len"></span> mm</p>
-                <div class="price-tag">Обща цена: <span id="res_price"></span> €</div>
+                <div class="form-group">
+                    <label for="dxf_file">2. Качете файл за изчисление:</label>
+                    <div class="upload-dropzone" onclick="document.getElementById('dxf_file').click()" style="cursor: pointer;">
+                        <p style="margin: 0; font-weight: 500;">Кликнете тук, за да изберете .dxf файл</p>
+                        <span class="text-muted text-small">Цената автоматично включва линеен сряз, габаритна площ и брой пробиви (pierces)</span>
+                        <input type="file" id="dxf_file" name="file" accept=".dxf" style="display: none;" onchange="this.form.submit()">
+                    </div>
+                </div>
+
+            </form>
+        </section>
+
+        <section class="admin-card">
+            <h3>Вашата библиотека с изчисления</h3>
+            <p class="section-subtitle">Списък на всички обработени от вас CAD чертежи, съобразени с размерите и материала.</p>
+
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Име на файл</th>
+                            <th>Материал</th>
+                            <th>Размери (Габарити)</th>
+                            <th>Дължина на рязане</th>
+                            <th>Изчислена цена</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for upload in uploads %}
+                        <tr>
+                            <td class="text-muted text-small">#{{ upload.id }}</td>
+                            <td><strong>{{ upload.filename }}</strong></td>
+                            <td><span class="badge badge-user">{{ upload.material }}</span></td>
+                            <td>{{ "%.2f"|format(upload.width) }} x {{ "%.2f"|format(upload.height) }} мм</td>
+                            <td>{{ "%.2f"|format(upload.total_length) }} мм</td>
+                            <td><span style="color: var(--success-text); font-weight: 600;">{{ "%.2f"|format(upload.calculated_price) }} €</span></td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="6" class="text-center no-data">
+                                Вашата библиотека е празна. Качете първия си чертеж по-горе.
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
         </section>
 
-        <section class="panel library-panel">
-            <h3>Вашата библиотека със запазени компоненти</h3>
-            <table class="library-table">
-                <thead>
-                    <tr>
-                        <th>Файл на дизайна</th>
-                        <th>Материал</th>
-                        <th>Размери (mm)</th>
-                        <th>Линеен срез (mm)</th>
-                        <th>Цена</th>
-                    </tr>
-                </thead>
-                <tbody id="libraryBody">
-                    {% for file in files %}
-                    <tr>
-                        <td>{{ file.filename }}</td>
-                        <td>{{ materials[file.material]['name'] }}</td>
-                        <td>{{ file.width }} x {{ file.height }}</td>
-                        <td>{{ file.total_length }}</td>
-                        <td class="table-price">{{ file.calculated_price }} €</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </section>
     </main>
 
-    <script src="{{ url_for('static', filename='main.js') }}"></script>
 </body>
 </html>

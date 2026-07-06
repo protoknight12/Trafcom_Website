@@ -14,6 +14,11 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://postgres:REDACTED
 app.config['UPLOAD_FOLDER'] = os.path.join(os.getcwd(), 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
+CNC_PRICE_PER_MM = 0.03
+CNC_PRICE_PER_PIERCE = 0.10
+CNC_BASE_SETUP_FEE = 15.00
+CNC_WASTE_MULTIPLIER = 1.15
+
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
@@ -26,9 +31,9 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(50), unique=True, nullable=False)
-    # Change 150 to 255 here:
     password = db.Column(db.String(255), nullable=False)
     is_admin = db.Column(db.Boolean, default=False)
+    uploads = db.relationship('DxfFile', cascade='all, delete-orphan', backref='owner', lazy=True)
 
 
 class DxfFile(db.Model):
@@ -50,9 +55,13 @@ def load_user(user_id):
 # ----------------- DXF ГЕОМЕТРИЯ И ЦЕНИ -----------------
 
 MATERIAL_CONFIG = {
-    "steel": {"name": "Стомана (2mm)", "cost_per_mm2": 0.00005, "cut_cost_per_mm": 0.0015},
-    "aluminum": {"name": "Алуминий (3mm)", "cost_per_mm2": 0.00008, "cut_cost_per_mm": 0.0020},
-    "wood": {"name": "Шперплат (6mm)", "cost_per_mm2": 0.00002, "cut_cost_per_mm": 0.0008}
+    "wood": {"cost_per_mm2": 0.00001, "cut_cost_per_mm": 0.0008, "cost_per_pierce": 0.05},
+    "steel": {"cost_per_mm2": 0.00002, "cut_cost_per_mm": 0.0015, "cost_per_pierce": 0.15},
+    "stainless_steel": {"cost_per_mm2": 0.00005, "cut_cost_per_mm": 0.0025, "cost_per_pierce": 0.25},
+    "aluminum": {"cost_per_mm2": 0.00004, "cut_cost_per_mm": 0.0020, "cost_per_pierce": 0.20},
+    "copper": {"cost_per_mm2": 0.00012, "cut_cost_per_mm": 0.0040, "cost_per_pierce": 0.40},
+    "brass": {"cost_per_mm2": 0.00009, "cut_cost_per_mm": 0.0035, "cost_per_pierce": 0.35},
+    "galvanized": {"cost_per_mm2": 0.00003, "cut_cost_per_mm": 0.0018, "cost_per_pierce": 0.18}
 }
 
 
@@ -61,6 +70,7 @@ def analyze_dxf_geometry(file_path):
         doc = ezdxf.readfile(file_path)
         msp = doc.modelspace()
 
+        # Calculate bounding box bounds
         try:
             extents = bbox.extents(msp, fast=True)
             if extents.has_data:
@@ -71,12 +81,17 @@ def analyze_dxf_geometry(file_path):
             width, height = 0.0, 0.0
 
         total_length = 0.0
+        pierce_count = 0
+
+        # High-precision vector path grouping tracking
         try:
             all_paths = path.make_paths(msp)
             total_length = sum(p.length() for p in all_paths)
+            pierce_count = len(all_paths)  # Each distinct continuous path sequence is 1 pierce
         except Exception:
             pass
 
+        # Fallback raw entity scanning loop
         if total_length == 0.0:
             for entity in msp:
                 try:
@@ -86,6 +101,7 @@ def analyze_dxf_geometry(file_path):
                         total_length += ((end[0] - start[0]) ** 2 + (end[1] - start[1]) ** 2) ** 0.5
                     elif dtype == 'CIRCLE':
                         total_length += 2 * 3.1415926535 * entity.dxf.radius
+                        pierce_count += 1  # Standard closed internal or independent circles
                     elif dtype == 'ARC':
                         r = entity.dxf.radius
                         span = entity.dxf.end_angle - entity.dxf.start_angle
@@ -93,9 +109,11 @@ def analyze_dxf_geometry(file_path):
                         total_length += r * (span * 3.1415926535 / 180.0)
                     elif dtype in ('LWPOLYLINE', 'POLYLINE'):
                         total_length += path.make_path(entity).length()
+                        pierce_count += 1
                 except Exception:
                     continue
 
+        # Safe fallback defaults
         if width == 0 and height == 0:
             xs, ys = [], []
             for e in msp:
@@ -111,16 +129,28 @@ def analyze_dxf_geometry(file_path):
         if width == 0 and height == 0 and total_length > 0:
             width, height = 10.0, 10.0
 
-        return abs(round(width, 2)), abs(round(height, 2)), abs(round(total_length, 2))
+        # A physical job with cutting length always has at least 1 entry puncture
+        if pierce_count == 0 and total_length > 0:
+            pierce_count = 1
+
+        return abs(round(width, 2)), abs(round(height, 2)), abs(round(total_length, 2)), pierce_count
     except Exception as e:
         print(f"DXF Parsing Error: {e}")
-        return None, None, None
+        return None, None, None, None
 
 
-def calculate_cnc_price(width, height, total_length, material):
+def calculate_cnc_price(width, height, total_length, pierce_count, material):
     config = MATERIAL_CONFIG.get(material)
-    if not config: return 0.0
-    return round((width * height * config["cost_per_mm2"]) + (total_length * config["cut_cost_per_mm"]) + 5.00, 2)
+    if not config:
+        return 0.0
+
+    material_surface_cost = width * height * config["cost_per_mm2"]
+    cutting_lineal_cost = total_length * config["cut_cost_per_mm"]
+    piercing_total_cost = pierce_count * config["cost_per_pierce"]
+    base_setup_fee = 5.00  # Flat initialization machine setup overhead
+
+    total_calculated_euro = material_surface_cost + cutting_lineal_cost + piercing_total_cost + base_setup_fee
+    return round(total_calculated_euro, 2)
 
 
 # ----------------- МАРШРУТИ И ЛОГИКА -----------------
@@ -181,13 +211,68 @@ def register():
 
 
 # Окончателно възстановен маршут за потребителското табло
-@app.route('/dashboard')
+@app.route('/dashboard', methods=['GET', 'POST'])
 @login_required
 def dashboard():
-    if current_user.is_admin:
-        return redirect(url_for('admin_dashboard'))
-    user_files = DxfFile.query.filter_by(user_id=current_user.id).all()
-    return render_template('dashboard.html', files=user_files, materials=MATERIAL_CONFIG)
+    if request.method == 'POST':
+        if 'file' not in request.files:
+            flash('Грешка: Няма избран файл.', 'danger')
+            return redirect(request.url)
+
+        file = request.files['file']
+        if file.filename == '':
+            flash('Грешка: Не сте избрали файл.', 'danger')
+            return redirect(request.url)
+
+        if file and file.filename.endswith('.dxf'):
+            try:
+                filename = secure_filename(file.filename)
+                temp_path = os.path.join('static', filename)
+                file.save(temp_path)
+
+                # Extracts geometric metrics along with total path pierces
+                width, height, total_length, pierce_count = analyze_dxf_geometry(temp_path)
+
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+
+                if width is None or total_length is None:
+                    flash('Грешка при обработката на DXF структурата.', 'danger')
+                    return redirect(url_for('dashboard'))
+
+                chosen_material = request.form.get('material', 'steel')
+
+                # Calculate final cost incorporating the newly tracked pierce_count metric
+                price = calculate_cnc_price(width, height, total_length, pierce_count, chosen_material)
+
+                # Persists matching your existing SQL model signature perfectly
+                new_file_record = DxfFile(
+                    filename=file.filename,
+                    material=chosen_material,
+                    width=width,
+                    height=height,
+                    total_length=total_length,
+                    calculated_price=price,
+                    user_id=current_user.id
+                )
+
+                db.session.add(new_file_record)
+                db.session.commit()
+
+                flash(f'Файлът "{file.filename}" беше изчислен успешно с включени пробиви ({pierce_count} бр.)!',
+                      'success')
+                return redirect(url_for('dashboard'))
+
+            except Exception as e:
+                db.session.rollback()
+                flash(f'Критична грешка при обработка/запис: {str(e)}', 'danger')
+                return redirect(url_for('dashboard'))
+        else:
+            flash('Невалиден формат! Системата приема само .dxf файлове.', 'danger')
+            return redirect(url_for('dashboard'))
+
+    user_uploads = DxfFile.query.filter_by(user_id=current_user.id).order_by(DxfFile.id.desc()).all()
+    return render_template('dashboard.html', uploads=user_uploads)
 
 
 @app.route('/upload', methods=['POST'])
@@ -276,12 +361,30 @@ def admin_create_user():
 @app.route('/admin/delete_user/<int:user_id>', methods=['POST'])
 @login_required
 def admin_delete_user(user_id):
-    if not current_user.is_admin: return jsonify({'error': 'Неоторизиран достъп'}), 403
-    user_to_delete = User.query.get_or_create = User.query.get(user_id)
-    if user_to_delete:
+    if not current_user.is_admin:
+        flash('Нямате администраторски права!', 'danger')
+        return redirect(url_for('dashboard'))
+
+    user_to_delete = User.query.get_or_404(user_id)
+
+    try:
+        # 1. (Your existing code that removes files from the disk goes here)
+        for upload in user_to_delete.uploads:
+            if upload.file_path and os.path.exists(upload.file_path):
+                os.remove(upload.file_path)
+
+        # 2. Complete the database deletion
         db.session.delete(user_to_delete)
         db.session.commit()
-        flash('Потребителят и неговите файлове бяха изтрити.')
+
+        # Success alert banner configuration
+        flash(f'Потребителят {user_to_delete.username} и неговите чертежи бяха изтрити!', 'success')
+
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Грешка при изтриване на данни: {str(e)}', 'danger')
+
+    # Crucial change: Redirect right back to the dashboard table view
     return redirect(url_for('admin_dashboard'))
 
 

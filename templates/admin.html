@@ -2,57 +2,108 @@
 <html lang="bg">
 <head>
     <meta charset="UTF-8">
-    <title>Административен Панел</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Админ Панел - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
-    <header class="navbar">
-        <h2>Административен контролен панел (ADMIN)</h2>
-        <a href="{{ url_for('logout') }}" class="logout-btn">Изход</a>
-    </header>
 
-    <main class="dashboard-grid">
-        <section class="panel">
-            <h3>Създай нов потребител</h3>
-            {% with messages = get_flashed_messages() %}
-                {% if messages %}<div class="flash-message">{{ messages[0] }}</div>{% endif %}
-            {% endwith %}
-            <form action="{{ url_for('admin_create_user') }}" method="POST">
+<nav class="navbar">
+    <div class="nav-container">
+        <h2>Административен Панел</h2>
+        <div class="nav-links">
+            <a href="{{ url_for('dashboard') }}" class="btn-secondary">Към основното табло</a>
+            <a href="{{ url_for('logout') }}" class="btn-logout">Изход</a>
+        </div>
+    </div>
+</nav>
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">
+            {{ message }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <div class="admin-grid">
+        <section class="admin-card">
+            <h3>Създаване на нов потребител</h3>
+            <form action="{{ url_for('admin_create_user') }}" method="POST" class="admin-form">
                 <div class="form-group">
-                    <input type="text" name="username" placeholder="Потребителско име" required>
+                    <label for="username">Потребителско име</label>
+                    <input type="text" id="username" name="username" placeholder="Въведете име..." required autocomplete="off">
                 </div>
                 <div class="form-group">
-                    <input type="password" name="password" placeholder="Парола" required>
+                    <label for="password">Парола</label>
+                    <input type="password" id="password" name="password" placeholder="Въведете парола..." required>
                 </div>
-                <button type="submit" class="btn">Добави акаунт</button>
+                <div class="form-group checkbox-group">
+                    <input type="checkbox" id="is_admin" name="is_admin" value="true">
+                    <label for="is_admin">Предоставяне на Администраторски права</label>
+                </div>
+                <button type="submit" class="btn-submit">Регистрация на акаунт</button>
             </form>
         </section>
+    </div>
 
-        <section class="panel">
-            <h3>Всички регистрирани потребители</h3>
-            <table class="library-table">
+    <section class="admin-card">
+        <h3>Списък с регистрирани потребители</h3>
+        <p class="section-subtitle">Общо регистрирани профили в системата, които имат достъп до калкулатора.</p>
+
+        <div class="table-responsive">
+            <table class="users-table">
                 <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Потребителско име</th>
-                        <th>Действие</th>
-                    </tr>
+                <tr>
+                    <th>ID</th>
+                    <th>Потребителско име</th>
+                    <th>Роля / Права</th>
+                    <th class="text-right">Действия</th>
+                </tr>
                 </thead>
                 <tbody>
-                    {% for user in users %}
-                    <tr>
-                        <td>{{ user.id }}</td>
-                        <td>{{ user.username }}</td>
-                        <td>
-                            <form action="{{ url_for('admin_delete_user', user_id=user.id) }}" method="POST" onsubmit="return confirm('Изтриването на потребителя ще премахне и цялата му библиотека с чертежи! Потвърждавате ли?');">
-                                <button type="submit" class="btn-danger-small">Изтрий</button>
-                            </form>
-                        </td>
-                    </tr>
-                    {% endfor %}
+                {% for user in users %}
+                <tr>
+                    <td>#{{ user.id }}</td>
+                    <td class="username-cell">
+                        <strong>{{ user.username }}</strong>
+                    </td>
+                    <td>
+                        {% if user.is_admin %}
+                        <span class="badge badge-admin">Администратор</span>
+                        {% else %}
+                        <span class="badge badge-user">Потребител / Служител</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-right">
+                        {% if user.id == current_user.id %}
+                        <span class="text-muted text-small">Текуща сесия</span>
+                        {% else %}
+                        <form action="{{ url_for('admin_delete_user', user_id=user.id) }}" method="POST" onsubmit="return confirm('Изтриването на потребителя ще премахне и цялата му библиотека с чертежи! Потвърждавате ли?');" style="display:inline;">
+                            <button type="submit" class="btn-delete">Изтрий профила</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" class="text-center no-data">
+                        Няма намерени регистрирани потребители в базата данни.
+                    </td>
+                </tr>
+                {% endfor %}
                 </tbody>
             </table>
-        </section>
-    </main>
+        </div>
+    </section>
+
+</main>
+
 </body>
 </html>
