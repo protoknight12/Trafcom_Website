@@ -1,0 +1,130 @@
+:root {
+    --bg-dark: #121824;
+    --panel-bg: #1e2640;
+    --accent: #00e676;
+    --text-main: #f5f7fa;
+    --text-muted: #9aa5ce;
+    --border-color: #2f3b69;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background-color: var(--bg-dark);
+    color: var(--text-main);
+    margin: 0;
+    padding: 0;
+}
+
+.navbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background-color: var(--panel-bg);
+    padding: 15px 30px;
+    border-bottom: 2px solid var(--border-color);
+}
+
+.logout-btn {
+    color: #ff5252;
+    text-decoration: none;
+    font-weight: bold;
+}
+
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: 1fr 2fr;
+    gap: 25px;
+    padding: 30px;
+}
+
+@media (max-width: 900px) {
+    .dashboard-grid { grid-template-columns: 1fr; }
+}
+
+.panel {
+    background-color: var(--panel-bg);
+    border-radius: 8px;
+    padding: 25px;
+    border: 1px solid var(--border-color);
+}
+
+.form-group {
+    margin-bottom: 20px;
+}
+
+label {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--text-muted);
+}
+
+input, select {
+    width: 100%;
+    padding: 10px;
+    background: var(--bg-dark);
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    border-radius: 4px;
+    box-sizing: border-box;
+}
+
+.btn {
+    background-color: var(--accent);
+    color: #000;
+    border: none;
+    padding: 12px 20px;
+    font-weight: bold;
+    border-radius: 4px;
+    cursor: pointer;
+    width: 100%;
+}
+
+.btn-secondary {
+    background-color: transparent;
+    border: 1px solid var(--text-muted);
+    color: var(--text-main);
+}
+
+.auth-container {
+    max-width: 400px;
+    margin: 80px auto;
+    background: var(--panel-bg);
+    padding: 30px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.auth-box { margin-top: 20px; }
+.border-top { border-top: 1px solid var(--border-color); padding-top: 20px; }
+
+.hidden { display: none; }
+
+.result-display {
+    margin-top: 25px;
+    padding: 15px;
+    background: rgba(0, 230, 118, 0.1);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+}
+
+.price-tag {
+    font-size: 1.3rem;
+    font-weight: bold;
+    color: var(--accent);
+    margin-top: 10px;
+}
+
+.library-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.library-table th, .library-table td {
+    padding: 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.library-table th { color: var(--text-muted); }
+.table-price { color: var(--accent); font-weight: bold; }
+.flash-message { color: #ff5252; margin-bottom: 15px; }

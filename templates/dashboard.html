@@ -1,10 +1,73 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="bg">
 <head>
     <meta charset="UTF-8">
-    <title>Title</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CNC Производствен Панел</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
+    <header class="navbar">
+        <h2>CNC Портал: Добре дошли, {{ current_user.username }}</h2>
+        <a href="{{ url_for('logout') }}" class="logout-btn">Изход от профила</a>
+    </header>
 
+    <main class="dashboard-grid">
+        <section class="panel upload-panel">
+            <h3>Анализиране на нов .DXF модел</h3>
+            <form id="uploadForm" enctype="multipart/form-data">
+                <div class="form-group">
+                    <label for="dxf_file">Изберете DXF файл:</label>
+                    <input type="file" id="dxf_file" name="dxf_file" accept=".dxf" required>
+                </div>
+                <div class="form-group">
+                    <label for="material">Материал за изрязване:</label>
+                    <select id="material" name="material" required>
+                        {% for key, value in materials.items() %}
+                            <option value="{{ key }}">{{ value.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <button type="submit" class="btn action-btn">Изчисли цена за изработка</button>
+            </form>
+
+            <div id="resultModal" class="result-display hidden">
+                <h4>Резултат от калкулацията</h4>
+                <p><strong>Файл:</strong> <span id="res_file"></span></p>
+                <p><strong>Материал:</strong> <span id="res_mat"></span></p>
+                <p><strong>Габаритни размери:</strong> <span id="res_dim"></span> mm</p>
+                <p><strong>Обща дължина на рязане:</strong> <span id="res_len"></span> mm</p>
+                <div class="price-tag">Изчислена стойност: <span id="res_price"></span> €</div>
+            </div>
+        </section>
+
+        <section class="panel library-panel">
+            <h3>Вашата библиотека със запазени компоненти</h3>
+            <table class="library-table">
+                <thead>
+                    <tr>
+                        <th>Файл на дизайна</th>
+                        <th>Материал</th>
+                        <th>Размери (mm)</th>
+                        <th>Линеен срез (mm)</th>
+                        <th>Цена</th>
+                    </tr>
+                </thead>
+                <tbody id="libraryBody">
+                    {% for file in files %}
+                    <tr>
+                        <td>{{ file.filename }}</td>
+                        <td>{{ materials[file.material]['name'] }}</td>
+                        <td>{{ file.width }} x {{ file.height }}</td>
+                        <td>{{ file.total_length }}</td>
+                        <td class="table-price">{{ file.calculated_price }} €</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='main.js') }}"></script>
 </body>
 </html>
