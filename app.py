@@ -164,15 +164,31 @@ def process_entity(entity):
                 for (x1, y1, bulge), (x2, y2, _next_bulge) in segment_pairs:
                     p1, p2 = (x1, y1), (x2, y2)
                     segments.append((p1, p2))
+                    chord = math.dist(p1, p2)
 
-                    if abs(bulge) < 1e-9:
+                    is_straight = abs(bulge) < 1e-9
+                    if not is_straight and chord > 0:
+                        # A bulge's radius is derived by dividing by the
+                        # bulge value, so tiny floating-point noise on what
+                        # should be a straight segment (e.g. 1e-7 instead of
+                        # exactly 0) produces a near-infinite radius and a
+                        # center millions of mm away. That phantom arc is
+                        # invisible on screen but blows out the bounding box
+                        # used to scale/center the whole drawing. A radius
+                        # more than 1000x the chord length is imperceptibly
+                        # flat at any real drawing scale, so treat it as
+                        # straight instead of trusting the raw bulge value.
+                        center, start_rad, end_rad, radius = bulge_to_arc(p1, p2, bulge)
+                        if not math.isfinite(radius) or radius > chord * 1000:
+                            is_straight = True
+
+                    if is_straight:
                         # Straight segment
-                        length += math.dist(p1, p2)
+                        length += chord
                         shapes.append({'type': 'line', 'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2})
                     else:
                         # Curved segment - convert the bulge into real arc
                         # parameters (center, radius, start/end angle).
-                        center, start_rad, end_rad, radius = bulge_to_arc(p1, p2, bulge)
                         sweep_rad = (end_rad - start_rad) % (2 * math.pi)
 
                         length += radius * sweep_rad
@@ -235,6 +251,61 @@ def count_pierces(all_segments, tolerance=0.5):
     return pierce_count
 
 
+def compute_bounding_box(shapes):
+    """
+    Computes the outer width/height of a drawing from its extracted shapes.
+    This feeds directly into pricing, so arcs use their true angular sweep
+    (not just their full-circle radius) to stay precise - a rounding-corner
+    arc (say a 90-degree corner fillet) should only expand the box by its
+    actual visible extent, not by treating it as if it were a full circle.
+    """
+    min_x = min_y = float('inf')
+    max_x = max_y = float('-inf')
+
+    def expand(x, y):
+        nonlocal min_x, max_x, min_y, max_y
+        if x < min_x: min_x = x
+        if x > max_x: max_x = x
+        if y < min_y: min_y = y
+        if y > max_y: max_y = y
+
+    for s in shapes:
+        if s['type'] == 'line':
+            expand(s['x1'], s['y1'])
+            expand(s['x2'], s['y2'])
+
+        elif s['type'] == 'circle':
+            expand(s['cx'] - s['r'], s['cy'] - s['r'])
+            expand(s['cx'] + s['r'], s['cy'] + s['r'])
+
+        elif s['type'] == 'arc':
+            cx, cy, r = s['cx'], s['cy'], s['r']
+            sa, ea = s['start_angle'] % 360, s['end_angle'] % 360
+            sweep = (ea - sa) % 360 or 360  # 0 means a full 360-degree sweep
+
+            # Always include the arc's actual start/end points.
+            for angle in (sa, ea):
+                rad = math.radians(angle)
+                expand(cx + r * math.cos(rad), cy + r * math.sin(rad))
+
+            # Include any cardinal direction (rightmost/top/leftmost/bottom
+            # of the full circle) that the arc's sweep actually passes
+            # through - those are the only points where the arc can extend
+            # further than a straight line between its start/end would.
+            for cardinal in (0, 90, 180, 270):
+                if (cardinal - sa) % 360 <= sweep + 1e-9:
+                    rad = math.radians(cardinal)
+                    expand(cx + r * math.cos(rad), cy + r * math.sin(rad))
+
+        elif s['type'] == 'polyline':
+            for x, y in s['points']:
+                expand(x, y)
+
+    if min_x == float('inf'):
+        return 0.0, 0.0
+    return max_x - min_x, max_y - min_y
+
+
 def analyze_dxf_geometry(file_path):
     """
     Parses a DXF file to determine outer dimensions, total cutting length,
@@ -245,18 +316,9 @@ def analyze_dxf_geometry(file_path):
         doc = ezdxf.readfile(file_path)
         msp = doc.modelspace()
 
-        # 1. Calculate Bounding Box Dimensions
-        try:
-            extents = bbox.extents(msp, fast=True)
-            if extents.has_data:
-                width, height = extents.size.x, extents.size.y
-            else:
-                width, height = 0.0, 0.0
-        except Exception:
-            width, height = 0.0, 0.0
-
-        # 2. Single pass over every entity: accumulate cutting length, collect
-        # endpoint segments (for pierce detection), and collect drawable shapes.
+        # 1. Single pass over every entity: accumulate cutting length, collect
+        # endpoint segments (for pierce detection + bounding box), and collect
+        # drawable shapes.
         total_length = 0.0
         all_segments = []
         shapes = []
@@ -266,6 +328,27 @@ def analyze_dxf_geometry(file_path):
             total_length += entity_length
             all_segments.extend(entity_segments)
             shapes.extend(entity_shapes)
+
+        # 2. Calculate outer dimensions from the SAME sanitized shape data
+        # used for the 2D viewer and cutting length/pricing - not a separate
+        # ezdxf bbox.extents() call over the raw entities. Deriving it
+        # independently would let a degenerate entity (e.g. a near-zero
+        # bulge producing a huge phantom arc, or a stray TEXT/DIMENSION
+        # entity far from the actual part) silently inflate the *priced*
+        # dimensions without showing up in what's actually drawn/cut, or
+        # vice versa. Computing both from one sanitized source keeps price
+        # and visualization guaranteed consistent.
+        width, height = compute_bounding_box(shapes)
+        if width == 0 and height == 0:
+            # Fallback for files with no LINE/CIRCLE/ARC/POLYLINE geometry at
+            # all (e.g. only SPLINE/HATCH/TEXT) - better to report ezdxf's
+            # own bounding box than nothing.
+            try:
+                extents = bbox.extents(msp, fast=True)
+                if extents.has_data:
+                    width, height = extents.size.x, extents.size.y
+            except Exception:
+                pass
 
         # 3. Graph connectivity component counting to determine pierce count
         pierce_count = count_pierces(all_segments)
