@@ -1,13 +1,15 @@
 import os
-import shutil
+import json
+import math
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import ezdxf
-from ezdxf import bbox, path
-import math
+from ezdxf import bbox
+
+
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'REDACTED_ROTATED_SECRET_KEY'
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://postgres:REDACTED_ROTATED_PASSWORD@localhost:5432/cnc_calculator_db'
@@ -45,6 +47,9 @@ class DxfFile(db.Model):
     total_length = db.Column(db.Float, nullable=False)
     calculated_price = db.Column(db.Float, nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    # Stores the extracted 2D geometry (lines/arcs/circles) as a JSON string,
+    # so the viewer modal can render the drawing without re-parsing the DXF file.
+    geometry_json = db.Column(db.Text, nullable=True)
 
 
 @login_manager.user_loader
@@ -55,13 +60,13 @@ def load_user(user_id):
 # ----------------- DXF ГЕОМЕТРИЯ И ЦЕНИ -----------------
 
 MATERIAL_CONFIG = {
-    "wood": {"cost_per_mm2": 0.00001, "cut_cost_per_mm": 0.0008, "cost_per_pierce": 0.05},
-    "steel": {"cost_per_mm2": 0.00002, "cut_cost_per_mm": 0.0015, "cost_per_pierce": 0.15},
-    "stainless_steel": {"cost_per_mm2": 0.00005, "cut_cost_per_mm": 0.0025, "cost_per_pierce": 0.25},
-    "aluminum": {"cost_per_mm2": 0.00004, "cut_cost_per_mm": 0.0020, "cost_per_pierce": 0.20},
-    "copper": {"cost_per_mm2": 0.00012, "cut_cost_per_mm": 0.0040, "cost_per_pierce": 0.40},
-    "brass": {"cost_per_mm2": 0.00009, "cut_cost_per_mm": 0.0035, "cost_per_pierce": 0.35},
-    "galvanized": {"cost_per_mm2": 0.00003, "cut_cost_per_mm": 0.0018, "cost_per_pierce": 0.18}
+    "wood": {"cost_per_mm2": 0.00001, "cut_cost_per_mm": 0.0008, "cost_per_pierce": 0.05, "name": "Дървесен материал / МДФ"},
+    "steel": {"cost_per_mm2": 0.00002, "cut_cost_per_mm": 0.0015, "cost_per_pierce": 0.15, "name": "Въглеродна стомана"},
+    "stainless_steel": {"cost_per_mm2": 0.00005, "cut_cost_per_mm": 0.0025, "cost_per_pierce": 0.25, "name": "Неръждаема стомана"},
+    "aluminum": {"cost_per_mm2": 0.00004, "cut_cost_per_mm": 0.0020, "cost_per_pierce": 0.20, "name": "Алуминий"},
+    "copper": {"cost_per_mm2": 0.00012, "cut_cost_per_mm": 0.0040, "cost_per_pierce": 0.40, "name": "Мед"},
+    "brass": {"cost_per_mm2": 0.00009, "cut_cost_per_mm": 0.0035, "cost_per_pierce": 0.35, "name": "Месинг"},
+    "galvanized": {"cost_per_mm2": 0.00003, "cut_cost_per_mm": 0.0018, "cost_per_pierce": 0.18, "name": "Поцинкована ламарина"}
 }
 
 
@@ -80,15 +85,12 @@ def get_entity_endpoints(entity):
             segments.append((s, e))
 
         elif dtype == 'CIRCLE':
-            # A circle is a closed loop that touches itself.
-            # We can model it as a single segment starting and ending at the same top point.
             cx, cy = entity.dxf.center.x, entity.dxf.center.y
             r = entity.dxf.radius
             p = (cx, cy + r)
             segments.append((p, p))
 
         elif dtype == 'ARC':
-            # Calculate actual start/end coordinates of the arc using trigonometry
             cx, cy = entity.dxf.center.x, entity.dxf.center.y
             r = entity.dxf.radius
             sa = math.radians(entity.dxf.start_angle)
@@ -99,7 +101,6 @@ def get_entity_endpoints(entity):
             segments.append((s, e))
 
         elif dtype in ('LWPOLYLINE', 'POLYLINE'):
-            # Explode polyline points into individual consecutive line segments
             points = [(p[0], p[1]) for p in entity.get_points(format='xy')]
             if not points:
                 return segments
@@ -107,7 +108,6 @@ def get_entity_endpoints(entity):
             for i in range(len(points) - 1):
                 segments.append((points[i], points[i + 1]))
 
-            # If the polyline is explicitly flagged as closed, bridge back to the start
             if entity.is_closed:
                 segments.append((points[-1], points[0]))
 
@@ -117,10 +117,62 @@ def get_entity_endpoints(entity):
     return segments
 
 
+def extract_drawable_shapes(msp):
+    """
+    Extracts a lightweight, JSON-serializable list of shapes for 2D rendering
+    in the browser. Each shape is a dict describing how to draw it on a canvas,
+    keeping DXF's native (Y-up) coordinate system - the frontend handles the
+    Y-axis flip when drawing.
+    """
+    shapes = []
+
+    for entity in msp:
+        try:
+            dtype = entity.dxftype()
+
+            if dtype == 'LINE':
+                shapes.append({
+                    'type': 'line',
+                    'x1': entity.dxf.start.x, 'y1': entity.dxf.start.y,
+                    'x2': entity.dxf.end.x, 'y2': entity.dxf.end.y
+                })
+
+            elif dtype == 'CIRCLE':
+                shapes.append({
+                    'type': 'circle',
+                    'cx': entity.dxf.center.x, 'cy': entity.dxf.center.y,
+                    'r': entity.dxf.radius
+                })
+
+            elif dtype == 'ARC':
+                shapes.append({
+                    'type': 'arc',
+                    'cx': entity.dxf.center.x, 'cy': entity.dxf.center.y,
+                    'r': entity.dxf.radius,
+                    'start_angle': entity.dxf.start_angle,
+                    'end_angle': entity.dxf.end_angle
+                })
+
+            elif dtype in ('LWPOLYLINE', 'POLYLINE'):
+                points = [(p[0], p[1]) for p in entity.get_points(format='xy')]
+                if points:
+                    shapes.append({
+                        'type': 'polyline',
+                        'points': points,
+                        'closed': bool(entity.is_closed)
+                    })
+
+        except Exception:
+            pass  # Skip malformed entities safely, keep the rest of the drawing
+
+    return shapes
+
+
 def analyze_dxf_geometry(file_path):
     """
     Parses a DXF file to determine outer dimensions, total cutting length,
-    and a precise pierce count using direct entity extraction and graph matching.
+    a precise pierce count using direct entity extraction and graph matching,
+    and a list of drawable shapes for the 2D viewer.
     """
     try:
         doc = ezdxf.readfile(file_path)
@@ -141,7 +193,6 @@ def analyze_dxf_geometry(file_path):
         total_length = 0.0
 
         for entity in msp:
-            # Accumulate lengths using raw definitions to keep length tracking alive
             try:
                 dtype = entity.dxftype()
                 if dtype == 'LINE':
@@ -162,7 +213,6 @@ def analyze_dxf_geometry(file_path):
             except Exception:
                 pass
 
-            # Extract geometric points for pierce grouping
             all_segments.extend(get_entity_endpoints(entity))
 
         # 3. Graph connectivity component counting (Undirected check)
@@ -173,13 +223,11 @@ def analyze_dxf_geometry(file_path):
             tolerance = 0.5  # Max gap distance in mm allowed between vertices
             adj = {i: [] for i in range(num_segs)}
 
-            # Map out which fragments touch at their boundaries
             for i in range(num_segs):
                 s1, e1 = all_segments[i]
                 for j in range(i + 1, num_segs):
                     s2, e2 = all_segments[j]
 
-                    # Check all 4 endpoint possibilities to capture undirected connections
                     if (math.dist(s1, s2) <= tolerance or
                             math.dist(s1, e2) <= tolerance or
                             math.dist(e1, s2) <= tolerance or
@@ -187,7 +235,6 @@ def analyze_dxf_geometry(file_path):
                         adj[i].append(j)
                         adj[j].append(i)
 
-            # Standard Breadth-First Search (BFS) to identify connected loops
             visited = set()
             for node in range(num_segs):
                 if node not in visited:
@@ -207,11 +254,14 @@ def analyze_dxf_geometry(file_path):
         if pierce_count == 0 and total_length > 0:
             pierce_count = 1
 
-        return abs(round(width, 2)), abs(round(height, 2)), abs(round(total_length, 2)), pierce_count
+        # 5. Extract drawable shapes for the 2D viewer
+        shapes = extract_drawable_shapes(msp)
+
+        return abs(round(width, 2)), abs(round(height, 2)), abs(round(total_length, 2)), pierce_count, shapes
 
     except Exception as e:
         print(f"Critical DXF Parsing Error: {e}")
-        return None, None, None, None
+        return None, None, None, None, None
 
 
 def calculate_cnc_price(width, height, total_length, pierce_count, material):
@@ -305,8 +355,8 @@ def dashboard():
                 temp_path = os.path.join('static', filename)
                 file.save(temp_path)
 
-                # Extracts geometric metrics along with total path pierces
-                width, height, total_length, pierce_count = analyze_dxf_geometry(temp_path)
+                # Extracts geometric metrics, pierce count, and drawable shapes
+                width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(temp_path)
 
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
@@ -317,10 +367,8 @@ def dashboard():
 
                 chosen_material = request.form.get('material', 'steel')
 
-                # Calculate final cost incorporating the newly tracked pierce_count metric
                 price = calculate_cnc_price(width, height, total_length, pierce_count, chosen_material)
 
-                # Persists matching your existing SQL model signature perfectly
                 new_file_record = DxfFile(
                     filename=file.filename,
                     material=chosen_material,
@@ -328,7 +376,8 @@ def dashboard():
                     height=height,
                     total_length=total_length,
                     calculated_price=price,
-                    user_id=current_user.id
+                    user_id=current_user.id,
+                    geometry_json=json.dumps(shapes)
                 )
 
                 db.session.add(new_file_record)
@@ -350,40 +399,29 @@ def dashboard():
     return render_template('dashboard.html', uploads=user_uploads)
 
 
-@app.route('/upload', methods=['POST'])
+@app.route('/geometry/<int:file_id>')
 @login_required
-def upload_file():
-    if 'dxf_file' not in request.files:
-        return jsonify({'error': 'Няма качен файл'}), 400
-    file = request.files['dxf_file']
-    material = request.form.get('material')
+def get_geometry(file_id):
+    """
+    Returns the stored 2D shape data for a given uploaded DXF file, so the
+    dashboard viewer modal can render it on a canvas. Only the owning user
+    (or an admin) may access it.
+    """
+    dxf_file = DxfFile.query.get_or_404(file_id)
 
-    if file.filename == '' or not file.filename.lower().endswith('.dxf'):
-        return jsonify({'error': 'Невалиден файлов формат. Качвайте само .dxf.'}), 400
-    if material not in MATERIAL_CONFIG:
-        return jsonify({'error': 'Невалиден избор на материал.'}), 400
+    if dxf_file.user_id != current_user.id and not current_user.is_admin:
+        return jsonify({'error': 'Нямате достъп до този файл.'}), 403
 
-    filename = secure_filename(file.filename)
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{current_user.id}_{filename}")
-    file.save(file_path)
-
-    width, height, total_length = analyze_dxf_geometry(file_path)
-    if width is None:
-        return jsonify({'error': 'Грешка при извличане на геометрия от DXF.'}), 400
-
-    price = calculate_cnc_price(width, height, total_length, material)
-
-    new_dxf = DxfFile(
-        filename=filename, material=material, width=width, height=height,
-        total_length=total_length, calculated_price=price, user_id=current_user.id
-    )
-    db.session.add(new_dxf)
-    db.session.commit()
+    try:
+        shapes = json.loads(dxf_file.geometry_json) if dxf_file.geometry_json else []
+    except (TypeError, ValueError):
+        shapes = []
 
     return jsonify({
-        'filename': filename, 'width': width, 'height': height,
-        'total_length': total_length, 'price': price,
-        'material_name': MATERIAL_CONFIG[material]['name']
+        'filename': dxf_file.filename,
+        'width': dxf_file.width,
+        'height': dxf_file.height,
+        'shapes': shapes
     })
 
 
@@ -443,24 +481,20 @@ def admin_delete_user(user_id):
     user_to_delete = User.query.get_or_404(user_id)
 
     try:
-        # 1. (Your existing code that removes files from the disk goes here)
         for upload in user_to_delete.uploads:
-            file_path = os.path.join(app.config['UPLOAD_FOLDER'],f"{upload.user_id}{upload.filename}")
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{upload.user_id}_{upload.filename}")
             if os.path.exists(file_path):
-                os.remove(upload.file_path)
+                os.remove(file_path)
 
-        # 2. Complete the database deletion
         db.session.delete(user_to_delete)
         db.session.commit()
 
-        # Success alert banner configuration
         flash(f'Потребителят {user_to_delete.username} и неговите чертежи бяха изтрити!', 'success')
 
     except Exception as e:
         db.session.rollback()
         flash(f'Грешка при изтриване на данни: {str(e)}', 'danger')
 
-    # Crucial change: Redirect right back to the dashboard table view
     return redirect(url_for('admin_dashboard'))
 
 
@@ -469,6 +503,7 @@ def admin_delete_user(user_id):
 def logout():
     logout_user()
     return redirect(url_for('login'))
+
 
 
 if __name__ == '__main__':

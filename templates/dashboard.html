@@ -5,6 +5,87 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Табло - Trafcom DXF</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        /* ---------- 2D DXF Viewer Modal ---------- */
+        .viewer-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.75);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .viewer-overlay.active {
+            display: flex;
+        }
+        .viewer-modal {
+            background-color: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 10px;
+            width: 90vw;
+            max-width: 900px;
+            height: 80vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .viewer-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid #333;
+        }
+        .viewer-header h4 {
+            margin: 0;
+            font-weight: 600;
+        }
+        .viewer-close-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted, #999);
+            font-size: 1.5rem;
+            line-height: 1;
+            cursor: pointer;
+        }
+        .viewer-close-btn:hover {
+            color: #fff;
+        }
+        .viewer-body {
+            flex: 1;
+            position: relative;
+            background-color: #101010;
+        }
+        .viewer-canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        .viewer-status {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-muted, #999);
+            font-size: 0.95rem;
+        }
+        .filename-link {
+            background: none;
+            border: none;
+            padding: 0;
+            color: var(--accent-secondary, #7c9cff);
+            font-weight: 600;
+            font-size: inherit;
+            font-family: inherit;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+        .filename-link:hover {
+            color: #fff;
+        }
+    </style>
 </head>
 <body>
 
@@ -68,7 +149,7 @@
 
         <section class="admin-card">
             <h3>Вашата библиотека с изчисления</h3>
-            <p class="section-subtitle">Списък на всички обработени от вас CAD чертежи, съобразени с размерите и материала.</p>
+            <p class="section-subtitle">Списък на всички обработени от вас CAD чертежи, съобразени с размерите и материала. Кликнете върху име на файл за 2D визуализация.</p>
 
             <div class="table-responsive">
                 <table class="data-table">
@@ -86,7 +167,11 @@
                         {% for upload in uploads %}
                         <tr>
                             <td class="text-muted text-small">#{{ upload.id }}</td>
-                            <td><strong>{{ upload.filename }}</strong></td>
+                            <td>
+                                <button type="button" class="filename-link" onclick="openDxfViewer({{ upload.id }}, '{{ upload.filename|e }}')">
+                                    {{ upload.filename }}
+                                </button>
+                            </td>
                             <td><span class="badge badge-user">{{ upload.material }}</span></td>
                             <td>{{ "%.2f"|format(upload.width) }} x {{ "%.2f"|format(upload.height) }} мм</td>
                             <td>{{ "%.2f"|format(upload.total_length) }} мм</td>
@@ -106,5 +191,20 @@
 
     </main>
 
+    <!-- 2D DXF Viewer Modal -->
+    <div class="viewer-overlay" id="viewerOverlay">
+        <div class="viewer-modal">
+            <div class="viewer-header">
+                <h4 id="viewerTitle">Визуализация</h4>
+                <button type="button" class="viewer-close-btn" onclick="closeDxfViewer()">&times;</button>
+            </div>
+            <div class="viewer-body">
+                <div class="viewer-status" id="viewerStatus">Зареждане...</div>
+                <canvas class="viewer-canvas" id="viewerCanvas"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/dxf_viewer.js') }}"></script>
 </body>
 </html>
