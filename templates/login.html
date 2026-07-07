@@ -14,8 +14,27 @@
     </style>
 </head>
 <body>
+<nav class="navbar">
+    <div class="nav-container">
+        <h2 class="nav-logo">TRAFCOM</h2>
+        <div class="nav-links">
+            <div class="nav-section-links">
+                <div class="dropdown">
+                    <a class="dropdown-trigger">Приложения <span class="dropdown-arrow">▼</span></a>
+                    <div class="dropdown-content">
+                        <a href="{{ url_for('dashboard') }}">DXF CNC Калкулатор</a>
+                        <a href="{{ url_for('generator') }}">Параметричен Генератор</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</nav>
+
 <div class="admin-container auth-wrapper">
     <div class="admin-card auth-card">
+        <a href="/" style="display: block; margin-bottom: 20px; color: var(--accent-secondary); text-decoration: none; font-size: 0.9rem;">← Към начална страница</a>
+
         <h2 style="text-align: center; margin-bottom: 28px; margin-top: 0; background: var(--gradient-purple); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
             Вход в CNC Портал
         </h2>
