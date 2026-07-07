@@ -440,23 +440,20 @@ def calculate_cnc_price(width, height, total_length, pierce_count, material_key)
 
 @app.route('/')
 def index():
-    # if current_user.is_authenticated:
-    #     if current_user.is_admin:
-    #         return redirect(url_for('admin_dashboard'))
-    #     return redirect(url_for('dashboard'))
-    # Anonymous visitors see the public landing page (list of apps/machines)
-    # instead of being forced straight to login. Login is only required once
-    # they actually click into an app - e.g. /dashboard is still guarded by
-    # @login_required, which automatically bounces unauthenticated visitors
-    # to the login page via Flask-Login's login_manager.login_view.
+    # Both anonymous and logged-in visitors see the public landing page now -
+    # index.html adapts its nav CTA based on current_user.is_authenticated
+    # (showing "Към Таблото" instead of Login/Register). Apps like /dashboard
+    # and /generator still require login via @login_required regardless.
     return render_template('index.html')
 
 
 @app.route('/generator')
 @login_required
 def generator():
-    # Publicly accessible, or add @login_required if you want it locked down
-    return render_template('generator.html')
+    # Requires login, same as every other app (matches the "apps require an
+    # account, the public site doesn't" design used across the project).
+    materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
+    return render_template('generator.html', materials=materials)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():

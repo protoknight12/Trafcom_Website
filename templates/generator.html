@@ -105,11 +105,11 @@
 <body>
 <nav class="navbar">
     <div class="nav-container">
-        <h2>Административен Панел</h2>
+        <h2>TRAFCOM</h2>
         <div class="nav-links">
             <div class="nav-section-links">
                 <div class="dropdown">
-                    <a class="dropdown-trigger">Приложения <span class="dropdown-arrow">▼</span></a>
+                    <a class="dropdown-trigger" href="#" tabindex="0" onclick="event.preventDefault()">Приложения <span class="dropdown-arrow">▼</span></a>
                     <div class="dropdown-content">
                         <a href="{{ url_for('dashboard') }}">DXF CNC Калкулатор</a>
                         <a href="{{ url_for('generator') }}">Параметричен Генератор</a>
@@ -117,9 +117,16 @@
                 </div>
                 <a href="{{ url_for('index') }}">Начало</a>
                 <a href="{{ url_for('dashboard') }}">Лична Библиотека</a>
+                {% if current_user.is_admin %}
+                <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
+                {% endif %}
             </div>
             <div class="nav-cta-buttons">
-                <span class="user-badge" style="border-color: var(--danger-border); color: #ff7675;"> СЕСИЯ: АДМИНИСТРАТОР</span>
+                {% if current_user.is_admin %}
+                <span class="user-badge" style="border-color: var(--danger-border); color: #ff7675;">СЕСИЯ: АДМИНИСТРАТОР</span>
+                {% else %}
+                <span class="user-badge">{{ current_user.username }}</span>
+                {% endif %}
                 <a href="{{ url_for('logout') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Изход</a>
             </div>
         </div>
@@ -179,6 +186,16 @@
             <input type="range" id="in-seed" min="1" max="9999" value="7341">
 
             <button id="btn-download" class="btn-submit" style="width: 100%; margin-top: 20px;">Изтегли DXF Модел</button>
+
+            <div class="control-group-title">Изчисляване на цена</div>
+            <div class="form-group" style="margin-bottom: 12px;">
+                <select id="in-material" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-color); color: #fff; padding: 8px; border-radius: 4px;">
+                    {% for material in materials %}
+                    <option value="{{ material.key }}">{{ material.display_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button id="btn-calculate" class="btn-submit" style="width: 100%; background: var(--gradient-purple-hover);">Изчисли цена в Калкулатора</button>
         </div>
 
         <div class="preview-area">
@@ -190,6 +207,14 @@
             </div>
         </div>
     </div>
+
+    <!-- Hidden form that submits the generated DXF straight into the same
+         /dashboard upload flow used by the main calculator - reuses all of
+         its existing pricing/geometry logic instead of duplicating it. -->
+    <form id="sendToCalculatorForm" action="{{ url_for('dashboard') }}" method="POST" enctype="multipart/form-data" style="display: none;">
+        <input type="hidden" name="material" id="calc-material-field">
+        <input type="file" name="file" id="calc-file-field">
+    </form>
 </main>
 
 <script>
@@ -260,6 +285,33 @@
         }
     }
 
+    /**
+     * Returns the cut perimeter of one hole shape at the given size, using
+     * the exact same point geometry as the DXF export below - so the
+     * "Линеен сряз" stat actually reflects what gets cut, instead of always
+     * reading 0.00 m regardless of the generated pattern.
+     */
+    function shapePerimeter(type, size) {
+        const r = size / 2;
+        if (type === 'circle') {
+            return 2 * Math.PI * r;
+        }
+        let pts = [];
+        if (type === 'square') pts = [[-r, -r], [r, -r], [r, r], [-r, r]];
+        else if (type === 'hexagon') { for (let i = 0; i < 6; i++) { let a = i * Math.PI / 3; pts.push([r * Math.cos(a), r * Math.sin(a)]); } }
+        else if (type === 'triangle') pts = [[0, -r], [r * 0.866, r / 2], [-r * 0.866, r / 2]];
+        else if (type === 'rhombus') pts = [[0, -r], [r / 1.5, 0], [0, r], [-r / 1.5, 0]];
+        else return 0;
+
+        let perimeter = 0;
+        for (let i = 0; i < pts.length; i++) {
+            const p1 = pts[i];
+            const p2 = pts[(i + 1) % pts.length];
+            perimeter += Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+        }
+        return perimeter;
+    }
+
     function render() {
         const W = parseFloat(document.getElementById('in-width').value);
         const H = parseFloat(document.getElementById('in-height').value);
@@ -278,7 +330,7 @@
 
         const rand = mulberry32(seed);
         generatedHoles = [];
-        let totalCutLength = 0;
+        let totalCutLength = 2 * (W + H); // outer panel boundary is also a cut (see DXF export)
 
         const drawScale = Math.min(800 / W, 800 / H);
         canvas.width = W * drawScale;
@@ -330,6 +382,7 @@
                 }
 
                 generatedHoles.push({ x: jX, y: jY, size: finalSize, rot: rotRad, type: shapeType });
+                totalCutLength += shapePerimeter(shapeType, finalSize);
 
                 ctx.save();
                 ctx.translate(jX * drawScale, jY * drawScale);
@@ -346,9 +399,12 @@
         document.getElementById('stat-cut').innerText = (totalCutLength / 1000).toFixed(2) + ' m';
     }
 
-    document.getElementById('btn-download').addEventListener('click', () => {
-        const W = parseFloat(document.getElementById('in-width').value);
-        const H = parseFloat(document.getElementById('in-height').value);
+    /**
+     * Builds the DXF file text for the current panel + generated holes.
+     * Shared by both the download button and the "send to calculator"
+     * button, so the two stay in sync automatically.
+     */
+    function buildDxfString(W, H) {
         let dxf = [];
         dxf.push("  0\nSECTION\n  2\nHEADER\n  0\nENDSEC\n  0\nSECTION\n  2\nENTITIES");
         dxf.push("  0\nLWPOLYLINE\n100\nAcDbEntity\n  8\n0\n100\nAcDbPolyline\n 90\n5\n 70\n1");
@@ -374,11 +430,37 @@
             }
         });
         dxf.push("  0\nENDSEC\n  0\nEOF");
-        const blob = new Blob([dxf.join('\n')], { type: "application/dxf" });
+        return dxf.join('\n');
+    }
+
+    document.getElementById('btn-download').addEventListener('click', () => {
+        const W = parseFloat(document.getElementById('in-width').value);
+        const H = parseFloat(document.getElementById('in-height').value);
+        const blob = new Blob([buildDxfString(W, H)], { type: "application/dxf" });
         const link = document.createElement("a");
         link.href = URL.createObjectURL(blob);
         link.download = `Panel_${W}x${H}_Mixed.dxf`;
         link.click();
+    });
+
+    document.getElementById('btn-calculate').addEventListener('click', () => {
+        const W = parseFloat(document.getElementById('in-width').value);
+        const H = parseFloat(document.getElementById('in-height').value);
+        const dxfText = buildDxfString(W, H);
+        const filename = `Panel_${W}x${H}_Mixed.dxf`;
+
+        // Wrap the generated DXF text as a real File object and attach it
+        // to the hidden form's file input via DataTransfer - this lets us
+        // submit it through the exact same multipart upload flow /dashboard
+        // already handles for manually-uploaded files, so pricing/geometry
+        // logic never needs to be duplicated in JS.
+        const file = new File([dxfText], filename, { type: 'application/dxf' });
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(file);
+        document.getElementById('calc-file-field').files = dataTransfer.files;
+        document.getElementById('calc-material-field').value = document.getElementById('in-material').value;
+
+        document.getElementById('sendToCalculatorForm').submit();
     });
 
     window.addEventListener('load', render);
