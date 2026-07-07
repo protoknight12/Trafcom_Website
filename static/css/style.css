@@ -633,3 +633,243 @@ button, .btn {
     line-height: 1.6;
     margin: 0;
 }
+/* ==========================================================================
+   DMG MORI INSPIRED MODERN INDUSTRIAL STYLING
+   ========================================================================== */
+
+.dmg-container {
+    max-width: 1340px;
+    margin: 0 auto;
+    padding: 40px 24px;
+}
+
+/* --- Hero Layout --- */
+.dmg-hero {
+    padding: 60px 0 80px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.hero-tag {
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: var(--accent-secondary);
+    margin-bottom: 16px;
+}
+
+.hero-tag span {
+    color: var(--text-main);
+    background-color: rgba(124, 58, 237, 0.2);
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-right: 4px;
+}
+
+.hero-title {
+    font-size: 3.5rem;
+    font-weight: 800;
+    letter-spacing: -1px;
+    line-height: 1.1;
+    color: var(--text-main);
+    margin-bottom: 24px;
+}
+
+.text-glow {
+    background: var(--gradient-purple);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.hero-lead {
+    font-size: 1.1rem;
+    color: var(--text-muted);
+    max-width: 720px;
+    line-height: 1.7;
+    margin-bottom: 48px;
+}
+
+/* --- Technical Mini-Metrics --- */
+.hero-stats {
+    display: flex;
+    gap: 60px;
+    flex-wrap: wrap;
+}
+
+.stat-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.stat-num {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--text-main);
+    font-family: monospace;
+    border-bottom: 2px solid var(--accent-primary);
+    width: fit-content;
+    padding-bottom: 2px;
+}
+
+.stat-label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* --- Showcase Section Structure --- */
+.dmg-showcase-section {
+    margin-top: 60px;
+}
+
+.section-header-dmg {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    margin-bottom: 40px;
+    gap: 20px;
+}
+
+.dmg-section-title {
+    font-size: 2rem;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    color: var(--text-main);
+    margin: 0;
+}
+
+.dmg-line-decorative {
+    flex-grow: 1;
+    height: 1px;
+    background: linear-gradient(90deg, rgba(255,255,255,0.08) 0%, transparent 100%);
+    margin-bottom: 8px;
+}
+
+/* --- The Machine Cards Grid --- */
+.dmg-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 30px;
+}
+
+.dmg-card {
+    background-color: var(--bg-surface);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: var(--border-radius-md); /* Keeps your exact smooth rounding rule */
+    padding: 30px;
+    display: flex;
+    flex-direction: column;
+    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    position: relative;
+}
+
+.dmg-card:hover {
+    border-color: rgba(168, 85, 247, 0.4);
+    transform: translateY(-5px);
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4), 0 0 30px rgba(124, 58, 237, 0.05);
+}
+
+.dmg-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    padding-bottom: 14px;
+    margin-bottom: 16px;
+}
+
+.dmg-card-series {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    letter-spacing: 1px;
+}
+
+.dmg-card-num {
+    font-size: 0.85rem;
+    font-weight: 700;
+    font-family: monospace;
+    color: rgba(255, 255, 255, 0.2);
+}
+
+.dmg-card-title {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: var(--text-main);
+    margin: 0 0 20px 0;
+}
+
+/* --- Rounded Image Mask --- */
+.dmg-card-img-wrap {
+    width: 100%;
+    height: 200px;
+    border-radius: var(--border-radius-sm);
+    overflow: hidden;
+    margin-bottom: 24px;
+    background-color: var(--bg-base);
+    border: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.dmg-card-img-wrap img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 0.75;
+    transition: transform 0.5s ease, opacity 0.5s ease;
+}
+
+.dmg-card:hover .dmg-card-img-wrap img {
+    transform: scale(1.05);
+    opacity: 0.95;
+}
+
+/* --- Structured Specs Layout --- */
+.dmg-card-specs {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background-color: rgba(255, 255, 255, 0.02);
+    padding: 16px;
+    border-radius: var(--border-radius-sm);
+    margin-bottom: 20px;
+    border-left: 3px solid var(--accent-primary);
+}
+
+.spec-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.85rem;
+}
+
+.spec-name {
+    color: var(--text-muted);
+}
+
+.spec-val {
+    color: var(--text-main);
+    font-weight: 600;
+}
+
+.dmg-card-desc {
+    font-size: 0.88rem;
+    color: var(--text-muted);
+    line-height: 1.6;
+    margin: 0;
+}
+
+/* Active Link Accent indicator */
+.active-nav-link {
+    color: var(--text-main) !important;
+    position: relative;
+}
+.active-nav-link::after {
+    content: '';
+    position: absolute;
+    bottom: -6px;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background: var(--gradient-purple);
+}
