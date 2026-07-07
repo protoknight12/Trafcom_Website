@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Генератор на Панели - Trafcom</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .generator-layout {
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            gap: 24px;
+            align-items: start;
+        }
+        .controls-sidebar {
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-md);
+            padding: 24px;
+            max-height: 85vh;
+            overflow-y: auto;
+        }
+        .control-group-title {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--accent-secondary);
+            margin: 20px 0 10px 0;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 4px;
+        }
+        .control-group-title:first-child { margin-top: 0; }
+
+        .slider-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 4px;
+        }
+        .slider-label { font-size: 0.85rem; color: var(--text-muted); }
+        .slider-val { font-size: 0.85rem; font-family: monospace; color: var(--text-main); font-weight: bold; }
+
+        input[type="range"] {
+            width: 100%;
+            margin-bottom: 16px;
+            accent-color: var(--accent-primary);
+        }
+
+        .shape-selector {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+        .shape-btn {
+            background: var(--bg-input);
+            border: 1px solid var(--border-color);
+            color: var(--text-muted);
+            padding: 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            text-align: center;
+        }
+        .shape-btn.active {
+            background: rgba(124, 58, 237, 0.15);
+            border-color: var(--accent-primary);
+            color: var(--text-main);
+        }
+
+        .preview-area {
+            background-color: #0b0c10;
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-md);
+            height: 85vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+            background-image: radial-gradient(circle at center, #1a1c24 0%, #0b0c10 100%);
+        }
+        canvas {
+            background: #2a2d36;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+            max-width: 90%;
+            max-height: 90%;
+        }
+        .stats-overlay {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(20, 24, 36, 0.85);
+            border: 1px solid var(--border-color);
+            padding: 16px;
+            border-radius: var(--border-radius-sm);
+            backdrop-filter: blur(4px);
+        }
+        .stat-line { display: flex; justify-content: space-between; gap: 20px; font-size: 0.85rem; margin-bottom: 6px; }
+        .stat-line span:last-child { font-family: monospace; color: var(--accent-secondary); font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<nav class="navbar">
+    <div class="nav-container">
+        <h2>TRAFCOM Генератор</h2>
+        <div class="nav-links">
+            <a href="{{ url_for('index') }}" class="btn-secondary" style="padding: 8px 16px;">← Обратно</a>
+        </div>
+    </div>
+</nav>
+
+<main class="dashboard-container" style="margin-top: 20px; max-width: 1400px;">
+    <div class="generator-layout">
+
+        <div class="controls-sidebar">
+            <div class="control-group-title">Панел & Материал</div>
+
+            <div class="slider-row"><span class="slider-label">Ширина (mm)</span><span class="slider-val" id="val-width">900</span></div>
+            <input type="range" id="in-width" min="100" max="2500" value="900">
+
+            <div class="slider-row"><span class="slider-label">Височина (mm)</span><span class="slider-val" id="val-height">1900</span></div>
+            <input type="range" id="in-height" min="100" max="3000" value="1900">
+
+            <div class="slider-row"><span class="slider-label">Дебелина (mm)</span><span class="slider-val" id="val-thickness">2</span></div>
+            <input type="range" id="in-thickness" min="1" max="20" value="2">
+
+            <div class="control-group-title">Геометрия</div>
+
+            <div class="shape-selector" id="shape-selector">
+                <div class="shape-btn active" data-shape="hexagon">Hexagon</div>
+                <div class="shape-btn" data-shape="circle">Circle</div>
+                <div class="shape-btn" data-shape="square">Square</div>
+                <div class="shape-btn" data-shape="triangle">Triangle</div>
+                <div class="shape-btn" data-shape="rhombus">Rhombus</div>
+                <div class="shape-btn" data-shape="hex-cluster">Hex-Cluster</div>
+            </div>
+
+            <div class="slider-row"><span class="slider-label">Макс. Отвор (mm)</span><span class="slider-val" id="val-cellsize">72</span></div>
+            <input type="range" id="in-cellsize" min="10" max="150" value="72">
+
+            <div class="slider-row"><span class="slider-label">Мин. Отвор (mm)</span><span class="slider-val" id="val-minsize">10</span></div>
+            <input type="range" id="in-minsize" min="2" max="50" value="10">
+
+            <div class="slider-row"><span class="slider-label">Луфт (Spacing mm)</span><span class="slider-val" id="val-spacing">6</span></div>
+            <input type="range" id="in-spacing" min="1" max="30" value="6">
+
+            <div class="slider-row"><span class="slider-label">Ротация (°)</span><span class="slider-val" id="val-rotation">0</span></div>
+            <input type="range" id="in-rotation" min="0" max="180" value="0">
+
+            <div class="slider-row"><span class="slider-label">Рамка (Border mm)</span><span class="slider-val" id="val-border">30</span></div>
+            <input type="range" id="in-border" min="0" max="200" value="30">
+
+            <div class="control-group-title">Градиент & Органичност</div>
+
+            <div class="form-group" style="margin-bottom: 12px;">
+                <select id="in-direction" style="background: var(--bg-input); border: 1px solid var(--border-color); color: #fff; padding: 8px; border-radius: 4px;">
+                    <option value="top-bottom">Плътност: Горе -> Долу</option>
+                    <option value="bottom-top">Плътност: Долу -> Горе</option>
+                </select>
+            </div>
+
+            <div class="slider-row"><span class="slider-label">Плътна Зона (%)</span><span class="slider-val" id="val-densezone">18</span></div>
+            <input type="range" id="in-densezone" min="0" max="80" value="18">
+
+            <div class="slider-row"><span class="slider-label">Крива (Falloff)</span><span class="slider-val" id="val-falloff">2.4</span></div>
+            <input type="range" id="in-falloff" min="0.5" max="6.0" step="0.1" value="2.4">
+
+            <div class="slider-row"><span class="slider-label">Празнота (Sparseness %)</span><span class="slider-val" id="val-sparseness">92</span></div>
+            <input type="range" id="in-sparseness" min="0" max="100" value="92">
+
+            <div class="slider-row"><span class="slider-label">Разпръскване (Jitter %)</span><span class="slider-val" id="val-jitter">5</span></div>
+            <input type="range" id="in-jitter" min="0" max="50" value="5">
+
+            <div class="slider-row"><span class="slider-label">Горна Случайност (%)</span><span class="slider-val" id="val-randomness">8</span></div>
+            <input type="range" id="in-randomness" min="0" max="50" value="8">
+
+            <div class="slider-row"><span class="slider-label">Random Seed</span><span class="slider-val" id="val-seed">7341</span></div>
+            <input type="range" id="in-seed" min="1" max="9999" value="7341">
+
+            <button id="btn-download" class="btn-submit" style="width: 100%; margin-top: 20px;">Изтегли DXF Модел</button>
+        </div>
+
+        <div class="preview-area">
+            <canvas id="genCanvas"></canvas>
+            <div class="stats-overlay">
+                <div class="stat-line"><span>Панел</span><span id="stat-panel">0 x 0 mm</span></div>
+                <div class="stat-line"><span>Брой отвори</span><span id="stat-holes">0</span></div>
+                <div class="stat-line"><span>Линеен сряз</span><span id="stat-cut">0.00 m</span></div>
+            </div>
+        </div>
+
+    </div>
+</main>
+
+<script>
+    // --- State & DOM setup ---
+    const canvas = document.getElementById('genCanvas');
+    const ctx = canvas.getContext('2d');
+    let currentShape = 'hexagon';
+    let generatedHoles = []; // Will store geometry for DXF export
+
+    const inputs = [
+        'width', 'height', 'thickness', 'cellsize', 'minsize', 'spacing',
+        'rotation', 'border', 'densezone', 'falloff', 'sparseness',
+        'jitter', 'randomness', 'seed'
+    ];
+
+    // Bind shape buttons
+    document.querySelectorAll('.shape-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            document.querySelectorAll('.shape-btn').forEach(b => b.classList.remove('active'));
+            e.target.classList.add('active');
+            currentShape = e.target.getAttribute('data-shape');
+            render();
+        });
+    });
+
+    // Bind all inputs to trigger re-render
+    inputs.forEach(id => {
+        document.getElementById(`in-${id}`).addEventListener('input', (e) => {
+            document.getElementById(`val-${id}`).innerText = e.target.value;
+            render();
+        });
+    });
+    document.getElementById('in-direction').addEventListener('change', render);
+
+    // Seeded Random Generator (Mulberry32) to ensure consistent organic patterns
+    function mulberry32(a) {
+        return function() {
+            var t = a += 0x6D2B79F5;
+            t = Math.imul(t ^ t >>> 15, t | 1);
+            t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+            return ((t ^ t >>> 14) >>> 0) / 4294967296;
+        }
+    }
+
+    // --- Main Rendering & Math Engine ---
+    function render() {
+        // Read Params
+        const W = parseFloat(document.getElementById('in-width').value);
+        const H = parseFloat(document.getElementById('in-height').value);
+        const maxSize = parseFloat(document.getElementById('in-cellsize').value);
+        const minSize = parseFloat(document.getElementById('in-minsize').value);
+        const spacing = parseFloat(document.getElementById('in-spacing').value);
+        const rotRad = parseFloat(document.getElementById('in-rotation').value) * Math.PI / 180;
+        const border = parseFloat(document.getElementById('in-border').value);
+        const dir = document.getElementById('in-direction').value;
+        const densePct = parseFloat(document.getElementById('in-densezone').value) / 100;
+        const falloff = parseFloat(document.getElementById('in-falloff').value);
+        const sparseness = parseFloat(document.getElementById('in-sparseness').value) / 100;
+        const jitterPct = parseFloat(document.getElementById('in-jitter').value) / 100;
+        const topRandomness = parseFloat(document.getElementById('in-randomness').value) / 100;
+        const seed = parseInt(document.getElementById('in-seed').value);
+
+        const rand = mulberry32(seed);
+        generatedHoles = [];
+        let totalCutLength = 0;
+
+        // Setup Canvas aspect ratio
+        const drawScale = Math.min(800 / W, 800 / H);
+        canvas.width = W * drawScale;
+        canvas.height = H * drawScale;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Base plate (Dark Metal)
+        ctx.fillStyle = '#475569';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Hole color (Background showing through)
+        ctx.fillStyle = '#0b0c10';
+
+        const step = maxSize + spacing;
+        const startX = border + maxSize / 2;
+        const startY = border + maxSize / 2;
+        const endX = W - border - maxSize / 2;
+        const endY = H - border - maxSize / 2;
+
+        // Staggered grid toggle
+        let rowIdx = 0;
+
+        for (let y = startY; y <= endY; y += step * 0.866) { // 0.866 handles hex/stagger packing naturally
+            let isStaggered = rowIdx % 2 !== 0;
+            let rowStartX = startX + (isStaggered ? step / 2 : 0);
+
+            for (let x = rowStartX; x <= endX; x += step) {
+                // Determine position in gradient
+                let normY = (y - startY) / (endY - startY || 1);
+                if (dir === 'bottom-top') normY = 1.0 - normY;
+
+                // Evaluate Falloff Curve
+                let scaleFactor = 1.0;
+                let activeSparseness = 0;
+
+                if (normY > densePct) {
+                    let falloffDomain = (normY - densePct) / (1.0 - densePct);
+                    scaleFactor = 1.0 - Math.pow(falloffDomain, falloff);
+                    activeSparseness = sparseness * falloffDomain;
+                }
+
+                // Random drops (holes missing entirely)
+                if (rand() < topRandomness && normY <= densePct) continue; // organic holes in dense zone
+                if (rand() < activeSparseness) continue; // dissolve effect at sparse end
+
+                let finalSize = minSize + (maxSize - minSize) * Math.max(0, scaleFactor);
+                if (finalSize < 2) continue; // too small to cut
+
+                // Jitter (moves hole off-center as it gets smaller)
+                let jX = x;
+                let jY = y;
+                if (jitterPct > 0 && scaleFactor < 0.9) {
+                    let jitterAmt = maxSize * jitterPct * (1.0 - scaleFactor);
+                    jX += (rand() * 2 - 1) * jitterAmt;
+                    jY += (rand() * 2 - 1) * jitterAmt;
+                }
+
+                // Save for DXF & draw
+                generatedHoles.push({ x: jX, y: jY, size: finalSize, rot: rotRad });
+
+                ctx.save();
+                ctx.translate(jX * drawScale, jY * drawScale);
+                ctx.rotate(rotRad);
+
+                ctx.beginPath();
+                let r = (finalSize * drawScale) / 2;
+
+                if (currentShape === 'circle') {
+                    ctx.arc(0, 0, r, 0, Math.PI*2);
+                    totalCutLength += 2 * Math.PI * (finalSize/2);
+                }
+                else if (currentShape === 'square') {
+                    ctx.rect(-r, -r, r*2, r*2);
+                    totalCutLength += 4 * finalSize;
+                }
+                else if (currentShape === 'hexagon' || currentShape === 'hex-cluster') {
+                    // For hex-cluster, we just approximate it as a hexagon for simplicity in canvas right now,
+                    // but a real implementation would draw 3 rhombuses. We will render as hexagon.
+                    for (let i = 0; i < 6; i++) {
+                        let a = i * Math.PI / 3;
+                        if (i === 0) ctx.moveTo(r * Math.cos(a), r * Math.sin(a));
+                        else ctx.lineTo(r * Math.cos(a), r * Math.sin(a));
+                    }
+                    ctx.closePath();
+                    totalCutLength += 6 * (finalSize/2);
+                }
+                else if (currentShape === 'triangle') {
+                    ctx.moveTo(0, -r);
+                    ctx.lineTo(r * 0.866, r/2);
+                    ctx.lineTo(-r * 0.866, r/2);
+                    ctx.closePath();
+                    totalCutLength += 3 * (r * 1.732);
+                }
+                else if (currentShape === 'rhombus') {
+                    ctx.moveTo(0, -r);
+                    ctx.lineTo(r/1.5, 0);
+                    ctx.moveTo(0, r);
+                    ctx.lineTo(-r/1.5, 0);
+                    ctx.closePath();
+                    totalCutLength += 4 * Math.sqrt(Math.pow(finalSize/2, 2) + Math.pow(finalSize/3, 2));
+                }
+
+                ctx.fill();
+                ctx.restore();
+            }
+            rowIdx++;
+        }
+
+        // Update HUD
+        document.getElementById('stat-panel').innerText = `${W} x ${H} mm`;
+        document.getElementById('stat-holes').innerText = generatedHoles.length;
+        document.getElementById('stat-cut').innerText = (totalCutLength / 1000).toFixed(2) + ' m';
+    }
+
+    // --- DXF Compilation Logic ---
+    document.getElementById('btn-download').addEventListener('click', () => {
+        const W = parseFloat(document.getElementById('in-width').value);
+        const H = parseFloat(document.getElementById('in-height').value);
+
+        let dxf = [];
+        dxf.push("  0\nSECTION\n  2\nHEADER\n  0\nENDSEC\n  0\nSECTION\n  2\nENTITIES");
+
+        // 1. Panel Border
+        dxf.push("  0\nLWPOLYLINE\n100\nAcDbEntity\n  8\n0\n100\nAcDbPolyline\n 90\n4\n 70\n1");
+        dxf.push(` 10\n0.0\n 20\n0.0\n 10\n${W}\n 20\n0.0\n 10\n${W}\n 20\n${H}\n 10\n0.0\n 20\n${H}`);
+
+        // 2. Holes
+        generatedHoles.forEach(h => {
+            let rad = h.size / 2;
+
+            if (currentShape === 'circle') {
+                dxf.push(`  0\nCIRCLE\n  8\n0\n 10\n${h.x.toFixed(3)}\n 20\n${h.y.toFixed(3)}\n 40\n${rad.toFixed(3)}`);
+            }
+            else {
+                // Polygon logic (DXF needs exact vertices rotated)
+                let pts = [];
+                if (currentShape === 'square') {
+                    pts = [[-rad, -rad], [rad, -rad], [rad, rad], [-rad, rad]];
+                } else if (currentShape === 'hexagon' || currentShape === 'hex-cluster') {
+                    for (let i = 0; i < 6; i++) {
+                        let a = i * Math.PI / 3;
+                        pts.push([rad * Math.cos(a), rad * Math.sin(a)]);
+                    }
+                } else if (currentShape === 'triangle') {
+                    pts = [[0, -rad], [rad * 0.866, rad/2], [-rad * 0.866, rad/2]];
+                } else if (currentShape === 'rhombus') {
+                    pts = [[0, -rad], [rad/1.5, 0], [0, rad], [-rad/1.5, 0]];
+                }
+
+                // Apply rotation & translation
+                dxf.push(`  0\nLWPOLYLINE\n100\nAcDbEntity\n  8\n0\n100\nAcDbPolyline\n 90\n${pts.length}\n 70\n1`);
+                pts.forEach(p => {
+                    let rx = p[0] * Math.cos(h.rot) - p[1] * Math.sin(h.rot);
+                    let ry = p[0] * Math.sin(h.rot) + p[1] * Math.cos(h.rot);
+                    dxf.push(` 10\n${(h.x + rx).toFixed(3)}\n 20\n${(h.y + ry).toFixed(3)}`);
+                });
+            }
+        });
+
+        dxf.push("  0\nENDSEC\n  0\nEOF");
+
+        // Trigger file download
+        const blob = new Blob([dxf.join('\n')], { type: "application/dxf" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = `Panel_${W}x${H}_${currentShape}.dxf`;
+        link.click();
+    });
+
+    // Init
+    window.addEventListener('load', render);
+
+</script>
+</body>
+</html>

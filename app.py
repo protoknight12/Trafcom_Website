@@ -452,6 +452,12 @@ def index():
     return render_template('index.html')
 
 
+@app.route('/generator')
+@login_required
+def generator():
+    # Publicly accessible, or add @login_required if you want it locked down
+    return render_template('generator.html')
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
