@@ -90,25 +90,24 @@
 <body>
 <nav class="navbar">
     <div class="nav-container">
-        <a href="/" class="nav-logo" style="text-decoration: none; color: inherit;"><h2>TRAFCOM</h2></a>
+        <h2>Административен Панел</h2>
         <div class="nav-links">
-            <div class="nav-section-links">
-                <div class="dropdown">
-                    <a class="dropdown-trigger">Приложения <span class="dropdown-arrow">▼</span></a>
-                    <div class="dropdown-content">
-                        <a href="{{ url_for('dashboard') }}">DXF CNC Калкулатор</a>
-                        <a href="{{ url_for('generator') }}">Параметричен Генератор</a>
-                    </div>
-                </div>
-            </div>
-            <div class="nav-cta-buttons">
-                {% if current_user.is_authenticated %}
-                    <a href="{{ url_for('logout') }}" class="btn-secondary" style="padding: 8px 16px;">Изход</a>
-                {% else %}
-                    <a href="{{ url_for('login') }}" class="btn-secondary" style="padding: 8px 16px;">Вход</a>
-                {% endif %}
+    <div class="nav-section-links">
+        <div class="dropdown">
+            <a class="dropdown-trigger">Приложения <span class="dropdown-arrow">▼</span></a>
+            <div class="dropdown-content">
+                <a href="{{ url_for('dashboard') }}">DXF CNC Калкулатор</a>
+                <a href="{{ url_for('generator') }}">Параметричен Генератор</a>
             </div>
         </div>
+        <a href="{{ url_for('index') }}">Начало</a>
+        <a href="{{ url_for('dashboard') }}">Лична Библиотека</a>
+    </div>
+    <div class="nav-cta-buttons">
+        <span class="user-badge" style="border-color: var(--danger-border); color: #ff7675;"> СЕСИЯ: АДМИНИСТРАТОР</span>
+        <a href="{{ url_for('logout') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Изход</a>
+    </div>
+</div>
     </div>
 </nav>
 
