@@ -125,13 +125,9 @@
                 <div class="form-group" style="margin-bottom: 1.5rem;">
                     <label for="material" style="display: block; margin-bottom: 0.5rem; font-weight: 500;">1. Изберете материал:</label>
                     <select id="material" name="material" style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px; font-size: 1rem; cursor: pointer;">
-                        <option value="wood">Дървесен материал / МДФ (Wood)</option>
-                        <option value="steel">Въглеродна стомана (Steel)</option>
-                        <option value="stainless_steel">Неръждаема стомана (Stainless Steel)</option>
-                        <option value="aluminum">Алуминий (Aluminum)</option>
-                        <option value="copper">Мед (Copper)</option>
-                        <option value="brass">Месинг (Brass)</option>
-                        <option value="galvanized">Поцинкована ламарина (Galvanized)</option>
+                        {% for material in materials %}
+                        <option value="{{ material.key }}">{{ material.display_name }}</option>
+                        {% endfor %}
                     </select>
                 </div>
 

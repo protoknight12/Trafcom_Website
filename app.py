@@ -2,6 +2,8 @@ import os
 import json
 import math
 import uuid
+import webbrowser
+import threading
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
@@ -70,6 +72,29 @@ class DxfFile(db.Model):
     geometry_json = db.Column(db.Text, nullable=True)
 
 
+class MaterialPrice(db.Model):
+    """
+    Per-material pricing, editable by admins at runtime instead of being
+    hardcoded in source. `key` is the stable internal identifier used in
+    DxfFile.material and the dashboard's material <select> - it's
+    auto-generated when a material is created, not edited through the UI.
+
+    Prices are stored in human-friendly units (EUR per square meter, EUR per
+    meter of cut) rather than per mm2/per mm - the raw per-mm values needed
+    for typical prices are tiny (e.g. 0.00001), which is awkward to enter and
+    read for non-technical staff. calculate_cnc_price() converts the
+    drawing's mm-based measurements into m2/m before applying these rates, so
+    the actual calculated price is unaffected by this unit choice - only
+    what admins type/see changes.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    key = db.Column(db.String(50), unique=True, nullable=False)
+    display_name = db.Column(db.String(100), nullable=False)
+    cost_per_m2 = db.Column(db.Float, nullable=False)
+    cost_per_meter_cut = db.Column(db.Float, nullable=False)
+    cost_per_pierce = db.Column(db.Float, nullable=False)
+
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
@@ -77,15 +102,41 @@ def load_user(user_id):
 
 # ----------------- DXF ГЕОМЕТРИЯ И ЦЕНИ -----------------
 
-MATERIAL_CONFIG = {
-    "wood": {"cost_per_mm2": 0.00001, "cut_cost_per_mm": 0.0008, "cost_per_pierce": 0.05, "name": "Дървесен материал / МДФ"},
-    "steel": {"cost_per_mm2": 0.00002, "cut_cost_per_mm": 0.0015, "cost_per_pierce": 0.15, "name": "Въглеродна стомана"},
-    "stainless_steel": {"cost_per_mm2": 0.00005, "cut_cost_per_mm": 0.0025, "cost_per_pierce": 0.25, "name": "Неръждаема стомана"},
-    "aluminum": {"cost_per_mm2": 0.00004, "cut_cost_per_mm": 0.0020, "cost_per_pierce": 0.20, "name": "Алуминий"},
-    "copper": {"cost_per_mm2": 0.00012, "cut_cost_per_mm": 0.0040, "cost_per_pierce": 0.40, "name": "Мед"},
-    "brass": {"cost_per_mm2": 0.00009, "cut_cost_per_mm": 0.0035, "cost_per_pierce": 0.35, "name": "Месинг"},
-    "galvanized": {"cost_per_mm2": 0.00003, "cut_cost_per_mm": 0.0018, "cost_per_pierce": 0.18, "name": "Поцинкована ламарина"}
+# One-time seed data: used only to populate the MaterialPrice table on first
+# run (see seed_material_prices() below). After that, prices are read from
+# and edited through the database - NOT from this dict - so admins can
+# change them at runtime via the admin panel without a code change/redeploy.
+# These are the same real prices as before, just re-expressed in EUR/m2 and
+# EUR/meter-of-cut instead of EUR/mm2 and EUR/mm - mathematically identical,
+# just friendlier numbers (e.g. 0.00001 EUR/mm2 = 10.00 EUR/m2).
+DEFAULT_MATERIAL_SEED = {
+    "wood": {"cost_per_m2": 10.00, "cost_per_meter_cut": 0.80, "cost_per_pierce": 0.05, "name": "Дървесен материал / МДФ"},
+    "steel": {"cost_per_m2": 20.00, "cost_per_meter_cut": 1.50, "cost_per_pierce": 0.15, "name": "Въглеродна стомана"},
+    "stainless_steel": {"cost_per_m2": 50.00, "cost_per_meter_cut": 2.50, "cost_per_pierce": 0.25, "name": "Неръждаема стомана"},
+    "aluminum": {"cost_per_m2": 40.00, "cost_per_meter_cut": 2.00, "cost_per_pierce": 0.20, "name": "Алуминий"},
+    "copper": {"cost_per_m2": 120.00, "cost_per_meter_cut": 4.00, "cost_per_pierce": 0.40, "name": "Мед"},
+    "brass": {"cost_per_m2": 90.00, "cost_per_meter_cut": 3.50, "cost_per_pierce": 0.35, "name": "Месинг"},
+    "galvanized": {"cost_per_m2": 30.00, "cost_per_meter_cut": 1.80, "cost_per_pierce": 0.18, "name": "Поцинкована ламарина"}
 }
+
+
+def seed_material_prices():
+    """
+    Populates the MaterialPrice table from DEFAULT_MATERIAL_SEED, but only
+    for keys that don't already exist - safe to call on every startup.
+    Existing rows (including any prices an admin has already edited, or new
+    materials an admin has added) are never overwritten.
+    """
+    for key, cfg in DEFAULT_MATERIAL_SEED.items():
+        if not MaterialPrice.query.filter_by(key=key).first():
+            db.session.add(MaterialPrice(
+                key=key,
+                display_name=cfg['name'],
+                cost_per_m2=cfg['cost_per_m2'],
+                cost_per_meter_cut=cfg['cost_per_meter_cut'],
+                cost_per_pierce=cfg['cost_per_pierce']
+            ))
+    db.session.commit()
 
 
 def process_entity(entity):
@@ -366,14 +417,20 @@ def analyze_dxf_geometry(file_path):
         return None, None, None, None, None
 
 
-def calculate_cnc_price(width, height, total_length, pierce_count, material):
-    config = MATERIAL_CONFIG.get(material)
-    if not config:
+def calculate_cnc_price(width, height, total_length, pierce_count, material_key):
+    material = MaterialPrice.query.filter_by(key=material_key).first()
+    if not material:
         return 0.0
 
-    material_surface_cost = width * height * config["cost_per_mm2"]
-    cutting_lineal_cost = total_length * config["cut_cost_per_mm"]
-    piercing_total_cost = pierce_count * config["cost_per_pierce"]
+    # Prices are stored per square meter / per meter of cut (human-friendly),
+    # so convert the drawing's mm-based measurements accordingly before
+    # applying them. 1 m2 = 1,000,000 mm2; 1 m = 1,000 mm.
+    area_m2 = (width * height) / 1_000_000
+    length_m = total_length / 1_000
+
+    material_surface_cost = area_m2 * material.cost_per_m2
+    cutting_lineal_cost = length_m * material.cost_per_meter_cut
+    piercing_total_cost = pierce_count * material.cost_per_pierce
 
     total_calculated_euro = material_surface_cost + cutting_lineal_cost + piercing_total_cost + BASE_SETUP_FEE
     return round(total_calculated_euro, 2)
@@ -387,7 +444,12 @@ def index():
         if current_user.is_admin:
             return redirect(url_for('admin_dashboard'))
         return redirect(url_for('dashboard'))
-    return redirect(url_for('login'))
+    # Anonymous visitors see the public landing page (list of apps/machines)
+    # instead of being forced straight to login. Login is only required once
+    # they actually click into an app - e.g. /dashboard is still guarded by
+    # @login_required, which automatically bounces unauthenticated visitors
+    # to the login page via Flask-Login's login_manager.login_view.
+    return render_template('index.html')
 
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -468,7 +530,8 @@ def dashboard():
                     return redirect(url_for('dashboard'))
 
                 chosen_material = request.form.get('material', 'steel')
-                if chosen_material not in MATERIAL_CONFIG:
+                chosen_material_row = MaterialPrice.query.filter_by(key=chosen_material).first()
+                if not chosen_material_row:
                     flash('Невалиден избор на материал.', 'danger')
                     return redirect(url_for('dashboard'))
 
@@ -505,7 +568,8 @@ def dashboard():
             return redirect(url_for('dashboard'))
 
     user_uploads = DxfFile.query.filter_by(user_id=current_user.id).order_by(DxfFile.id.desc()).all()
-    return render_template('dashboard.html', uploads=user_uploads)
+    materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
+    return render_template('dashboard.html', uploads=user_uploads, materials=materials)
 
 
 @app.route('/geometry/<int:file_id>')
@@ -554,7 +618,8 @@ def admin_dashboard():
         flash('Нямате достъп до тази страница.')
         return redirect(url_for('dashboard'))
     all_users = User.query.filter(User.id != current_user.id).all()
-    return render_template('admin.html', users=all_users)
+    materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
+    return render_template('admin.html', users=all_users, materials=materials)
 
 
 @app.route('/admin/create_user', methods=['POST'])
@@ -578,6 +643,89 @@ def admin_create_user():
     db.session.add(new_user)
     db.session.commit()
     flash(f'Успешно създаден потребител: {username}')
+    return redirect(url_for('admin_dashboard'))
+
+
+@app.route('/admin/update_material/<string:key>', methods=['POST'])
+@login_required
+def admin_update_material(key):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    material = MaterialPrice.query.filter_by(key=key).first_or_404()
+
+    try:
+        cost_per_m2 = float(request.form.get('cost_per_m2', ''))
+        cost_per_meter_cut = float(request.form.get('cost_per_meter_cut', ''))
+        cost_per_pierce = float(request.form.get('cost_per_pierce', ''))
+    except ValueError:
+        flash('Всички цени трябва да бъдат валидни числа.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    if cost_per_m2 < 0 or cost_per_meter_cut < 0 or cost_per_pierce < 0:
+        flash('Цените не могат да бъдат отрицателни числа.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    # Round to 2 decimals - keeps prices in a simple, everyday currency
+    # format rather than accumulating long float tails over repeated edits.
+    material.cost_per_m2 = round(cost_per_m2, 2)
+    material.cost_per_meter_cut = round(cost_per_meter_cut, 2)
+    material.cost_per_pierce = round(cost_per_pierce, 2)
+    db.session.commit()
+
+    flash(f'Цените за "{material.display_name}" бяха обновени успешно.', 'success')
+    return redirect(url_for('admin_dashboard'))
+
+
+@app.route('/admin/add_material', methods=['POST'])
+@login_required
+def admin_add_material():
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    display_name = request.form.get('display_name', '').strip()
+    if not display_name:
+        flash('Моля въведете име на материала.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    if MaterialPrice.query.filter_by(display_name=display_name).first():
+        # Lets your boss add e.g. "Алуминий 2мм" and "Алуминий 10мм" as
+        # distinct priced entries, while still catching accidental exact
+        # duplicates of the same name.
+        flash(f'Вече съществува материал с име "{display_name}".', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    try:
+        cost_per_m2 = float(request.form.get('cost_per_m2', ''))
+        cost_per_meter_cut = float(request.form.get('cost_per_meter_cut', ''))
+        cost_per_pierce = float(request.form.get('cost_per_pierce', ''))
+    except ValueError:
+        flash('Всички цени трябва да бъдат валидни числа.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    if cost_per_m2 < 0 or cost_per_meter_cut < 0 or cost_per_pierce < 0:
+        flash('Цените не могат да бъдат отрицателни числа.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    # The key is just an opaque internal identifier (used in DxfFile.material
+    # and the dashboard <select> value) - it's never shown to users, so a
+    # simple auto-generated id-based key avoids any need to transliterate
+    # Cyrillic display names into a URL-safe slug.
+    new_material = MaterialPrice(
+        key='pending',  # placeholder, replaced with a real unique key below
+        display_name=display_name,
+        cost_per_m2=round(cost_per_m2, 2),
+        cost_per_meter_cut=round(cost_per_meter_cut, 2),
+        cost_per_pierce=round(cost_per_pierce, 2)
+    )
+    db.session.add(new_material)
+    db.session.flush()  # assigns new_material.id without a full commit yet
+    new_material.key = f'material_{new_material.id}'
+    db.session.commit()
+
+    flash(f'Материалът "{display_name}" беше добавен успешно.', 'success')
     return redirect(url_for('admin_dashboard'))
 
 
@@ -634,8 +782,21 @@ if __name__ == '__main__':
                 is_admin=True
             ))
             db.session.commit()
+        # Populate the MaterialPrice table with defaults on first run only -
+        # existing rows (including any admin-edited prices) are never touched.
+        seed_material_prices()
     # Defaults to debug mode for local development. Set FLASK_DEBUG=0 in your
     # environment before deploying anywhere public - debug mode exposes an
     # interactive code-execution debugger on unhandled exceptions.
     debug_mode = os.environ.get('FLASK_DEBUG', '1') == '1'
+
+    # Auto-open the app in the browser on startup. When debug_mode is on,
+    # Flask's reloader re-runs this entire script in a subprocess - without
+    # this guard the browser would pop open twice. WERKZEUG_RUN_MAIN is only
+    # set to 'true' inside that reloaded subprocess (the one actually
+    # serving requests), so we only open there; when debug is off, there's
+    # no reloader/subprocess at all, so we open immediately instead.
+    if not debug_mode or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+        threading.Timer(1.0, lambda: webbrowser.open('http://127.0.0.1:5000/')).start()
+
     app.run(debug=debug_mode)

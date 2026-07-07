@@ -5,6 +5,35 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Админ Панел - Trafcom DXF</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .material-price-input {
+            width: 100px;
+            padding: 0.5rem;
+            background-color: #1a1a1a;
+            color: #fff;
+            border: 1px solid #333;
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+        .material-row-form {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .btn-save-price {
+            background-color: var(--accent-primary, #6c5ce7);
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 0.5rem 0.9rem;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.85rem;
+        }
+        .btn-save-price:hover {
+            opacity: 0.85;
+        }
+    </style>
 </head>
 <body>
 
@@ -52,6 +81,73 @@
             </form>
         </section>
     </div>
+
+    <section class="admin-card">
+        <h3>Добавяне на нов материал</h3>
+        <p class="section-subtitle">Добавете нов материал (напр. различни дебелини на един и същ метал, всяка със собствена цена).</p>
+        <form action="{{ url_for('admin_add_material') }}" method="POST" class="admin-form">
+            <div class="form-group">
+                <label for="new_display_name">Име на материала</label>
+                <input type="text" id="new_display_name" name="display_name" placeholder="напр. Алуминий 2мм" required autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="new_cost_per_m2">Цена на м² плоча (€)</label>
+                <input type="number" id="new_cost_per_m2" step="0.01" min="0" name="cost_per_m2" placeholder="напр. 40.00" required>
+            </div>
+            <div class="form-group">
+                <label for="new_cost_per_meter_cut">Цена на метър рязане (€)</label>
+                <input type="number" id="new_cost_per_meter_cut" step="0.01" min="0" name="cost_per_meter_cut" placeholder="напр. 2.00" required>
+            </div>
+            <div class="form-group">
+                <label for="new_cost_per_pierce">Цена на пробиване (€)</label>
+                <input type="number" id="new_cost_per_pierce" step="0.01" min="0" name="cost_per_pierce" placeholder="напр. 0.20" required>
+            </div>
+            <button type="submit" class="btn-submit">Добави материал</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Цени на материалите</h3>
+        <p class="section-subtitle">Редактирайте цените на материалите, използвани при изчисляване на всяка поръчка. Промените влизат в сила незабавно за всички нови изчисления.</p>
+
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Материал</th>
+                    <th>Цена на м² плоча (€)</th>
+                    <th>Цена на метър рязане (€)</th>
+                    <th>Цена на пробиване (€)</th>
+                    <th class="text-right">Действие</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for material in materials %}
+                <tr>
+                    <td><strong>{{ material.display_name }}</strong></td>
+                    <td colspan="4">
+                        <form action="{{ url_for('admin_update_material', key=material.key) }}" method="POST" class="material-row-form">
+                            <input type="number" step="0.01" min="0" name="cost_per_m2"
+                                   value="{{ '%.2f'|format(material.cost_per_m2) }}" class="material-price-input" required>
+                            <input type="number" step="0.01" min="0" name="cost_per_meter_cut"
+                                   value="{{ '%.2f'|format(material.cost_per_meter_cut) }}" class="material-price-input" required>
+                            <input type="number" step="0.01" min="0" name="cost_per_pierce"
+                                   value="{{ '%.2f'|format(material.cost_per_pierce) }}" class="material-price-input" required>
+                            <button type="submit" class="btn-save-price">Запази</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5" class="text-center no-data">
+                        Няма конфигурирани материали.
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
 
     <section class="admin-card">
         <h3>Списък с регистрирани потребители</h3>
