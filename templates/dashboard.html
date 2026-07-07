@@ -89,129 +89,147 @@
 </head>
 <body>
 
-    <nav class="navbar">
-        <div class="nav-container">
-            <h2>Trafcom DXF Калкулатор</h2>
-            <div class="nav-links">
-    <div class="nav-section-links">
-        <div class="dropdown">
-            <a class="dropdown-trigger">Приложения <span class="dropdown-arrow">▼</span></a>
-            <div class="dropdown-content">
-                <a href="{{ url_for('dashboard') }}">DXF CNC Калкулатор</a>
-            </div>
-        </div>
-        <a href="{{ url_for('index') }}">Начало</a>
-        {% if current_user.is_admin %}
-        <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
-        {% endif %}
-    </div>
-    <div class="nav-cta-buttons">
-        <span class="user-badge"> Потребител: {{ current_user.username }}</span>
-        <a href="{{ url_for('logout') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Изход</a>
-    </div>
-</div>
-        </div>
-    </nav>
-
-    <main class="dashboard-container">
-
-        {% with messages = get_flashed_messages(with_categories=true) %}
-          {% if messages %}
-            <div class="flash-messages">
-              {% for category, message in messages %}
-                <div class="alert alert-{{ category }}">
-                  {{ message }}
-                </div>
-              {% endfor %}
-            </div>
-          {% endif %}
-        {% endwith %}
-
-        <section class="admin-card">
-            <h3>Изчисляване на нов DXF чертеж</h3>
-            <p class="section-subtitle">Изберете индустриален материал и качете .dxf файл за пълно ценообразуване.</p>
-
-            <form action="{{ url_for('dashboard') }}" method="POST" enctype="multipart/form-data" class="admin-form">
-
-                <div class="form-group" style="margin-bottom: 1.5rem;">
-                    <label for="material" style="display: block; margin-bottom: 0.5rem; font-weight: 500;">1. Изберете материал:</label>
-                    <select id="material" name="material" style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px; font-size: 1rem; cursor: pointer;">
-                        {% for material in materials %}
-                        <option value="{{ material.key }}">{{ material.display_name }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label for="dxf_file">2. Качете файл за изчисление:</label>
-                    <div class="upload-dropzone" onclick="document.getElementById('dxf_file').click()" style="cursor: pointer;">
-                        <p style="margin: 0; font-weight: 500;">Кликнете тук, за да изберете .dxf файл</p>
-                        <span class="text-muted text-small">Цената автоматично включва линеен сряз, габаритна площ и брой пробиви (pierces)</span>
-                        <input type="file" id="dxf_file" name="file" accept=".dxf" style="display: none;" onchange="this.form.submit()">
+<nav class="navbar">
+    <div class="nav-container">
+        <h2>Trafcom DXF Калкулатор</h2>
+        <div class="nav-links">
+            <div class="nav-section-links">
+                <div class="dropdown">
+                    <a class="dropdown-trigger">Приложения <span class="dropdown-arrow">▼</span></a>
+                    <div class="dropdown-content">
+                        <a href="{{ url_for('dashboard') }}">DXF CNC Калкулатор</a>
                     </div>
                 </div>
-
-            </form>
-        </section>
-
-        <section class="admin-card">
-            <h3>Вашата библиотека с изчисления</h3>
-            <p class="section-subtitle">Списък на всички обработени от вас CAD чертежи, съобразени с размерите и материала. Кликнете върху име на файл за 2D визуализация.</p>
-
-            <div class="table-responsive">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>ID</th>
-                            <th>Име на файл</th>
-                            <th>Материал</th>
-                            <th>Размери (Габарити)</th>
-                            <th>Дължина на рязане</th>
-                            <th>Изчислена цена</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for upload in uploads %}
-                        <tr>
-                            <td class="text-muted text-small">#{{ upload.id }}</td>
-                            <td>
-                                <button type="button" class="filename-link" onclick="openDxfViewer({{ upload.id }}, '{{ upload.filename|e }}')">
-                                    {{ upload.filename }}
-                                </button>
-                            </td>
-                            <td><span class="badge badge-user">{{ upload.material }}</span></td>
-                            <td>{{ "%.2f"|format(upload.width) }} x {{ "%.2f"|format(upload.height) }} мм</td>
-                            <td>{{ "%.2f"|format(upload.total_length) }} мм</td>
-                            <td><span style="color: var(--success-text); font-weight: 600;">{{ "%.2f"|format(upload.calculated_price) }} €</span></td>
-                        </tr>
-                        {% else %}
-                        <tr>
-                            <td colspan="6" class="text-center no-data">
-                                Вашата библиотека е празна. Качете първия си чертеж по-горе.
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+                <a href="{{ url_for('index') }}">Начало</a>
+                {% if current_user.is_admin %}
+                <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
+                {% endif %}
             </div>
-        </section>
-
-    </main>
-
-    <!-- 2D DXF Viewer Modal -->
-    <div class="viewer-overlay" id="viewerOverlay">
-        <div class="viewer-modal">
-            <div class="viewer-header">
-                <h4 id="viewerTitle">Визуализация</h4>
-                <button type="button" class="viewer-close-btn" onclick="closeDxfViewer()">&times;</button>
-            </div>
-            <div class="viewer-body">
-                <div class="viewer-status" id="viewerStatus">Зареждане...</div>
-                <canvas class="viewer-canvas" id="viewerCanvas"></canvas>
+            <div class="nav-cta-buttons">
+                <span class="user-badge"> Потребител: {{ current_user.username }}</span>
+                <a href="{{ url_for('logout') }}" class="btn-secondary"
+                   style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Изход</a>
             </div>
         </div>
     </div>
+</nav>
 
-    <script src="{{ url_for('static', filename='js/dxf_viewer.js') }}"></script>
+<main class="dashboard-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">
+            {{ message }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Изчисляване на нов DXF чертеж</h3>
+        <p class="section-subtitle">Изберете индустриален материал и качете .dxf файл за пълно ценообразуване.</p>
+
+        <form action="{{ url_for('dashboard') }}" method="POST" enctype="multipart/form-data" class="admin-form">
+
+            <div class="form-group" style="margin-bottom: 1.5rem;">
+                <label for="material" style="display: block; margin-bottom: 0.5rem; font-weight: 500;">1. Изберете
+                    материал:</label>
+                <select id="material" name="material"
+                        style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px; font-size: 1rem; cursor: pointer;">
+                    {% for material in materials %}
+                    <option value="{{ material.key }}">{{ material.display_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="dxf_file">2. Качете файл за изчисление:</label>
+                <div class="upload-dropzone" onclick="document.getElementById('dxf_file').click()"
+                     style="cursor: pointer;">
+                    <p style="margin: 0; font-weight: 500;">Кликнете тук, за да изберете .dxf файл</p>
+                    <span class="text-muted text-small">Цената автоматично включва линеен сряз, габаритна площ и брой пробиви (pierces)</span>
+                    <input type="file" id="dxf_file" name="file" accept=".dxf" style="display: none;"
+                           onchange="this.form.submit()">
+                </div>
+            </div>
+
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Вашата библиотека с изчисления</h3>
+        <p class="section-subtitle">Списък на всички обработени от вас CAD чертежи, съобразени с размерите и материала.
+            Кликнете върху име на файл за 2D визуализация.</p>
+
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Име на файл</th>
+                    <th>Материал</th>
+                    <th>Размери (Габарити)</th>
+                    <th>Дължина на рязане</th>
+                    <th>Изчислена цена</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for upload in uploads %}
+                <tr>
+                    <td class="text-muted text-small">#{{ upload.id }}</td>
+                    <td>
+                        <button type="button" class="filename-link"
+                                onclick="openDxfViewer({{ upload.id }}, '{{ upload.filename|e }}')">
+                            {{ upload.filename }}
+                        </button>
+                    </td>
+                    <td>
+    <span class="badge badge-user">
+        {% set ns = namespace(display_name=upload.material) %}
+        {% for mat in materials %}
+            {% if mat.key == upload.material %}
+                {% set ns.display_name = mat.display_name %}
+            {% endif %}
+        {% endfor %}
+        {{ ns.display_name }}
+    </span>
+                    </td>
+                    <td>{{ "%.2f"|format(upload.width) }} x {{ "%.2f"|format(upload.height) }} мм</td>
+                    <td>{{ "%.2f"|format(upload.total_length) }} мм</td>
+                    <td><span style="   color: var(--success-text); font-weight: 600;">{{ "%.2f"|format(upload.calculated_price) }} €</span>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="text-center no-data">
+                        Вашата библиотека е празна. Качете първия си чертеж по-горе.
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+</main>
+
+<!-- 2D DXF Viewer Modal -->
+<div class="viewer-overlay" id="viewerOverlay">
+    <div class="viewer-modal">
+        <div class="viewer-header">
+            <h4 id="viewerTitle">Визуализация</h4>
+            <button type="button" class="viewer-close-btn" onclick="closeDxfViewer()">&times;</button>
+        </div>
+        <div class="viewer-body">
+            <div class="viewer-status" id="viewerStatus">Зареждане...</div>
+            <canvas class="viewer-canvas" id="viewerCanvas"></canvas>
+        </div>
+    </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/dxf_viewer.js') }}"></script>
 </body>
 </html>
