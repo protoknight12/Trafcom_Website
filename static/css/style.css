@@ -486,3 +486,150 @@ button, .btn {
 .app-card:hover .app-card-arrow svg {
     transform: translateX(4px);
 }
+/* ==========================================================================
+   NAVBAR DROPDOWN SYSTEM
+   ========================================================================== */
+.dropdown {
+    position: relative;
+    display: inline-block;
+}
+
+.dropdown-trigger {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+
+.dropdown-arrow {
+    font-size: 0.65rem;
+    transition: transform 0.2s ease;
+    color: var(--text-muted);
+}
+
+.dropdown-content {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    min-width: 220px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    padding: 8px 0;
+    margin-top: 8px;
+}
+
+/* Pseudo-element to bridge the gap so the hover state doesn't break instantly */
+.dropdown-content::before {
+    content: '';
+    position: absolute;
+    top: -12px;
+    left: 0;
+    width: 100%;
+    height: 12px;
+}
+
+.dropdown-content a {
+    color: var(--text-muted) !important;
+    padding: 12px 20px !important;
+    text-decoration: none;
+    display: block !important;
+    transition: all 0.2s ease !important;
+    text-align: left;
+    border-radius: 0 !important;
+    font-weight: 500 !important;
+}
+
+.dropdown-content a:hover {
+    background-color: var(--bg-input) !important;
+    color: var(--text-main) !important;
+    padding-left: 24px !important;
+}
+
+.dropdown:hover .dropdown-content,
+.dropdown:focus-within .dropdown-content {
+    display: block;
+}
+
+.dropdown:hover .dropdown-arrow {
+    transform: rotate(180deg);
+    color: var(--accent-secondary);
+}
+
+/* ==========================================================================
+   PROFESSIONAL CNC MACHINE SHOWCASE CARDS
+   ========================================================================== */
+.machine-section {
+    margin-top: 40px;
+    padding-bottom: 80px;
+}
+
+.machine-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 32px;
+    margin-top: 32px;
+}
+
+.machine-card {
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    transition: border-color 0.3s ease, transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.machine-card:hover {
+    border-color: var(--accent-secondary);
+    transform: translateY(-4px);
+    box-shadow: 0 12px 30px rgba(124, 58, 237, 0.15);
+}
+
+.machine-img-container {
+    width: 100%;
+    height: 220px;
+    overflow: hidden;
+    background-color: var(--bg-base);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.machine-img-container img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 0.8;
+    transition: transform 0.4s ease, opacity 0.4s ease;
+}
+
+.machine-card:hover .machine-img-container img {
+    transform: scale(1.04);
+    opacity: 1;
+}
+
+.machine-body {
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    flex-grow: 1;
+}
+
+.machine-title {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text-main);
+    margin: 0;
+}
+
+.machine-text {
+    font-size: 0.92rem;
+    color: var(--text-muted);
+    line-height: 1.6;
+    margin: 0;
+}

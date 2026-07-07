@@ -440,10 +440,10 @@ def calculate_cnc_price(width, height, total_length, pierce_count, material_key)
 
 @app.route('/')
 def index():
-    if current_user.is_authenticated:
-        if current_user.is_admin:
-            return redirect(url_for('admin_dashboard'))
-        return redirect(url_for('dashboard'))
+    # if current_user.is_authenticated:
+    #     if current_user.is_admin:
+    #         return redirect(url_for('admin_dashboard'))
+    #     return redirect(url_for('dashboard'))
     # Anonymous visitors see the public landing page (list of apps/machines)
     # instead of being forced straight to login. Login is only required once
     # they actually click into an app - e.g. /dashboard is still guarded by
