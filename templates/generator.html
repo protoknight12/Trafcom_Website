@@ -12,6 +12,7 @@
             gap: 24px;
             align-items: start;
         }
+
         .controls-sidebar {
             background-color: var(--bg-surface);
             border: 1px solid var(--border-color);
@@ -20,6 +21,7 @@
             max-height: 85vh;
             overflow-y: auto;
         }
+
         .control-group-title {
             font-size: 0.8rem;
             text-transform: uppercase;
@@ -29,7 +31,10 @@
             border-bottom: 1px solid var(--border-color);
             padding-bottom: 4px;
         }
-        .control-group-title:first-child { margin-top: 0; }
+
+        .control-group-title:first-child {
+            margin-top: 0;
+        }
 
         .slider-row {
             display: flex;
@@ -37,8 +42,18 @@
             align-items: center;
             margin-bottom: 4px;
         }
-        .slider-label { font-size: 0.85rem; color: var(--text-muted); }
-        .slider-val { font-size: 0.85rem; font-family: monospace; color: var(--text-main); font-weight: bold; }
+
+        .slider-label {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .slider-val {
+            font-size: 0.85rem;
+            font-family: monospace;
+            color: var(--text-main);
+            font-weight: bold;
+        }
 
         input[type="range"] {
             width: 100%;
@@ -52,6 +67,7 @@
             gap: 8px;
             margin-bottom: 16px;
         }
+
         .shape-btn {
             background: var(--bg-input);
             border: 1px solid var(--border-color);
@@ -63,6 +79,7 @@
             text-align: center;
             transition: all 0.2s;
         }
+
         .shape-btn.active {
             background: rgba(124, 58, 237, 0.25);
             border-color: var(--accent-primary);
@@ -82,12 +99,14 @@
             overflow: hidden;
             background-image: radial-gradient(circle at center, #1a1c24 0%, #0b0c10 100%);
         }
+
         canvas {
             background: #2a2d36;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
             max-width: 90%;
             max-height: 90%;
         }
+
         .stats-overlay {
             position: absolute;
             top: 20px;
@@ -98,8 +117,20 @@
             border-radius: var(--border-radius-sm);
             backdrop-filter: blur(4px);
         }
-        .stat-line { display: flex; justify-content: space-between; gap: 20px; font-size: 0.85rem; margin-bottom: 6px; }
-        .stat-line span:last-child { font-family: monospace; color: var(--accent-secondary); font-weight: bold; }
+
+        .stat-line {
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+            font-size: 0.85rem;
+            margin-bottom: 6px;
+        }
+
+        .stat-line span:last-child {
+            font-family: monospace;
+            color: var(--accent-secondary);
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -109,7 +140,8 @@
         <div class="nav-links">
             <div class="nav-section-links">
                 <div class="dropdown">
-                    <a class="dropdown-trigger" href="#" tabindex="0" onclick="event.preventDefault()">Приложения <span class="dropdown-arrow">▼</span></a>
+                    <a class="dropdown-trigger" href="#" tabindex="0" onclick="event.preventDefault()">Приложения <span
+                            class="dropdown-arrow">▼</span></a>
                     <div class="dropdown-content">
                         <a href="{{ url_for('dashboard') }}">DXF CNC Калкулатор</a>
                         <a href="{{ url_for('generator') }}">Параметричен Генератор</a>
@@ -127,7 +159,8 @@
                 {% else %}
                 <span class="user-badge">{{ current_user.username }}</span>
                 {% endif %}
-                <a href="{{ url_for('logout') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Изход</a>
+                <a href="{{ url_for('logout') }}" class="btn-secondary"
+                   style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Изход</a>
             </div>
         </div>
     </div>
@@ -138,11 +171,16 @@
 
         <div class="controls-sidebar">
             <div class="control-group-title">Панел & Материал</div>
-            <div class="slider-row"><span class="slider-label">Ширина (mm)</span><span class="slider-val" id="val-width">900</span></div>
+            <div class="slider-row"><span class="slider-label">Ширина (mm)</span><span class="slider-val"
+                                                                                       id="val-width">900</span></div>
             <input type="range" id="in-width" min="100" max="2500" value="900">
-            <div class="slider-row"><span class="slider-label">Височина (mm)</span><span class="slider-val" id="val-height">1900</span></div>
+            <div class="slider-row"><span class="slider-label">Височина (mm)</span><span class="slider-val"
+                                                                                         id="val-height">1900</span>
+            </div>
             <input type="range" id="in-height" min="100" max="3000" value="1900">
-            <div class="slider-row"><span class="slider-label">Дебелина (mm)</span><span class="slider-val" id="val-thickness">2</span></div>
+            <div class="slider-row"><span class="slider-label">Дебелина (mm)</span><span class="slider-val"
+                                                                                         id="val-thickness">2</span>
+            </div>
             <input type="range" id="in-thickness" min="1" max="20" value="2">
 
             <div class="control-group-title">Геометрия (Изберете няколко)</div>
@@ -154,48 +192,73 @@
                 <div class="shape-btn" data-shape="rhombus">Rhombus</div>
             </div>
 
-            <div class="slider-row"><span class="slider-label">Макс. Отвор (mm)</span><span class="slider-val" id="val-cellsize">72</span></div>
+            <div class="slider-row"><span class="slider-label">Макс. Отвор (mm)</span><span class="slider-val"
+                                                                                            id="val-cellsize">72</span>
+            </div>
             <input type="range" id="in-cellsize" min="10" max="150" value="72">
-            <div class="slider-row"><span class="slider-label">Мин. Отвор (mm)</span><span class="slider-val" id="val-minsize">10</span></div>
+            <div class="slider-row"><span class="slider-label">Мин. Отвор (mm)</span><span class="slider-val"
+                                                                                           id="val-minsize">10</span>
+            </div>
             <input type="range" id="in-minsize" min="2" max="50" value="10">
-            <div class="slider-row"><span class="slider-label">Луфт (Spacing mm)</span><span class="slider-val" id="val-spacing">6</span></div>
+            <div class="slider-row"><span class="slider-label">Луфт (Spacing mm)</span><span class="slider-val"
+                                                                                             id="val-spacing">6</span>
+            </div>
             <input type="range" id="in-spacing" min="1" max="30" value="6">
-            <div class="slider-row"><span class="slider-label">Ротация (°)</span><span class="slider-val" id="val-rotation">0</span></div>
+            <div class="slider-row"><span class="slider-label">Ротация (°)</span><span class="slider-val"
+                                                                                       id="val-rotation">0</span></div>
             <input type="range" id="in-rotation" min="0" max="180" value="0">
-            <div class="slider-row"><span class="slider-label">Рамка (Border mm)</span><span class="slider-val" id="val-border">30</span></div>
+            <div class="slider-row"><span class="slider-label">Рамка (Border mm)</span><span class="slider-val"
+                                                                                             id="val-border">30</span>
+            </div>
             <input type="range" id="in-border" min="0" max="200" value="30">
 
             <div class="control-group-title">Градиент & Органичност</div>
             <div class="form-group" style="margin-bottom: 12px;">
-                <select id="in-direction" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-color); color: #fff; padding: 8px; border-radius: 4px;">
+                <select id="in-direction"
+                        style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-color); color: #fff; padding: 8px; border-radius: 4px;">
                     <option value="top-bottom">Плътност: Горе -> Долу</option>
                     <option value="bottom-top">Плътност: Долу -> Горе</option>
                 </select>
             </div>
-            <div class="slider-row"><span class="slider-label">Плътна Зона (%)</span><span class="slider-val" id="val-densezone">18</span></div>
+            <div class="slider-row"><span class="slider-label">Плътна Зона (%)</span><span class="slider-val"
+                                                                                           id="val-densezone">18</span>
+            </div>
             <input type="range" id="in-densezone" min="0" max="80" value="18">
-            <div class="slider-row"><span class="slider-label">Крива (Falloff)</span><span class="slider-val" id="val-falloff">2.4</span></div>
+            <div class="slider-row"><span class="slider-label">Крива (Falloff)</span><span class="slider-val"
+                                                                                           id="val-falloff">2.4</span>
+            </div>
             <input type="range" id="in-falloff" min="0.5" max="6.0" step="0.1" value="2.4">
-            <div class="slider-row"><span class="slider-label">Празнота (Sparseness %)</span><span class="slider-val" id="val-sparseness">92</span></div>
+            <div class="slider-row"><span class="slider-label">Празнота (Sparseness %)</span><span class="slider-val"
+                                                                                                   id="val-sparseness">92</span>
+            </div>
             <input type="range" id="in-sparseness" min="0" max="100" value="92">
-            <div class="slider-row"><span class="slider-label">Разпръскване (Jitter %)</span><span class="slider-val" id="val-jitter">5</span></div>
+            <div class="slider-row"><span class="slider-label">Разпръскване (Jitter %)</span><span class="slider-val"
+                                                                                                   id="val-jitter">5</span>
+            </div>
             <input type="range" id="in-jitter" min="0" max="50" value="5">
-            <div class="slider-row"><span class="slider-label">Горна Случайност (%)</span><span class="slider-val" id="val-randomness">8</span></div>
+            <div class="slider-row"><span class="slider-label">Горна Случайност (%)</span><span class="slider-val"
+                                                                                                id="val-randomness">8</span>
+            </div>
             <input type="range" id="in-randomness" min="0" max="50" value="8">
-            <div class="slider-row"><span class="slider-label">Random Seed</span><span class="slider-val" id="val-seed">7341</span></div>
+            <div class="slider-row"><span class="slider-label">Random Seed</span><span class="slider-val" id="val-seed">7341</span>
+            </div>
             <input type="range" id="in-seed" min="1" max="9999" value="7341">
 
-            <button id="btn-download" class="btn-submit" style="width: 100%; margin-top: 20px;">Изтегли DXF Модел</button>
+            <button id="btn-download" class="btn-submit" style="width: 100%; margin-top: 20px;">Изтегли DXF Модел
+            </button>
 
             <div class="control-group-title">Изчисляване на цена</div>
             <div class="form-group" style="margin-bottom: 12px;">
-                <select id="in-material" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-color); color: #fff; padding: 8px; border-radius: 4px;">
+                <select id="in-material"
+                        style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-color); color: #fff; padding: 8px; border-radius: 4px;">
                     {% for material in materials %}
                     <option value="{{ material.key }}">{{ material.display_name }}</option>
                     {% endfor %}
                 </select>
             </div>
-            <button id="btn-calculate" class="btn-submit" style="width: 100%; background: var(--gradient-purple-hover);">Изчисли цена в Калкулатора</button>
+            <button id="btn-calculate" class="btn-submit"
+                    style="width: 100%; background: var(--gradient-purple-hover);">Изчисли цена в Калкулатора
+            </button>
         </div>
 
         <div class="preview-area">
@@ -211,7 +274,8 @@
     <!-- Hidden form that submits the generated DXF straight into the same
          /dashboard upload flow used by the main calculator - reuses all of
          its existing pricing/geometry logic instead of duplicating it. -->
-    <form id="sendToCalculatorForm" action="{{ url_for('dashboard') }}" method="POST" enctype="multipart/form-data" style="display: none;">
+    <form id="sendToCalculatorForm" action="{{ url_for('dashboard') }}" method="POST" enctype="multipart/form-data"
+          style="display: none;">
         <input type="hidden" name="material" id="calc-material-field">
         <input type="file" name="file" id="calc-file-field">
     </form>
@@ -251,7 +315,7 @@
     document.getElementById('in-direction').addEventListener('change', render);
 
     function mulberry32(a) {
-        return function() {
+        return function () {
             var t = a += 0x6D2B79F5;
             t = Math.imul(t ^ t >>> 15, t | 1);
             t ^= t + Math.imul(t ^ t >>> 7, t | 61);
@@ -298,8 +362,12 @@
         }
         let pts = [];
         if (type === 'square') pts = [[-r, -r], [r, -r], [r, r], [-r, r]];
-        else if (type === 'hexagon') { for (let i = 0; i < 6; i++) { let a = i * Math.PI / 3; pts.push([r * Math.cos(a), r * Math.sin(a)]); } }
-        else if (type === 'triangle') pts = [[0, -r], [r * 0.866, r / 2], [-r * 0.866, r / 2]];
+        else if (type === 'hexagon') {
+            for (let i = 0; i < 6; i++) {
+                let a = i * Math.PI / 3;
+                pts.push([r * Math.cos(a), r * Math.sin(a)]);
+            }
+        } else if (type === 'triangle') pts = [[0, -r], [r * 0.866, r / 2], [-r * 0.866, r / 2]];
         else if (type === 'rhombus') pts = [[0, -r], [r / 1.5, 0], [0, r], [-r / 1.5, 0]];
         else return 0;
 
@@ -381,7 +449,7 @@
                     jY += (rand() * 2 - 1) * jitterAmt;
                 }
 
-                generatedHoles.push({ x: jX, y: jY, size: finalSize, rot: rotRad, type: shapeType });
+                generatedHoles.push({x: jX, y: jY, size: finalSize, rot: rotRad, type: shapeType});
                 totalCutLength += shapePerimeter(shapeType, finalSize);
 
                 ctx.save();
@@ -406,7 +474,41 @@
      */
     function buildDxfString(W, H) {
         let dxf = [];
-        dxf.push("  0\nSECTION\n  2\nHEADER\n  0\nENDSEC\n  0\nSECTION\n  2\nENTITIES");
+
+        // HEADER: $ACADVER tells AutoCAD which DXF version this is, which in
+        // turn tells it what entity types are even valid. Without it,
+        // AutoCAD can silently assume a much older format that predates
+        // LWPOLYLINE (introduced in AutoCAD 2000/AC1015) - which is exactly
+        // the entity type used for the panel border and every non-circle
+        // hole. $EXTMIN/$EXTMAX also help AutoCAD zoom to the right area
+        // instead of opening on an empty/default view.
+        dxf.push("  0\nSECTION\n  2\nHEADER");
+        dxf.push("  9\n$ACADVER\n  1\nAC1015");
+        dxf.push(`  9\n$INSBASE\n 10\n0.0\n 20\n0.0\n 30\n0.0`);
+        dxf.push(`  9\n$EXTMIN\n 10\n0.0\n 20\n0.0\n 30\n0.0`);
+        dxf.push(`  9\n$EXTMAX\n 10\n${W}\n 20\n${H}\n 30\n0.0`);
+        dxf.push("  0\nENDSEC");
+
+        // TABLES: a minimal but properly-formed LTYPE + LAYER table, with
+        // handle (5) and owner (330) references matching standard AC1015
+        // structure. Layer "0" and linetype "CONTINUOUS" are referenced
+        // (implicitly, or via group code 8) by every entity below - some CAD
+        // software tolerates these being undefined, but AutoCAD expects them
+        // formally present and properly linked for a well-formed file.
+        dxf.push("  0\nSECTION\n  2\nTABLES");
+        dxf.push("  0\nTABLE\n  2\nLTYPE\n  5\n1\n330\n0\n100\nAcDbSymbolTable\n 70\n1");
+        dxf.push("  0\nLTYPE\n  5\n2\n330\n1\n100\nAcDbSymbolTableRecord\n100\nAcDbLinetypeTableRecord\n  2\nCONTINUOUS\n 70\n0\n  3\nSolid line\n 72\n65\n 73\n0\n 40\n0.0");
+        dxf.push("  0\nENDTAB");
+        dxf.push("  0\nTABLE\n  2\nLAYER\n  5\n3\n330\n0\n100\nAcDbSymbolTable\n 70\n1");
+        dxf.push("  0\nLAYER\n  5\n4\n330\n3\n100\nAcDbSymbolTableRecord\n100\nAcDbLayerTableRecord\n  2\n0\n 70\n0\n 62\n7\n  6\nCONTINUOUS");
+        dxf.push("  0\nENDTAB");
+        dxf.push("  0\nENDSEC");
+
+        // BLOCKS: some CAD software expects this section to at least exist,
+        // even empty.
+        dxf.push("  0\nSECTION\n  2\nBLOCKS\n  0\nENDSEC");
+
+        dxf.push("  0\nSECTION\n  2\nENTITIES");
         dxf.push("  0\nLWPOLYLINE\n100\nAcDbEntity\n  8\n0\n100\nAcDbPolyline\n 90\n5\n 70\n1");
         dxf.push(` 10\n0.0\n 20\n0.0\n 10\n${W}\n 20\n0.0\n 10\n${W}\n 20\n${H}\n 10\n0.0\n 20\n${H}\n 10\n0.0\n 20\n0.0`);
 
@@ -417,9 +519,13 @@
             } else {
                 let pts = [];
                 if (h.type === 'square') pts = [[-rad, -rad], [rad, -rad], [rad, rad], [-rad, rad]];
-                else if (h.type === 'hexagon') { for(let i=0; i<6; i++) { let a=i*Math.PI/3; pts.push([rad*Math.cos(a), rad*Math.sin(a)]); } }
-                else if (h.type === 'triangle') pts = [[0, -rad], [rad * 0.866, rad/2], [-rad * 0.866, rad/2]];
-                else if (h.type === 'rhombus') pts = [[0, -rad], [rad/1.5, 0], [0, rad], [-rad/1.5, 0]];
+                else if (h.type === 'hexagon') {
+                    for (let i = 0; i < 6; i++) {
+                        let a = i * Math.PI / 3;
+                        pts.push([rad * Math.cos(a), rad * Math.sin(a)]);
+                    }
+                } else if (h.type === 'triangle') pts = [[0, -rad], [rad * 0.866, rad / 2], [-rad * 0.866, rad / 2]];
+                else if (h.type === 'rhombus') pts = [[0, -rad], [rad / 1.5, 0], [0, rad], [-rad / 1.5, 0]];
                 pts.push(pts[0]);
                 dxf.push(`  0\nLWPOLYLINE\n100\nAcDbEntity\n  8\n0\n100\nAcDbPolyline\n 90\n${pts.length}\n 70\n1`);
                 pts.forEach(p => {
@@ -436,7 +542,7 @@
     document.getElementById('btn-download').addEventListener('click', () => {
         const W = parseFloat(document.getElementById('in-width').value);
         const H = parseFloat(document.getElementById('in-height').value);
-        const blob = new Blob([buildDxfString(W, H)], { type: "application/dxf" });
+        const blob = new Blob([buildDxfString(W, H)], {type: "application/dxf"});
         const link = document.createElement("a");
         link.href = URL.createObjectURL(blob);
         link.download = `Panel_${W}x${H}_Mixed.dxf`;
@@ -454,7 +560,7 @@
         // submit it through the exact same multipart upload flow /dashboard
         // already handles for manually-uploaded files, so pricing/geometry
         // logic never needs to be duplicated in JS.
-        const file = new File([dxfText], filename, { type: 'application/dxf' });
+        const file = new File([dxfText], filename, {type: 'application/dxf'});
         const dataTransfer = new DataTransfer();
         dataTransfer.items.add(file);
         document.getElementById('calc-file-field').files = dataTransfer.files;
