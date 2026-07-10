@@ -1174,6 +1174,17 @@ def admin_product_offer(product_id):
     return render_template('offer.html', product=product, pricing=pricing, customer_name=customer_name)
 
 
+@app.route('/admin/products/<int:product_id>/protocol')
+@login_required
+def admin_product_protocol(product_id):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    product = Product.query.get_or_404(product_id)
+    return render_template('protocol.html', product=product)
+
+
 @app.route('/admin/delete_user/<int:user_id>', methods=['POST'])
 @login_required
 def admin_delete_user(user_id):

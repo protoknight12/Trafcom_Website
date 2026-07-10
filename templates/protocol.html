@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Приемо-Предавателен Протокол - {{ product.name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .proto-toolbar {
+            max-width: 1000px;
+            margin: 24px auto 0;
+            padding: 24px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-md);
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+        }
+        .proto-toolbar .form-group {
+            margin-bottom: 0;
+        }
+        .proto-toolbar label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+            display: block;
+            font-weight: 600;
+        }
+        .proto-toolbar input, .proto-toolbar textarea {
+            background-color: var(--bg-input);
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            padding: 10px 14px;
+            border-radius: var(--border-radius-sm);
+            font-size: 0.88rem;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .proto-toolbar textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+        .proto-sheet {
+            max-width: 1000px;
+            margin: 24px auto 60px;
+            background-color: #ffffff;
+            color: #111111;
+            border-radius: var(--border-radius-md);
+            padding: 50px;
+            box-sizing: border-box;
+            font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+        }
+        .proto-header {
+            border-bottom: 1px solid #111;
+            padding-bottom: 10px;
+            margin-bottom: 25px;
+        }
+        .proto-header h2 {
+            margin: 0;
+            font-size: 1.4rem;
+            font-weight: 800;
+            color: #000;
+        }
+        .proto-header p {
+            margin: 4px 0 0;
+            font-size: 0.85rem;
+            color: #444;
+        }
+        .proto-title {
+            text-align: center;
+            font-size: 1.5rem;
+            font-weight: 800;
+            margin: 30px 0 20px;
+            letter-spacing: 0.5px;
+        }
+        .proto-preamble {
+            font-size: 0.95rem;
+            margin-bottom: 20px;
+            text-align: justify;
+        }
+        .proto-object {
+            font-weight: 700;
+            background: #f5f5f5;
+            padding: 12px;
+            border-left: 4px solid #111;
+            margin-bottom: 25px;
+            font-size: 0.95rem;
+        }
+        .proto-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            font-size: 0.9rem;
+        }
+        .proto-table th {
+            background: #f9f9f9;
+            color: #111;
+            font-weight: 700;
+            border: 1px solid #ddd;
+            padding: 12px 10px;
+            text-align: left;
+            font-size: 0.85rem;
+        }
+        .proto-table td {
+            border: 1px solid #ddd;
+            padding: 12px 10px;
+            vertical-align: top;
+        }
+        .text-center { text-align: center; }
+        .text-right { text-align: right; }
+
+        .proto-signatures {
+            margin-top: 60px;
+            display: flex;
+            justify-content: space-between;
+            page-break-inside: avoid;
+        }
+        .sig-block {
+            width: 45%;
+            font-size: 0.95rem;
+        }
+        .sig-line {
+            margin-top: 45px;
+            border-top: 1px dashed #111;
+            padding-top: 5px;
+            font-size: 0.85rem;
+            color: #333;
+        }
+
+        @media print {
+            .navbar, .proto-toolbar, .no-print { display: none !important; }
+            body { background: #fff; }
+            .proto-sheet { margin: 0; box-shadow: none; padding: 0; max-width: 100%; }
+        }
+    </style>
+</head>
+<body>
+<nav class="navbar">
+    <div class="nav-container">
+        <h2>TRAFCOM</h2>
+        <div class="nav-links">
+            <div class="nav-cta-buttons">
+                <a href="{{ url_for('admin_product_edit', product_id=product.id) }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">← Обратно</a>
+            </div>
+        </div>
+    </div>
+</nav>
+
+<div class="proto-toolbar no-print">
+    <div class="form-group">
+        <label for="inDate">Дата на протокола</label>
+        <input type="date" id="inDate">
+    </div>
+    <div class="form-group">
+        <label for="inCity">Град на подписване</label>
+        <input type="text" id="inCity" placeholder="напр. София, Пловдив...">
+    </div>
+    <div class="form-group">
+        <label for="inProtoId">ID на модул (от чертеж)</label>
+        <input type="text" id="inProtoId" value="1.2-M01">
+    </div>
+    <div class="form-group">
+        <label for="inProviderRep">МОЛ на ТРАФКОМ (Предаващ)</label>
+        <input type="text" id="inProviderRep" value="Десислав Цветанов">
+    </div>
+    <div class="form-group">
+        <label for="inClientName">Приемаща страна (Фирма)</label>
+        <input type="text" id="inClientName" placeholder="напр. СИТИПАРК СОФИЯ ЕООД">
+    </div>
+    <div class="form-group">
+        <label for="inClientAddress">Адрес на приемащата фирма</label>
+        <input type="text" id="inClientAddress" placeholder="Адрес по регистрация...">
+    </div>
+    <div class="form-group">
+        <label for="inClientEik">ЕИК на приемащата фирма</label>
+        <input type="text" id="inClientEik" placeholder="Булстат / ЕИК...">
+    </div>
+    <div class="form-group">
+        <label for="inClientRep">МОЛ на приемащата фирма</label>
+        <input type="text" id="inClientRep" placeholder="Три имена на получателя...">
+    </div>
+    <div class="form-group" style="grid-column: span 2;">
+        <label for="inObject">ОБЕКТ (Наименование и локация)</label>
+        <input type="text" id="inObject" placeholder="напр. ЦТП - ЗОНА ЗА ОТДИХ CTP03...">
+    </div>
+    <div class="form-group">
+        <label for="inDimensions">Размери на модула (Ш / Д / В см)</label>
+        <input type="text" id="inDimensions" placeholder="напр. 80 / 40 / 200">
+    </div>
+    <div class="form-group">
+        <label for="inQuantity">Количество (бр.)</label>
+        <input type="number" id="inQuantity" value="1" min="1">
+    </div>
+    <div class="form-group" style="grid-column: span 3;">
+        <label for="inCustomDesc">Описание / Спецификация на марка и модел (Редактируемо)</label>
+        <textarea id="inCustomDesc">{% if product.description %}{{ product.description }}&#10;{% endif %}КОНСТРУКЦИЯ&#10;Компоненти:&#10;{% for pd in product.product_details %}- {{ pd.detail.name }} ({{ pd.detail.material.display_name }}) — {{ pd.quantity }} бр.&#10;{% endfor %}</textarea>
+    </div>
+    <div class="form-group" style="display: flex; align-items: flex-end;">
+        <button class="btn-submit" style="padding: 12px 24px; width: 100%; margin-top: 0; font-size: 0.95rem;" onclick="window.print()">Печат / PDF</button>
+    </div>
+</div>
+
+<div class="proto-sheet">
+    <div class="proto-header">
+        <h2>ТРАФКОМ ООД</h2>
+        <p>гр. Тетевен, ул Александър Стамболийски 36, trafcom@tafcombg.com, +359 886 762276</p>
+    </div>
+
+    <div class="proto-title">ПРИЕМО-ПРЕДАВАТЕЛЕН ПРОТОКОЛ</div>
+
+    <div class="proto-preamble">
+        Днес, <strong id="lblDate">......................</strong> год. в гр. <strong id="lblCity">......................</strong>, между страните:<br><br>
+        <strong>Предаваща страна:</strong> ТРАФКОМ ООД, ГР.ТЕТЕВЕН УЛ. АЛЕКСАНДЪР СТАМБОЛИЙСКИ 36, ЕИК: 110034354, представлявано от <span id="lblProviderRep1" style="font-weight: bold;">Десислав Цветанов</span> и<br>
+        <strong>Приемаща страна:</strong> <span id="lblClientName" style="border-bottom: 1px dotted #000; min-width: 150px; display: inline-block;">............................................................</span>,
+        ситуирана на адрес: <span id="lblClientAddress" style="border-bottom: 1px dotted #000; min-width: 150px; display: inline-block;">............................................................</span>,
+        ЕИК: <span id="lblClientEik" style="border-bottom: 1px dotted #000; min-width: 80px; display: inline-block;">........................</span>,
+        представлявано от <span id="lblClientRep" style="border-bottom: 1px dotted #000; min-width: 120px; display: inline-block;">............................................................</span><br><br>
+        се подписа настоящият Приемо-Предавателен Протокол, наричан по-нататък за краткост Протокола, при следните условия:<br><br>
+        Предаващата Страна предаде, а Приемащата Страна прие, както следва:
+    </div>
+
+    <div class="proto-object">
+        ОБЕКТ: <span id="lblObject">........................................................................................................................</span>
+    </div>
+
+    <table class="proto-table">
+        <thead>
+        <tr>
+            <th style="width: 10%; text-align: center;">ID</th>
+            <th style="width: 25%;">модул</th>
+            <th style="width: 15%; text-align: center;">снимка</th>
+            <th style="width: 32%;">описание<br>марка модел</th>
+            <th style="width: 12%; text-align: center;">размери<br>Ш / Д / В см</th>
+            <th style="width: 3%; text-align: right;">кол-во</th>
+            <th style="width: 3%; text-align: center;">мерна<br>единица</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr>
+            <td class="text-center" id="lblProtoId" style="font-weight: 600;">1.2-M01</td>
+            <td><strong>{{ product.name }}</strong></td>
+            <td class="text-center">
+                {% if product.images %}
+                    <img src="{{ url_for('static', filename='uploads/products/' ~ product.images[0].filename) }}" style="max-width: 120px; max-height: 90px; object-fit: contain; display: block; margin: 0 auto;">
+                {% else %}
+                    <span style="color: #999; font-size: 0.75rem; font-style: italic;">Няма снимка</span>
+                {% endif %}
+            </td>
+            <td id="lblCustomDesc" style="font-size: 0.85rem; white-space: pre-wrap; text-align: left;"></td>
+            <td class="text-center" id="lblDimensions" style="font-size: 0.85rem;">—</td>
+            <td class="text-right"><strong id="lblQuantity">1</strong></td>
+            <td class="text-center">бр.</td>
+        </tr>
+        </tbody>
+    </table>
+
+    <div class="proto-signatures">
+        <div class="sig-block">
+            <strong>ПРЕДАВАЩА СТРАНА:</strong>
+            <div class="sig-line">за ТРАФКОМ ООД<br><span id="lblProviderRep2">Десислав Цветанов</span></div>
+        </div>
+        <div class="sig-block">
+            <strong>ПРИЕМАЩА СТРАНА:</strong>
+            <div class="sig-line">за <span class="mirror-client-name">...................................................</span><br>три имена и подпис</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Инициализация на днешна дата като стойност по подразбиране в контролата за дата
+    const dateInput = document.getElementById('inDate');
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getTime()).substring(0,2); // сигурен чист формат
+    const formattedTodayHtml = `${yyyy}-${mm}-${String(today.getDate()).padStart(2,'0')}`;
+    dateInput.value = formattedTodayHtml;
+
+    document.getElementById('lblDate').textContent = today.toLocaleDateString('bg-BG');
+    dateInput.addEventListener('change', () => {
+        if(dateInput.value) {
+            const d = new Date(dateInput.value);
+            document.getElementById('lblDate').textContent = d.toLocaleDateString('bg-BG');
+        } else {
+            document.getElementById('lblDate').textContent = '......................';
+        }
+    });
+
+    // Първоначално пренасяне на генерираното текстово описание
+    const txtArea = document.getElementById('inCustomDesc');
+    const lblDesc = document.getElementById('lblCustomDesc');
+    lblDesc.textContent = txtArea.value;
+    txtArea.addEventListener('input', () => {
+        lblDesc.textContent = txtArea.value;
+    });
+
+    // Мапинг за динамично преливане на данните
+    const bindings = [
+        { input: 'inCity', label: 'lblCity', fallback: '......................' },
+        { input: 'inProtoId', label: 'lblProtoId', fallback: '—' },
+        { input: 'inDimensions', label: 'lblDimensions', fallback: '—' },
+        { input: 'inQuantity', label: 'lblQuantity', fallback: '1' },
+        { input: 'inClientName', label: 'lblClientName', fallback: '............................................................' },
+        { input: 'inClientAddress', label: 'lblClientAddress', fallback: '............................................................' },
+        { input: 'inClientEik', label: 'lblClientEik', fallback: '........................' },
+        { input: 'inClientRep', label: 'lblClientRep', fallback: '............................................................' }
+    ];
+
+    bindings.forEach(b => {
+        const inputEl = document.getElementById(b.input);
+        const labelEl = document.getElementById(b.label);
+
+        if (inputEl && labelEl) {
+            inputEl.addEventListener('input', () => {
+                const val = inputEl.value.trim();
+                labelEl.textContent = val || b.fallback;
+
+                if (b.input === 'inClientName') {
+                    document.querySelector('.mirror-client-name').textContent = val || '...................................................';
+                }
+            });
+        }
+    });
+
+    // Специално следене за представителя на ТРАФКОМ (променя се на две места)
+    const providerInput = document.getElementById('inProviderRep');
+    providerInput.addEventListener('input', () => {
+        const name = providerInput.value.trim() || '...................................';
+        document.getElementById('lblProviderRep1').textContent = name;
+        document.getElementById('lblProviderRep2').textContent = name;
+    });
+</script>
+</body>
+</html>
