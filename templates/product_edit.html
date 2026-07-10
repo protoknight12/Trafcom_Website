@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ product.name }} - Редакция на продукт</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<nav class="navbar">
+    <div class="nav-container">
+        <h2>TRAFCOM</h2>
+        <div class="nav-links">
+            <div class="nav-section-links">
+                <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
+            </div>
+            <div class="nav-cta-buttons">
+                <a href="{{ url_for('logout') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Изход</a>
+            </div>
+        </div>
+    </div>
+</nav>
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <a href="{{ url_for('admin_dashboard') }}" style="display: block; margin-bottom: 20px; color: var(--accent-secondary); text-decoration: none; font-size: 0.9rem;">← Обратно към Админ Панел</a>
+
+    <section class="admin-card">
+        <h3>Информация за продукта</h3>
+        <form action="{{ url_for('admin_product_update', product_id=product.id) }}" method="POST" class="admin-form">
+            <div class="form-group">
+                <label for="name">Име на продукта</label>
+                <input type="text" id="name" name="name" value="{{ product.name }}" required>
+            </div>
+            <div class="form-group">
+                <label for="description">Описание</label>
+                <input type="text" id="description" name="description" value="{{ product.description or '' }}">
+            </div>
+            <div class="form-group">
+                <label for="markup_percent">Надценка (%)</label>
+                <input type="number" id="markup_percent" name="markup_percent" step="0.1" min="0" value="{{ product.markup_percent }}">
+            </div>
+            <button type="submit" class="btn-submit">Запази промените</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Детайли в продукта</h3>
+
+        <form action="{{ url_for('admin_product_add_detail', product_id=product.id) }}" method="POST" class="admin-form" style="margin-bottom: 1.5rem;">
+            <div class="form-group">
+                <label for="detail_id">Детайл</label>
+                <select id="detail_id" name="detail_id" style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px;">
+                    {% for detail in all_details %}
+                    <option value="{{ detail.id }}">{{ detail.name }} ({{ detail.material.display_name }}, {{ "%.2f"|format(detail.calculated_price) }} €)</option>
+                    {% else %}
+                    <option disabled>Няма налични детайли - добавете такива в Админ Панела</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="quantity">Количество</label>
+                <input type="number" id="quantity" name="quantity" min="1" value="1">
+            </div>
+            <button type="submit" class="btn-submit">Добави към продукта</button>
+        </form>
+
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Детайл</th>
+                    <th>Материал</th>
+                    <th>Ед. цена (€)</th>
+                    <th>Кол.</th>
+                    <th>Общо (€)</th>
+                    <th class="text-right">Действие</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for pd in product.product_details %}
+                <tr>
+                    <td><strong>{{ pd.detail.name }}</strong></td>
+                    <td><span class="badge badge-user">{{ pd.detail.material.display_name }}</span></td>
+                    <td>{{ "%.2f"|format(pd.detail.calculated_price) }} €</td>
+                    <td>{{ pd.quantity }}</td>
+                    <td>{{ "%.2f"|format(pd.detail.calculated_price * pd.quantity) }} €</td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_product_remove_detail', product_id=product.id, product_detail_id=pd.id) }}" method="POST" style="display:inline;">
+                            <button type="submit" class="btn-delete">Премахни</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="text-center no-data">Все още няма добавени детайли.</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="admin-card">
+        <h3>Допълнителни разходи</h3>
+        <p class="section-subtitle">Боядисване, монтаж, транспорт или всякакъв друг разход, специфичен за този продукт.</p>
+
+        <form action="{{ url_for('admin_product_add_cost', product_id=product.id) }}" method="POST" class="admin-form" style="margin-bottom: 1.5rem;">
+            <div class="form-group">
+                <label for="label">Описание</label>
+                <input type="text" id="label" name="label" placeholder="напр. Боядисване" required>
+            </div>
+            <div class="form-group">
+                <label for="amount">Сума (€)</label>
+                <input type="number" id="amount" name="amount" step="0.01" min="0" required>
+            </div>
+            <button type="submit" class="btn-submit">Добави разход</button>
+        </form>
+
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Описание</th>
+                    <th>Сума (€)</th>
+                    <th class="text-right">Действие</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for cost in product.extra_costs %}
+                <tr>
+                    <td>{{ cost.label }}</td>
+                    <td>{{ "%.2f"|format(cost.amount) }} €</td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_product_remove_cost', product_id=product.id, cost_id=cost.id) }}" method="POST" style="display:inline;">
+                            <button type="submit" class="btn-delete">Премахни</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="3" class="text-center no-data">Няма добавени разходи.</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="admin-card">
+        <h3>Ценова разбивка</h3>
+        <div class="table-responsive">
+            <table class="users-table">
+                <tbody>
+                <tr>
+                    <td>Сума от детайли</td>
+                    <td class="text-right">{{ "%.2f"|format(pricing.details_subtotal) }} €</td>
+                </tr>
+                <tr>
+                    <td>Допълнителни разходи</td>
+                    <td class="text-right">{{ "%.2f"|format(pricing.extra_costs_subtotal) }} €</td>
+                </tr>
+                <tr>
+                    <td><strong>Обща себестойност</strong></td>
+                    <td class="text-right"><strong>{{ "%.2f"|format(pricing.total_cost) }} €</strong></td>
+                </tr>
+                <tr>
+                    <td>Надценка ({{ product.markup_percent }}%)</td>
+                    <td class="text-right">+{{ "%.2f"|format(pricing.markup_amount) }} €</td>
+                </tr>
+                <tr>
+                    <td><strong>Продажна цена</strong></td>
+                    <td class="text-right"><span style="color: var(--success-text); font-weight: 700; font-size: 1.1rem;">{{ "%.2f"|format(pricing.sell_price) }} €</span></td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+        <a href="{{ url_for('admin_product_offer', product_id=product.id) }}" class="btn-submit" style="display: inline-block; margin-top: 1.5rem; text-decoration: none; padding: 12px 24px;">Генерирай оферта</a>
+    </section>
+
+</main>
+</body>
+</html>

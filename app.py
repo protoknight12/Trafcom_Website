@@ -95,6 +95,88 @@ class MaterialPrice(db.Model):
     cost_per_pierce = db.Column(db.Float, nullable=False)
 
 
+class Detail(db.Model):
+    """
+    A reusable, admin-curated catalog component ("детайл") - built once from
+    a DXF upload + material choice (using the exact same geometry/pricing
+    logic as the main calculator), then reused across any number of
+    Products. Deliberately NOT tied to a specific user's personal upload
+    library (DxfFile) - that's per-user upload history, this is a shared
+    parts catalog admins maintain independently.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(150), nullable=False)
+    material_key = db.Column(db.String(50), db.ForeignKey('material_price.key'), nullable=False)
+    width = db.Column(db.Float, nullable=False)
+    height = db.Column(db.Float, nullable=False)
+    total_length = db.Column(db.Float, nullable=False)
+    pierce_count = db.Column(db.Integer, nullable=False)
+    calculated_price = db.Column(db.Float, nullable=False)
+    geometry_json = db.Column(db.Text, nullable=True)
+
+    material = db.relationship('MaterialPrice')
+
+
+class Product(db.Model):
+    """
+    A sellable product assembled from one or more Details (with quantities)
+    plus optional extra costs (painting, assembly, transport, etc.) and an
+    optional markup percentage applied on top of total cost to get the
+    actual sell price shown on generated offers.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(150), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    markup_percent = db.Column(db.Float, nullable=False, default=0.0)
+
+    product_details = db.relationship('ProductDetail', cascade='all, delete-orphan', backref='product', lazy=True)
+    extra_costs = db.relationship('ProductExtraCost', cascade='all, delete-orphan', backref='product', lazy=True)
+
+
+class ProductDetail(db.Model):
+    """Join table: which Details compose a Product, and in what quantity."""
+    id = db.Column(db.Integer, primary_key=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
+    detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=False)
+    quantity = db.Column(db.Integer, nullable=False, default=1)
+
+    detail = db.relationship('Detail')
+
+
+class ProductExtraCost(db.Model):
+    """
+    A flexible named cost line item on a Product (e.g. "Боядисване" -> 50.00,
+    "Монтаж" -> 30.00, "Транспорт" -> 20.00) - deliberately not a fixed set
+    of columns, since these vary per product and per business need.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
+    label = db.Column(db.String(100), nullable=False)
+    amount = db.Column(db.Float, nullable=False)
+
+
+def calculate_product_pricing(product):
+    """
+    Returns a dict with the full cost/price breakdown for a product:
+    details subtotal, extra costs subtotal, total cost, markup amount, and
+    final sell price. Centralized here so the products list, edit page, and
+    offer view can never disagree with each other.
+    """
+    details_subtotal = sum(pd.detail.calculated_price * pd.quantity for pd in product.product_details)
+    extra_costs_subtotal = sum(ec.amount for ec in product.extra_costs)
+    total_cost = details_subtotal + extra_costs_subtotal
+    markup_amount = total_cost * (product.markup_percent / 100.0)
+    sell_price = total_cost + markup_amount
+
+    return {
+        'details_subtotal': round(details_subtotal, 2),
+        'extra_costs_subtotal': round(extra_costs_subtotal, 2),
+        'total_cost': round(total_cost, 2),
+        'markup_amount': round(markup_amount, 2),
+        'sell_price': round(sell_price, 2),
+    }
+
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
@@ -622,7 +704,13 @@ def admin_dashboard():
         return redirect(url_for('dashboard'))
     all_users = User.query.filter(User.id != current_user.id).all()
     materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
-    return render_template('admin.html', users=all_users, materials=materials)
+    details = Detail.query.order_by(Detail.name).all()
+    products = Product.query.order_by(Product.name).all()
+    product_pricing = {p.id: calculate_product_pricing(p) for p in products}
+    return render_template(
+        'admin.html', users=all_users, materials=materials,
+        details=details, products=products, product_pricing=product_pricing
+    )
 
 
 @app.route('/admin/create_user', methods=['POST'])
@@ -730,6 +818,280 @@ def admin_add_material():
 
     flash(f'Материалът "{display_name}" беше добавен успешно.', 'success')
     return redirect(url_for('admin_dashboard'))
+
+
+# ----------------- БИБЛИОТЕКА С ДЕТАЙЛИ (Detail catalog) -----------------
+
+@app.route('/admin/details/add', methods=['POST'])
+@login_required
+def admin_add_detail():
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    name = request.form.get('name', '').strip()
+    material_key = request.form.get('material', '')
+
+    if not name:
+        flash('Моля въведете име на детайла.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    if not MaterialPrice.query.filter_by(key=material_key).first():
+        flash('Невалиден избор на материал.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    if 'file' not in request.files or request.files['file'].filename == '':
+        flash('Моля качете .dxf файл за детайла.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    file = request.files['file']
+    if not file.filename.lower().endswith('.dxf'):
+        flash('Невалиден формат! Приемат се само .dxf файлове.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    temp_path = None
+    try:
+        filename = secure_filename(file.filename)
+        temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{uuid.uuid4().hex}_{filename}")
+        file.save(temp_path)
+
+        width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(temp_path)
+        if width is None:
+            flash('Грешка при обработката на DXF структурата.', 'danger')
+            return redirect(url_for('admin_dashboard'))
+
+        price = calculate_cnc_price(width, height, total_length, pierce_count, material_key)
+
+        new_detail = Detail(
+            name=name, material_key=material_key, width=width, height=height,
+            total_length=total_length, pierce_count=pierce_count,
+            calculated_price=price, geometry_json=json.dumps(shapes)
+        )
+        db.session.add(new_detail)
+        db.session.commit()
+        flash(f'Детайлът "{name}" беше добавен успешно.', 'success')
+
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Грешка при обработка/запис: {str(e)}', 'danger')
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+
+    return redirect(url_for('admin_dashboard'))
+
+
+@app.route('/admin/details/delete/<int:detail_id>', methods=['POST'])
+@login_required
+def admin_delete_detail(detail_id):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    detail = Detail.query.get_or_404(detail_id)
+
+    # A detail used inside any product can't be deleted out from under it -
+    # that would silently corrupt that product's price. Remove it from every
+    # product first (via the product edit page), then delete it here.
+    if ProductDetail.query.filter_by(detail_id=detail.id).first():
+        flash(f'Детайлът "{detail.name}" се използва в поне един продукт и не може да бъде изтрит.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    db.session.delete(detail)
+    db.session.commit()
+    flash(f'Детайлът "{detail.name}" беше изтрит.', 'success')
+    return redirect(url_for('admin_dashboard'))
+
+
+# ----------------- ПРОДУКТИ (Products) -----------------
+
+@app.route('/admin/products/add', methods=['POST'])
+@login_required
+def admin_add_product():
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Моля въведете име на продукта.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    description = request.form.get('description', '').strip()
+
+    try:
+        markup_percent = float(request.form.get('markup_percent', '0') or 0)
+    except ValueError:
+        markup_percent = 0.0
+
+    new_product = Product(name=name, description=description, markup_percent=round(markup_percent, 2))
+    db.session.add(new_product)
+    db.session.commit()
+
+    flash(f'Продуктът "{name}" беше създаден. Добавете детайли и допълнителни разходи по-долу.', 'success')
+    return redirect(url_for('admin_product_edit', product_id=new_product.id))
+
+
+@app.route('/admin/products/<int:product_id>/edit')
+@login_required
+def admin_product_edit(product_id):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    product = Product.query.get_or_404(product_id)
+    all_details = Detail.query.order_by(Detail.name).all()
+    pricing = calculate_product_pricing(product)
+    return render_template('product_edit.html', product=product, all_details=all_details, pricing=pricing)
+
+
+@app.route('/admin/products/<int:product_id>/update', methods=['POST'])
+@login_required
+def admin_product_update(product_id):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    product = Product.query.get_or_404(product_id)
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Моля въведете име на продукта.', 'danger')
+        return redirect(url_for('admin_product_edit', product_id=product.id))
+
+    try:
+        markup_percent = float(request.form.get('markup_percent', '0') or 0)
+    except ValueError:
+        flash('Надценката трябва да бъде валидно число.', 'danger')
+        return redirect(url_for('admin_product_edit', product_id=product.id))
+
+    product.name = name
+    product.description = request.form.get('description', '').strip()
+    product.markup_percent = round(markup_percent, 2)
+    db.session.commit()
+
+    flash('Продуктът беше обновен успешно.', 'success')
+    return redirect(url_for('admin_product_edit', product_id=product.id))
+
+
+@app.route('/admin/products/<int:product_id>/delete', methods=['POST'])
+@login_required
+def admin_product_delete(product_id):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    product = Product.query.get_or_404(product_id)
+    name = product.name
+    db.session.delete(product)  # cascades to ProductDetail/ProductExtraCost rows
+    db.session.commit()
+    flash(f'Продуктът "{name}" беше изтрит.', 'success')
+    return redirect(url_for('admin_dashboard'))
+
+
+@app.route('/admin/products/<int:product_id>/add_detail', methods=['POST'])
+@login_required
+def admin_product_add_detail(product_id):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    product = Product.query.get_or_404(product_id)
+
+    try:
+        detail_id = int(request.form.get('detail_id', ''))
+        quantity = int(request.form.get('quantity', '1'))
+    except ValueError:
+        flash('Невалиден детайл или количество.', 'danger')
+        return redirect(url_for('admin_product_edit', product_id=product.id))
+
+    if quantity < 1:
+        flash('Количеството трябва да бъде поне 1.', 'danger')
+        return redirect(url_for('admin_product_edit', product_id=product.id))
+
+    detail = Detail.query.get_or_404(detail_id)
+
+    # If this detail is already on the product, just bump its quantity
+    # instead of creating a duplicate line item.
+    existing = ProductDetail.query.filter_by(product_id=product.id, detail_id=detail.id).first()
+    if existing:
+        existing.quantity += quantity
+    else:
+        db.session.add(ProductDetail(product_id=product.id, detail_id=detail.id, quantity=quantity))
+
+    db.session.commit()
+    flash(f'Детайлът "{detail.name}" беше добавен към продукта.', 'success')
+    return redirect(url_for('admin_product_edit', product_id=product.id))
+
+
+@app.route('/admin/products/<int:product_id>/remove_detail/<int:product_detail_id>', methods=['POST'])
+@login_required
+def admin_product_remove_detail(product_id, product_detail_id):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    line_item = ProductDetail.query.filter_by(id=product_detail_id, product_id=product_id).first_or_404()
+    db.session.delete(line_item)
+    db.session.commit()
+    flash('Детайлът беше премахнат от продукта.', 'success')
+    return redirect(url_for('admin_product_edit', product_id=product_id))
+
+
+@app.route('/admin/products/<int:product_id>/add_cost', methods=['POST'])
+@login_required
+def admin_product_add_cost(product_id):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    product = Product.query.get_or_404(product_id)
+    label = request.form.get('label', '').strip()
+
+    try:
+        amount = float(request.form.get('amount', ''))
+    except ValueError:
+        flash('Сумата трябва да бъде валидно число.', 'danger')
+        return redirect(url_for('admin_product_edit', product_id=product.id))
+
+    if not label:
+        flash('Моля въведете описание на разхода.', 'danger')
+        return redirect(url_for('admin_product_edit', product_id=product.id))
+
+    if amount < 0:
+        flash('Сумата не може да бъде отрицателна.', 'danger')
+        return redirect(url_for('admin_product_edit', product_id=product.id))
+
+    db.session.add(ProductExtraCost(product_id=product.id, label=label, amount=round(amount, 2)))
+    db.session.commit()
+    flash(f'Разходът "{label}" беше добавен.', 'success')
+    return redirect(url_for('admin_product_edit', product_id=product.id))
+
+
+@app.route('/admin/products/<int:product_id>/remove_cost/<int:cost_id>', methods=['POST'])
+@login_required
+def admin_product_remove_cost(product_id, cost_id):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    cost = ProductExtraCost.query.filter_by(id=cost_id, product_id=product_id).first_or_404()
+    db.session.delete(cost)
+    db.session.commit()
+    flash('Разходът беше премахнат.', 'success')
+    return redirect(url_for('admin_product_edit', product_id=product_id))
+
+
+@app.route('/admin/products/<int:product_id>/offer')
+@login_required
+def admin_product_offer(product_id):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    product = Product.query.get_or_404(product_id)
+    pricing = calculate_product_pricing(product)
+    customer_name = request.args.get('customer', '')
+    return render_template('offer.html', product=product, pricing=pricing, customer_name=customer_name)
 
 
 @app.route('/admin/delete_user/<int:user_id>', methods=['POST'])

@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Оферта - {{ product.name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .offer-toolbar {
+            max-width: 800px;
+            margin: 24px auto 0;
+            padding: 0 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+        }
+        .offer-toolbar .form-group {
+            flex: 1;
+            margin-bottom: 0;
+        }
+        .offer-toolbar input[type="text"] {
+            background-color: var(--bg-input);
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            padding: 10px 14px;
+            border-radius: var(--border-radius-sm);
+            font-size: 0.9rem;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .offer-sheet {
+            max-width: 800px;
+            margin: 24px auto 60px;
+            background-color: #ffffff;
+            color: #111111;
+            border-radius: var(--border-radius-md);
+            padding: 48px;
+            box-sizing: border-box;
+        }
+        .offer-sheet h1 {
+            margin: 0 0 4px;
+            font-size: 1.6rem;
+            font-weight: 800;
+        }
+        .offer-sheet .offer-meta {
+            color: #555;
+            font-size: 0.9rem;
+            margin-bottom: 32px;
+        }
+        .offer-sheet .offer-meta strong {
+            color: #111;
+        }
+        .offer-sheet h2 {
+            font-size: 1.1rem;
+            font-weight: 700;
+            border-bottom: 2px solid #111;
+            padding-bottom: 8px;
+            margin-top: 32px;
+            margin-bottom: 16px;
+        }
+        .offer-sheet table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.92rem;
+        }
+        .offer-sheet th {
+            text-align: left;
+            padding: 8px 4px;
+            border-bottom: 1px solid #ccc;
+            color: #555;
+            font-weight: 600;
+        }
+        .offer-sheet td {
+            padding: 8px 4px;
+            border-bottom: 1px solid #eee;
+        }
+        .offer-sheet .text-right { text-align: right; }
+        .offer-sheet .offer-total-row td {
+            border-bottom: none;
+            border-top: 2px solid #111;
+            padding-top: 14px;
+            font-size: 1.2rem;
+            font-weight: 800;
+        }
+        .offer-sheet .offer-description {
+            color: #555;
+            margin-bottom: 16px;
+        }
+
+        @media print {
+            .navbar, .offer-toolbar, .no-print { display: none !important; }
+            body { background: #fff; }
+            .offer-sheet { margin: 0; box-shadow: none; padding: 0; }
+        }
+    </style>
+</head>
+<body>
+<nav class="navbar">
+    <div class="nav-container">
+        <h2>TRAFCOM</h2>
+        <div class="nav-links">
+            <div class="nav-cta-buttons">
+                <a href="{{ url_for('admin_product_edit', product_id=product.id) }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">← Обратно</a>
+            </div>
+        </div>
+    </div>
+</nav>
+
+<div class="offer-toolbar no-print">
+    <div class="form-group">
+        <input type="text" id="customerNameInput" placeholder="Име на клиента..." value="{{ customer_name }}">
+    </div>
+    <button class="btn-submit" style="padding: 12px 24px;" onclick="window.print()">Печат / PDF</button>
+</div>
+
+<div class="offer-sheet">
+    <h1>ТЪРГОВСКА ОФЕРТА</h1>
+    <div class="offer-meta">
+        <strong>Trafcom</strong> &nbsp;|&nbsp; Дата: <span id="offerDate"></span> &nbsp;|&nbsp; Клиент: <span id="offerCustomerName">{{ customer_name if customer_name else '—' }}</span>
+    </div>
+
+    <h2>{{ product.name }}</h2>
+    {% if product.description %}
+    <p class="offer-description">{{ product.description }}</p>
+    {% endif %}
+
+    <table>
+        <thead>
+        <tr>
+            <th>Детайл</th>
+            <th>Материал</th>
+            <th class="text-right">Кол.</th>
+            <th class="text-right">Ед. цена</th>
+            <th class="text-right">Общо</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for pd in product.product_details %}
+        <tr>
+            <td>{{ pd.detail.name }}</td>
+            <td>{{ pd.detail.material.display_name }}</td>
+            <td class="text-right">{{ pd.quantity }}</td>
+            <td class="text-right">{{ "%.2f"|format(pd.detail.calculated_price) }} €</td>
+            <td class="text-right">{{ "%.2f"|format(pd.detail.calculated_price * pd.quantity) }} €</td>
+        </tr>
+        {% endfor %}
+        {% for cost in product.extra_costs %}
+        <tr>
+            <td colspan="4">{{ cost.label }}</td>
+            <td class="text-right">{{ "%.2f"|format(cost.amount) }} €</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+
+    <table style="margin-top: 20px;">
+        <tbody>
+        <tr>
+            <td>Себестойност</td>
+            <td class="text-right">{{ "%.2f"|format(pricing.total_cost) }} €</td>
+        </tr>
+        {% if product.markup_percent %}
+        <tr>
+            <td>Надценка ({{ product.markup_percent }}%)</td>
+            <td class="text-right">+{{ "%.2f"|format(pricing.markup_amount) }} €</td>
+        </tr>
+        {% endif %}
+        <tr class="offer-total-row">
+            <td>Крайна цена</td>
+            <td class="text-right">{{ "%.2f"|format(pricing.sell_price) }} €</td>
+        </tr>
+        </tbody>
+    </table>
+</div>
+
+<script>
+    document.getElementById('offerDate').textContent = new Date().toLocaleDateString('bg-BG');
+
+    const customerInput = document.getElementById('customerNameInput');
+    const customerDisplay = document.getElementById('offerCustomerName');
+    customerInput.addEventListener('input', function () {
+        customerDisplay.textContent = customerInput.value.trim() || '—';
+    });
+</script>
+</body>
+</html>
