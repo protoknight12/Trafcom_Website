@@ -144,21 +144,38 @@
             <td class="text-right">{{ "%.2f"|format(pd.detail.calculated_price) }} €</td>
             <td class="text-right">{{ "%.2f"|format(pd.detail.calculated_price * pd.quantity) }} €</td>
         </tr>
-        {% endfor %}
-        {% for cost in product.extra_costs %}
+        {% else %}
         <tr>
-            <td colspan="4">{{ cost.label }}</td>
-            <td class="text-right">{{ "%.2f"|format(cost.amount) }} €</td>
+            <td colspan="5" class="text-center" style="color: #555; font-style: italic; padding: 12px 0;">Няма добавени детайли.</td>
         </tr>
         {% endfor %}
         </tbody>
     </table>
 
-    <table style="margin-top: 20px;">
+    <table style="margin-top: 30px;">
+        <thead>
+        <tr>
+            <th colspan="2" style="border-bottom: 2px solid #111; color: #111; font-weight: 700;">Калкулация на цената</th>
+        </tr>
+        </thead>
         <tbody>
         <tr>
-            <td>Себестойност</td>
-            <td class="text-right">{{ "%.2f"|format(pricing.total_cost) }} €</td>
+            <td>Сума от детайли</td>
+            <td class="text-right">{{ "%.2f"|format(pricing.details_subtotal) }} €</td>
+        </tr>
+
+        {% if product.extra_costs %}
+            {% for cost in product.extra_costs %}
+            <tr>
+                <td style="padding-left: 15px; color: #555;">+ {{ cost.label }} (допълнителен разход)</td>
+                <td class="text-right" style="color: #555;">{{ "%.2f"|format(cost.amount) }} €</td>
+            </tr>
+            {% endfor %}
+        {% endif %}
+
+        <tr>
+            <td style="border-top: 1px solid #ccc; font-weight: 600;">Обща себестойност</td>
+            <td class="text-right" style="border-top: 1px solid #ccc; font-weight: 600;">{{ "%.2f"|format(pricing.total_cost) }} €</td>
         </tr>
         {% if product.markup_percent %}
         <tr>
@@ -167,7 +184,7 @@
         </tr>
         {% endif %}
         <tr class="offer-total-row">
-            <td>Крайна цена</td>
+            <td>Крайна цена за клиента</td>
             <td class="text-right">{{ "%.2f"|format(pricing.sell_price) }} €</td>
         </tr>
         </tbody>
@@ -175,11 +192,11 @@
 
     {% if product.images %}
     <div class="offer-gallery-section" style="margin-top: 40px; border-top: 2px solid #111; padding-top: 20px; page-break-inside: avoid;">
-        <h3 style="font-size: 1.1rem; text-transform: uppercase; margin-bottom: 16px; color: #111; font-weight: 700;">Приложения и спецификации</h3>
+        <h3 style="font-size: 1.1rem; text-transform: uppercase; margin-bottom: 16px; color: #111; font-weight: 700;">Изображения на продукта</h3>
         <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px;">
             {% for img in product.images %}
             <div style="border: 1px solid #eee; padding: 6px; background: #fff; text-align: center; display: flex; align-items: center; justify-content: center; height: 180px; box-sizing: border-box; page-break-inside: avoid;">
-                <img src="{{ url_for('static', filename='uploads/products/' ~ img.filename) }}" alt="Спецификация" style="max-width: 100%; max-height: 100%; object-fit: contain;">
+                <img src="{{ url_for('static', filename='uploads/products/' ~ img.filename) }}" alt="Продуктово изображение" style="max-width: 100%; max-height: 100%; object-fit: contain;">
             </div>
             {% endfor %}
         </div>
