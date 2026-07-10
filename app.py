@@ -46,6 +46,8 @@ login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+app.config['PRODUCT_IMAGES_FOLDER'] = os.path.join(app.static_folder, 'uploads', 'products')
+os.makedirs(app.config['PRODUCT_IMAGES_FOLDER'], exist_ok=True)
 
 
 # ----------------- МОДЕЛИ В БАЗАТА ДАННИ -----------------
@@ -116,6 +118,11 @@ class Detail(db.Model):
 
     material = db.relationship('MaterialPrice')
 
+class ProductImage(db.Model):
+    """Stores references to uploaded persistent product documentation or marketing images."""
+    id = db.Column(db.Integer, primary_key=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
+    filename = db.Column(db.String(255), nullable=False)
 
 class Product(db.Model):
     """
@@ -131,6 +138,8 @@ class Product(db.Model):
 
     product_details = db.relationship('ProductDetail', cascade='all, delete-orphan', backref='product', lazy=True)
     extra_costs = db.relationship('ProductExtraCost', cascade='all, delete-orphan', backref='product', lazy=True)
+    # ADD THIS RELATIONSHIP BINDING:
+    images = db.relationship('ProductImage', cascade='all, delete-orphan', backref='product', lazy=True)
 
 
 class ProductDetail(db.Model):
@@ -819,6 +828,67 @@ def admin_add_material():
     flash(f'Материалът "{display_name}" беше добавен успешно.', 'success')
     return redirect(url_for('admin_dashboard'))
 
+@app.route('/admin/products/<int:product_id>/upload_image', methods=['POST'])
+@login_required
+def admin_product_upload_image(product_id):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    product = Product.query.get_or_404(product_id)
+
+    if 'images' not in request.files:
+        flash('Няма избрани файлове.', 'danger')
+        return redirect(url_for('admin_product_edit', product_id=product.id))
+
+    files = request.files.getlist('images')
+    uploaded_count = 0
+    allowed_extensions = {'png', 'jpg', 'jpeg', 'webp', 'gif'}
+
+    for file in files:
+        if file and file.filename != '':
+            ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else ''
+            if ext in allowed_extensions:
+                filename = secure_filename(file.filename)
+                unique_filename = f"{uuid.uuid4().hex}_{filename}"
+                file_path = os.path.join(app.config['PRODUCT_IMAGES_FOLDER'], unique_filename)
+                file.save(file_path)
+
+                new_img = ProductImage(product_id=product.id, filename=unique_filename)
+                db.session.add(new_img)
+                uploaded_count += 1
+            else:
+                flash(f'Невалиден формат на файла: {file.filename}. Разрешени са само изображения.', 'danger')
+
+    if uploaded_count > 0:
+        db.session.commit()
+        flash(f'Успешно качени изображения: {uploaded_count} бр.', 'success')
+
+    return redirect(url_for('admin_product_edit', product_id=product.id))
+
+
+@app.route('/admin/products/<int:product_id>/delete_image/<int:image_id>', methods=['POST'])
+@login_required
+def admin_product_delete_image(product_id, image_id):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    img = ProductImage.query.filter_by(id=image_id, product_id=product_id).first_or_404()
+    file_path = os.path.join(app.config['PRODUCT_IMAGES_FOLDER'], img.filename)
+
+    # Remove asset from filesystem to prevent dead bytes accumulation
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    except Exception as e:
+        print(f"Error deleting file from disk: {e}")
+
+    db.session.delete(img)
+    db.session.commit()
+    flash('Изображението беше премахнато.', 'success')
+    return redirect(url_for('admin_product_edit', product_id=product_id))
+
 
 # ----------------- БИБЛИОТЕКА С ДЕТАЙЛИ (Detail catalog) -----------------
 
@@ -982,7 +1052,17 @@ def admin_product_delete(product_id):
 
     product = Product.query.get_or_404(product_id)
     name = product.name
-    db.session.delete(product)  # cascades to ProductDetail/ProductExtraCost rows
+
+    # Unlink files from storage before cascading database removal
+    for img in product.images:
+        file_path = os.path.join(app.config['PRODUCT_IMAGES_FOLDER'], img.filename)
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except Exception as e:
+            print(f"Failed disk cleanup for file {img.filename}: {e}")
+
+    db.session.delete(product)  # Cascades database records
     db.session.commit()
     flash(f'Продуктът "{name}" беше изтрит.', 'success')
     return redirect(url_for('admin_dashboard'))

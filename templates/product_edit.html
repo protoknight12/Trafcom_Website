@@ -158,6 +158,37 @@
     </section>
 
     <section class="admin-card">
+        <h3>Изображения на продукта</h3>
+        <p class="section-subtitle">Качете чертежи, визуализации или снимки на крайния продукт, които автоматично ще се приложат към генерираната оферта.</p>
+
+        <form action="{{ url_for('admin_product_upload_image', product_id=product.id) }}" method="POST" enctype="multipart/form-data" style="margin-bottom: 2rem; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 250px;">
+                <input type="file" name="images" accept="image/*" multiple required style="background: #1a1a1a; color: #fff; padding: 9px 12px; border-radius: 6px; border: 1px solid #333; width: 100%; box-sizing: border-box; font-size: 0.9rem;">
+            </div>
+            <button type="submit" class="btn-submit" style="margin-top: 0; padding: 11px 20px;">Качи избраните</button>
+        </form>
+
+        {% if product.images %}
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 16px;">
+            {% for img in product.images %}
+            <div style="border: 1px solid #333; border-radius: 6px; padding: 8px; text-align: center; background: #1a1a1a; display: flex; flex-direction: column; justify-content: space-between;">
+                <div style="width: 100%; height: 120px; display: flex; align-items: center; justify-content: center; overflow: hidden; background: #fff; border-radius: 4px; margin-bottom: 8px;">
+                    <img src="{{ url_for('static', filename='uploads/products/' ~ img.filename) }}" alt="Продуктово изображение" style="max-width: 100%; max-height: 100%; object-fit: contain;">
+                </div>
+                <form action="{{ url_for('admin_product_delete_image', product_id=product.id, image_id=img.id) }}" method="POST" onsubmit="return confirm('Наистина ли искате да изтриете това изображение?');" style="margin: 0; padding: 0;">
+                    <button type="submit" style="padding: 6px 12px; font-size: 0.82rem; background-color: #dc3545; color: #fff; border: none; border-radius: 4px; width: 100%; cursor: pointer; font-weight: 600;">Премахни</button>
+                </form>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div style="text-align: center; padding: 20px; border: 1px dashed #333; border-radius: 6px; color: var(--text-muted); font-style: italic; font-size: 0.95rem;">
+            Няма прикрепени изображения към този продукт.
+        </div>
+        {% endif %}
+    </section>
+
+    <section class="admin-card">
         <h3>Ценова разбивка</h3>
         <div class="table-responsive">
             <table class="users-table">
