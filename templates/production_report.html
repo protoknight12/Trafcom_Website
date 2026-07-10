@@ -7,12 +7,15 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <style>
         .status-badge { padding: 4px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; display: inline-block; }
-        .status-Нова { background-color: #ffc107; color: #000; }
-        .status-производство { background-color: #17a2b8; color: #fff; }
-        .status-Завършена { background-color: #28a745; color: #fff; }
-        .progress-container { background: #e9ecef; border-radius: 4px; overflow: hidden; width: 100%; height: 10px; margin-top: 5px; }
+        .status-new { background-color: #ffc107; color: #000; }
+        .status-in_production { background-color: #17a2b8; color: #fff; }
+        .status-completed { background-color: #28a745; color: #fff; }
+        .status-cancelled { background-color: #6c757d; color: #fff; }
+        .progress-container { background: rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden; width: 100%; height: 10px; margin-top: 5px; }
         .progress-bar { background: #28a745; height: 100%; transition: width 0.3s ease; }
-        .qty-updater { width: 70px; padding: 4px; border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); text-align: center; }
+        .qty-updater { width: 80px; padding: 6px; border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); text-align: center; background-color: var(--bg-input); color: var(--text-main); }
+        .qty-updater:disabled { opacity: 0.5; cursor: not-allowed; }
+        .order-card-header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
     </style>
 </head>
 <body>
@@ -22,7 +25,8 @@
         <div class="nav-links">
             <div class="nav-section-links">
                 <div class="dropdown">
-                    <a class="dropdown-trigger" href="#" tabindex="0" onclick="event.preventDefault()">Приложения <span class="dropdown-arrow">▼</span></a>
+                    <a class="dropdown-trigger" href="#" tabindex="0" onclick="event.preventDefault()">Приложения <span
+                            class="dropdown-arrow">▼</span></a>
                     <div class="dropdown-content">
                         <a href="{{ url_for('dashboard') }}">DXF CNC Калкулатор</a>
                         <a href="{{ url_for('generator') }}">Параметричен Генератор</a>
@@ -31,128 +35,181 @@
                 <a href="{{ url_for('index') }}">Начало</a>
                 <a href="{{ url_for('dashboard') }}">Лична Библиотека</a>
 
-                {# Връзки за Поръчки и Производство #}
                 {% if current_user.is_authenticated %}
-                    <a href="{{ url_for('create_order') }}">Нова Поръчка</a>
-                    {% if current_user.is_admin %}
-                        <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
-                        <a href="{{ url_for('admin_production_report') }}" class="active">Справка Производство</a>
-                    {% endif %}
+                <a href="{{ url_for('create_order') }}">Нова Поръчка</a>
+                <a href="{{ url_for('my_orders') }}">Моите Поръчки</a>
+                {% if current_user.is_admin %}
+                <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
+                <a href="{{ url_for('admin_production_report') }}" class="active">Справка Производство</a>
+                {% endif %}
                 {% endif %}
             </div>
 
             <div class="nav-cta-buttons">
                 {% if current_user.is_admin %}
-                    <span class="user-badge" style="border-color: var(--danger-border); color: #ff7675;">СЕСИЯ: АДМИНИСТРАТОР</span>
+                <span class="user-badge" style="border-color: var(--danger-border); color: #ff7675;">СЕСИЯ: АДМИНИСТРАТОР</span>
                 {% else %}
-                    <span class="user-badge">{{ current_user.username }}</span>
+                <span class="user-badge">{{ current_user.username }}</span>
                 {% endif %}
-                <a href="{{ url_for('logout') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Изход</a>
+                <a href="{{ url_for('logout') }}" class="btn-secondary"
+                   style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Изход</a>
             </div>
         </div>
     </div>
 </nav>
 
-<main class="admin-container" style="max-width: 1200px; margin: 30px auto; padding: 0 15px;">
-    <div class="card">
-        <div class="card-header">
-            <h3>Текущо състояние на поръчките (Справка Изработено / Остатък)</h3>
+<main class="admin-container" style="max-width: 1100px; margin: 30px auto; padding: 0 15px;">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <h2 style="margin-bottom: 20px;">Текущо състояние на поръчките</h2>
+    <p class="section-subtitle" style="margin-top: -10px;">Прогресът на всеки продукт се изчислява по неговите съставни детайли - въведете реално изработените бройки за всеки компонент.</p>
+
+    {% for order in orders %}
+    <section class="admin-card">
+        <div class="order-card-header">
+            <div>
+                <strong style="font-size: 1.1rem;">{{ order.order_number }}</strong> &nbsp;—&nbsp; {{ order.customer_name }}
+                <div class="text-muted text-small">{{ order.created_at.strftime('%d.%m.%Y %H:%M') }} · Потребител: {{ order.user.username }}</div>
+            </div>
+            <span class="status-badge status-{{ order.status }}" id="order-status-{{ order.id }}">{{ order.status_label }}</span>
         </div>
 
-        <div class="table-responsive" style="padding: 15px; overflow-x: auto;">
-            <table class="users-table" style="width: 100%; border-collapse: collapse;">
+        <div style="margin-bottom: 16px; max-width: 320px;">
+            <div class="progress-container"><div class="progress-bar" id="order-progress-{{ order.id }}" style="width: {{ order.percent_complete }}%;"></div></div>
+            <span class="text-small text-muted" id="order-pct-{{ order.id }}">{{ order.percent_complete }}% готовност</span>
+        </div>
+
+        <div class="table-responsive">
+            <table class="data-table">
                 <thead>
-                    <tr style="text-align: left; border-bottom: 2px solid var(--border-color);">
-                        <th style="padding: 12px;">Номер</th>
-                        <th style="padding: 12px;">Клиент</th>
-                        <th style="padding: 12px;">Изделие / Компонент</th>
-                        <th style="padding: 12px;" class="text-center">Заявено к-во</th>
-                        <th style="padding: 12px;" class="text-center">Изработено до момента</th>
-                        <th style="padding: 12px;" class="text-center">Оставащо к-во</th>
-                        <th style="padding: 12px;" class="text-center">Статус поръчка</th>
-                        <th style="padding: 12px;">Напредък</th>
-                    </tr>
+                <tr>
+                    <th>Изделие / Компонент</th>
+                    <th class="text-center">Нужно к-во</th>
+                    <th class="text-center">Изработено</th>
+                    <th class="text-center">Прогрес</th>
+                </tr>
                 </thead>
                 <tbody>
-                {% for order in orders %}
-                    {% for item in order.items %}
-                    <tr id="row-{{ item.id }}" style="border-bottom: 1px solid var(--border-color);">
-                        <td style="padding: 12px;"><strong>{{ order.order_number }}</strong></td>
-                        <td style="padding: 12px;">{{ order.customer_name }}</td>
-                        <td style="padding: 12px;">
-                            {% if item.product %}
-                                <span style="color: #007bff; font-weight: 600;">[Продукт]</span> {{ item.product.name }}
-                            {% else %}
-                                <span style="color: #6f42c1; font-weight: 600;">[Детайл]</span> {{ item.detail.name }}
-                            {% endif %}
-                        </td>
-                        <td style="padding: 12px;" class="text-center" id="ordered-{{ item.id }}">{{ item.quantity_ordered }} бр.</td>
-                        <td style="padding: 12px;" class="text-center">
-                            <input type="number" class="qty-updater" value="{{ item.quantity_produced }}"
-                                   min="0" max="{{ item.quantity_ordered }}"
-                                   onchange="updateProduction('{{ item.id }}', this.value)"> бр.
-                        </td>
-                        <td style="padding: 12px;" class="text-center" id="remaining-{{ item.id }}" style="font-weight: bold;">
-                            {{ item.quantity_remaining }} бр.
-                        </td>
-                        <td style="padding: 12px;" class="text-center">
-                            <span id="status-badge-{{ item.id }}" class="status-badge status-{{ order.status }}">{{ order.status }}</span>
-                        </td>
-                        <td style="padding: 12px;">
-                            {% set pct = (item.quantity_produced / item.quantity_ordered * 100)|int %}
-                            <div class="progress-container">
-                                <div class="progress-bar" id="progress-{{ item.id }}" style="width: {{ pct }}%;"></div>
-                            </div>
-                            <small id="pct-label-{{ item.id }}">{{ pct }}% готовност</small>
-                        </td>
-                    </tr>
-                    {% endfor %}
+                {% for item in order.items %}
+                <tr style="background-color: rgba(255,255,255,0.03);">
+                    <td>
+                        {% if item.product %}
+                        <span style="color: #007bff; font-weight: 600;">[ПРОДУКТ]</span> {{ item.product.name }}
+                        {% else %}
+                        <span style="color: #a56cff; font-weight: 600;">[ДЕТАЙЛ]</span> {{ item.detail.name }}
+                        {% endif %}
+                    </td>
+                    <td class="text-center">{{ item.quantity_ordered }} бр.</td>
+                    <td class="text-center">
+                        {% if item.detail %}
+                        <input type="number" class="qty-updater" min="0" max="{{ item.quantity_ordered }}"
+                               value="{{ item.quantity_produced }}"
+                               data-target-type="item" data-target-id="{{ item.id }}"
+                               data-order-id="{{ order.id }}" data-max="{{ item.quantity_ordered }}"
+                               onchange="updateProduction(this)"
+                               {{ 'disabled' if order.status == 'cancelled' else '' }}>
+                        {% else %}
+                        <span class="text-muted text-small">виж компонентите отдолу</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-center" id="item-pct-{{ item.id }}">{{ item.percent_complete }}%</td>
+                </tr>
+
+                {% if item.product %}
+                {% for comp in item.components %}
+                <tr>
+                    <td style="padding-left: 30px; color: var(--text-muted);">↳ Компонент: {{ comp.detail_name_snapshot }}</td>
+                    <td class="text-center">{{ comp.quantity_needed }} бр.</td>
+                    <td class="text-center">
+                        <input type="number" class="qty-updater" min="0" max="{{ comp.quantity_needed }}"
+                               value="{{ comp.quantity_produced }}"
+                               data-target-type="component" data-target-id="{{ comp.id }}"
+                               data-order-id="{{ order.id }}" data-item-id="{{ item.id }}" data-max="{{ comp.quantity_needed }}"
+                               onchange="updateProduction(this)"
+                               {{ 'disabled' if order.status == 'cancelled' else '' }}>
+                    </td>
+                    <td class="text-center" id="component-pct-{{ comp.id }}">{{ comp.percent_complete }}%</td>
+                </tr>
                 {% else %}
                 <tr>
-                    <td colspan="8" class="text-center" style="padding: 30px; color: grey;">Няма регистрирани поръчки в системата.</td>
+                    <td colspan="4" style="padding-left: 30px; color: var(--text-muted); font-style: italic;">Този продукт няма добавени детайли.</td>
                 </tr>
+                {% endfor %}
+                {% endif %}
                 {% endfor %}
                 </tbody>
             </table>
         </div>
-    </div>
+    </section>
+    {% else %}
+    <div class="admin-card text-center no-data">Няма регистрирани поръчки.</div>
+    {% endfor %}
 </main>
 
 <script>
-function updateProduction(itemId, val) {
-    const ordered = parseInt(document.getElementById('ordered-' + itemId).textContent);
-    let produced = parseInt(val);
+    function updateProduction(inputEl) {
+        const targetType = inputEl.dataset.targetType;
+        const targetId = inputEl.dataset.targetId;
+        const orderId = inputEl.dataset.orderId;
+        const itemId = inputEl.dataset.itemId; // only present for component-type inputs
+        const max = parseInt(inputEl.dataset.max, 10);
 
-    if (produced > ordered) produced = ordered;
-    if (produced < 0 || isNaN(produced)) produced = 0;
+        let val = parseInt(inputEl.value, 10);
+        if (isNaN(val) || val < 0) val = 0;
+        if (val > max) val = max;
+        inputEl.value = val;
 
-    const formData = new FormData();
-    formData.append('order_item_id', itemId);
-    formData.append('produced_qty', produced);
+        const formData = new FormData();
+        formData.append('target_type', targetType);
+        formData.append('target_id', targetId);
+        formData.append('produced_qty', val);
 
-    fetch('/admin/production', {
-        method: 'POST',
-        body: formData
-    })
-    .then(response => response.json())
-    .then(data => {
-        if(data.status === 'success') {
-            document.getElementById('remaining-' + itemId).textContent = data.remaining + ' бр.';
+        fetch('/admin/production', { method: 'POST', body: formData })
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+                if (data.status !== 'success') {
+                    alert(data.message || 'Възникна грешка при обновяването.');
+                    return;
+                }
 
-            const pct = Math.round((produced / ordered) * 100);
-            document.getElementById('progress-' + itemId).style.width = pct + '%';
-            document.getElementById('pct-label-' + itemId).textContent = pct + '% готовност';
+                if (targetType === 'component') {
+                    const compEl = document.getElementById('component-pct-' + targetId);
+                    if (compEl) compEl.textContent = data.target_percent + '%';
+                    if (itemId) {
+                        const itemPctEl = document.getElementById('item-pct-' + itemId);
+                        if (itemPctEl) itemPctEl.textContent = data.item_percent + '%';
+                    }
+                } else {
+                    const itemPctEl = document.getElementById('item-pct-' + targetId);
+                    if (itemPctEl) itemPctEl.textContent = data.item_percent + '%';
+                }
 
-            // Коригирано от Jinja синтаксис към стандартна JavaScript конкатенация
-            const badge = document.getElementById('status-badge-' + itemId);
-            if (badge) {
-                badge.className = 'status-badge status-' + data.order_status;
-                badge.textContent = data.order_status;
-            }
-        }
-    })
-    .catch(error => console.error('Error updating production:', error));
-}
+                const orderPctEl = document.getElementById('order-pct-' + orderId);
+                if (orderPctEl) orderPctEl.textContent = data.order_percent + '% готовност';
+
+                const orderProgressEl = document.getElementById('order-progress-' + orderId);
+                if (orderProgressEl) orderProgressEl.style.width = data.order_percent + '%';
+
+                const badge = document.getElementById('order-status-' + orderId);
+                if (badge) {
+                    badge.className = 'status-badge status-' + data.order_status;
+                    badge.textContent = data.order_status_label;
+                }
+            })
+            .catch(function (error) {
+                console.error('Error updating production:', error);
+                alert('Връзката със сървъра беше прекъсната.');
+            });
+    }
 </script>
 </body>
 </html>

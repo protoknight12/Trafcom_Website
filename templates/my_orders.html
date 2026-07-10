@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Моите Поръчки - TRAFCOM</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .status-badge { padding: 4px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; display: inline-block; }
+        .status-new { background-color: #ffc107; color: #000; }
+        .status-in_production { background-color: #17a2b8; color: #fff; }
+        .status-completed { background-color: #28a745; color: #fff; }
+        .status-cancelled { background-color: #6c757d; color: #fff; }
+        .progress-container { background: rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden; width: 100%; height: 8px; margin-top: 6px; }
+        .progress-bar { background: #28a745; height: 100%; transition: width 0.3s ease; }
+        .order-card-header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+        .order-footer { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; margin-top: 16px; }
+    </style>
+</head>
+<body>
+<nav class="navbar">
+    <div class="nav-container">
+        <h2>TRAFCOM</h2>
+        <div class="nav-links">
+            <div class="nav-section-links">
+                <a href="{{ url_for('dashboard') }}">Чертежи</a>
+                <a href="{{ url_for('create_order') }}">Нова Поръчка</a>
+                <a href="{{ url_for('my_orders') }}" class="active">Моите Поръчки</a>
+                {% if current_user.is_admin %}
+                    <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
+                    <a href="{{ url_for('admin_production_report') }}">Справка Производство</a>
+                {% endif %}
+            </div>
+            <div class="nav-cta-buttons">
+                <a href="{{ url_for('logout') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Изход</a>
+            </div>
+        </div>
+    </div>
+</nav>
+
+<main class="admin-container" style="max-width: 900px; margin: 30px auto; padding: 0 15px;">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <h2 style="margin-bottom: 20px;">Моите Поръчки</h2>
+
+    {% for order in orders %}
+    <section class="admin-card">
+        <div class="order-card-header">
+            <div>
+                <strong style="font-size: 1.1rem;">{{ order.order_number }}</strong> &nbsp;—&nbsp; {{ order.customer_name }}
+                <div class="text-muted text-small">{{ order.created_at.strftime('%d.%m.%Y %H:%M') }}</div>
+            </div>
+            <span class="status-badge status-{{ order.status }}">{{ order.status_label }}</span>
+        </div>
+
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                <tr>
+                    <th>Артикул</th>
+                    <th class="text-center">Кол.</th>
+                    <th class="text-right">Ед. цена</th>
+                    <th class="text-right">Общо</th>
+                    <th style="min-width: 140px;">Прогрес</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for item in order.items %}
+                <tr>
+                    <td>
+                        {{ item.item_name }}
+                        {% if item.product %}
+                        <span class="badge badge-user">Продукт</span>
+                        {% else %}
+                        <span class="badge badge-user">Детайл</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-center">{{ item.quantity_ordered }} бр.</td>
+                    <td class="text-right">{{ "%.2f"|format(item.unit_price) }} €</td>
+                    <td class="text-right">{{ "%.2f"|format(item.line_total) }} €</td>
+                    <td>
+                        <div class="progress-container"><div class="progress-bar" style="width: {{ item.percent_complete }}%;"></div></div>
+                        <span class="text-small text-muted">{{ item.percent_complete }}%</span>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="order-footer">
+            <div style="min-width: 220px;">
+                <div class="progress-container"><div class="progress-bar" style="width: {{ order.percent_complete }}%;"></div></div>
+                <span class="text-small text-muted">Общ напредък на поръчката: {{ order.percent_complete }}%</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 16px;">
+                <strong>Обща сума: {{ "%.2f"|format(order.total_price) }} €</strong>
+                {% if order.can_cancel %}
+                <form method="POST" action="{{ url_for('cancel_order', order_id=order.id) }}"
+                      onsubmit="return confirm('Наистина ли искате да отмените поръчка {{ order.order_number }}?');">
+                    <button type="submit" class="btn-delete">Отмени поръчка</button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+    {% else %}
+    <div class="admin-card text-center no-data">Нямате направени поръчки все още. <a href="{{ url_for('create_order') }}">Направете първата си поръчка</a>.</div>
+    {% endfor %}
+</main>
+</body>
+</html>

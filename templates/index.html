@@ -24,8 +24,12 @@
                 <a href="#">Услуги</a>
                 <a href="#">За нас</a>
                 <a href="#">Контакти</a>
-                {% if current_user.is_authenticated and current_user.is_admin %}
+                {% if current_user.is_authenticated %}
+                <a href="{{ url_for('create_order') }}">Нова Поръчка</a>
+                <a href="{{ url_for('my_orders') }}">Моите Поръчки</a>
+                {% if current_user.is_admin %}
                 <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
+                {% endif %}
                 {% endif %}
             </div>
             <div class="nav-cta-buttons">

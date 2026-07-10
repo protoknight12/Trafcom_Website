@@ -43,6 +43,18 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 # Flat fee added to every job to cover machine setup/initialization overhead.
 BASE_SETUP_FEE = 5.00
 
+# Order status is stored as a plain-ASCII slug (safe to use directly as a CSS
+# class, e.g. "status-in_production") and displayed via STATUS_LABELS. The
+# old code stored the Bulgarian label itself (e.g. "В производство") as the
+# status value, which broke when interpolated into class="status-{{ status }}"
+# because the space split it into two separate CSS classes.
+STATUS_LABELS = {
+    'new': 'Нова',
+    'in_production': 'В производство',
+    'completed': 'Завършена',
+    'cancelled': 'Отменена',
+}
+
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
@@ -155,24 +167,81 @@ class ProductDetail(db.Model):
 
 
 class Order(db.Model):
+    """
+    A customer order, placed by a logged-in user. Cart-style: one Order can
+    contain any number of OrderItems, each either a whole Product or a
+    standalone Detail.
+
+    Completion percentage and status are NOT tracked per-product - they're
+    derived from the individual Detail components a product order line is
+    made of (see OrderItemComponent), so a product is only "done" once every
+    one of its constituent details has actually been produced. See
+    Order.percent_complete / OrderItem.percent_complete below.
+    """
     id = db.Column(db.Integer, primary_key=True)
     order_number = db.Column(db.String(50), unique=True, nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     customer_name = db.Column(db.String(150), nullable=False)
-    status = db.Column(db.String(50), default='Нова')  # Нова, В производство, Завършена
+    status = db.Column(db.String(50), default='new')  # new, in_production, completed, cancelled
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     user = db.relationship('User', backref=db.backref('orders', lazy=True))
     items = db.relationship('OrderItem', backref='order', lazy=True, cascade="all, delete-orphan")
 
+    @property
+    def status_label(self):
+        return STATUS_LABELS.get(self.status, self.status)
+
+    @property
+    def total_price(self):
+        return round(sum(item.line_total for item in self.items), 2)
+
+    @property
+    def percent_complete(self):
+        """
+        Weighted by raw detail-piece units across every item in the order
+        (a product's own units aren't the unit of account - its components
+        are), so an order half full of easy small parts and half full of a
+        single complex product reflects genuine production progress rather
+        than "1 of 2 line items done".
+        """
+        total_needed = 0
+        total_produced = 0
+        for item in self.items:
+            needed, produced = item.detail_unit_totals
+            total_needed += needed
+            total_produced += produced
+        if total_needed <= 0:
+            return 0.0
+        return round(total_produced / total_needed * 100, 1)
+
+    @property
+    def can_cancel(self):
+        # Once any production has started (or it's already done/cancelled),
+        # cancelling would discard real work - only a brand new order is
+        # safe for a customer to cancel themselves.
+        return self.status == 'new'
+
 
 class OrderItem(db.Model):
+    """
+    One line in an Order: a quantity of either a whole Product or a
+    standalone Detail. `unit_price` is snapshotted at order-creation time
+    (from the product/detail's price at that moment) so a later price change
+    never rewrites the cost of an order that's already been placed.
+
+    For product line items, production progress is tracked per-component via
+    OrderItemComponent (see below), NOT via quantity_produced on this row -
+    that field is only meaningful for standalone-detail line items, which
+    have no sub-components to track separately.
+    """
     id = db.Column(db.Integer, primary_key=True)
     order_id = db.Column(db.Integer, db.ForeignKey('order.id'), nullable=False)
     product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=True)
     detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=True)
     quantity_ordered = db.Column(db.Integer, nullable=False)
-    quantity_produced = db.Column(db.Integer, default=0, nullable=False) # Колко са готови
+    quantity_produced = db.Column(db.Integer, default=0, nullable=False)  # only used for standalone-detail items
+    unit_price = db.Column(db.Float, nullable=False, default=0.0)
 
     product = db.relationship('Product')
     detail = db.relationship('Detail')
@@ -181,6 +250,71 @@ class OrderItem(db.Model):
     def quantity_remaining(self):
         rem = self.quantity_ordered - self.quantity_produced
         return rem if rem > 0 else 0
+
+    @property
+    def item_name(self):
+        if self.product:
+            return self.product.name
+        if self.detail:
+            return self.detail.name
+        return 'Неизвестен артикул'
+
+    @property
+    def line_total(self):
+        return round(self.unit_price * self.quantity_ordered, 2)
+
+    @property
+    def detail_unit_totals(self):
+        """
+        (needed, produced) expressed in raw detail-piece units - used both
+        for this item's own percent_complete and as this item's weighted
+        contribution to the parent Order's percent_complete.
+        """
+        if self.product_id:
+            needed = sum(c.quantity_needed for c in self.components)
+            produced = sum(min(c.quantity_produced, c.quantity_needed) for c in self.components)
+        else:
+            needed = self.quantity_ordered
+            produced = min(self.quantity_produced, self.quantity_ordered)
+        return needed, produced
+
+    @property
+    def percent_complete(self):
+        needed, produced = self.detail_unit_totals
+        if needed <= 0:
+            return 100.0
+        return round(produced / needed * 100, 1)
+
+
+class OrderItemComponent(db.Model):
+    """
+    A frozen snapshot of one Detail's production requirement for a single
+    product OrderItem, created once when the order is placed (so later edits
+    to a product's recipe never retroactively change an already-placed
+    order). This is the actual unit of production tracking for product line
+    items: quantity_produced is entered by admins per-component, and rolled
+    up into OrderItem.percent_complete / Order.percent_complete.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    order_item_id = db.Column(db.Integer, db.ForeignKey('order_item.id'), nullable=False)
+    detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=True)
+    detail_name_snapshot = db.Column(db.String(150), nullable=False)
+    quantity_needed = db.Column(db.Integer, nullable=False)
+    quantity_produced = db.Column(db.Integer, default=0, nullable=False)
+
+    order_item = db.relationship('OrderItem', backref=db.backref('components', cascade='all, delete-orphan', lazy=True))
+    detail = db.relationship('Detail')
+
+    @property
+    def quantity_remaining(self):
+        rem = self.quantity_needed - self.quantity_produced
+        return rem if rem > 0 else 0
+
+    @property
+    def percent_complete(self):
+        if self.quantity_needed <= 0:
+            return 100.0
+        return round(min(self.quantity_produced, self.quantity_needed) / self.quantity_needed * 100, 1)
 
 
 class ProductExtraCost(db.Model):
@@ -557,6 +691,37 @@ def calculate_cnc_price(width, height, total_length, pierce_count, material_key)
     total_calculated_euro = material_surface_cost + cutting_lineal_cost + piercing_total_cost + BASE_SETUP_FEE
     return round(total_calculated_euro, 2)
 
+
+def generate_order_number():
+    """
+    Generates a unique, human-friendly order number like ORD-2026-4821.
+    Retries on the (very unlikely) chance of a random collision; falls back
+    to a guaranteed-unique uuid-based suffix if it somehow never finds a free
+    4-digit number.
+    """
+    year = datetime.utcnow().year
+    for _ in range(20):
+        candidate = f"ORD-{year}-{random.randint(1000, 9999)}"
+        if not Order.query.filter_by(order_number=candidate).first():
+            return candidate
+    return f"ORD-{year}-{uuid.uuid4().hex[:8].upper()}"
+
+
+def refresh_order_status(order):
+    """
+    Recomputes an order's status from its current production progress.
+    Never overrides a cancelled order - cancellation is a manual, final
+    action independent of production progress.
+    """
+    if order.status == 'cancelled':
+        return
+    pct = order.percent_complete
+    if pct >= 100 and len(order.items) > 0:
+        order.status = 'completed'
+    elif pct > 0:
+        order.status = 'in_production'
+    else:
+        order.status = 'new'
 
 # ----------------- МАРШРУТИ И ЛОГИКА -----------------
 
@@ -1270,47 +1435,138 @@ def logout():
 
 
 
-# МАРШРУТ ЗА ОБИКНОВЕНИ ПОТРЕБИТЕЛИ - СЪЗДАВАНЕ НА ПОРЪЧКА
+# МАРШРУТ ЗА ОБИКНОВЕНИ ПОТРЕБИТЕЛИ - СЪЗДАВАНЕ НА ПОРЪЧКА (кошница с няколко артикула)
 @app.route('/orders/new', methods=['GET', 'POST'])
 @login_required
 def create_order():
     if request.method == 'POST':
-        customer_name = request.form.get('customer_name')
-        item_type = request.form.get('item_type')  # 'product' или 'detail'
-        item_id = request.form.get('item_id')
-        qty = int(request.form.get('quantity', 1))
+        customer_name = request.form.get('customer_name', '').strip()
+        cart_raw = request.form.get('cart_json', '')
 
-        if not customer_name or not item_id:
-            flash('Моля попълнете всички задължителни полета.', 'danger')
+        if not customer_name:
+            flash('Моля въведете име на клиент.', 'danger')
             return redirect(url_for('create_order'))
 
-        # Генериране на уникален номер на поръчка (напр. ORD-2026-XXXX)
-        order_num = f"ORD-{datetime.utcnow().year}-{random.randint(1000, 9999)}"
+        try:
+            cart = json.loads(cart_raw)
+            if not isinstance(cart, list):
+                cart = []
+        except (TypeError, ValueError):
+            cart = []
+
+        if not cart:
+            flash('Моля добавете поне един артикул към поръчката.', 'danger')
+            return redirect(url_for('create_order'))
 
         new_order = Order(
-            order_number=order_num,
+            order_number=generate_order_number(),
             user_id=current_user.id,
             customer_name=customer_name,
-            status='Нова'
+            status='new'
         )
         db.session.add(new_order)
         db.session.flush()  # Взимаме ID-то преди commit
 
-        order_item = OrderItem(order_id=new_order.id, quantity_ordered=qty)
-        if item_type == 'product':
-            order_item.product_id = int(item_id)
-        else:
-            order_item.detail_id = int(item_id)
+        added_any = False
+        for row in cart:
+            if not isinstance(row, dict):
+                continue
+            try:
+                item_type = row.get('type')
+                item_id = int(row.get('id'))
+                qty = int(row.get('qty', 1))
+            except (TypeError, ValueError):
+                continue
+            if qty < 1:
+                continue
 
-        db.session.add(order_item)
+            if item_type == 'product':
+                product = Product.query.get(item_id)
+                if not product:
+                    continue
+                pricing = calculate_product_pricing(product)
+                order_item = OrderItem(
+                    order_id=new_order.id, product_id=product.id,
+                    quantity_ordered=qty, unit_price=pricing['sell_price']
+                )
+                db.session.add(order_item)
+                db.session.flush()  # need order_item.id for its components
+
+                # Freeze the product's current recipe into per-detail
+                # production targets for this order line.
+                for pd in product.product_details:
+                    db.session.add(OrderItemComponent(
+                        order_item_id=order_item.id,
+                        detail_id=pd.detail_id,
+                        detail_name_snapshot=pd.detail.name,
+                        quantity_needed=pd.quantity * qty
+                    ))
+                added_any = True
+
+            elif item_type == 'detail':
+                detail = Detail.query.get(item_id)
+                if not detail:
+                    continue
+                order_item = OrderItem(
+                    order_id=new_order.id, detail_id=detail.id,
+                    quantity_ordered=qty, unit_price=detail.calculated_price
+                )
+                db.session.add(order_item)
+                added_any = True
+
+        if not added_any:
+            db.session.rollback()
+            flash('Невалидни артикули в поръчката.', 'danger')
+            return redirect(url_for('create_order'))
+
         db.session.commit()
+        flash(f'Поръчка {new_order.order_number} беше успешно изпратена!', 'success')
+        return redirect(url_for('my_orders'))
 
-        flash(f'Поръчка {order_num} беше успешно изпратена!', 'success')
-        return redirect(url_for('create_order'))
+    products = Product.query.order_by(Product.name).all()
+    details = Detail.query.order_by(Detail.name).all()
+    # Pre-computed, JSON-friendly catalogs so the cart UI can add items and
+    # show live prices/totals client-side without extra round-trips.
+    products_data = [
+        {'id': p.id, 'name': p.name, 'price': calculate_product_pricing(p)['sell_price']}
+        for p in products
+    ]
+    details_data = [
+        {
+            'id': d.id,
+            'name': f"{d.name} ({d.material.display_name})" if d.material else d.name,
+            'price': d.calculated_price
+        }
+        for d in details
+    ]
+    return render_template('order_create.html', products=products_data, details=details_data)
 
-    products = Product.query.all()
-    details = Detail.query.all()
-    return render_template('order_create.html', products=products, details=details)
+
+# МАРШРУТ ЗА ОБИКНОВЕНИ ПОТРЕБИТЕЛИ - ИСТОРИЯ И СТАТУС НА СОБСТВЕНИТЕ ПОРЪЧКИ
+@app.route('/orders')
+@login_required
+def my_orders():
+    orders = Order.query.filter_by(user_id=current_user.id).order_by(Order.created_at.desc()).all()
+    return render_template('my_orders.html', orders=orders)
+
+
+@app.route('/orders/<int:order_id>/cancel', methods=['POST'])
+@login_required
+def cancel_order(order_id):
+    order = Order.query.get_or_404(order_id)
+
+    if order.user_id != current_user.id and not current_user.is_admin:
+        flash('Нямате достъп до тази поръчка.', 'danger')
+        return redirect(url_for('my_orders'))
+
+    if not order.can_cancel:
+        flash('Поръчката вече е в процес на изработка (или вече е приключена/отменена) и не може да бъде отменена.', 'danger')
+        return redirect(url_for('my_orders'))
+
+    order.status = 'cancelled'
+    db.session.commit()
+    flash(f'Поръчка {order.order_number} беше отменена.', 'success')
+    return redirect(url_for('my_orders'))
 
 
 # АДМИН СТРАНИЦА - СПРАВКА ЗА ПРОИЗВОДСТВО И ОСТАТЪЦИ
@@ -1322,31 +1578,62 @@ def admin_production_report():
         return redirect(url_for('dashboard'))
 
     if request.method == 'POST':
-        # Динамично обновяване на изработеното количество от производството
-        item_id = request.form.get('order_item_id')
-        produced_qty = int(request.form.get('produced_qty', 0))
+        # Динамично обновяване на изработеното количество - или на цял
+        # OrderItem (за самостоятелен детайл), или на един конкретен
+        # компонент (детайл) от продукт (target_type = 'item' / 'component').
+        target_type = request.form.get('target_type')
+        target_id = request.form.get('target_id')
 
-        item = OrderItem.query.get_or_404(item_id)
-        item.quantity_produced = produced_qty
+        try:
+            produced_qty = int(request.form.get('produced_qty', 0))
+        except (TypeError, ValueError):
+            return jsonify({'status': 'error', 'message': 'Невалидно количество.'}), 400
 
-        # Автоматично обновяване на статуса на поръчката, ако всичко е готово
-        order = item.order
-        all_done = all(i.quantity_produced >= i.quantity_ordered for i in order.items)
-        if all_done:
-            order.status = 'Завършена'
-        elif any(i.quantity_produced > 0 for i in order.items):
-            order.status = 'В производство'
+        if target_type == 'component':
+            component = OrderItemComponent.query.get_or_404(target_id)
+            produced_qty = max(0, min(produced_qty, component.quantity_needed))
+            component.quantity_produced = produced_qty
+            order_item = component.order_item
+            target_percent = component.percent_complete
+        elif target_type == 'item':
+            order_item = OrderItem.query.get_or_404(target_id)
+            produced_qty = max(0, min(produced_qty, order_item.quantity_ordered))
+            order_item.quantity_produced = produced_qty
+            target_percent = order_item.percent_complete
+        else:
+            return jsonify({'status': 'error', 'message': 'Невалиден тип на артикула.'}), 400
 
+        order = order_item.order
+        refresh_order_status(order)
         db.session.commit()
-        return jsonify({'status': 'success', 'remaining': item.quantity_remaining})
 
-    orders = Order.query.order_by(Order.created_at.desc()).all()
+        return jsonify({
+            'status': 'success',
+            'produced_qty': produced_qty,
+            'target_percent': target_percent,
+            'item_percent': order_item.percent_complete,
+            'order_percent': order.percent_complete,
+            'order_status': order.status,
+            'order_status_label': STATUS_LABELS.get(order.status, order.status)
+        })
+
+    orders = Order.query.filter(Order.status != 'cancelled').order_by(Order.created_at.desc()).all()
     return render_template('production_report.html', orders=orders)
 
 
 
 if __name__ == '__main__':
     with app.app_context():
+        # NOTE ON SCHEMA CHANGES: db.create_all() only creates tables that
+        # don't exist yet - it will NOT add new columns to an existing
+        # `order` / `order_item` table or backfill the new `order_item`
+        # unit_price column, and it can't rewrite old status values ("Нова",
+        # "В производство", "Завършена") into the new slugs ("new",
+        # "in_production", "completed"). If you already have a database from
+        # before this change, either drop the order/order_item tables (or the
+        # whole DB, in dev) and let this recreate them, or run a manual
+        # migration (Alembic, or hand-written ALTER TABLE + UPDATE
+        # statements) before deploying this version.
         db.create_all()
         # Автоматично генериране на СИСТЕМЕН АДМИН при липса на такъв
         admin = User.query.filter_by(username='admin').first()

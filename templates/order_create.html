@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Нова Поръчка - TRAFCOM</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .cart-total-row td { border-top: 2px solid var(--border-color); font-weight: 700; font-size: 1.05rem; }
+        .item-type-toggle { display: flex; gap: 20px; margin: 8px 0 4px; }
+        .item-type-toggle label { font-weight: normal; text-transform: none; letter-spacing: normal; display: flex; align-items: center; gap: 6px; }
+        .add-item-row { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
+        .add-item-row .form-group { flex: 1; min-width: 200px; margin-bottom: 0; }
+        .add-item-row .form-group.qty-field { flex: 0 0 120px; min-width: 100px; }
+    </style>
 </head>
 <body>
 <nav class="navbar">
@@ -14,6 +22,7 @@
             <div class="nav-section-links">
                 <a href="{{ url_for('dashboard') }}">Чертежи</a>
                 <a href="{{ url_for('create_order') }}" class="active">Нова Поръчка</a>
+                <a href="{{ url_for('my_orders') }}">Моите Поръчки</a>
                 {% if current_user.is_admin %}
                     <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
                     <a href="{{ url_for('admin_production_report') }}">Справка Производство</a>
@@ -26,81 +35,189 @@
     </div>
 </nav>
 
-<main class="admin-container" style="max-width: 600px; margin: 40px auto; padding: 0 15px;">
-    <div class="card">
-        <div class="card-header">
-            <h3>Заявка за изработка на продукти / детайли</h3>
+<main class="admin-container" style="max-width: 800px; margin: 40px auto; padding: 0 15px;">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Добавяне на артикул към поръчката</h3>
+        <p class="section-subtitle">Добавете един или няколко продукта / детайла, след което изпратете цялата поръчка наведнъж.</p>
+
+        <div class="form-group">
+            <label>Тип артикул</label>
+            <div class="item-type-toggle">
+                <label><input type="radio" name="cart_item_type" value="product" checked> Цялостен продукт (Модул)</label>
+                <label><input type="radio" name="cart_item_type" value="detail"> Отделен детайл (Компонент)</label>
+            </div>
         </div>
 
-        {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-            {% for category, message in messages %}
-                <div class="alert alert-{{ category }}" style="margin: 15px;">{{ message }}</div>
-            {% endfor %}
-        {% endif %}
-        {% endwith %}
+        <div class="add-item-row">
+            <div class="form-group" id="product_selector">
+                <label for="cart_product_id">Продукт</label>
+                <select id="cart_product_id">
+                    {% for p in products %}
+                    <option value="{{ p.id }}">{{ p.name }}</option>
+                    {% else %}
+                    <option disabled>Няма налични продукти</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" id="detail_selector" style="display: none;">
+                <label for="cart_detail_id">Детайл</label>
+                <select id="cart_detail_id">
+                    {% for d in details %}
+                    <option value="{{ d.id }}">{{ d.name }}</option>
+                    {% else %}
+                    <option disabled>Няма налични детайли</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group qty-field">
+                <label for="cart_qty">Количество</label>
+                <input type="number" id="cart_qty" value="1" min="1">
+            </div>
+            <div class="form-group" style="flex: 0 0 auto;">
+                <button type="button" class="btn-secondary" onclick="addToCart()" style="padding: 12px 20px;">+ Добави</button>
+            </div>
+        </div>
+    </section>
 
-        <form method="POST" style="padding: 20px;">
+    <section class="admin-card">
+        <h3>Съдържание на поръчката</h3>
+        <div class="table-responsive">
+            <table class="data-table" id="cartTable">
+                <thead>
+                <tr>
+                    <th>Артикул</th>
+                    <th>Тип</th>
+                    <th class="text-center">Кол.</th>
+                    <th class="text-right">Ед. цена</th>
+                    <th class="text-right">Общо</th>
+                    <th class="text-right">Действие</th>
+                </tr>
+                </thead>
+                <tbody id="cartTableBody">
+                    <tr id="cartEmptyRow"><td colspan="6" class="text-center no-data">Все още няма добавени артикули.</td></tr>
+                </tbody>
+                <tfoot>
+                    <tr class="cart-total-row">
+                        <td colspan="4" class="text-right">Обща стойност:</td>
+                        <td class="text-right" id="cartTotal">0.00 €</td>
+                        <td></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+
+        <form method="POST" id="orderForm" style="margin-top: 24px;">
             <div class="form-group">
                 <label for="customer_name">Име на клиент / Фирма *</label>
                 <input type="text" id="customer_name" name="customer_name" required placeholder="Въведете получател...">
             </div>
-
-            <div class="form-group">
-                <label>Тип на поръчката</label>
-                <div style="display: flex; gap: 20px; margin-top: 8px;">
-                    <label style="font-weight: normal;"><input type="radio" name="item_type" value="product" checked onclick="toggleSelects('product')"> Цялостен продукт (Модул)</label>
-                    <label style="font-weight: normal;"><input type="radio" name="item_type" value="detail" onclick="toggleSelects('detail')"> Отделен детайл (Компонент)</label>
-                </div>
-            </div>
-
-            <div class="form-group" id="product_selector">
-                <label for="product_id">Изберете Продукт</label>
-                <select id="product_id" name="item_id">
-                    {% for p in products %}
-                        <option value="{{ p.id }}">{{ p.name }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-
-            <div class="form-group" id="detail_selector" style="display: none;">
-                <label for="detail_id">Изберете Детайл</label>
-                <select id="detail_id">
-                    {% for d in details %}
-                        <option value="{{ d.id }}">{{ d.name }} {{ '(' + d.material.display_name + ')' if d.material else '' }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-
-            <div class="form-group">
-                <label for="quantity">Количество за изработка (бр.) *</label>
-                <input type="number" id="quantity" name="quantity" value="1" min="1" required>
-            </div>
-
-            <button type="submit" class="btn-submit" style="width: 100%; margin-top: 20px;">Изпрати Поръчка</button>
+            <input type="hidden" name="cart_json" id="cartJsonInput">
+            <button type="submit" class="btn-submit" style="width: 100%; margin-top: 8px;" id="submitOrderBtn" disabled>Изпрати Поръчка</button>
         </form>
-    </div>
+    </section>
 </main>
 
 <script>
-function toggleSelects(type) {
-    const prodSel = document.getElementById('product_selector');
-    const detSel = document.getElementById('detail_selector');
-    const prodInput = document.getElementById('product_id');
-    const detInput = document.getElementById('detail_id');
+    const PRODUCTS = {{ products|tojson }};
+    const DETAILS = {{ details|tojson }};
+    let cart = [];
 
-    if(type === 'product') {
-        prodSel.style.display = 'block';
-        detSel.style.display = 'none';
-        prodInput.name = 'item_id';
-        detInput.removeAttribute('name');
-    } else {
-        prodSel.style.display = 'none';
-        detSel.style.display = 'block';
-        detInput.name = 'item_id';
-        prodInput.removeAttribute('name');
+    document.querySelectorAll('input[name="cart_item_type"]').forEach(function (radio) {
+        radio.addEventListener('change', function () {
+            document.getElementById('product_selector').style.display = this.value === 'product' ? 'block' : 'none';
+            document.getElementById('detail_selector').style.display = this.value === 'detail' ? 'block' : 'none';
+        });
+    });
+
+    function addToCart() {
+        const type = document.querySelector('input[name="cart_item_type"]:checked').value;
+        const qty = parseInt(document.getElementById('cart_qty').value, 10);
+
+        if (!qty || qty < 1) {
+            alert('Моля въведете валидно количество.');
+            return;
+        }
+
+        let id, name, unitPrice;
+        if (type === 'product') {
+            const sel = document.getElementById('cart_product_id');
+            if (!sel.value) { alert('Няма избран продукт.'); return; }
+            id = parseInt(sel.value, 10);
+            const p = PRODUCTS.find(function (x) { return x.id === id; });
+            if (!p) return;
+            name = p.name;
+            unitPrice = p.price;
+        } else {
+            const sel = document.getElementById('cart_detail_id');
+            if (!sel.value) { alert('Няма избран детайл.'); return; }
+            id = parseInt(sel.value, 10);
+            const d = DETAILS.find(function (x) { return x.id === id; });
+            if (!d) return;
+            name = d.name;
+            unitPrice = d.price;
+        }
+
+        const existing = cart.find(function (c) { return c.type === type && c.id === id; });
+        if (existing) {
+            existing.qty += qty;
+        } else {
+            cart.push({ type: type, id: id, name: name, unitPrice: unitPrice, qty: qty });
+        }
+        renderCart();
     }
-}
+
+    function removeFromCart(index) {
+        cart.splice(index, 1);
+        renderCart();
+    }
+
+    function renderCart() {
+        const body = document.getElementById('cartTableBody');
+        body.innerHTML = '';
+
+        if (cart.length === 0) {
+            body.innerHTML = '<tr id="cartEmptyRow"><td colspan="6" class="text-center no-data">Все още няма добавени артикули.</td></tr>';
+        } else {
+            cart.forEach(function (item, idx) {
+                const lineTotal = (item.unitPrice * item.qty).toFixed(2);
+                const tr = document.createElement('tr');
+                tr.innerHTML =
+                    '<td>' + item.name + '</td>' +
+                    '<td>' + (item.type === 'product' ? 'Продукт' : 'Детайл') + '</td>' +
+                    '<td class="text-center">' + item.qty + '</td>' +
+                    '<td class="text-right">' + item.unitPrice.toFixed(2) + ' €</td>' +
+                    '<td class="text-right">' + lineTotal + ' €</td>' +
+                    '<td class="text-right"><button type="button" class="btn-delete" onclick="removeFromCart(' + idx + ')">Премахни</button></td>';
+                body.appendChild(tr);
+            });
+        }
+
+        const total = cart.reduce(function (sum, item) { return sum + item.unitPrice * item.qty; }, 0);
+        document.getElementById('cartTotal').textContent = total.toFixed(2) + ' €';
+        document.getElementById('submitOrderBtn').disabled = cart.length === 0;
+    }
+
+    document.getElementById('orderForm').addEventListener('submit', function (e) {
+        if (cart.length === 0) {
+            e.preventDefault();
+            alert('Моля добавете поне един артикул към поръчката.');
+            return;
+        }
+        document.getElementById('cartJsonInput').value = JSON.stringify(
+            cart.map(function (c) { return { type: c.type, id: c.id, qty: c.qty }; })
+        );
+    });
 </script>
 </body>
 </html>
