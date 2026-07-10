@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Декларация за съответствие - {{ product.name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .cert-toolbar {
+            max-width: 800px;
+            margin: 24px auto 0;
+            padding: 20px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-md);
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 12px;
+        }
+        .cert-toolbar .form-group {
+            margin-bottom: 0;
+        }
+        .cert-toolbar label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+            display: block;
+            font-weight: 600;
+        }
+        .cert-toolbar input, .cert-toolbar select {
+            background-color: var(--bg-input);
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            padding: 8px 12px;
+            border-radius: var(--border-radius-sm);
+            font-size: 0.88rem;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .cert-sheet {
+            max-width: 800px;
+            margin: 24px auto 60px;
+            background-color: #ffffff;
+            color: #111111;
+            border: 1px solid #ddd;
+            border-radius: var(--border-radius-md);
+            padding: 60px 50px;
+            box-sizing: border-box;
+            font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .cert-company {
+            font-size: 1.05rem;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            margin-bottom: 5px;
+        }
+        .cert-address {
+            font-size: 0.85rem;
+            color: #444;
+            margin-bottom: 35px;
+        }
+        .cert-title {
+            text-align: center;
+            font-size: 1.4rem;
+            font-weight: 800;
+            margin-bottom: 5px;
+            letter-spacing: 0.5px;
+        }
+        .cert-number {
+            text-align: center;
+            font-size: 1.05rem;
+            font-weight: 600;
+            margin-bottom: 40px;
+        }
+        .cert-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 40px;
+        }
+        .cert-table td {
+            border: 1px solid #111;
+            padding: 12px 15px;
+            font-size: 0.95rem;
+            vertical-align: top;
+        }
+        .cert-table td.label-cell {
+            font-weight: 700;
+            width: 30%;
+            background-color: #fafafa;
+        }
+        .cert-footer {
+            margin-top: 60px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            font-size: 0.95rem;
+            page-break-inside: avoid;
+        }
+        .footer-left {
+            width: 55%;
+        }
+        .footer-right {
+            width: 35%;
+            text-align: right;
+        }
+        .sig-underline {
+            border-bottom: 1px dotted #111;
+            display: inline-block;
+            width: 160px;
+        }
+
+        @media print {
+            .navbar, .cert-toolbar, .no-print { display: none !important; }
+            body { background: #fff; }
+            .cert-sheet { margin: 0; box-shadow: none; padding: 0; border: none; max-width: 100%; }
+        }
+    </style>
+</head>
+<body>
+<nav class="navbar">
+    <div class="nav-container">
+        <h2>TRAFCOM</h2>
+        <div class="nav-links">
+            <div class="nav-cta-buttons">
+                <a href="{{ url_for('admin_product_edit', product_id=product.id) }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">← Обратно</a>
+            </div>
+        </div>
+    </div>
+</nav>
+
+<div class="cert-toolbar no-print">
+    <div class="form-group" style="grid-column: span 2;">
+        <label for="selectDetail">Изберете детайл от продукта</label>
+        <select id="selectDetail">
+            <option value="">-- Изберете компонент --</option>
+            {% for pd in product.product_details %}
+            <option value="{{ pd.id }}" data-name="{{ pd.detail.name }}" data-qty="{{ pd.quantity }}" data-material="{{ pd.detail.material.display_name }}">
+                {{ pd.detail.name }}
+            </option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="form-group">
+        <label for="inCertNum">Декларация №</label>
+        <input type="text" id="inCertNum" placeholder="напр. 142">
+    </div>
+    <div class="form-group">
+        <label for="inCertDate">Дата на декларация</label>
+        <input type="text" id="inCertDate" placeholder="напр. 26.11.2024">
+    </div>
+    <div class="form-group">
+        <label for="inDetailNum">Детайл № / Наименование</label>
+        <input type="text" id="inDetailNum">
+    </div>
+    <div class="form-group">
+        <label for="inBatch">Партида</label>
+        <input type="text" id="inBatch" placeholder="Номер или индекс...">
+    </div>
+    <div class="form-group">
+        <label for="inQuantity">Количество</label>
+        <input type="text" id="inQuantity">
+    </div>
+    <div class="form-group">
+        <label for="inDrawing">Чертеж / Спецификация</label>
+        <input type="text" id="inDrawing" placeholder="напр. Р.К. 54-998/11.07.2022">
+    </div>
+    <div class="form-group">
+        <label for="inMaterial">Материал</label>
+        <input type="text" id="inMaterial">
+    </div>
+    <div class="form-group">
+        <label for="inOrderNum">Поръчка №</label>
+        <input type="text" id="inOrderNum" placeholder="напр. СС-484/26.11.2024">
+    </div>
+    <div class="form-group">
+        <label for="inProtocolNum">Измервателен протокол №</label>
+        <input type="text" id="inProtocolNum">
+    </div>
+    <div class="form-group">
+        <label for="inClient">За клиент</label>
+        <input type="text" id="inClient" placeholder="напр. Оптикоелектрон">
+    </div>
+    <div class="form-group" style="grid-column: span 2;">
+        <label for="inNotes">Забележка</label>
+        <input type="text" id="inNotes">
+    </div>
+    <div class="form-group">
+        <label for="inInspector">Отговорник по качеството</label>
+        <input type="text" id="inInspector" value="инж. Ц. Цветанов">
+    </div>
+    <div class="form-group" style="display: flex; align-items: flex-end;">
+        <button class="btn-submit" style="padding: 10px 20px; width: 100%; margin-top: 0;" onclick="window.print()">Печат / PDF</button>
+    </div>
+</div>
+
+<div class="cert-sheet">
+    <div class="cert-company"> ТРАФКОМ ООД</div>
+    <div class="cert-address"> ГР. ТЕТЕВЕН УЛ. АЛЕКСАНДЪР СТАМБОЛИЙСКИ 36</div>
+
+    <div class="cert-title"> ДЕКЛАРАЦИЯ ЗА СЪОТВЕТСТВИЕ</div>
+    <div class="cert-number"> № <span id="lblCertNum">........</span> / <span id="lblCertDate">................</span></div>
+
+    <table class="cert-table">
+        <tbody>
+        <tr>
+            <td class="label-cell"> Детайл №:</td>
+            <td id="lblDetailNum" style="font-weight: 600;"></td>
+        </tr>
+        <tr>
+            <td class="label-cell"> Количество:</td>
+            <td>
+                <span id="lblQuantity" style="font-weight: 600; margin-right: 40px;"></span>
+                <strong> партида:</strong> <span id="lblBatch"></span>
+            </td>
+        </tr>
+        <tr>
+            <td class="label-cell"> Чертеж:</td>
+            <td id="lblDrawing"></td>
+        </tr>
+        <tr>
+            <td class="label-cell"> Материал:</td>
+            <td id="lblMaterial"></td>
+        </tr>
+        <tr>
+            <td class="label-cell"> Поръчка №</td>
+            <td id="lblOrderNum"></td>
+        </tr>
+        <tr>
+            <td class="label-cell"> Измервателен протокол №:</td>
+            <td id="lblProtocolNum"></td>
+        </tr>
+        <tr>
+            <td class="label-cell"> За клиент:</td>
+            <td id="lblClient" style="font-weight: 600;"></td>
+        </tr>
+        <tr>
+            <td class="label-cell"> Забележка:</td>
+            <td id="lblNotes"></td>
+        </tr>
+        </tbody>
+    </table>
+
+    <div class="cert-footer">
+        <div class="footer-left">
+            Отговорник по качеството: <span class="sig-underline"></span>
+        </div>
+        <div class="footer-right">
+            <strong id="lblInspector"> инж. Ц. Цветанов</strong><br>
+            <span style="font-size: 0.85rem; color: #444;"> дата: <span id="lblFooterDate">................</span></span>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.getElementById('lblFooterDate').textContent = new Date().toLocaleDateString('bg-BG');
+
+    const selectEl = document.getElementById('selectDetail');
+    selectEl.addEventListener('change', function() {
+        const selected = selectEl.options[selectEl.selectedIndex];
+        if(selected.value !== "") {
+            document.getElementById('inDetailNum').value = selected.getAttribute('data-name');
+            document.getElementById('inQuantity').value = selected.getAttribute('data-qty') + " бр.";
+            document.getElementById('inMaterial').value = selected.getAttribute('data-material');
+
+            document.getElementById('inDetailNum').dispatchEvent(new Event('input'));
+            document.getElementById('inQuantity').dispatchEvent(new Event('input'));
+            document.getElementById('inMaterial').dispatchEvent(new Event('input'));
+        }
+    });
+
+    const bindings = [
+        { input: 'inCertNum', label: 'lblCertNum', fallback: '........' },
+        { input: 'inCertDate', label: 'lblCertDate', fallback: '................' },
+        { input: 'inDetailNum', label: 'lblDetailNum', fallback: '' },
+        { input: 'inBatch', label: 'lblBatch', fallback: '........' },
+        { input: 'inQuantity', label: 'lblQuantity', fallback: '' },
+        { input: 'inDrawing', label: 'lblDrawing', fallback: '' },
+        { input: 'inMaterial', label: 'lblMaterial', fallback: '' },
+        { input: 'inOrderNum', label: 'lblOrderNum', fallback: '' },
+        { input: 'inProtocolNum', label: 'lblProtocolNum', fallback: '' },
+        { input: 'inClient', label: 'lblClient', fallback: '' },
+        { input: 'inNotes', label: 'lblNotes', fallback: '' },
+        { input: 'inInspector', label: 'lblInspector', fallback: 'инж. Ц. Цветанов' }
+    ];
+
+    bindings.forEach(b => {
+        const inputEl = document.getElementById(b.input);
+        const labelEl = document.getElementById(b.label);
+
+        if (inputEl && labelEl) {
+            inputEl.addEventListener('input', () => {
+                labelEl.textContent = inputEl.value.trim() || b.fallback;
+
+                if(b.input === 'inCertDate') {
+                    document.getElementById('lblFooterDate').textContent = inputEl.value.trim() || '................';
+                }
+            });
+        }
+    });
+</script>
+</body>
+</html>
