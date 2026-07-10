@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Машини - TRAFCOM</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .machine-status-badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            display: inline-block;
+        }
+        .status-idle {
+            background-color: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+            border: 1px solid #10b981;
+        }
+        .status-running {
+            background-color: rgba(23, 162, 184, 0.15);
+            color: #17a2b8;
+            border: 1px solid #17a2b8;
+        }
+        .status-maintenance {
+            background-color: rgba(255, 193, 7, 0.15);
+            color: #ffc107;
+            border: 1px solid #ffc107;
+        }
+        .machine-action-form {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .select-status {
+            padding: 6px 10px;
+            background-color: #1a1f30;
+            color: #fff;
+            border: 1px solid #333;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+<nav class="navbar">
+    <div class="nav-container">
+        <h2>TRAFCOM</h2>
+        <div class="nav-links">
+            <div class="nav-section-links">
+                <a href="{{ url_for('index') }}">Начало</a>
+                <a href="{{ url_for('dashboard') }}">Чертежи</a>
+                <a href="{{ url_for('list_machines') }}" class="active">Машини</a>
+                {% if current_user.is_admin %}
+                    <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
+                    <a href="{{ url_for('admin_production_report') }}">Справка Производство</a>
+                {% endif %}
+            </div>
+            <div class="nav-cta-buttons">
+                {% if current_user.is_admin %}
+                    <span class="user-badge" style="border-color: var(--danger-border); color: #ff7675;">СЕСИЯ: АДМИНИСТРАТОР</span>
+                {% else %}
+                    <span class="user-badge">{{ current_user.username }}</span>
+                {% endif %}
+                <a href="{{ url_for('logout') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Изход</a>
+            </div>
+        </div>
+    </div>
+</nav>
+
+<main class="admin-container" style="max-width: 900px; margin: 40px auto; padding: 0 15px;">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    {% if current_user.role == 'admin' %}
+    <section class="admin-card">
+        <h3>Добавяне на нова машина</h3>
+        <p class="section-subtitle">Въведете наименование на машината, за да я добавите към производствения списък.</p>
+        <form action="{{ url_for('add_machine') }}" method="POST" class="admin-form" style="display: flex; gap: 12px; align-items: flex-end;">
+            <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                <label for="machine_name">Име на машина</label>
+                <input type="text" id="machine_name" name="name" placeholder="напр. Trumpf Fiber Laser 3030" required>
+            </div>
+            <button type="submit" class="btn-submit" style="margin-top: 0; padding: 12px 24px;">Добави Машина</button>
+        </form>
+    </section>
+    {% endif %}
+
+    <section class="admin-card">
+        <h3>Списък с Машини</h3>
+        <p class="section-subtitle">Всички производствени единици в Trafcom и техния текущ статус.</p>
+
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Име</th>
+                    <th>Статус</th>
+                    <th>Последна поддръжка</th>
+                    {% if current_user.role in ['admin', 'worker'] %}
+                    <th class="text-right">Актуализация на статус</th>
+                    {% endif %}
+                </tr>
+                </thead>
+                <tbody>
+                {% for m in machines %}
+                <tr>
+                    <td><strong>{{ m.name }}</strong></td>
+                    <td>
+                        {% if m.status == 'idle' %}
+                        <span class="machine-status-badge status-idle">Свободна</span>
+                        {% elif m.status == 'running' %}
+                        <span class="machine-status-badge status-running">Работи</span>
+                        {% else %}
+                        <span class="machine-status-badge status-maintenance">Поддръжка</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {{ m.last_maintenance.strftime('%d.%m.%Y %H:%M') if m.last_maintenance else 'Неизвестно' }}
+                    </td>
+                    {% if current_user.role in ['admin', 'worker'] %}
+                    <td class="text-right">
+                        <form action="{{ url_for('update_machine_status', id=m.id) }}" method="POST" class="machine-action-form" style="justify-content: flex-end; margin: 0; padding: 0;">
+                            <select name="status" class="select-status">
+                                <option value="idle" {% if m.status == 'idle' %}selected{% endif %}>Свободна</option>
+                                <option value="running" {% if m.status == 'running' %}selected{% endif %}>Работи</option>
+                                <option value="maintenance" {% if m.status == 'maintenance' %}selected{% endif %}>Поддръжка</option>
+                            </select>
+                            <button type="submit" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem; border-radius: 4px;">Запази</button>
+                        </form>
+                    </td>
+                    {% endif %}
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" class="text-center no-data">Няма добавени машини.</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</main>
+</body>
+</html>

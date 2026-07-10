@@ -57,6 +57,9 @@
         <div class="order-card-header">
             <div>
                 <strong style="font-size: 1.1rem;">{{ order.order_number }}</strong> &nbsp;—&nbsp; {{ order.customer_name }}
+                {% if order.machine %}
+                <span style="margin-left: 8px; border: 1px solid #7c3aed; color: #a855f7; background-color: rgba(124,58,237,0.1); font-size: 0.8rem; font-weight: bold; padding: 2px 8px; border-radius: 4px; display: inline-block; vertical-align: middle;">🔧 {{ order.machine.name }}</span>
+                {% endif %}
                 <div class="text-muted text-small">{{ order.created_at.strftime('%d.%m.%Y %H:%M') }}</div>
             </div>
             <span class="status-badge status-{{ order.status }}">{{ order.status_label }}</span>

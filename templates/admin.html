@@ -215,7 +215,7 @@
                 {% for detail in details %}
                 <tr>
                     <td><strong>{{ detail.name }}</strong></td>
-                    <td><span class="badge badge-user">{{ detail.material.display_name }}</span></td>
+                    <td><span class="badge badge-user">{{ detail.material.display_name if detail.material else 'Неизвестен' }}</span></td>
                     <td>{{ "%.2f"|format(detail.width) }} x {{ "%.2f"|format(detail.height) }} мм</td>
                     <td>{{ "%.2f"|format(detail.calculated_price) }} €</td>
                     <td class="text-right">

@@ -19,10 +19,10 @@ import random
 # can be kept out of source control. Safe no-op if the package isn't present.
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     pass
-
 
 app = Flask(__name__)
 
@@ -70,8 +70,14 @@ class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(50), unique=True, nullable=False)
     password = db.Column(db.String(255), nullable=False)
-    is_admin = db.Column(db.Boolean, default=False)
+    # roles: 'regular_user', 'worker', 'admin'
+    role = db.Column(db.String(20), default='regular_user')
+
     uploads = db.relationship('DxfFile', cascade='all, delete-orphan', backref='owner', lazy=True)
+
+    @property
+    def is_admin(self):
+        return self.role == 'admin'
 
 
 class DxfFile(db.Model):
@@ -86,6 +92,8 @@ class DxfFile(db.Model):
     # Stores the extracted 2D geometry (lines/arcs/circles) as a JSON string,
     # so the viewer modal can render the drawing without re-parsing the DXF file.
     geometry_json = db.Column(db.Text, nullable=True)
+    machine_id = db.Column(db.Integer, db.ForeignKey('machine.id'), nullable=True)
+    machine = db.relationship('Machine', backref='dxf_files')
 
 
 class MaterialPrice(db.Model):
@@ -132,11 +140,13 @@ class Detail(db.Model):
 
     material = db.relationship('MaterialPrice')
 
+
 class ProductImage(db.Model):
     """Stores references to uploaded persistent product documentation or marketing images."""
     id = db.Column(db.Integer, primary_key=True)
     product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
     filename = db.Column(db.String(255), nullable=False)
+
 
 class Product(db.Model):
     """
@@ -184,8 +194,10 @@ class Order(db.Model):
     customer_name = db.Column(db.String(150), nullable=False)
     status = db.Column(db.String(50), default='new')  # new, in_production, completed, cancelled
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    machine_id = db.Column(db.Integer, db.ForeignKey('machine.id'), nullable=True)
 
     user = db.relationship('User', backref=db.backref('orders', lazy=True))
+    machine = db.relationship('Machine', backref='orders')
     items = db.relationship('OrderItem', backref='order', lazy=True, cascade="all, delete-orphan")
 
     @property
@@ -351,6 +363,13 @@ def calculate_product_pricing(product):
     }
 
 
+class Machine(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    status = db.Column(db.String(50), default='idle')  # idle, running, maintenance
+    last_maintenance = db.Column(db.DateTime, default=datetime.utcnow)
+
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
@@ -366,13 +385,16 @@ def load_user(user_id):
 # EUR/meter-of-cut instead of EUR/mm2 and EUR/mm - mathematically identical,
 # just friendlier numbers (e.g. 0.00001 EUR/mm2 = 10.00 EUR/m2).
 DEFAULT_MATERIAL_SEED = {
-    "wood": {"cost_per_m2": 10.00, "cost_per_meter_cut": 0.80, "cost_per_pierce": 0.05, "name": "Дървесен материал / МДФ"},
+    "wood": {"cost_per_m2": 10.00, "cost_per_meter_cut": 0.80, "cost_per_pierce": 0.05,
+             "name": "Дървесен материал / МДФ"},
     "steel": {"cost_per_m2": 20.00, "cost_per_meter_cut": 1.50, "cost_per_pierce": 0.15, "name": "Въглеродна стомана"},
-    "stainless_steel": {"cost_per_m2": 50.00, "cost_per_meter_cut": 2.50, "cost_per_pierce": 0.25, "name": "Неръждаема стомана"},
+    "stainless_steel": {"cost_per_m2": 50.00, "cost_per_meter_cut": 2.50, "cost_per_pierce": 0.25,
+                        "name": "Неръждаема стомана"},
     "aluminum": {"cost_per_m2": 40.00, "cost_per_meter_cut": 2.00, "cost_per_pierce": 0.20, "name": "Алуминий"},
     "copper": {"cost_per_m2": 120.00, "cost_per_meter_cut": 4.00, "cost_per_pierce": 0.40, "name": "Мед"},
     "brass": {"cost_per_m2": 90.00, "cost_per_meter_cut": 3.50, "cost_per_pierce": 0.35, "name": "Месинг"},
-    "galvanized": {"cost_per_m2": 30.00, "cost_per_meter_cut": 1.80, "cost_per_pierce": 0.18, "name": "Поцинкована ламарина"}
+    "galvanized": {"cost_per_m2": 30.00, "cost_per_meter_cut": 1.80, "cost_per_pierce": 0.18,
+                   "name": "Поцинкована ламарина"}
 }
 
 
@@ -449,7 +471,8 @@ def process_entity(entity):
                 span += 360
             length = r * math.radians(span)
             segments.append((start, end))
-            shapes.append({'type': 'arc', 'cx': cx, 'cy': cy, 'r': r, 'start_angle': start_angle, 'end_angle': end_angle})
+            shapes.append(
+                {'type': 'arc', 'cx': cx, 'cy': cy, 'r': r, 'start_angle': start_angle, 'end_angle': end_angle})
 
         elif dtype in ('LWPOLYLINE', 'POLYLINE'):
             # Include bulge values (format='xyb'): a non-zero bulge means the
@@ -666,7 +689,8 @@ def analyze_dxf_geometry(file_path):
         if pierce_count == 0 and total_length > 0:
             pierce_count = 1
 
-        return float(abs(round(width, 2))), float(abs(round(height, 2))), float(abs(round(total_length, 2))), pierce_count, shapes
+        return float(abs(round(width, 2))), float(abs(round(height, 2))), float(
+            abs(round(total_length, 2))), pierce_count, shapes
 
     except Exception as e:
         print(f"Critical DXF Parsing Error: {e}")
@@ -723,6 +747,32 @@ def refresh_order_status(order):
     else:
         order.status = 'new'
 
+
+from functools import wraps
+
+
+def role_required(roles):
+    """Decorator to require specific roles."""
+
+    def decorator(f):
+        @wraps(f)
+        @login_required
+        def decorated_function(*args, **kwargs):
+            if isinstance(roles, str):
+                allowed_roles = [roles]
+            else:
+                allowed_roles = roles
+
+            if current_user.role not in allowed_roles:
+                flash("Нямате разрешение за достъп до тази страница.", "danger")
+                return redirect(url_for('dashboard'))
+            return f(*args, **kwargs)
+
+        return decorated_function
+
+    return decorator
+
+
 # ----------------- МАРШРУТИ И ЛОГИКА -----------------
 
 @app.route('/')
@@ -742,6 +792,7 @@ def generator():
     materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
     return render_template('generator.html', materials=materials)
 
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
@@ -754,7 +805,7 @@ def login():
 
         if user and check_password_hash(user.password, password):
             login_user(user)
-            if user.is_admin:
+            if user.role == 'admin':
                 return redirect(url_for('admin_dashboard'))
             return redirect(url_for('dashboard'))
         flash('Невалидно потребителско име или парола.')
@@ -763,26 +814,24 @@ def login():
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
-    if current_user.is_authenticated:
-        return redirect(url_for('index'))
-
     if request.method == 'POST':
-        username = request.form.get('username', '').strip()
-        password = request.form.get('password', '').strip()
+        username = request.form.get('username')
+        password = request.form.get('password')
 
-        if not username or not password:
-            flash('Моля попълнете всички полета.')
-            return redirect(url_for('register'))
+        # Hash the password
+        hashed_password = generate_password_hash(password, method='scrypt')
 
-        if User.query.filter_by(username=username).first():
-            flash('Потребителското име вече е заето.')
-            return redirect(url_for('register'))
+        # Create user with default role 'regular_user'
+        new_user = User(
+            username=username,
+            password=hashed_password,
+            role='regular_user'  # Make sure this is 'role', not 'is_admin'
+        )
 
-        secure_pass = generate_password_hash(password, method='scrypt')
-        new_user = User(username=username, password=secure_pass, is_admin=False)
         db.session.add(new_user)
         db.session.commit()
-        flash('Успешна регистрация! Моля, влезте в профила си.')
+
+        flash('Регистрацията е успешна!', 'success')
         return redirect(url_for('login'))
 
     return render_template('register.html')
@@ -899,6 +948,71 @@ def delete_account():
     return redirect(url_for('register'))
 
 
+@app.route('/upload', methods=['GET', 'POST'])
+@login_required
+def upload():
+    if request.method == 'POST':
+        # 1. Handle file presence
+        file = request.files.get('file')
+        if not file or file.filename == '':
+            flash("Моля, изберете файл за качване.", "danger")
+            return redirect(request.url)
+
+        if not file.filename.lower().endswith('.dxf'):
+            flash('Невалиден формат! Системата приема само .dxf файлове.', 'danger')
+            return redirect(request.url)
+
+        temp_path = None
+        try:
+            filename = secure_filename(file.filename)
+            temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{uuid.uuid4().hex}_{filename}")
+            file.save(temp_path)
+
+            width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(temp_path)
+            if width is None or total_length is None:
+                flash('Грешка при обработката на DXF структурата.', 'danger')
+                return redirect(request.url)
+
+            chosen_material = request.form.get('material', 'steel')
+            chosen_material_row = MaterialPrice.query.filter_by(key=chosen_material).first()
+            if not chosen_material_row:
+                flash('Невалиден избор на материал.', 'danger')
+                return redirect(request.url)
+
+            price = calculate_cnc_price(width, height, total_length, pierce_count, chosen_material)
+
+            machine_id_raw = request.form.get('machine_id', '')
+            selected_machine = int(machine_id_raw) if machine_id_raw and machine_id_raw.isdigit() else None
+
+            new_file = DxfFile(
+                filename=file.filename,
+                material=chosen_material,
+                width=width,
+                height=height,
+                total_length=total_length,
+                calculated_price=price,
+                user_id=current_user.id,
+                geometry_json=json.dumps(shapes),
+                machine_id=selected_machine
+            )
+
+            db.session.add(new_file)
+            db.session.commit()
+            flash(f'Файлът "{file.filename}" беше качен и обработен успешно!', 'success')
+            return redirect(url_for('dashboard'))
+
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Критична грешка при обработка/запис: {str(e)}', 'danger')
+            return redirect(request.url)
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    machines = Machine.query.all()
+    materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
+    return render_template('upload.html', machines=machines, materials=materials)
+
 # ----------------- АДМИНИСТРАТОРСКИ МАРШРУТИ -----------------
 
 @app.route('/admin')
@@ -935,7 +1049,7 @@ def admin_create_user():
 
     grant_admin = request.form.get('is_admin') == 'true'
     secure_pass = generate_password_hash(password, method='scrypt')
-    new_user = User(username=username, password=secure_pass, is_admin=grant_admin)
+    new_user = User(username=username, password=secure_pass, role='admin' if grant_admin else 'regular_user')
     db.session.add(new_user)
     db.session.commit()
     flash(f'Успешно създаден потребител: {username}')
@@ -1024,6 +1138,7 @@ def admin_add_material():
     flash(f'Материалът "{display_name}" беше добавен успешно.', 'success')
     return redirect(url_for('admin_dashboard'))
 
+
 @app.route('/admin/products/<int:product_id>/upload_image', methods=['POST'])
 @login_required
 def admin_product_upload_image(product_id):
@@ -1062,6 +1177,41 @@ def admin_product_upload_image(product_id):
 
     return redirect(url_for('admin_product_edit', product_id=product.id))
 
+
+
+@app.route('/machines/add', methods=['POST'])
+@login_required
+def add_machine():
+    if current_user.role != 'admin':
+        flash("Само администратори могат да добавят машини.", "danger")
+        return redirect(url_for('list_machines'))
+
+    name = request.form.get('name')
+    new_machine = Machine(name=name)
+    db.session.add(new_machine)
+    db.session.commit()
+    flash('Машината е добавена успешно!', 'success')
+    return redirect(url_for('list_machines'))
+
+
+@app.route('/machines/update/<int:id>', methods=['POST'])
+@login_required
+def update_machine_status(id):
+    # Workers or Admins can update status
+    if current_user.role not in ['admin', 'worker']:
+        return "Unauthorized", 403
+
+    machine = Machine.query.get_or_404(id)
+    machine.status = request.form.get('status')
+    db.session.commit()
+    flash(f'Статусът на {machine.name} е актуализиран.', 'success')
+    return redirect(url_for('list_machines'))
+
+@app.route('/machines')
+@login_required
+def list_machines():
+    machines = Machine.query.all()
+    return render_template('machines.html', machines=machines)
 
 @app.route('/admin/products/<int:product_id>/delete_image/<int:image_id>', methods=['POST'])
 @login_required
@@ -1207,8 +1357,9 @@ def admin_product_edit(product_id):
 
     product = Product.query.get_or_404(product_id)
     all_details = Detail.query.order_by(Detail.name).all()
+    materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
     pricing = calculate_product_pricing(product)
-    return render_template('product_edit.html', product=product, all_details=all_details, pricing=pricing)
+    return render_template('product_edit.html', product=product, all_details=all_details, pricing=pricing, materials=materials)
 
 
 @app.route('/admin/products/<int:product_id>/update', methods=['POST'])
@@ -1432,9 +1583,6 @@ def logout():
     return redirect(url_for('login'))
 
 
-
-
-
 # МАРШРУТ ЗА ОБИКНОВЕНИ ПОТРЕБИТЕЛИ - СЪЗДАВАНЕ НА ПОРЪЧКА (кошница с няколко артикула)
 @app.route('/orders/new', methods=['GET', 'POST'])
 @login_required
@@ -1458,11 +1606,15 @@ def create_order():
             flash('Моля добавете поне един артикул към поръчката.', 'danger')
             return redirect(url_for('create_order'))
 
+        machine_id_raw = request.form.get('machine_id', '')
+        machine_id = int(machine_id_raw) if machine_id_raw and machine_id_raw.isdigit() else None
+
         new_order = Order(
             order_number=generate_order_number(),
             user_id=current_user.id,
             customer_name=customer_name,
-            status='new'
+            status='new',
+            machine_id=machine_id
         )
         db.session.add(new_order)
         db.session.flush()  # Взимаме ID-то преди commit
@@ -1525,6 +1677,8 @@ def create_order():
 
     products = Product.query.order_by(Product.name).all()
     details = Detail.query.order_by(Detail.name).all()
+    machines = Machine.query.order_by(Machine.name).all()
+    materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
     # Pre-computed, JSON-friendly catalogs so the cart UI can add items and
     # show live prices/totals client-side without extra round-trips.
     products_data = [
@@ -1539,7 +1693,8 @@ def create_order():
         }
         for d in details
     ]
-    return render_template('order_create.html', products=products_data, details=details_data)
+    return render_template('order_create.html', products=products_data, details=details_data,
+                           machines=machines, materials=materials)
 
 
 # МАРШРУТ ЗА ОБИКНОВЕНИ ПОТРЕБИТЕЛИ - ИСТОРИЯ И СТАТУС НА СОБСТВЕНИТЕ ПОРЪЧКИ
@@ -1560,7 +1715,8 @@ def cancel_order(order_id):
         return redirect(url_for('my_orders'))
 
     if not order.can_cancel:
-        flash('Поръчката вече е в процес на изработка (или вече е приключена/отменена) и не може да бъде отменена.', 'danger')
+        flash('Поръчката вече е в процес на изработка (или вече е приключена/отменена) и не може да бъде отменена.',
+              'danger')
         return redirect(url_for('my_orders'))
 
     order.status = 'cancelled'
@@ -1618,8 +1774,132 @@ def admin_production_report():
         })
 
     orders = Order.query.filter(Order.status != 'cancelled').order_by(Order.created_at.desc()).all()
-    return render_template('production_report.html', orders=orders)
+    machines = Machine.query.order_by(Machine.name).all()
+    return render_template('production_report.html', orders=orders, machines=machines)
 
+
+# ----------------- QUICK-CREATE API ENDPOINTS -----------------
+
+@app.route('/api/quick-create-detail', methods=['POST'])
+@login_required
+def api_quick_create_detail():
+    """AJAX endpoint: create a Detail from a DXF file + material, returns JSON."""
+    if not current_user.is_admin:
+        return jsonify({'status': 'error', 'message': 'Нямате достъп.'}), 403
+
+    name = request.form.get('name', '').strip()
+    material_key = request.form.get('material', '')
+
+    if not name:
+        return jsonify({'status': 'error', 'message': 'Моля въведете име на детайла.'}), 400
+
+    if not MaterialPrice.query.filter_by(key=material_key).first():
+        return jsonify({'status': 'error', 'message': 'Невалиден избор на материал.'}), 400
+
+    if 'file' not in request.files or request.files['file'].filename == '':
+        return jsonify({'status': 'error', 'message': 'Моля качете .dxf файл.'}), 400
+
+    file = request.files['file']
+    if not file.filename.lower().endswith('.dxf'):
+        return jsonify({'status': 'error', 'message': 'Невалиден формат! Приемат се само .dxf файлове.'}), 400
+
+    temp_path = None
+    try:
+        filename = secure_filename(file.filename)
+        temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{uuid.uuid4().hex}_{filename}")
+        file.save(temp_path)
+
+        width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(temp_path)
+        if width is None:
+            return jsonify({'status': 'error', 'message': 'Грешка при обработката на DXF файла.'}), 400
+
+        price = calculate_cnc_price(width, height, total_length, pierce_count, material_key)
+        mat = MaterialPrice.query.filter_by(key=material_key).first()
+
+        new_detail = Detail(
+            name=name, material_key=material_key, width=width, height=height,
+            total_length=total_length, pierce_count=pierce_count,
+            calculated_price=price, geometry_json=json.dumps(shapes)
+        )
+        db.session.add(new_detail)
+        db.session.commit()
+
+        return jsonify({
+            'status': 'success',
+            'detail': {
+                'id': new_detail.id,
+                'name': f"{new_detail.name} ({mat.display_name})",
+                'price': new_detail.calculated_price
+            }
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': f'Грешка: {str(e)}'}), 500
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
+@app.route('/api/quick-create-product', methods=['POST'])
+@login_required
+def api_quick_create_product():
+    """AJAX endpoint: create a bare Product (no details yet), returns JSON."""
+    if not current_user.is_admin:
+        return jsonify({'status': 'error', 'message': 'Нямате достъп.'}), 403
+
+    name = request.form.get('name', '').strip()
+    if not name:
+        return jsonify({'status': 'error', 'message': 'Моля въведете име на продукта.'}), 400
+
+    description = request.form.get('description', '').strip()
+    try:
+        markup_percent = float(request.form.get('markup_percent', '0') or 0)
+    except ValueError:
+        markup_percent = 0.0
+
+    new_product = Product(name=name, description=description, markup_percent=round(markup_percent, 2))
+    db.session.add(new_product)
+    db.session.commit()
+
+    pricing = calculate_product_pricing(new_product)
+
+    return jsonify({
+        'status': 'success',
+        'product': {
+            'id': new_product.id,
+            'name': new_product.name,
+            'price': pricing['sell_price']
+        }
+    })
+
+
+@app.route('/admin/orders/<int:order_id>/assign_machine', methods=['POST'])
+@login_required
+def admin_assign_machine(order_id):
+    """AJAX endpoint: assign or change the machine on an order."""
+    if not current_user.is_admin and current_user.role != 'worker':
+        return jsonify({'status': 'error', 'message': 'Нямате достъп.'}), 403
+
+    order = Order.query.get_or_404(order_id)
+    machine_id_raw = request.form.get('machine_id', '')
+
+    if machine_id_raw and machine_id_raw.isdigit():
+        machine = Machine.query.get(int(machine_id_raw))
+        if not machine:
+            return jsonify({'status': 'error', 'message': 'Невалидна машина.'}), 400
+        order.machine_id = machine.id
+        machine_name = machine.name
+    else:
+        order.machine_id = None
+        machine_name = None
+
+    db.session.commit()
+
+    return jsonify({
+        'status': 'success',
+        'machine_name': machine_name
+    })
 
 
 if __name__ == '__main__':
@@ -1641,7 +1921,7 @@ if __name__ == '__main__':
             db.session.add(User(
                 username='admin',
                 password=generate_password_hash('admin123', method='scrypt'),
-                is_admin=True
+                role='admin'  # Set the role to 'admin'
             ))
             db.session.commit()
         # Populate the MaterialPrice table with defaults on first run only -

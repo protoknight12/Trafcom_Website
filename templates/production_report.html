@@ -78,7 +78,16 @@
         <div class="order-card-header">
             <div>
                 <strong style="font-size: 1.1rem;">{{ order.order_number }}</strong> &nbsp;—&nbsp; {{ order.customer_name }}
-                <div class="text-muted text-small">{{ order.created_at.strftime('%d.%m.%Y %H:%M') }} · Потребител: {{ order.user.username }}</div>
+                <div class="text-muted text-small">{{ order.created_at.strftime('%d.%m.%Y %H:%M') }} · Потребител: {{ order.user.username if order.user else 'Изтрит потребител' }}</div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; margin-left: auto; margin-right: 16px;">
+                <label for="machine_select_{{ order.id }}" style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">Машина:</label>
+                <select id="machine_select_{{ order.id }}" onchange="assignMachine({{ order.id }}, this)" style="padding: 6px 10px; background-color: #1a1f30; color: #fff; border: 1px solid #333; border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: all 0.2s ease;">
+                    <option value="">-- Без машина --</option>
+                    {% for m in machines %}
+                    <option value="{{ m.id }}" {% if order.machine_id == m.id %}selected{% endif %}>{{ m.name }}</option>
+                    {% endfor %}
+                </select>
             </div>
             <span class="status-badge status-{{ order.status }}" id="order-status-{{ order.id }}">{{ order.status_label }}</span>
         </div>
@@ -103,9 +112,9 @@
                 <tr style="background-color: rgba(255,255,255,0.03);">
                     <td>
                         {% if item.product %}
-                        <span style="color: #007bff; font-weight: 600;">[ПРОДУКТ]</span> {{ item.product.name }}
+                        <span style="color: #007bff; font-weight: 600;">[ПРОДУКТ]</span> {{ item.product.name if item.product else 'Изтрит продукт' }}
                         {% else %}
-                        <span style="color: #a56cff; font-weight: 600;">[ДЕТАЙЛ]</span> {{ item.detail.name }}
+                        <span style="color: #a56cff; font-weight: 600;">[ДЕТАЙЛ]</span> {{ item.detail.name if item.detail else 'Изтрит детайл' }}
                         {% endif %}
                     </td>
                     <td class="text-center">{{ item.quantity_ordered }} бр.</td>
@@ -209,6 +218,36 @@
                 console.error('Error updating production:', error);
                 alert('Връзката със сървъра беше прекъсната.');
             });
+    }
+
+    function assignMachine(orderId, selectEl) {
+        const machineId = selectEl.value;
+        const formData = new FormData();
+        formData.append('machine_id', machineId);
+
+        selectEl.style.borderColor = '#7c3aed';
+
+        fetch('/admin/orders/' + orderId + '/assign_machine', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                selectEl.style.borderColor = '#28a745';
+                setTimeout(() => { selectEl.style.borderColor = '#333'; }, 1500);
+            } else {
+                selectEl.style.borderColor = '#dc3545';
+                alert(data.message || 'Грешка при назначаване на машина.');
+                setTimeout(() => { selectEl.style.borderColor = '#333'; }, 2000);
+            }
+        })
+        .catch(error => {
+            console.error('Error assigning machine:', error);
+            selectEl.style.borderColor = '#dc3545';
+            alert('Връзката със сървъра беше прекъсната.');
+            setTimeout(() => { selectEl.style.borderColor = '#333'; }, 2000);
+        });
     }
 </script>
 </body>

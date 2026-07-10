@@ -61,8 +61,13 @@
 
         <div class="add-item-row">
             <div class="form-group" id="product_selector">
-                <label for="cart_product_id">Продукт</label>
-                <select id="cart_product_id">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <label for="cart_product_id" style="margin-bottom: 0;">Продукт *</label>
+                    {% if current_user.is_admin %}
+                    <button type="button" onclick="openQuickProductModal()" style="font-size: 0.75rem; padding: 4px 8px; background: var(--gradient-purple); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
+                    {% endif %}
+                </div>
+                <select id="cart_product_id" style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px;">
                     {% for p in products %}
                     <option value="{{ p.id }}">{{ p.name }}</option>
                     {% else %}
@@ -71,8 +76,13 @@
                 </select>
             </div>
             <div class="form-group" id="detail_selector" style="display: none;">
-                <label for="cart_detail_id">Детайл</label>
-                <select id="cart_detail_id">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <label for="cart_detail_id" style="margin-bottom: 0;">Детайл *</label>
+                    {% if current_user.is_admin %}
+                    <button type="button" onclick="openQuickDetailModal()" style="font-size: 0.75rem; padding: 4px 8px; background: var(--gradient-purple); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
+                    {% endif %}
+                </div>
+                <select id="cart_detail_id" style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px;">
                     {% for d in details %}
                     <option value="{{ d.id }}">{{ d.name }}</option>
                     {% else %}
@@ -118,7 +128,16 @@
         </div>
 
         <form method="POST" id="orderForm" style="margin-top: 24px;">
-            <div class="form-group">
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label for="machine_id">Назначи машина (по избор)</label>
+                <select id="machine_id" name="machine_id" style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px;">
+                    <option value="">-- Без конкретна машина --</option>
+                    {% for machine in machines %}
+                    <option value="{{ machine.id }}">{{ machine.name }} ({% if machine.status == 'idle' %}Свободна{% elif machine.status == 'running' %}Работи{% else %}Поддръжка{% endif %})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom: 20px;">
                 <label for="customer_name">Име на клиент / Фирма *</label>
                 <input type="text" id="customer_name" name="customer_name" required placeholder="Въведете получател...">
             </div>
@@ -127,6 +146,59 @@
         </form>
     </section>
 </main>
+
+<!-- Modals for Quick Create -->
+{% if current_user.is_admin %}
+<div id="quickDetailModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
+    <div class="admin-card" style="width: 100%; max-width: 500px; margin: 20px; background-color: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 28px; box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15); position: relative;">
+        <span onclick="closeQuickDetailModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
+        <h3 style="margin-top: 0; margin-bottom: 16px;">Бързо създаване на детайл</h3>
+        <form id="quickDetailForm" enctype="multipart/form-data">
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qd_name">Име на детайла</label>
+                <input type="text" id="qd_name" name="name" required placeholder="напр. Странична стена">
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qd_material">Материал</label>
+                <select id="qd_material" name="material" style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px;">
+                    {% for mat in materials %}
+                    <option value="{{ mat.key }}">{{ mat.display_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label for="qd_file">DXF файл</label>
+                <input type="file" id="qd_file" name="file" accept=".dxf" required style="color: #fff;">
+            </div>
+            <button type="submit" class="btn-submit" style="width: 100%;">Добави детайл</button>
+            <div id="qd_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
+        </form>
+    </div>
+</div>
+
+<div id="quickProductModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
+    <div class="admin-card" style="width: 100%; max-width: 500px; margin: 20px; background-color: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 28px; box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15); position: relative;">
+        <span onclick="closeQuickProductModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
+        <h3 style="margin-top: 0; margin-bottom: 16px;">Бързо създаване на продукт</h3>
+        <form id="quickProductForm">
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qp_name">Име на продукта</label>
+                <input type="text" id="qp_name" name="name" required placeholder="напр. Метален шкаф">
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qp_description">Описание</label>
+                <input type="text" id="qp_description" name="description" placeholder="Кратко описание...">
+            </div>
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label for="qp_markup">Надценка (%)</label>
+                <input type="number" id="qp_markup" name="markup_percent" step="0.1" min="0" value="0">
+            </div>
+            <button type="submit" class="btn-submit" style="width: 100%;">Създай продукт</button>
+            <div id="qp_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
+        </form>
+    </div>
+</div>
+{% endif %}
 
 <script>
     const PRODUCTS = {{ products|tojson }};
@@ -218,6 +290,114 @@
             cart.map(function (c) { return { type: c.type, id: c.id, qty: c.qty }; })
         );
     });
+
+    // Modal Control Functions
+    function openQuickDetailModal() {
+        document.getElementById('quickDetailModal').style.display = 'flex';
+        document.getElementById('qd_error').style.display = 'none';
+    }
+    function closeQuickDetailModal() {
+        document.getElementById('quickDetailModal').style.display = 'none';
+        document.getElementById('quickDetailForm').reset();
+    }
+    function openQuickProductModal() {
+        document.getElementById('quickProductModal').style.display = 'flex';
+        document.getElementById('qp_error').style.display = 'none';
+    }
+    function closeQuickProductModal() {
+        document.getElementById('quickProductModal').style.display = 'none';
+        document.getElementById('quickProductForm').reset();
+    }
+
+    {% if current_user.is_admin %}
+    document.getElementById('quickDetailForm').addEventListener('submit', function (e) {
+        e.preventDefault();
+        const submitBtn = this.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Обработване...';
+        
+        const formData = new FormData(this);
+        const errDiv = document.getElementById('qd_error');
+        errDiv.style.display = 'none';
+        
+        fetch('/api/quick-create-detail', {
+            method: 'POST',
+            body: formData
+        })
+        .then(res => res.json())
+        .then(data => {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Добави детайл';
+            if (data.status === 'success') {
+                DETAILS.push({
+                    id: data.detail.id,
+                    name: data.detail.name,
+                    price: data.detail.price
+                });
+                const sel = document.getElementById('cart_detail_id');
+                const opt = document.createElement('option');
+                opt.value = data.detail.id;
+                opt.textContent = data.detail.name;
+                sel.appendChild(opt);
+                sel.value = data.detail.id;
+                closeQuickDetailModal();
+            } else {
+                errDiv.textContent = data.message || 'Грешка при създаване.';
+                errDiv.style.display = 'block';
+            }
+        })
+        .catch(err => {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Добави детайл';
+            errDiv.textContent = 'Връзката със сървъра беше прекъсната.';
+            errDiv.style.display = 'block';
+        });
+    });
+
+    document.getElementById('quickProductForm').addEventListener('submit', function (e) {
+        e.preventDefault();
+        const submitBtn = this.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Обработване...';
+        
+        const formData = new FormData(this);
+        const errDiv = document.getElementById('qp_error');
+        errDiv.style.display = 'none';
+        
+        fetch('/api/quick-create-product', {
+            method: 'POST',
+            body: formData
+        })
+        .then(res => res.json())
+        .then(data => {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Създай продукт';
+            if (data.status === 'success') {
+                PRODUCTS.push({
+                    id: data.product.id,
+                    name: data.product.name,
+                    price: data.product.price
+                });
+                const sel = document.getElementById('cart_product_id');
+                const opt = document.createElement('option');
+                opt.value = data.product.id;
+                opt.textContent = data.product.name;
+                sel.appendChild(opt);
+                sel.value = data.product.id;
+                closeQuickProductModal();
+            } else {
+                errDiv.textContent = data.message || 'Грешка при създаване.';
+                errDiv.style.display = 'block';
+            }
+        })
+        .catch(err => {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Създай продукт';
+            errDiv.textContent = 'Връзката със сървъра беше прекъсната.';
+            errDiv.style.display = 'block';
+        });
+    });
+    {% endif %}
 </script>
 </body>
 </html>

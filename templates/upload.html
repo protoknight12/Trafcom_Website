@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Качване на DXF - TRAFCOM</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<nav class="navbar">
+    <div class="nav-container">
+        <h2>TRAFCOM</h2>
+        <div class="nav-links">
+            <div class="nav-section-links">
+                <a href="{{ url_for('dashboard') }}">Чертежи</a>
+                <a href="{{ url_for('create_order') }}">Нова Поръчка</a>
+                <a href="{{ url_for('my_orders') }}">Моите Поръчки</a>
+                {% if current_user.is_admin %}
+                    <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
+                    <a href="{{ url_for('admin_production_report') }}">Справка Производство</a>
+                {% endif %}
+            </div>
+            <div class="nav-cta-buttons">
+                <a href="{{ url_for('logout') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Изход</a>
+            </div>
+        </div>
+    </div>
+</nav>
+
+<main class="admin-container" style="max-width: 600px; margin: 40px auto; padding: 0 15px;">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Качване на DXF чертеж</h3>
+        <p class="section-subtitle">Качете нов чертеж, изберете материал за ценообразуване и го свържете с конкретна машина по избор.</p>
+
+        <form action="{{ url_for('upload') }}" method="POST" enctype="multipart/form-data" class="admin-form">
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label for="material">Материал за изчисление *</label>
+                <select name="material" id="material" style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px;" required>
+                    {% for mat in materials %}
+                    <option value="{{ mat.key }}">{{ mat.display_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label for="dxf_file">DXF файл *</label>
+                <input type="file" id="dxf_file" name="file" accept=".dxf" required style="color: #fff;">
+            </div>
+
+            <div class="form-group" style="margin-bottom: 24px;">
+                <label for="machine_id">Свържи с машина (незадължително)</label>
+                <select name="machine_id" id="machine_id" style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px;">
+                    <option value="">-- Без конкретна машина --</option>
+                    {% for machine in machines %}
+                    <option value="{{ machine.id }}">{{ machine.name }} ({% if machine.status == 'idle' %}Свободна{% elif machine.status == 'running' %}Работи{% else %}Поддръжка{% endif %})</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <button type="submit" class="btn-submit" style="width: 100%;">Качи и изчисли</button>
+        </form>
+    </section>
+</main>
+</body>
+</html>

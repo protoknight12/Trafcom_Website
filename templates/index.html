@@ -20,7 +20,7 @@
                         <a href="{{ url_for('generator') }}">Параметричен Генератор</a>
                     </div>
                 </div>
-                <a href="#machines" class="active-nav-link">Машини</a>
+                <a href="{{ url_for('list_machines') }}">Машини</a>
                 <a href="#">Услуги</a>
                 <a href="#">За нас</a>
                 <a href="#">Контакти</a>
@@ -29,6 +29,7 @@
                 <a href="{{ url_for('my_orders') }}">Моите Поръчки</a>
                 {% if current_user.is_admin %}
                 <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
+
                 {% endif %}
                 {% endif %}
             </div>
