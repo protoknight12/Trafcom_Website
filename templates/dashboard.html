@@ -101,6 +101,7 @@
             </div>
         </div>
         <a href="{{ url_for('index') }}">Начало</a>
+
         <a href="{{ url_for('dashboard') }}">Лична Библиотека</a>
         {% if current_user.is_admin %}
         <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>

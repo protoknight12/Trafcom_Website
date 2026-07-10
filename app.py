@@ -1,3 +1,4 @@
+from datetime import datetime
 import os
 import json
 import math
@@ -12,6 +13,7 @@ from werkzeug.utils import secure_filename
 import ezdxf
 from ezdxf import bbox
 from ezdxf.math import bulge_to_arc
+import random
 
 # Optional: load a local .env file if python-dotenv is installed, so secrets
 # can be kept out of source control. Safe no-op if the package isn't present.
@@ -150,6 +152,35 @@ class ProductDetail(db.Model):
     quantity = db.Column(db.Integer, nullable=False, default=1)
 
     detail = db.relationship('Detail')
+
+
+class Order(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    order_number = db.Column(db.String(50), unique=True, nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    customer_name = db.Column(db.String(150), nullable=False)
+    status = db.Column(db.String(50), default='Нова')  # Нова, В производство, Завършена
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    user = db.relationship('User', backref=db.backref('orders', lazy=True))
+    items = db.relationship('OrderItem', backref='order', lazy=True, cascade="all, delete-orphan")
+
+
+class OrderItem(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    order_id = db.Column(db.Integer, db.ForeignKey('order.id'), nullable=False)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=True)
+    detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=True)
+    quantity_ordered = db.Column(db.Integer, nullable=False)
+    quantity_produced = db.Column(db.Integer, default=0, nullable=False) # Колко са готови
+
+    product = db.relationship('Product')
+    detail = db.relationship('Detail')
+
+    @property
+    def quantity_remaining(self):
+        rem = self.quantity_ordered - self.quantity_produced
+        return rem if rem > 0 else 0
 
 
 class ProductExtraCost(db.Model):
@@ -1234,6 +1265,83 @@ def admin_delete_user(user_id):
 def logout():
     logout_user()
     return redirect(url_for('login'))
+
+
+
+
+
+# МАРШРУТ ЗА ОБИКНОВЕНИ ПОТРЕБИТЕЛИ - СЪЗДАВАНЕ НА ПОРЪЧКА
+@app.route('/orders/new', methods=['GET', 'POST'])
+@login_required
+def create_order():
+    if request.method == 'POST':
+        customer_name = request.form.get('customer_name')
+        item_type = request.form.get('item_type')  # 'product' или 'detail'
+        item_id = request.form.get('item_id')
+        qty = int(request.form.get('quantity', 1))
+
+        if not customer_name or not item_id:
+            flash('Моля попълнете всички задължителни полета.', 'danger')
+            return redirect(url_for('create_order'))
+
+        # Генериране на уникален номер на поръчка (напр. ORD-2026-XXXX)
+        order_num = f"ORD-{datetime.utcnow().year}-{random.randint(1000, 9999)}"
+
+        new_order = Order(
+            order_number=order_num,
+            user_id=current_user.id,
+            customer_name=customer_name,
+            status='Нова'
+        )
+        db.session.add(new_order)
+        db.session.flush()  # Взимаме ID-то преди commit
+
+        order_item = OrderItem(order_id=new_order.id, quantity_ordered=qty)
+        if item_type == 'product':
+            order_item.product_id = int(item_id)
+        else:
+            order_item.detail_id = int(item_id)
+
+        db.session.add(order_item)
+        db.session.commit()
+
+        flash(f'Поръчка {order_num} беше успешно изпратена!', 'success')
+        return redirect(url_for('create_order'))
+
+    products = Product.query.all()
+    details = Detail.query.all()
+    return render_template('order_create.html', products=products, details=details)
+
+
+# АДМИН СТРАНИЦА - СПРАВКА ЗА ПРОИЗВОДСТВО И ОСТАТЪЦИ
+@app.route('/admin/production', methods=['GET', 'POST'])
+@login_required
+def admin_production_report():
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    if request.method == 'POST':
+        # Динамично обновяване на изработеното количество от производството
+        item_id = request.form.get('order_item_id')
+        produced_qty = int(request.form.get('produced_qty', 0))
+
+        item = OrderItem.query.get_or_404(item_id)
+        item.quantity_produced = produced_qty
+
+        # Автоматично обновяване на статуса на поръчката, ако всичко е готово
+        order = item.order
+        all_done = all(i.quantity_produced >= i.quantity_ordered for i in order.items)
+        if all_done:
+            order.status = 'Завършена'
+        elif any(i.quantity_produced > 0 for i in order.items):
+            order.status = 'В производство'
+
+        db.session.commit()
+        return jsonify({'status': 'success', 'remaining': item.quantity_remaining})
+
+    orders = Order.query.order_by(Order.created_at.desc()).all()
+    return render_template('production_report.html', orders=orders)
 
 
 

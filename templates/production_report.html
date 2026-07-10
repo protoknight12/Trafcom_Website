@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Производствена Справка - TRAFCOM</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .status-badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: bold;
+        }
+        .status-Нова { background-color: #ffc107; color: #000; }
+        .status-производство { background-color: #17a2b8; color: #fff; }
+        .status-Завършена { background-color: #28a745; color: #fff; }
+
+        .progress-container {
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+            width: 100%;
+            height: 10px;
+            margin-top: 5px;
+        }
+        .progress-bar {
+            background: #28a745;
+            height: 100%;
+            transition: width 0.3s ease;
+        }
+        .qty-updater {
+            width: 70px;
+            padding: 4px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-input);
+            color: var(--text-main);
+            border-radius: var(--border-radius-sm);
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+<nav class="navbar">
+    <div class="nav-container">
+        <h2>TRAFCOM</h2>
+        <div class="nav-links">
+            <div class="nav-section-links">
+                <a href="{{ url_for('create_order') }}">Нова Поръчка</a>
+                <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
+                <a href="{{ url_for('admin_production_report') }}" class="active">Справка Производство</a>
+            </div>
+            <div class="nav-cta-buttons">
+                <a href="{{ url_for('logout') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Изход</a>
+            </div>
+        </div>
+    </div>
+</nav>
+
+<main class="admin-container" style="max-width: 1100px; margin-top: 30px;">
+    <div class="card">
+        <div class="card-header">
+            <h3>Текущо състояние на поръчките (Справка Изработено / Остатък)</h3>
+        </div>
+
+        <div class="table-responsive" style="padding: 15px;">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Номер</th>
+                    <th>Клиент</th>
+                    <th>Изделие / Компонент</th>
+                    <th class="text-center">Заявено к-во</th>
+                    <th class="text-center">Изработено до момента</th>
+                    <th class="text-center">Оставащо к-во</th>
+                    <th class="text-center">Статус</th>
+                    <th>Напредък</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for order in orders %}
+                    {% for item in order.items %}
+                    <tr id="row-{{ item.id }}">
+                        <td><strong>{{ order.order_number }}</strong></td>
+                        <td>{{ order.customer_name }}</td>
+                        <td>
+                            {% if item.product %}
+                                <span style="color: #007bff; font-weight: 600;">[Продукт]</span> {{ item.product.name }}
+                            {% else %}
+                                <span style="color: #6f42c1; font-weight: 600;">[Детайл]</span> {{ item.detail.name }}
+                            {% endif %}
+                        </td>
+                        <td class="text-center" id="ordered-{{ item.id }}">{{ item.quantity_ordered }} бр.</td>
+                        <td class="text-center">
+                            <input type="number" class="qty-updater" value="{{ item.quantity_produced }}"
+                                   min="0" max="{{ item.quantity_ordered }}"
+                                   onchange="updateProduction('{{ item.id }}', this.value)"> бр.
+                        </td>
+                        <td class="text-center" id="remaining-{{ item.id }}" style="font-weight: bold; color: {% if item.quantity_remaining > 0 %}#dc3545{% else %}#28a745{% endif %};">
+                            {{ item.quantity_remaining }} бр.
+                        </td>
+                        <td class="text-center">
+                            <span class="status-badge status-{{ order.status }}">{{ order.status }}</span>
+                        </td>
+                        <td>
+                            {% set pct = (item.quantity_produced / item.quantity_ordered * 100)|int %}
+                            <div class="progress-container">
+                                <div class="progress-bar" id="progress-{{ item.id }}" style="width: {{ pct }}%;"></div>
+                            </div>
+                            <small id="pct-label-{{ item.id }}">{{ pct }}% готовност</small>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                {% else %}
+                <tr>
+                    <td colspan="8" class="text-center" style="color: var(--text-muted); padding: 30px;">Няма регистрирани поръчки в системата.</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</main>
+
+<script>
+function updateProduction(itemId, val) {
+    const ordered = parseInt(document.getElementById('ordered-' + itemId).textContent);
+    let produced = parseInt(val);
+
+    if (produced > ordered) produced = ordered;
+    if (produced < 0 || isNaN(produced)) produced = 0;
+
+    const formData = new FormData();
+    formData.append('order_item_id', itemId);
+    formData.append('produced_qty', produced);
+
+    fetch('/admin/production', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if(data.status === 'success') {
+            const remCell = document.getElementById('remaining-' + itemId);
+            remCell.textContent = data.remaining + ' бр.';
+
+            remCell.style.color = data.remaining === 0 ? '#28a745' : '#dc3545';
+
+            const pct = Math.round((produced / ordered) * 100);
+            document.getElementById('progress-' + itemId).style.width = pct + '%';
+            document.getElementById('pct-label-' + itemId).textContent = pct + '% готовност';
+        }
+    })
+    .catch(error => console.error('Error updating production:', error));
+}
+</script>
+</body>
+</html>
