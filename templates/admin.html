@@ -162,6 +162,120 @@
     </section>
 
     <section class="admin-card">
+        <h3>Библиотека с детайли</h3>
+        <p class="section-subtitle">Добавете преизползваеми детайли (DXF + материал), от които се изграждат продуктите по-долу.</p>
+
+        <form action="{{ url_for('admin_add_detail') }}" method="POST" enctype="multipart/form-data" class="admin-form" style="margin-bottom: 1.5rem;">
+            <div class="form-group">
+                <label for="detail_name">Име на детайла</label>
+                <input type="text" id="detail_name" name="name" placeholder="напр. Странична стена 400x300" required autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="detail_material">Материал</label>
+                <select id="detail_material" name="material" style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px;">
+                    {% for material in materials %}
+                    <option value="{{ material.key }}">{{ material.display_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="detail_file">DXF файл</label>
+                <input type="file" id="detail_file" name="file" accept=".dxf" required>
+            </div>
+            <button type="submit" class="btn-submit">Добави детайл</button>
+        </form>
+
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Име</th>
+                    <th>Материал</th>
+                    <th>Размери</th>
+                    <th>Цена на рязане (€)</th>
+                    <th class="text-right">Действие</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for detail in details %}
+                <tr>
+                    <td><strong>{{ detail.name }}</strong></td>
+                    <td><span class="badge badge-user">{{ detail.material.display_name }}</span></td>
+                    <td>{{ "%.2f"|format(detail.width) }} x {{ "%.2f"|format(detail.height) }} мм</td>
+                    <td>{{ "%.2f"|format(detail.calculated_price) }} €</td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_delete_detail', detail_id=detail.id) }}" method="POST" onsubmit="return confirm('Изтриване на детайла?');" style="display:inline;">
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5" class="text-center no-data">Няма добавени детайли.</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="admin-card">
+        <h3>Продукти</h3>
+        <p class="section-subtitle">Продуктите се изграждат от детайли plus допълнителни разходи (боядисване, монтаж, транспорт и др.).</p>
+
+        <form action="{{ url_for('admin_add_product') }}" method="POST" class="admin-form" style="margin-bottom: 1.5rem;">
+            <div class="form-group">
+                <label for="product_name">Име на продукта</label>
+                <input type="text" id="product_name" name="name" placeholder="напр. Метален шкаф модел А" required autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="product_description">Описание (незадължително)</label>
+                <input type="text" id="product_description" name="description" placeholder="Кратко описание...">
+            </div>
+            <div class="form-group">
+                <label for="product_markup">Надценка (%)</label>
+                <input type="number" id="product_markup" name="markup_percent" step="0.1" min="0" value="0">
+            </div>
+            <button type="submit" class="btn-submit">Създай продукт</button>
+        </form>
+
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Продукт</th>
+                    <th>Себестойност (€)</th>
+                    <th>Надценка</th>
+                    <th>Продажна цена (€)</th>
+                    <th class="text-right">Действия</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for product in products %}
+                <tr>
+                    <td><strong>{{ product.name }}</strong></td>
+                    <td>{{ "%.2f"|format(product_pricing[product.id].total_cost) }} €</td>
+                    <td>{{ product.markup_percent }}%</td>
+                    <td><span style="color: var(--success-text); font-weight: 600;">{{ "%.2f"|format(product_pricing[product.id].sell_price) }} €</span></td>
+                    <td class="text-right">
+                        <a href="{{ url_for('admin_product_edit', product_id=product.id) }}" class="btn-secondary" style="padding: 8px 14px; border-radius: var(--border-radius-sm); font-size: 0.85rem; text-decoration: none;">Редактирай</a>
+                        <a href="{{ url_for('admin_product_offer', product_id=product.id) }}" class="btn-secondary" style="padding: 8px 14px; border-radius: var(--border-radius-sm); font-size: 0.85rem; text-decoration: none;">Оферта</a>
+                        <form action="{{ url_for('admin_product_delete', product_id=product.id) }}" method="POST" onsubmit="return confirm('Изтриване на продукта?');" style="display:inline;">
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5" class="text-center no-data">Няма създадени продукти.</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="admin-card">
         <h3>Списък с регистрирани потребители</h3>
         <p class="section-subtitle">Общо регистрирани профили в системата, които имат достъп до калкулатора.</p>
 
