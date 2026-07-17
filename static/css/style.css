@@ -900,3 +900,83 @@ button, .btn {
     height: 2px;
     background: var(--gradient-purple);
 }
+
+/* ==========================================================================
+   RESPONSIVE NAVIGATION (hamburger menu on small screens)
+   ========================================================================== */
+.nav-toggle {
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    gap: 5px;
+    width: 40px;
+    height: 40px;
+    background: none;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    cursor: pointer;
+    padding: 0;
+}
+.nav-toggle span {
+    display: block;
+    width: 20px;
+    height: 2px;
+    background: var(--text-main);
+    margin: 0 auto;
+    transition: transform 0.2s ease, opacity 0.2s ease;
+}
+.nav-toggle[aria-expanded="true"] span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+.nav-toggle[aria-expanded="true"] span:nth-child(2) { opacity: 0; }
+.nav-toggle[aria-expanded="true"] span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
+@media (max-width: 900px) {
+    .nav-toggle {
+        display: flex;
+    }
+    .nav-container {
+        flex-wrap: wrap;
+    }
+    .nav-links {
+        display: none;
+        width: 100%;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 16px;
+        margin-top: 16px;
+        padding-top: 16px;
+        border-top: 1px solid var(--border-color);
+    }
+    .nav-links.open {
+        display: flex;
+    }
+    .nav-section-links {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 14px;
+        margin-right: 0;
+    }
+    .nav-cta-buttons {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+    }
+    .nav-cta-buttons .user-badge {
+        text-align: center;
+    }
+    /* The hover-based dropdown doesn't work on touch devices anyway (see
+       :focus-within fallback), and nesting it inside a column-flex mobile
+       menu looks broken - just always expand it inline on small screens. */
+    .dropdown-content {
+        position: static;
+        display: block;
+        box-shadow: none;
+        border: none;
+        background: none;
+        padding-left: 12px;
+        transform: none;
+        margin-top: 8px;
+    }
+    .dropdown-content::before {
+        display: none;
+    }
+}

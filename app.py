@@ -790,7 +790,7 @@ def index():
     # index.html adapts its nav CTA based on current_user.is_authenticated
     # (showing "Към Таблото" instead of Login/Register). Apps like /dashboard
     # and /generator still require login via @login_required regardless.
-    return render_template('index.html')
+    return render_template('index.html', active_page='index')
 
 
 @app.route('/generator')
@@ -799,7 +799,7 @@ def generator():
     # Requires login, same as every other app (matches the "apps require an
     # account, the public site doesn't" design used across the project).
     materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
-    return render_template('generator.html', materials=materials)
+    return render_template('generator.html', materials=materials, active_page='generator')
 
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -823,6 +823,9 @@ def login():
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
+    if current_user.is_authenticated:
+        return redirect(url_for('index'))
+
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
@@ -935,7 +938,7 @@ def dashboard():
 
     user_uploads = DxfFile.query.filter_by(user_id=current_user.id).order_by(DxfFile.id.desc()).all()
     materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
-    return render_template('dashboard.html', uploads=user_uploads, materials=materials)
+    return render_template('dashboard.html', uploads=user_uploads, materials=materials, active_page='dashboard')
 
 
 @app.route('/geometry/<int:file_id>')
@@ -1010,7 +1013,7 @@ def upload():
 
     machines = Machine.query.all()
     materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
-    return render_template('upload.html', machines=machines, materials=materials)
+    return render_template('upload.html', machines=machines, materials=materials, active_page='dashboard')
 
 # ----------------- АДМИНИСТРАТОРСКИ МАРШРУТИ -----------------
 
@@ -1027,7 +1030,8 @@ def admin_dashboard():
     product_pricing = {p.id: calculate_product_pricing(p) for p in products}
     return render_template(
         'admin.html', users=all_users, materials=materials,
-        details=details, products=products, product_pricing=product_pricing
+        details=details, products=products, product_pricing=product_pricing,
+        active_page='admin'
     )
 
 
@@ -1243,7 +1247,7 @@ def list_machines():
         flash('Нямате достъп до тази страница.', 'danger')
         return redirect(url_for('dashboard'))
     machines = Machine.query.all()
-    return render_template('machines.html', machines=machines)
+    return render_template('machines.html', machines=machines, active_page='machines')
 
 @app.route('/admin/products/<int:product_id>/delete_image/<int:image_id>', methods=['POST'])
 @login_required
@@ -1393,7 +1397,7 @@ def admin_product_edit(product_id):
     all_details = Detail.query.order_by(Detail.name).all()
     materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
     pricing = calculate_product_pricing(product)
-    return render_template('product_edit.html', product=product, all_details=all_details, pricing=pricing, materials=materials)
+    return render_template('product_edit.html', product=product, all_details=all_details, pricing=pricing, materials=materials, active_page='admin')
 
 
 @app.route('/admin/products/<int:product_id>/update', methods=['POST'])
@@ -1728,7 +1732,7 @@ def create_order():
         for d in details
     ]
     return render_template('order_create.html', products=products_data, details=details_data,
-                           machines=machines, materials=materials)
+                           machines=machines, materials=materials, active_page='create_order')
 
 
 # МАРШРУТ ЗА ОБИКНОВЕНИ ПОТРЕБИТЕЛИ - ИСТОРИЯ И СТАТУС НА СОБСТВЕНИТЕ ПОРЪЧКИ
@@ -1736,7 +1740,7 @@ def create_order():
 @login_required
 def my_orders():
     orders = Order.query.filter_by(user_id=current_user.id).order_by(Order.created_at.desc()).all()
-    return render_template('my_orders.html', orders=orders)
+    return render_template('my_orders.html', orders=orders, active_page='my_orders')
 
 
 @app.route('/orders/<int:order_id>/cancel', methods=['POST'])
@@ -1809,7 +1813,7 @@ def admin_production_report():
 
     orders = Order.query.filter(Order.status != 'cancelled').order_by(Order.created_at.desc()).all()
     machines = Machine.query.order_by(Machine.name).all()
-    return render_template('production_report.html', orders=orders, machines=machines)
+    return render_template('production_report.html', orders=orders, machines=machines, active_page='production')
 
 
 # ----------------- QUICK-CREATE API ENDPOINTS -----------------
