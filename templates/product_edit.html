@@ -101,7 +101,8 @@
                     <td>{{ pd.quantity }}</td>
                     <td>{{ "%.2f"|format((pd.detail.calculated_price if pd.detail else 0) * pd.quantity) }} €</td>
                     <td class="text-right">
-                        <form action="{{ url_for('admin_product_remove_detail', product_id=product.id, product_detail_id=pd.id) }}" method="POST" style="display:inline;">
+                        <form action="{{ url_for('admin_product_remove_detail', product_id=product.id, product_detail_id=pd.id) }}" method="POST"
+                              onsubmit="return confirm('Премахване на &quot;{{ (pd.detail.name if pd.detail else "детайла")|e }}&quot; от продукта?');" style="display:inline;">
                             <button type="submit" class="btn-delete">Премахни</button>
                         </form>
                     </td>
@@ -147,7 +148,8 @@
                     <td>{{ cost.label }}</td>
                     <td>{{ "%.2f"|format(cost.amount) }} €</td>
                     <td class="text-right">
-                        <form action="{{ url_for('admin_product_remove_cost', product_id=product.id, cost_id=cost.id) }}" method="POST" style="display:inline;">
+                        <form action="{{ url_for('admin_product_remove_cost', product_id=product.id, cost_id=cost.id) }}" method="POST"
+                              onsubmit="return confirm('Премахване на разход &quot;{{ cost.label|e }}&quot;?');" style="display:inline;">
                             <button type="submit" class="btn-delete">Премахни</button>
                         </form>
                     </td>
@@ -272,11 +274,11 @@
         const submitBtn = this.querySelector('button[type="submit"]');
         submitBtn.disabled = true;
         submitBtn.textContent = 'Обработване...';
-        
+
         const formData = new FormData(this);
         const errDiv = document.getElementById('qd_error');
         errDiv.style.display = 'none';
-        
+
         fetch('/api/quick-create-detail', {
             method: 'POST',
             body: formData

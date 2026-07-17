@@ -1351,6 +1351,8 @@ def admin_delete_detail(detail_id):
     return redirect(url_for('admin_dashboard'))
 
 
+
+
 # ----------------- ПРОДУКТИ (Products) -----------------
 
 @app.route('/admin/products/add', methods=['POST'])
@@ -1932,6 +1934,94 @@ def admin_assign_machine(order_id):
         'status': 'success',
         'machine_name': machine_name
     })
+
+# ============================================================
+# ADD THESE THREE ROUTES TO app.py
+# ============================================================
+# Each corresponds to a new "Изтрий" (Delete) button added to the
+# templates. Paste them near their related existing routes:
+#   - delete_dxf_file      -> near get_geometry() / dashboard()
+#   - delete_machine       -> near add_machine() / update_machine_status()
+#   - admin_delete_material -> near admin_update_material() / admin_add_material()
+#
+# All three follow the same conventions already used elsewhere in
+# app.py: POST-only, flash() feedback in Bulgarian, redirect back to
+# the originating page, and a try/db.session.rollback() on failure.
+
+
+@app.route('/dxf/<int:file_id>/delete', methods=['POST'])
+@login_required
+def delete_dxf_file(file_id):
+    """
+    Deletes one DXF upload from a user's personal library. Only the
+    owning user or an admin may delete it - matches the same
+    ownership check already used in get_geometry().
+    """
+    dxf_file = DxfFile.query.get_or_404(file_id)
+    if dxf_file.user_id != current_user.id and not current_user.is_admin:
+        flash('Нямате разрешение да изтриете този файл.', 'danger')
+        return redirect(url_for('dashboard'))
+    try:
+        filename = dxf_file.filename
+        db.session.delete(dxf_file)
+        db.session.commit()
+        flash(f'Файлът "{filename}" беше изтрит.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Грешка при изтриване: {str(e)}', 'danger')
+    return redirect(url_for('dashboard'))
+
+
+@app.route('/machines/<int:id>/delete', methods=['POST'])
+@role_required('admin')
+def delete_machine(id):
+    """
+    Deletes a machine. Orders and DxfFiles that reference it keep
+    existing (machine_id is nullable on both), so they're detached
+    rather than deleted - a removed machine shouldn't take historical
+    orders/uploads down with it.
+    """
+    machine = Machine.query.get_or_404(id)
+    try:
+        Order.query.filter_by(machine_id=machine.id).update({'machine_id': None})
+        DxfFile.query.filter_by(machine_id=machine.id).update({'machine_id': None})
+        db.session.delete(machine)
+        db.session.commit()
+        flash(f'Машина "{machine.name}" беше изтрита.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Грешка при изтриване: {str(e)}', 'danger')
+    return redirect(url_for('list_machines'))
+
+
+@app.route('/admin/materials/<string:key>/delete', methods=['POST'])
+@role_required('admin')
+def admin_delete_material(key):
+    """
+    Deletes a material price entry. Blocked if any Detail still
+    references it (Detail.material_key is a hard FK to
+    MaterialPrice.key with no cascade) - deleting it out from under
+    an existing catalog part would either crash on the FK constraint
+    or silently orphan the part's pricing basis. Reassign/delete those
+    Details first, then remove the material.
+    """
+    material = MaterialPrice.query.filter_by(key=key).first_or_404()
+    in_use = Detail.query.filter_by(material_key=key).count()
+    if in_use > 0:
+        flash(
+            f'Материалът "{material.display_name}" се използва от {in_use} детайл(а) '
+            'и не може да бъде изтрит. Изтрийте или преместете тези детайли първо.',
+            'danger'
+        )
+        return redirect(url_for('admin_dashboard'))
+    try:
+        db.session.delete(material)
+        db.session.commit()
+        flash(f'Материал "{material.display_name}" беше изтрит.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Грешка при изтриване: {str(e)}', 'danger')
+    return redirect(url_for('admin_dashboard'))
 
 
 if __name__ == '__main__':

@@ -112,6 +112,9 @@
                     {% if current_user.is_staff %}
                     <th class="text-right">Актуализация на статус</th>
                     {% endif %}
+                    {% if current_user.is_admin %}
+                    <th class="text-right">Действие</th>
+                    {% endif %}
                 </tr>
                 </thead>
                 <tbody>
@@ -142,10 +145,18 @@
                         </form>
                     </td>
                     {% endif %}
+                    {% if current_user.is_admin %}
+                    <td class="text-right">
+                        <form action="{{ url_for('delete_machine', id=m.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на машина &quot;{{ m.name|e }}&quot;? Всички свързани поръчки и чертежи ще останат, но без назначена машина.');" style="display:inline;">
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                    {% endif %}
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="4" class="text-center no-data">Няма добавени машини.</td>
+                    <td colspan="{{ 3 + (1 if current_user.is_staff else 0) + (1 if current_user.is_admin else 0) }}" class="text-center no-data">Няма добавени машини.</td>
                 </tr>
                 {% endfor %}
                 </tbody>

@@ -189,6 +189,7 @@
                     <th>Размери (Габарити)</th>
                     <th>Дължина на рязане</th>
                     <th>Изчислена цена</th>
+                    <th class="text-right">Действие</th>
                 </tr>
                 </thead>
                 <tbody>
@@ -216,10 +217,16 @@
                     <td>{{ "%.2f"|format(upload.total_length) }} мм</td>
                     <td><span style="   color: var(--success-text); font-weight: 600;">{{ "%.2f"|format(upload.calculated_price) }} €</span>
                     </td>
+                    <td class="text-right">
+                        <form action="{{ url_for('delete_dxf_file', file_id=upload.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на &quot;{{ upload.filename|e }}&quot;? Това действие е необратимо.');" style="display:inline;">
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="6" class="text-center no-data">
+                    <td colspan="7" class="text-center no-data">
                         Вашата библиотека е празна. Качете първия си чертеж по-горе.
                     </td>
                 </tr>

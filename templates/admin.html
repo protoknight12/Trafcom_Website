@@ -153,6 +153,7 @@
                     <th>Цена на метър рязане (€)</th>
                     <th>Цена на пробиване (€)</th>
                     <th class="text-right">Действие</th>
+                    <th class="text-right">Изтриване</th>
                 </tr>
                 </thead>
                 <tbody>
@@ -170,10 +171,16 @@
                             <button type="submit" class="btn-save-price">Запази</button>
                         </form>
                     </td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_delete_material', key=material.key) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на материал &quot;{{ material.display_name|e }}&quot;? Това е възможно само ако няма детайли, които го използват.');" style="display:inline;">
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="5" class="text-center no-data">
+                    <td colspan="6" class="text-center no-data">
                         Няма конфигурирани материали.
                     </td>
                 </tr>
