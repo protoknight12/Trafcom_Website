@@ -57,7 +57,10 @@
                     <a href="{{ url_for('my_orders') }}">Моите Поръчки</a>
                     {% if current_user.is_admin %}
                         <a href="{{ url_for('admin_dashboard') }}" class="active">Админ Панел</a>
+                    {% endif %}
+                    {% if current_user.is_admin or current_user.is_worker %}
                         <a href="{{ url_for('admin_production_report') }}">Справка Производство</a>
+                        <a href="{{ url_for('list_machines') }}">Машини</a>
                     {% endif %}
                 {% endif %}
             </div>
@@ -100,9 +103,13 @@
                     <label for="password">Парола</label>
                     <input type="password" id="password" name="password" placeholder="Въведете парола..." required>
                 </div>
-                <div class="form-group checkbox-group">
-                    <input type="checkbox" id="is_admin" name="is_admin" value="true">
-                    <label for="is_admin">Предоставяне на Администраторски права</label>
+                <div class="form-group">
+                    <label for="role">Роля</label>
+                    <select id="role" name="role" class="material-price-input" style="width: 100%;">
+                        <option value="regular_user" selected>Клиент</option>
+                        <option value="worker">Служител (цех)</option>
+                        <option value="admin">Администратор</option>
+                    </select>
                 </div>
                 <button type="submit" class="btn-submit">Регистрация на акаунт</button>
             </form>
@@ -314,17 +321,29 @@
                     <td>
                         {% if user.is_admin %}
                         <span class="badge badge-admin">Администратор</span>
+                        {% elif user.is_worker %}
+                        <span class="badge badge-worker">Служител</span>
                         {% else %}
-                        <span class="badge badge-user">Потребител / Служител</span>
+                        <span class="badge badge-user">Клиент</span>
                         {% endif %}
                     </td>
                     <td class="text-right">
                         {% if user.id == current_user.id %}
                         <span class="text-muted text-small">Текуща сесия</span>
                         {% else %}
-                        <form action="{{ url_for('admin_delete_user', user_id=user.id) }}" method="POST" onsubmit="return confirm('Изтриването на потребителя ще премахне и цялата му библиотека с чертежи! Потвърждавате ли?');" style="display:inline;">
-                            <button type="submit" class="btn-delete">Изтрий профила</button>
-                        </form>
+                        <div style="display: flex; gap: 8px; justify-content: flex-end; align-items: center;">
+                            <form action="{{ url_for('admin_update_user_role', user_id=user.id) }}" method="POST" style="display:inline; display: flex; gap: 6px;">
+                                <select name="role" class="material-price-input" style="width: auto;">
+                                    <option value="regular_user" {% if user.role == 'regular_user' %}selected{% endif %}>Клиент</option>
+                                    <option value="worker" {% if user.role == 'worker' %}selected{% endif %}>Служител</option>
+                                    <option value="admin" {% if user.role == 'admin' %}selected{% endif %}>Администратор</option>
+                                </select>
+                                <button type="submit" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem; border-radius: 4px;">Промени роля</button>
+                            </form>
+                            <form action="{{ url_for('admin_delete_user', user_id=user.id) }}" method="POST" onsubmit="return confirm('Изтриването на потребителя ще премахне и цялата му библиотека с чертежи! Потвърждавате ли?');" style="display:inline;">
+                                <button type="submit" class="btn-delete">Изтрий профила</button>
+                            </form>
+                        </div>
                         {% endif %}
                     </td>
                 </tr>

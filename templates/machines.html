@@ -55,6 +55,8 @@
                 <a href="{{ url_for('list_machines') }}" class="active">Машини</a>
                 {% if current_user.is_admin %}
                     <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
+                {% endif %}
+                {% if current_user.is_admin or current_user.is_worker %}
                     <a href="{{ url_for('admin_production_report') }}">Справка Производство</a>
                 {% endif %}
             </div>
@@ -82,7 +84,7 @@
     {% endif %}
     {% endwith %}
 
-    {% if current_user.role == 'admin' %}
+    {% if current_user.is_admin %}
     <section class="admin-card">
         <h3>Добавяне на нова машина</h3>
         <p class="section-subtitle">Въведете наименование на машината, за да я добавите към производствения списък.</p>
@@ -107,7 +109,7 @@
                     <th>Име</th>
                     <th>Статус</th>
                     <th>Последна поддръжка</th>
-                    {% if current_user.role in ['admin', 'worker'] %}
+                    {% if current_user.is_staff %}
                     <th class="text-right">Актуализация на статус</th>
                     {% endif %}
                 </tr>
@@ -128,7 +130,7 @@
                     <td>
                         {{ m.last_maintenance.strftime('%d.%m.%Y %H:%M') if m.last_maintenance else 'Неизвестно' }}
                     </td>
-                    {% if current_user.role in ['admin', 'worker'] %}
+                    {% if current_user.is_staff %}
                     <td class="text-right">
                         <form action="{{ url_for('update_machine_status', id=m.id) }}" method="POST" class="machine-action-form" style="justify-content: flex-end; margin: 0; padding: 0;">
                             <select name="status" class="select-status">

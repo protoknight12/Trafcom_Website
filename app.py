@@ -79,6 +79,15 @@ class User(db.Model, UserMixin):
     def is_admin(self):
         return self.role == 'admin'
 
+    @property
+    def is_worker(self):
+        return self.role == 'worker'
+
+    @property
+    def is_staff(self):
+        """Admins and workers both have production/machine-floor access."""
+        return self.role in ('admin', 'worker')
+
 
 class DxfFile(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -838,6 +847,56 @@ def register():
 
 
 # Окончателно възстановен маршут за потребителското табло
+def process_dxf_upload(file, material_key, machine_id=None):
+    """
+    Shared DXF-upload pipeline used by both /dashboard and /upload: saves
+    the file to a temp path, extracts geometry, validates the material, and
+    builds a (not-yet-committed) DxfFile record with its calculated price.
+    Keeping this logic in one place means a future fix to it automatically
+    applies to both routes, instead of having to be made twice.
+
+    Returns a (dxf_file, pierce_count, error_message) tuple - on failure
+    dxf_file/pierce_count are None and error_message is a user-facing
+    Bulgarian message ready to flash(); on success error_message is None.
+    """
+    temp_path = None
+    try:
+        filename = secure_filename(file.filename)
+        # Save to the private upload folder (not the public static/ folder)
+        # with a unique prefix, so concurrent uploads never collide and the
+        # raw file is never briefly web-accessible.
+        temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{uuid.uuid4().hex}_{filename}")
+        file.save(temp_path)
+
+        # Extracts geometric metrics, pierce count, and drawable shapes
+        width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(temp_path)
+        if width is None or total_length is None:
+            return None, None, 'Грешка при обработката на DXF структурата.'
+
+        material_row = MaterialPrice.query.filter_by(key=material_key).first()
+        if not material_row:
+            return None, None, 'Невалиден избор на материал.'
+
+        price = calculate_cnc_price(width, height, total_length, pierce_count, material_key)
+
+        dxf_file = DxfFile(
+            filename=file.filename,
+            material=material_key,
+            width=width,
+            height=height,
+            total_length=total_length,
+            calculated_price=price,
+            user_id=current_user.id,
+            geometry_json=json.dumps(shapes),
+            machine_id=machine_id
+        )
+        return dxf_file, pierce_count, None
+    finally:
+        # Always clean up the temp file, regardless of success/failure.
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
 @app.route('/dashboard', methods=['GET', 'POST'])
 @login_required
 def dashboard():
@@ -851,59 +910,27 @@ def dashboard():
             flash('Грешка: Не сте избрали файл.', 'danger')
             return redirect(request.url)
 
-        if file and file.filename.lower().endswith('.dxf'):
-            temp_path = None
-            try:
-                filename = secure_filename(file.filename)
-                # Save to the private upload folder (not the public static/
-                # folder) with a unique prefix, so concurrent uploads never
-                # collide and the raw file is never briefly web-accessible.
-                temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{uuid.uuid4().hex}_{filename}")
-                file.save(temp_path)
-
-                # Extracts geometric metrics, pierce count, and drawable shapes
-                width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(temp_path)
-
-                if width is None or total_length is None:
-                    flash('Грешка при обработката на DXF структурата.', 'danger')
-                    return redirect(url_for('dashboard'))
-
-                chosen_material = request.form.get('material', 'steel')
-                chosen_material_row = MaterialPrice.query.filter_by(key=chosen_material).first()
-                if not chosen_material_row:
-                    flash('Невалиден избор на материал.', 'danger')
-                    return redirect(url_for('dashboard'))
-
-                price = calculate_cnc_price(width, height, total_length, pierce_count, chosen_material)
-
-                new_file_record = DxfFile(
-                    filename=file.filename,
-                    material=chosen_material,
-                    width=width,
-                    height=height,
-                    total_length=total_length,
-                    calculated_price=price,
-                    user_id=current_user.id,
-                    geometry_json=json.dumps(shapes)
-                )
-
-                db.session.add(new_file_record)
-                db.session.commit()
-
-                flash(f'Файлът "{file.filename}" беше изчислен успешно с включени пробиви ({pierce_count} бр.)!',
-                      'success')
-                return redirect(url_for('dashboard'))
-
-            except Exception as e:
-                db.session.rollback()
-                flash(f'Критична грешка при обработка/запис: {str(e)}', 'danger')
-                return redirect(url_for('dashboard'))
-            finally:
-                # Always clean up the temp file, regardless of success/failure.
-                if temp_path and os.path.exists(temp_path):
-                    os.remove(temp_path)
-        else:
+        if not file.filename.lower().endswith('.dxf'):
             flash('Невалиден формат! Системата приема само .dxf файлове.', 'danger')
+            return redirect(url_for('dashboard'))
+
+        try:
+            chosen_material = request.form.get('material', 'steel')
+            dxf_file, pierce_count, error = process_dxf_upload(file, chosen_material)
+            if error:
+                flash(error, 'danger')
+                return redirect(url_for('dashboard'))
+
+            db.session.add(dxf_file)
+            db.session.commit()
+
+            flash(f'Файлът "{file.filename}" беше изчислен успешно с включени пробиви ({pierce_count} бр.)!',
+                  'success')
+            return redirect(url_for('dashboard'))
+
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Критична грешка при обработка/запис: {str(e)}', 'danger')
             return redirect(url_for('dashboard'))
 
     user_uploads = DxfFile.query.filter_by(user_id=current_user.id).order_by(DxfFile.id.desc()).all()
@@ -952,7 +979,6 @@ def delete_account():
 @login_required
 def upload():
     if request.method == 'POST':
-        # 1. Handle file presence
         file = request.files.get('file')
         if not file or file.filename == '':
             flash("Моля, изберете файл за качване.", "danger")
@@ -962,41 +988,17 @@ def upload():
             flash('Невалиден формат! Системата приема само .dxf файлове.', 'danger')
             return redirect(request.url)
 
-        temp_path = None
         try:
-            filename = secure_filename(file.filename)
-            temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{uuid.uuid4().hex}_{filename}")
-            file.save(temp_path)
-
-            width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(temp_path)
-            if width is None or total_length is None:
-                flash('Грешка при обработката на DXF структурата.', 'danger')
-                return redirect(request.url)
-
             chosen_material = request.form.get('material', 'steel')
-            chosen_material_row = MaterialPrice.query.filter_by(key=chosen_material).first()
-            if not chosen_material_row:
-                flash('Невалиден избор на материал.', 'danger')
-                return redirect(request.url)
-
-            price = calculate_cnc_price(width, height, total_length, pierce_count, chosen_material)
-
             machine_id_raw = request.form.get('machine_id', '')
             selected_machine = int(machine_id_raw) if machine_id_raw and machine_id_raw.isdigit() else None
 
-            new_file = DxfFile(
-                filename=file.filename,
-                material=chosen_material,
-                width=width,
-                height=height,
-                total_length=total_length,
-                calculated_price=price,
-                user_id=current_user.id,
-                geometry_json=json.dumps(shapes),
-                machine_id=selected_machine
-            )
+            dxf_file, _pierce_count, error = process_dxf_upload(file, chosen_material, machine_id=selected_machine)
+            if error:
+                flash(error, 'danger')
+                return redirect(request.url)
 
-            db.session.add(new_file)
+            db.session.add(dxf_file)
             db.session.commit()
             flash(f'Файлът "{file.filename}" беше качен и обработен успешно!', 'success')
             return redirect(url_for('dashboard'))
@@ -1005,9 +1007,6 @@ def upload():
             db.session.rollback()
             flash(f'Критична грешка при обработка/запис: {str(e)}', 'danger')
             return redirect(request.url)
-        finally:
-            if temp_path and os.path.exists(temp_path):
-                os.remove(temp_path)
 
     machines = Machine.query.all()
     materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
@@ -1047,12 +1046,38 @@ def admin_create_user():
         flash('Потребителското име вече съществува.')
         return redirect(url_for('admin_dashboard'))
 
-    grant_admin = request.form.get('is_admin') == 'true'
+    role = request.form.get('role', 'regular_user')
+    if role not in ('regular_user', 'worker', 'admin'):
+        flash('Невалидна роля.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
     secure_pass = generate_password_hash(password, method='scrypt')
-    new_user = User(username=username, password=secure_pass, role='admin' if grant_admin else 'regular_user')
+    new_user = User(username=username, password=secure_pass, role=role)
     db.session.add(new_user)
     db.session.commit()
     flash(f'Успешно създаден потребител: {username}')
+    return redirect(url_for('admin_dashboard'))
+
+
+@app.route('/admin/update_role/<int:user_id>', methods=['POST'])
+@login_required
+def admin_update_user_role(user_id):
+    if not current_user.is_admin:
+        return jsonify({'error': 'Неоторизиран достъп'}), 403
+
+    if user_id == current_user.id:
+        flash('Не можете да променяте собствената си роля.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    role = request.form.get('role', '')
+    if role not in ('regular_user', 'worker', 'admin'):
+        flash('Невалидна роля.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    user_to_update = User.query.get_or_404(user_id)
+    user_to_update.role = role
+    db.session.commit()
+    flash(f'Ролята на {user_to_update.username} беше обновена успешно.', 'success')
     return redirect(url_for('admin_dashboard'))
 
 
@@ -1186,7 +1211,11 @@ def add_machine():
         flash("Само администратори могат да добавят машини.", "danger")
         return redirect(url_for('list_machines'))
 
-    name = request.form.get('name')
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Моля въведете име на машината.', 'danger')
+        return redirect(url_for('list_machines'))
+
     new_machine = Machine(name=name)
     db.session.add(new_machine)
     db.session.commit()
@@ -1210,6 +1239,9 @@ def update_machine_status(id):
 @app.route('/machines')
 @login_required
 def list_machines():
+    if not current_user.is_staff:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
     machines = Machine.query.all()
     return render_template('machines.html', machines=machines)
 
@@ -1729,7 +1761,7 @@ def cancel_order(order_id):
 @app.route('/admin/production', methods=['GET', 'POST'])
 @login_required
 def admin_production_report():
-    if not current_user.is_admin:
+    if not current_user.is_staff:
         flash('Нямате достъп до тази страница.', 'danger')
         return redirect(url_for('dashboard'))
 

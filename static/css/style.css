@@ -297,6 +297,11 @@ button, .btn {
     color: var(--text-muted);
     border: 1px solid var(--border-color);
 }
+.badge-worker {
+    background-color: rgba(23, 162, 184, 0.15);
+    color: #17a2b8;
+    border: 1px solid rgba(23, 162, 184, 0.3);
+}
 
 /* Session role indicator shown in the navbar (e.g. "СЕСИЯ: АДМИНИСТРАТОР") -
    matches the same pill shape as the .badge classes above, since it's used

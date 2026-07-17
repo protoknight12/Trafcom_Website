@@ -109,7 +109,10 @@
                     <a href="{{ url_for('my_orders') }}">Моите Поръчки</a>
                     {% if current_user.is_admin %}
                         <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
+                    {% endif %}
+                    {% if current_user.is_admin or current_user.is_worker %}
                         <a href="{{ url_for('admin_production_report') }}">Справка Производство</a>
+                        <a href="{{ url_for('list_machines') }}">Машини</a>
                     {% endif %}
                 {% endif %}
             </div>
