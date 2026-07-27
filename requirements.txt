@@ -1,0 +1,9 @@
+flask
+flask-sqlalchemy
+flask-login
+flask-limiter
+werkzeug
+ezdxf
+psycopg2-binary
+python-barcode
+python-dotenv
