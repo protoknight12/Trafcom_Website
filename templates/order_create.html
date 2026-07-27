@@ -49,7 +49,7 @@
                     <button type="button" onclick="openQuickProductModal()" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
                     {% endif %}
                 </div>
-                <select id="cart_product_id" style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px;">
+                <select id="cart_product_id">
                     {% for p in products %}
                     <option value="{{ p.id }}">{{ p.name }}</option>
                     {% else %}
@@ -64,7 +64,7 @@
                     <button type="button" onclick="openQuickDetailModal()" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
                     {% endif %}
                 </div>
-                <select id="cart_detail_id" style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px;">
+                <select id="cart_detail_id">
                     {% for d in details %}
                     <option value="{{ d.id }}">{{ d.name }}</option>
                     {% else %}
@@ -112,7 +112,7 @@
         <form method="POST" id="orderForm" style="margin-top: 24px;">
             <div class="form-group" style="margin-bottom: 20px;">
                 <label for="machine_id">Назначи машина (по избор)</label>
-                <select id="machine_id" name="machine_id" style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px;">
+                <select id="machine_id" name="machine_id">
                     <option value="">-- Без конкретна машина --</option>
                     {% for machine in machines %}
                     <option value="{{ machine.id }}">{{ machine.name }} ({% if machine.status == 'idle' %}Свободна{% elif machine.status == 'running' %}Работи{% else %}Поддръжка{% endif %})</option>
@@ -142,7 +142,7 @@
             </div>
             <div class="form-group" style="margin-bottom: 15px;">
                 <label for="qd_material">Материал</label>
-                <select id="qd_material" name="material" style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px;">
+                <select id="qd_material" name="material">
                     {% for mat in materials %}
                     <option value="{{ mat.key }}">{{ mat.display_name }}</option>
                     {% endfor %}

@@ -661,10 +661,6 @@ def compute_bounding_box(shapes):
                     rad = math.radians(cardinal)
                     expand(cx + r * math.cos(rad), cy + r * math.sin(rad))
 
-        elif s['type'] == 'polyline':
-            for x, y in s['points']:
-                expand(x, y)
-
     if min_x == float('inf'):
         return 0.0, 0.0
     return max_x - min_x, max_y - min_y

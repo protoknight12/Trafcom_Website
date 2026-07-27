@@ -95,10 +95,6 @@ function drawShapes(shapes) {
         } else if (shape.type === 'arc') {
             expand(shape.cx - shape.r, shape.cy - shape.r);
             expand(shape.cx + shape.r, shape.cy + shape.r);
-        } else if (shape.type === 'polyline') {
-            shape.points.forEach(function (pt) {
-                expand(pt[0], pt[1]);
-            });
         }
     });
 
@@ -156,20 +152,6 @@ function drawShapes(shapes) {
             const startRad = -shape.start_angle * Math.PI / 180;
             const endRad = -shape.end_angle * Math.PI / 180;
             ctx.arc(cx, cy, shape.r * scale, endRad, startRad);
-
-        } else if (shape.type === 'polyline') {
-            shape.points.forEach(function (pt, idx) {
-                const [x, y] = toCanvas(pt[0], pt[1]);
-                if (idx === 0) {
-                    ctx.moveTo(x, y);
-                } else {
-                    ctx.lineTo(x, y);
-                }
-            });
-            if (shape.closed && shape.points.length > 0) {
-                const [x0, y0] = toCanvas(shape.points[0][0], shape.points[0][1]);
-                ctx.lineTo(x0, y0);
-            }
         }
 
         ctx.stroke();

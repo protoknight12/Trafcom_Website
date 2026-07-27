@@ -114,7 +114,7 @@
             <div class="form-group" style="margin-bottom: 1.5rem;">
                 <label for="material" style="display: block; margin-bottom: 0.5rem; font-weight: 500;">1. Изберете материал:</label>
                 <select id="material" name="material"
-                        style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px; font-size: 1rem; cursor: pointer;">
+                        style="font-size: 1rem; cursor: pointer;">
                     {% for material in materials %}
                     <option value="{{ material.key }}">{{ material.display_name }}</option>
                     {% endfor %}

@@ -28,7 +28,7 @@
         <form action="{{ url_for('upload') }}" method="POST" enctype="multipart/form-data" class="admin-form">
             <div class="form-group" style="margin-bottom: 20px;">
                 <label for="material">Материал за изчисление *</label>
-                <select name="material" id="material" style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px;" required>
+                <select name="material" id="material" required>
                     {% for mat in materials %}
                     <option value="{{ mat.key }}">{{ mat.display_name }}</option>
                     {% endfor %}
@@ -42,7 +42,7 @@
 
             <div class="form-group" style="margin-bottom: 24px;">
                 <label for="machine_id">Свържи с машина (незадължително)</label>
-                <select name="machine_id" id="machine_id" style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px;">
+                <select name="machine_id" id="machine_id">
                     <option value="">-- Без конкретна машина --</option>
                     {% for machine in machines %}
                     <option value="{{ machine.id }}">{{ machine.name }} ({% if machine.status == 'idle' %}Свободна{% elif machine.status == 'running' %}Работи{% else %}Поддръжка{% endif %})</option>
