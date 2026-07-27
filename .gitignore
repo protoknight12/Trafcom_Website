@@ -5,6 +5,13 @@ __pycache__/
 uploads/
 static/uploads/products/*
 
-# Local-only dev docs/tests - not part of the public site repo
+# Local-only dev docs - not part of the public site repo
 CLAUDE.md
-test_*.py
+
+# One-off local dev/DB-maintenance scripts - not part of the public site repo
+backfill_erp_numbers.py
+migrate_add_detail_label_fields.py
+migrate_add_product_material_label_fields.py
+migrate_add_sheet_dimensions.py
+migrate_erp_number_unique_int.py
+seed_test_data.py
