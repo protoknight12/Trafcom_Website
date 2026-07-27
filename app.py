@@ -2381,15 +2381,10 @@ if __name__ == '__main__':
         # migration (Alembic, or hand-written ALTER TABLE + UPDATE
         # statements) before deploying this version.
         db.create_all()
-        # Автоматично генериране на СИСТЕМЕН АДМИН при липса на такъв
-        admin = User.query.filter_by(username='admin').first()
-        if not admin:
-            db.session.add(User(
-                username='admin',
-                password=generate_password_hash('admin123', method='scrypt'),
-                role='admin'  # Set the role to 'admin'
-            ))
-            db.session.commit()
+        # No auto-created default admin account anymore - a hardcoded
+        # admin/admin123 credential sitting in public source was a real risk.
+        # To create the first admin on a brand-new database, run
+        # change_admin_password.py (creates the user if it doesn't exist yet).
         # Populate the MaterialPrice table with defaults on first run only -
         # existing rows (including any admin-edited prices) are never touched.
         seed_material_prices()
