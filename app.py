@@ -9,6 +9,8 @@ import threading
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import ezdxf
@@ -61,6 +63,11 @@ STATUS_LABELS = {
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
+
+# ponytail: in-memory storage - per-process only, resets on restart and
+# won't be shared across multiple gunicorn/waitress workers. Switch to
+# storage_uri="redis://..." if this ever runs with >1 worker process.
+limiter = Limiter(get_remote_address, app=app, default_limits=["300 per hour"])
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 app.config['PRODUCT_IMAGES_FOLDER'] = os.path.join(app.static_folder, 'uploads', 'products')
@@ -824,6 +831,7 @@ def generator():
 
 
 @app.route('/login', methods=['GET', 'POST'])
+@limiter.limit("10 per minute")
 def login():
     if current_user.is_authenticated:
         return redirect(url_for('index'))
@@ -843,6 +851,7 @@ def login():
 
 
 @app.route('/register', methods=['GET', 'POST'])
+@limiter.limit("5 per hour")
 def register():
     if current_user.is_authenticated:
         return redirect(url_for('index'))
