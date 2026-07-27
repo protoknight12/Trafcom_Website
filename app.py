@@ -1974,7 +1974,7 @@ def generate_barcode_svg(code):
     """
     buf = io.BytesIO()
     barcode.get('code128', str(code), writer=SVGWriter()).write(
-        buf, options={'write_text': False, 'module_height': 12, 'quiet_zone': 1}
+        buf, options={'write_text': False, 'module_height': 8, 'quiet_zone': 1}
     )
     svg = buf.getvalue().decode('utf-8')
     return svg[svg.index('<svg'):]  # drop the XML prolog/doctype so it can be embedded inline
