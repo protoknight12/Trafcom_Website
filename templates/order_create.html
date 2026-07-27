@@ -187,6 +187,13 @@
     const DETAILS = {{ details|tojson }};
     let cart = [];
 
+    function cell(text, opts) {
+        const td = document.createElement('td');
+        td.textContent = text;
+        if (opts && opts.className) td.className = opts.className;
+        return td;
+    }
+
     document.querySelectorAll('input[name="cart_item_type"]').forEach(function (radio) {
         radio.addEventListener('change', function () {
             document.getElementById('product_selector').style.display = this.value === 'product' ? 'block' : 'none';
@@ -246,13 +253,23 @@
             cart.forEach(function (item, idx) {
                 const lineTotal = (item.unitPrice * item.qty).toFixed(2);
                 const tr = document.createElement('tr');
-                tr.innerHTML =
-                    '<td>' + item.name + '</td>' +
-                    '<td>' + (item.type === 'product' ? 'Продукт' : 'Детайл') + '</td>' +
-                    '<td class="text-center">' + item.qty + '</td>' +
-                    '<td class="text-right">' + item.unitPrice.toFixed(2) + ' €</td>' +
-                    '<td class="text-right">' + lineTotal + ' €</td>' +
-                    '<td class="text-right"><button type="button" class="btn-delete" onclick="removeFromCart(' + idx + ')">Премахни</button></td>';
+
+                tr.appendChild(cell(item.name));
+                tr.appendChild(cell(item.type === 'product' ? 'Продукт' : 'Детайл'));
+                tr.appendChild(cell(item.qty, { className: 'text-center' }));
+                tr.appendChild(cell(item.unitPrice.toFixed(2) + ' €', { className: 'text-right' }));
+                tr.appendChild(cell(lineTotal + ' €', { className: 'text-right' }));
+
+                const actionTd = document.createElement('td');
+                actionTd.className = 'text-right';
+                const removeBtn = document.createElement('button');
+                removeBtn.type = 'button';
+                removeBtn.className = 'btn-delete';
+                removeBtn.textContent = 'Премахни';
+                removeBtn.addEventListener('click', function () { removeFromCart(idx); });
+                actionTd.appendChild(removeBtn);
+                tr.appendChild(actionTd);
+
                 body.appendChild(tr);
             });
         }
