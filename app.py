@@ -30,16 +30,16 @@ except ImportError:
 app = Flask(__name__)
 
 # ----------------- APP CONFIGURATION -----------------
-# Prefer environment variables so real secrets never live in source control.
-# The hardcoded values below are fallbacks so the app still runs out-of-the-box
-# in local dev - replace them (via a .env file or real env vars) before
-# deploying anywhere public, and rotate the DB password since it has been
-# shared in plaintext during development.
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'REDACTED_ROTATED_SECRET_KEY')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
-    'DATABASE_URL',
-    'postgresql+psycopg2://postgres:REDACTED_ROTATED_PASSWORD@localhost:5432/cnc_calculator_db'
-)
+# No hardcoded fallbacks - both must come from the environment (.env locally,
+# real env vars in deployment) so secrets never live in source control.
+try:
+    app.config['SECRET_KEY'] = os.environ['SECRET_KEY']
+    app.config['SQLALCHEMY_DATABASE_URI'] = os.environ['DATABASE_URL']
+except KeyError as e:
+    raise RuntimeError(
+        f'Missing required environment variable: {e.args[0]}. '
+        'Set SECRET_KEY and DATABASE_URL (e.g. in a .env file - see .env.example).'
+    ) from e
 app.config['UPLOAD_FOLDER'] = os.path.join(os.getcwd(), 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
@@ -2376,10 +2376,10 @@ if __name__ == '__main__':
         # Populate the MaterialPrice table with defaults on first run only -
         # existing rows (including any admin-edited prices) are never touched.
         seed_material_prices()
-    # Defaults to debug mode for local development. Set FLASK_DEBUG=0 in your
-    # environment before deploying anywhere public - debug mode exposes an
-    # interactive code-execution debugger on unhandled exceptions.
-    debug_mode = os.environ.get('FLASK_DEBUG', '1') == '1'
+    # Off by default - debug mode exposes an interactive code-execution
+    # debugger on unhandled exceptions, so it must be opted into explicitly.
+    # Set FLASK_DEBUG=1 in your environment for local development.
+    debug_mode = os.environ.get('FLASK_DEBUG', '0') == '1'
 
     # Auto-open the app in the browser on startup. When debug_mode is on,
     # Flask's reloader re-runs this entire script in a subprocess - without
