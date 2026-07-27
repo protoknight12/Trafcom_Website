@@ -139,7 +139,7 @@ class MaterialPrice(db.Model):
     # ERP code (shown as text + Code128 barcode) and internal part code (КД №)
     # printed on production labels - see print_label(). Optional/nullable
     # since older rows won't have them.
-    erp_number = db.Column(db.String(50), nullable=True)
+    erp_number = db.Column(db.Integer, nullable=True, unique=True)
     code_number = db.Column(db.String(100), nullable=True)
 
 
@@ -164,7 +164,7 @@ class Detail(db.Model):
     # ERP code (shown as text + Code128 barcode) and internal part code (КД №)
     # printed on production labels - see print_label(). Optional/nullable
     # since older catalog parts won't have these set.
-    erp_number = db.Column(db.String(50), nullable=True)
+    erp_number = db.Column(db.Integer, nullable=True, unique=True)
     code_number = db.Column(db.String(100), nullable=True)
 
     material = db.relationship('MaterialPrice')
@@ -191,7 +191,7 @@ class Product(db.Model):
     # ERP code (shown as text + Code128 barcode) and internal part code (КД №)
     # printed on production labels - see print_label(). Optional/nullable
     # since older rows won't have them.
-    erp_number = db.Column(db.String(50), nullable=True)
+    erp_number = db.Column(db.Integer, nullable=True, unique=True)
     code_number = db.Column(db.String(100), nullable=True)
 
     product_details = db.relationship('ProductDetail', cascade='all, delete-orphan', backref='product', lazy=True)
@@ -1126,6 +1126,70 @@ def _parse_sheet_dimensions(form):
     return values
 
 
+def _next_erp_number():
+    """
+    Auto-generates the next unique ERP №: one past the current max across
+    Detail/Product/MaterialPrice combined (100001 if none exist yet).
+    ponytail: read-then-use rather than a real DB sequence/lock - fine for
+    this app's single-admin-at-a-time usage; add a proper sequence if
+    concurrent creates ever start racing on this.
+    """
+    maxes = [
+        db.session.query(db.func.max(Detail.erp_number)).scalar(),
+        db.session.query(db.func.max(Product.erp_number)).scalar(),
+        db.session.query(db.func.max(MaterialPrice.erp_number)).scalar(),
+    ]
+    current_max = max((m for m in maxes if m is not None), default=100000)
+    return current_max + 1
+
+
+def _parse_erp_number(form):
+    """
+    Reads the optional erp_number field as an int. Blank -> auto-generates
+    the next unique one (see _next_erp_number) instead of leaving it unset,
+    so every Detail/Product/MaterialPrice ends up with an ERP № without
+    forcing admins to invent a number by hand - typing one in still
+    overrides the auto value. Raises ValueError on non-integer input, same
+    pattern as _parse_sheet_dimensions.
+    """
+    raw = form.get('erp_number', '').strip()
+    return int(raw) if raw else _next_erp_number()
+
+
+def _erp_number_conflict(erp_number, exclude_type=None, exclude_id=None):
+    """
+    ERP № must be unique across Detail/Product/MaterialPrice combined, not
+    just within one table - a scanned barcode has to resolve to exactly
+    one record (see erp_lookup()). Returns a human-readable description of
+    whichever row already owns `erp_number`, or None if it's free.
+    exclude_type/exclude_id skip a row's own unchanged value when editing.
+    """
+    if erp_number is None:
+        return None
+
+    detail_q = Detail.query.filter(Detail.erp_number == erp_number)
+    product_q = Product.query.filter(Product.erp_number == erp_number)
+    material_q = MaterialPrice.query.filter(MaterialPrice.erp_number == erp_number)
+
+    if exclude_type == 'detail':
+        detail_q = detail_q.filter(Detail.id != exclude_id)
+    elif exclude_type == 'product':
+        product_q = product_q.filter(Product.id != exclude_id)
+    elif exclude_type == 'material':
+        material_q = material_q.filter(MaterialPrice.id != exclude_id)
+
+    row = detail_q.first()
+    if row:
+        return f'детайл "{row.name}"'
+    row = product_q.first()
+    if row:
+        return f'продукт "{row.name}"'
+    row = material_q.first()
+    if row:
+        return f'материал "{row.display_name}"'
+    return None
+
+
 @app.route('/admin/update_material/<string:key>', methods=['POST'])
 @login_required
 def admin_update_material(key):
@@ -1140,12 +1204,18 @@ def admin_update_material(key):
         cost_per_meter_cut = float(request.form.get('cost_per_meter_cut', ''))
         cost_per_pierce = float(request.form.get('cost_per_pierce', ''))
         sheet_length_mm, sheet_width_mm, thickness_mm = _parse_sheet_dimensions(request.form)
+        erp_number = _parse_erp_number(request.form)
     except ValueError:
-        flash('Всички цени и размери трябва да бъдат валидни числа.', 'danger')
+        flash('Всички цени, размери и ERP № трябва да бъдат валидни числа.', 'danger')
         return redirect(url_for('admin_dashboard'))
 
     if cost_per_m2 < 0 or cost_per_meter_cut < 0 or cost_per_pierce < 0:
         flash('Цените не могат да бъдат отрицателни числа.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    conflict = _erp_number_conflict(erp_number, exclude_type='material', exclude_id=material.id)
+    if conflict:
+        flash(f'ERP № {erp_number} вече се използва от {conflict}.', 'danger')
         return redirect(url_for('admin_dashboard'))
 
     # Round to 2 decimals - keeps prices in a simple, everyday currency
@@ -1156,7 +1226,7 @@ def admin_update_material(key):
     material.sheet_length_mm = sheet_length_mm
     material.sheet_width_mm = sheet_width_mm
     material.thickness_mm = thickness_mm
-    material.erp_number = request.form.get('erp_number', '').strip() or None
+    material.erp_number = erp_number
     material.code_number = request.form.get('code_number', '').strip() or None
     db.session.commit()
 
@@ -1188,12 +1258,18 @@ def admin_add_material():
         cost_per_meter_cut = float(request.form.get('cost_per_meter_cut', ''))
         cost_per_pierce = float(request.form.get('cost_per_pierce', ''))
         sheet_length_mm, sheet_width_mm, thickness_mm = _parse_sheet_dimensions(request.form)
+        erp_number = _parse_erp_number(request.form)
     except ValueError:
-        flash('Всички цени и размери трябва да бъдат валидни числа.', 'danger')
+        flash('Всички цени, размери и ERP № трябва да бъдат валидни числа.', 'danger')
         return redirect(url_for('admin_dashboard'))
 
     if cost_per_m2 < 0 or cost_per_meter_cut < 0 or cost_per_pierce < 0:
         flash('Цените не могат да бъдат отрицателни числа.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    conflict = _erp_number_conflict(erp_number)
+    if conflict:
+        flash(f'ERP № {erp_number} вече се използва от {conflict}.', 'danger')
         return redirect(url_for('admin_dashboard'))
 
     # The key is just an opaque internal identifier (used in DxfFile.material
@@ -1209,7 +1285,7 @@ def admin_add_material():
         sheet_length_mm=sheet_length_mm,
         sheet_width_mm=sheet_width_mm,
         thickness_mm=thickness_mm,
-        erp_number=request.form.get('erp_number', '').strip() or None,
+        erp_number=erp_number,
         code_number=request.form.get('code_number', '').strip() or None
     )
     db.session.add(new_material)
@@ -1336,11 +1412,20 @@ def admin_add_detail():
 
     name = request.form.get('name', '').strip()
     material_key = request.form.get('material', '')
-    erp_number = request.form.get('erp_number', '').strip() or None
+    try:
+        erp_number = _parse_erp_number(request.form)
+    except ValueError:
+        flash('ERP № трябва да бъде цяло число.', 'danger')
+        return redirect(url_for('admin_dashboard'))
     code_number = request.form.get('code_number', '').strip() or None
 
     if not name:
         flash('Моля въведете име на детайла.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    conflict = _erp_number_conflict(erp_number)
+    if conflict:
+        flash(f'ERP № {erp_number} вече се използва от {conflict}.', 'danger')
         return redirect(url_for('admin_dashboard'))
 
     if not MaterialPrice.query.filter_by(key=material_key).first():
@@ -1471,14 +1556,20 @@ def admin_product_update(product_id):
 
     try:
         markup_percent = float(request.form.get('markup_percent', '0') or 0)
+        erp_number = _parse_erp_number(request.form)
     except ValueError:
-        flash('Надценката трябва да бъде валидно число.', 'danger')
+        flash('Надценката и ERP № трябва да бъдат валидни числа.', 'danger')
+        return redirect(url_for('admin_product_edit', product_id=product.id))
+
+    conflict = _erp_number_conflict(erp_number, exclude_type='product', exclude_id=product.id)
+    if conflict:
+        flash(f'ERP № {erp_number} вече се използва от {conflict}.', 'danger')
         return redirect(url_for('admin_product_edit', product_id=product.id))
 
     product.name = name
     product.description = request.form.get('description', '').strip()
     product.markup_percent = round(markup_percent, 2)
-    product.erp_number = request.form.get('erp_number', '').strip() or None
+    product.erp_number = erp_number
     product.code_number = request.form.get('code_number', '').strip() or None
     db.session.commit()
 
@@ -1882,7 +1973,7 @@ def generate_barcode_svg(code):
     library from a CDN - this app has no other runtime CDN dependency.
     """
     buf = io.BytesIO()
-    barcode.get('code128', code, writer=SVGWriter()).write(
+    barcode.get('code128', str(code), writer=SVGWriter()).write(
         buf, options={'write_text': False, 'module_height': 12, 'quiet_zone': 1}
     )
     svg = buf.getvalue().decode('utf-8')
@@ -1905,6 +1996,11 @@ def print_label(target_type, target_id):
     """
     order = None
     quantity = None
+    # The entity that actually owns erp_number/code_number and can be
+    # quick-edited from the label page - for an order item/component this
+    # is the linked Detail, not the order row itself.
+    edit_target_type = None
+    edit_target_id = None
 
     if target_type == 'component':
         row = OrderItemComponent.query.get_or_404(target_id)
@@ -1913,6 +2009,8 @@ def print_label(target_type, target_id):
         order = row.order_item.order
         erp_number = row.detail.erp_number if row.detail else None
         code_number = row.detail.code_number if row.detail else None
+        if row.detail:
+            edit_target_type, edit_target_id = 'detail', row.detail.id
     elif target_type == 'item':
         row = OrderItem.query.get_or_404(target_id)
         if not row.detail:
@@ -1923,36 +2021,126 @@ def print_label(target_type, target_id):
         order = row.order
         erp_number = row.detail.erp_number
         code_number = row.detail.code_number
+        edit_target_type, edit_target_id = 'detail', row.detail.id
     elif target_type == 'detail':
         row = Detail.query.get_or_404(target_id)
         name = row.name
         erp_number = row.erp_number
         code_number = row.code_number
+        edit_target_type, edit_target_id = 'detail', row.id
     elif target_type == 'product':
         row = Product.query.get_or_404(target_id)
         name = row.name
         erp_number = row.erp_number
         code_number = row.code_number
+        edit_target_type, edit_target_id = 'product', row.id
     elif target_type == 'material':
         row = MaterialPrice.query.get_or_404(target_id)
         name = row.display_name
         erp_number = row.erp_number
         code_number = row.code_number
+        edit_target_type, edit_target_id = 'material', row.id
     else:
         flash('Невалиден тип етикет.', 'danger')
         return redirect(url_for('admin_dashboard'))
 
+    return_quantity = None
     if quantity is None:
-        quantity = request.args.get('quantity', 1, type=int) or 1
-        quantity = max(1, quantity)
+        return_quantity = request.args.get('quantity', 1, type=int) or 1
+        quantity = max(1, return_quantity)
 
     barcode_svg = generate_barcode_svg(erp_number) if erp_number else None
 
     return render_template(
         'label.html', order=order, erp_number=erp_number, code_number=code_number,
         name=name, quantity=quantity, barcode_svg=barcode_svg,
-        print_date=datetime.now().strftime('%d/%m/%Y')
+        print_date=datetime.now().strftime('%d/%m/%Y'),
+        edit_target_type=edit_target_type, edit_target_id=edit_target_id,
+        return_target_type=target_type, return_target_id=target_id, return_quantity=return_quantity
     )
+
+
+@app.route('/admin/print-label/<string:edit_target_type>/<int:edit_target_id>/update-codes', methods=['POST'])
+@role_required(['admin', 'worker'])
+def update_label_codes(edit_target_type, edit_target_id):
+    """
+    Quick-edit for ERP №/КД № directly from the label print page, so you
+    don't have to leave it and go back to the admin panel just to fill
+    those in before printing. Always edits the underlying Detail/Product/
+    MaterialPrice row - for an order item/component label that's the
+    linked Detail (see edit_target_type in print_label() above), never the
+    order row itself.
+    """
+    if edit_target_type == 'detail':
+        row = Detail.query.get_or_404(edit_target_id)
+    elif edit_target_type == 'product':
+        row = Product.query.get_or_404(edit_target_id)
+    elif edit_target_type == 'material':
+        row = MaterialPrice.query.get_or_404(edit_target_id)
+    else:
+        flash('Невалиден тип за редакция.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    return_target_type = request.form.get('return_target_type', edit_target_type)
+    return_target_id = request.form.get('return_target_id', edit_target_id, type=int)
+    return_quantity = request.form.get('return_quantity', type=int)
+
+    def _back_to_label():
+        url = url_for('print_label', target_type=return_target_type, target_id=return_target_id)
+        return url + (f'?quantity={return_quantity}' if return_quantity else '')
+
+    try:
+        erp_number = _parse_erp_number(request.form)
+    except ValueError:
+        flash('ERP № трябва да бъде цяло число.', 'danger')
+        return redirect(_back_to_label())
+
+    conflict = _erp_number_conflict(erp_number, exclude_type=edit_target_type, exclude_id=edit_target_id)
+    if conflict:
+        flash(f'ERP № {erp_number} вече се използва от {conflict}.', 'danger')
+        return redirect(_back_to_label())
+
+    row.erp_number = erp_number
+    row.code_number = request.form.get('code_number', '').strip() or None
+    db.session.commit()
+    flash('ERP №/КД № бяха обновени.', 'success')
+
+    url = _back_to_label()
+    return redirect(url)
+
+
+@app.route('/admin/erp-lookup')
+@role_required(['admin', 'worker'])
+def erp_lookup():
+    """
+    Resolves a scanned/typed ERP № to whichever Detail/Product/
+    MaterialPrice owns it and jumps straight there. ERP № is unique across
+    all three tables (see _erp_number_conflict), so this always resolves
+    to at most one record - the barcode itself still just encodes the bare
+    number, since that's what a handheld scanner types into this search
+    box, which is what makes scanning it "point to" the right record.
+    """
+    erp_number = request.args.get('erp_number', type=int)
+    if erp_number is None:
+        flash('Моля въведете валиден ERP № (цяло число).', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    product = Product.query.filter_by(erp_number=erp_number).first()
+    if product:
+        return redirect(url_for('admin_product_edit', product_id=product.id))
+
+    detail = Detail.query.filter_by(erp_number=erp_number).first()
+    if detail:
+        flash(f'Намерен детайл: "{detail.name}" (вижте таблицата с детайли по-долу).', 'success')
+        return redirect(url_for('admin_dashboard'))
+
+    material = MaterialPrice.query.filter_by(erp_number=erp_number).first()
+    if material:
+        flash(f'Намерен материал: "{material.display_name}" (вижте таблицата с материали по-долу).', 'success')
+        return redirect(url_for('admin_dashboard'))
+
+    flash(f'Няма запис с ERP № {erp_number}.', 'danger')
+    return redirect(url_for('admin_dashboard'))
 
 
 # ----------------- QUICK-CREATE API ENDPOINTS -----------------

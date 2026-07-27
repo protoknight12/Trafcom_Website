@@ -54,6 +54,18 @@
     {% endif %}
     {% endwith %}
 
+    <section class="admin-card">
+        <h3>Търсене по ERP №</h3>
+        <p class="section-subtitle">Сканирайте или въведете ERP № от етикет, за да отидете директно на съответния продукт/детайл/материал.</p>
+        <form action="{{ url_for('erp_lookup') }}" method="GET" class="admin-form">
+            <div class="form-group">
+                <label for="erp_lookup_input">ERP №</label>
+                <input type="number" id="erp_lookup_input" name="erp_number" placeholder="напр. 3010001546" autofocus>
+            </div>
+            <button type="submit" class="btn-submit">Търси</button>
+        </form>
+    </section>
+
     <div class="admin-grid">
         <section class="admin-card">
             <h3>Създаване на нов потребител</h3>
@@ -112,8 +124,8 @@
                 <input type="number" id="new_thickness_mm" step="0.1" min="0" name="thickness_mm" placeholder="напр. 2">
             </div>
             <div class="form-group">
-                <label for="new_material_erp_number">ERP № (за етикет, незадължително)</label>
-                <input type="text" id="new_material_erp_number" name="erp_number" placeholder="напр. 3010001546">
+                <label for="new_material_erp_number">ERP № (незадължително - оставете празно за автоматично генериране)</label>
+                <input type="number" id="new_material_erp_number" name="erp_number" placeholder="автоматично">
             </div>
             <div class="form-group">
                 <label for="new_material_code_number">КД № (за етикет, незадължително)</label>
@@ -166,8 +178,8 @@
                             <input type="number" step="0.1" min="0" name="thickness_mm"
                                    value="{{ material.thickness_mm if material.thickness_mm is not none else '' }}"
                                    class="material-price-input" placeholder="мм">
-                            <input type="text" name="erp_number" value="{{ material.erp_number or '' }}"
-                                   class="material-price-input" placeholder="ERP №">
+                            <input type="number" name="erp_number" value="{{ material.erp_number or '' }}"
+                                   class="material-price-input" placeholder="автоматично">
                             <input type="text" name="code_number" value="{{ material.code_number or '' }}"
                                    class="material-price-input" placeholder="КД №">
                             <button type="submit" class="btn-save-price">Запази</button>
@@ -220,8 +232,8 @@
                 <input type="file" id="detail_file" name="file" accept=".dxf" required>
             </div>
             <div class="form-group">
-                <label for="detail_erp_number">ERP № (за етикет, незадължително)</label>
-                <input type="text" id="detail_erp_number" name="erp_number" placeholder="напр. 3010001546">
+                <label for="detail_erp_number">ERP № (незадължително - оставете празно за автоматично генериране)</label>
+                <input type="number" id="detail_erp_number" name="erp_number" placeholder="автоматично">
             </div>
             <div class="form-group">
                 <label for="detail_code_number">КД № (за етикет, незадължително)</label>

@@ -51,8 +51,8 @@
                 <input type="number" id="markup_percent" name="markup_percent" step="0.1" min="0" value="{{ product.markup_percent }}">
             </div>
             <div class="form-group">
-                <label for="erp_number">ERP № (за етикет, незадължително)</label>
-                <input type="text" id="erp_number" name="erp_number" value="{{ product.erp_number or '' }}">
+                <label for="erp_number">ERP № (оставете празно за автоматично генериране)</label>
+                <input type="number" id="erp_number" name="erp_number" value="{{ product.erp_number or '' }}" placeholder="автоматично">
             </div>
             <div class="form-group">
                 <label for="code_number">КД № (за етикет, незадължително)</label>
