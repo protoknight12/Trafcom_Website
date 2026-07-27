@@ -126,6 +126,13 @@ class MaterialPrice(db.Model):
     cost_per_m2 = db.Column(db.Float, nullable=False)
     cost_per_meter_cut = db.Column(db.Float, nullable=False)
     cost_per_pierce = db.Column(db.Float, nullable=False)
+    # Standard stock sheet size this material entry represents (mm). Purely
+    # informational catalog data - pricing still runs off the cut part's own
+    # geometry (calculate_cnc_price), not off these. Optional/nullable since
+    # older rows and non-sheet materials won't have them.
+    sheet_length_mm = db.Column(db.Float, nullable=True)
+    sheet_width_mm = db.Column(db.Float, nullable=True)
+    thickness_mm = db.Column(db.Float, nullable=True)
 
 
 class Detail(db.Model):
@@ -1085,6 +1092,22 @@ def admin_update_user_role(user_id):
     return redirect(url_for('admin_dashboard'))
 
 
+def _parse_sheet_dimensions(form):
+    """
+    Reads the optional sheet_length_mm/sheet_width_mm/thickness_mm fields.
+    All three are optional (blank -> None) since not every material entry
+    represents a specific stock size. Raises ValueError on non-numeric input,
+    same as the required cost fields, so callers can catch it in one place.
+    """
+    values = []
+    for field in ('sheet_length_mm', 'sheet_width_mm', 'thickness_mm'):
+        raw = form.get(field, '').strip()
+        values.append(float(raw) if raw else None)
+        if values[-1] is not None and values[-1] < 0:
+            raise ValueError(f'{field} must not be negative')
+    return values
+
+
 @app.route('/admin/update_material/<string:key>', methods=['POST'])
 @login_required
 def admin_update_material(key):
@@ -1098,8 +1121,9 @@ def admin_update_material(key):
         cost_per_m2 = float(request.form.get('cost_per_m2', ''))
         cost_per_meter_cut = float(request.form.get('cost_per_meter_cut', ''))
         cost_per_pierce = float(request.form.get('cost_per_pierce', ''))
+        sheet_length_mm, sheet_width_mm, thickness_mm = _parse_sheet_dimensions(request.form)
     except ValueError:
-        flash('Всички цени трябва да бъдат валидни числа.', 'danger')
+        flash('Всички цени и размери трябва да бъдат валидни числа.', 'danger')
         return redirect(url_for('admin_dashboard'))
 
     if cost_per_m2 < 0 or cost_per_meter_cut < 0 or cost_per_pierce < 0:
@@ -1111,6 +1135,9 @@ def admin_update_material(key):
     material.cost_per_m2 = round(cost_per_m2, 2)
     material.cost_per_meter_cut = round(cost_per_meter_cut, 2)
     material.cost_per_pierce = round(cost_per_pierce, 2)
+    material.sheet_length_mm = sheet_length_mm
+    material.sheet_width_mm = sheet_width_mm
+    material.thickness_mm = thickness_mm
     db.session.commit()
 
     flash(f'Цените за "{material.display_name}" бяха обновени успешно.', 'success')
@@ -1140,8 +1167,9 @@ def admin_add_material():
         cost_per_m2 = float(request.form.get('cost_per_m2', ''))
         cost_per_meter_cut = float(request.form.get('cost_per_meter_cut', ''))
         cost_per_pierce = float(request.form.get('cost_per_pierce', ''))
+        sheet_length_mm, sheet_width_mm, thickness_mm = _parse_sheet_dimensions(request.form)
     except ValueError:
-        flash('Всички цени трябва да бъдат валидни числа.', 'danger')
+        flash('Всички цени и размери трябва да бъдат валидни числа.', 'danger')
         return redirect(url_for('admin_dashboard'))
 
     if cost_per_m2 < 0 or cost_per_meter_cut < 0 or cost_per_pierce < 0:
@@ -1157,7 +1185,10 @@ def admin_add_material():
         display_name=display_name,
         cost_per_m2=round(cost_per_m2, 2),
         cost_per_meter_cut=round(cost_per_meter_cut, 2),
-        cost_per_pierce=round(cost_per_pierce, 2)
+        cost_per_pierce=round(cost_per_pierce, 2),
+        sheet_length_mm=sheet_length_mm,
+        sheet_width_mm=sheet_width_mm,
+        thickness_mm=thickness_mm
     )
     db.session.add(new_material)
     db.session.flush()  # assigns new_material.id without a full commit yet

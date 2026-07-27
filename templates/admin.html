@@ -136,6 +136,18 @@
                 <label for="new_cost_per_pierce">Цена на пробиване (€)</label>
                 <input type="number" id="new_cost_per_pierce" step="0.01" min="0" name="cost_per_pierce" placeholder="напр. 0.20" required>
             </div>
+            <div class="form-group">
+                <label for="new_sheet_length_mm">Дължина на плочата (мм)</label>
+                <input type="number" id="new_sheet_length_mm" step="1" min="0" name="sheet_length_mm" placeholder="напр. 3000">
+            </div>
+            <div class="form-group">
+                <label for="new_sheet_width_mm">Ширина на плочата (мм)</label>
+                <input type="number" id="new_sheet_width_mm" step="1" min="0" name="sheet_width_mm" placeholder="напр. 1500">
+            </div>
+            <div class="form-group">
+                <label for="new_thickness_mm">Дебелина (мм)</label>
+                <input type="number" id="new_thickness_mm" step="0.1" min="0" name="thickness_mm" placeholder="напр. 2">
+            </div>
             <button type="submit" class="btn-submit">Добави материал</button>
         </form>
     </section>
@@ -152,6 +164,9 @@
                     <th>Цена на м² плоча (€)</th>
                     <th>Цена на метър рязане (€)</th>
                     <th>Цена на пробиване (€)</th>
+                    <th>Дължина (мм)</th>
+                    <th>Ширина (мм)</th>
+                    <th>Дебелина (мм)</th>
                     <th class="text-right">Действие</th>
                     <th class="text-right">Изтриване</th>
                 </tr>
@@ -160,7 +175,7 @@
                 {% for material in materials %}
                 <tr>
                     <td><strong>{{ material.display_name }}</strong></td>
-                    <td colspan="4">
+                    <td colspan="7">
                         <form action="{{ url_for('admin_update_material', key=material.key) }}" method="POST" class="material-row-form">
                             <input type="number" step="0.01" min="0" name="cost_per_m2"
                                    value="{{ '%.2f'|format(material.cost_per_m2) }}" class="material-price-input" required>
@@ -168,6 +183,15 @@
                                    value="{{ '%.2f'|format(material.cost_per_meter_cut) }}" class="material-price-input" required>
                             <input type="number" step="0.01" min="0" name="cost_per_pierce"
                                    value="{{ '%.2f'|format(material.cost_per_pierce) }}" class="material-price-input" required>
+                            <input type="number" step="1" min="0" name="sheet_length_mm"
+                                   value="{{ material.sheet_length_mm|int if material.sheet_length_mm is not none else '' }}"
+                                   class="material-price-input" placeholder="мм">
+                            <input type="number" step="1" min="0" name="sheet_width_mm"
+                                   value="{{ material.sheet_width_mm|int if material.sheet_width_mm is not none else '' }}"
+                                   class="material-price-input" placeholder="мм">
+                            <input type="number" step="0.1" min="0" name="thickness_mm"
+                                   value="{{ material.thickness_mm if material.thickness_mm is not none else '' }}"
+                                   class="material-price-input" placeholder="мм">
                             <button type="submit" class="btn-save-price">Запази</button>
                         </form>
                     </td>
@@ -180,7 +204,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="6" class="text-center no-data">
+                    <td colspan="9" class="text-center no-data">
                         Няма конфигурирани материали.
                     </td>
                 </tr>
