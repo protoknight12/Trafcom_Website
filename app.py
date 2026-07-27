@@ -812,6 +812,14 @@ def role_required(roles):
 
 # ----------------- МАРШРУТИ И ЛОГИКА -----------------
 
+@app.route('/robots.txt')
+def robots_txt():
+    # Everything except '/' requires login anyway, so there's nothing for a
+    # crawler to reach that auth doesn't already gate - allow indexing so
+    # customers can actually find the site via search.
+    return app.response_class('User-agent: *\nAllow: /\n', mimetype='text/plain')
+
+
 @app.route('/')
 def index():
     # Both anonymous and logged-in visitors see the public landing page now -
