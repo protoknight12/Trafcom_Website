@@ -4,3 +4,7 @@ __pycache__/
 .env
 uploads/
 static/uploads/products/*
+
+# Local-only dev docs/tests - not part of the public site repo
+CLAUDE.md
+test_*.py
