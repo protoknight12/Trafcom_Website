@@ -9,7 +9,7 @@
         <div class="nav-links" id="navLinks">
             <div class="nav-section-links">
                 <div class="dropdown">
-                    <a class="dropdown-trigger" href="#" tabindex="0" onclick="event.preventDefault()">Приложения <span class="dropdown-arrow">▼</span></a>
+                    <a class="dropdown-trigger {{ 'active-nav-link' if active_page == 'generator' else '' }}" href="#" tabindex="0" onclick="event.preventDefault()">Приложения <span class="dropdown-arrow">▼</span></a>
                     <div class="dropdown-content">
                         <a href="{{ url_for('dashboard') }}">DXF CNC Калкулатор</a>
                         <a href="{{ url_for('generator') }}">Параметричен Генератор</a>
@@ -23,12 +23,17 @@
                     <a href="{{ url_for('create_order') }}" class="{{ 'active-nav-link' if active_page == 'create_order' else '' }}">Нова Поръчка</a>
                     <a href="{{ url_for('my_orders') }}" class="{{ 'active-nav-link' if active_page == 'my_orders' else '' }}">Моите Поръчки</a>
 
-                    {% if current_user.is_admin %}
-                        <a href="{{ url_for('admin_dashboard') }}" class="{{ 'active-nav-link' if active_page == 'admin' else '' }}">Админ Панел</a>
-                    {% endif %}
                     {% if current_user.is_admin or current_user.is_worker %}
-                        <a href="{{ url_for('admin_production_report') }}" class="{{ 'active-nav-link' if active_page == 'production' else '' }}">Справка Производство</a>
-                        <a href="{{ url_for('list_machines') }}" class="{{ 'active-nav-link' if active_page == 'machines' else '' }}">Машини</a>
+                        <div class="dropdown">
+                            <a class="dropdown-trigger {{ 'active-nav-link' if active_page in ['admin', 'production', 'machines'] else '' }}" href="#" tabindex="0" onclick="event.preventDefault()">Управление <span class="dropdown-arrow">▼</span></a>
+                            <div class="dropdown-content">
+                                {% if current_user.is_admin %}
+                                    <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
+                                {% endif %}
+                                <a href="{{ url_for('admin_production_report') }}">Справка Производство</a>
+                                <a href="{{ url_for('list_machines') }}">Машини</a>
+                            </div>
+                        </div>
                     {% endif %}
                 {% else %}
                     <a href="#">Услуги</a>

@@ -45,32 +45,7 @@
     </style>
 </head>
 <body>
-<nav class="navbar">
-    <div class="nav-container">
-        <h2>TRAFCOM</h2>
-        <div class="nav-links">
-            <div class="nav-section-links">
-                <a href="{{ url_for('index') }}">Начало</a>
-                <a href="{{ url_for('dashboard') }}">Чертежи</a>
-                <a href="{{ url_for('list_machines') }}" class="active">Машини</a>
-                {% if current_user.is_admin %}
-                    <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
-                {% endif %}
-                {% if current_user.is_admin or current_user.is_worker %}
-                    <a href="{{ url_for('admin_production_report') }}">Справка Производство</a>
-                {% endif %}
-            </div>
-            <div class="nav-cta-buttons">
-                {% if current_user.is_admin %}
-                    <span class="user-badge" style="border-color: var(--danger-border); color: #ff7675;">СЕСИЯ: АДМИНИСТРАТОР</span>
-                {% else %}
-                    <span class="user-badge">{{ current_user.username }}</span>
-                {% endif %}
-                <a href="{{ url_for('logout') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Изход</a>
-            </div>
-        </div>
-    </div>
-</nav>
+{% include 'partials/navbar.html' %}
 
 <main class="admin-container" style="max-width: 900px; margin: 40px auto; padding: 0 15px;">
 

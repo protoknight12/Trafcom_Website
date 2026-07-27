@@ -15,28 +15,7 @@
     </style>
 </head>
 <body>
-<nav class="navbar">
-    <div class="nav-container">
-        <h2>TRAFCOM</h2>
-        <div class="nav-links">
-            <div class="nav-section-links">
-                <a href="{{ url_for('dashboard') }}">Чертежи</a>
-                <a href="{{ url_for('create_order') }}" class="active">Нова Поръчка</a>
-                <a href="{{ url_for('my_orders') }}">Моите Поръчки</a>
-                {% if current_user.is_admin %}
-                    <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
-                {% endif %}
-                {% if current_user.is_admin or current_user.is_worker %}
-                    <a href="{{ url_for('admin_production_report') }}">Справка Производство</a>
-                    <a href="{{ url_for('list_machines') }}">Машини</a>
-                {% endif %}
-            </div>
-            <div class="nav-cta-buttons">
-                <a href="{{ url_for('logout') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Изход</a>
-            </div>
-        </div>
-    </div>
-</nav>
+{% include 'partials/navbar.html' %}
 
 <main class="admin-container" style="max-width: 800px; margin: 40px auto; padding: 0 15px;">
 
@@ -67,7 +46,7 @@
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <label for="cart_product_id" style="margin-bottom: 0;">Продукт *</label>
                     {% if current_user.is_admin %}
-                    <button type="button" onclick="openQuickProductModal()" style="font-size: 0.75rem; padding: 4px 8px; background: var(--gradient-purple); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
+                    <button type="button" onclick="openQuickProductModal()" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
                     {% endif %}
                 </div>
                 <select id="cart_product_id" style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px;">
@@ -82,7 +61,7 @@
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <label for="cart_detail_id" style="margin-bottom: 0;">Детайл *</label>
                     {% if current_user.is_admin %}
-                    <button type="button" onclick="openQuickDetailModal()" style="font-size: 0.75rem; padding: 4px 8px; background: var(--gradient-purple); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
+                    <button type="button" onclick="openQuickDetailModal()" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
                     {% endif %}
                 </div>
                 <select id="cart_detail_id" style="width: 100%; padding: 0.75rem; background-color: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px;">

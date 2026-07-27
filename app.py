@@ -3,6 +3,7 @@ import os
 import json
 import math
 import uuid
+import io
 import webbrowser
 import threading
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
@@ -14,6 +15,8 @@ import ezdxf
 from ezdxf import bbox
 from ezdxf.math import bulge_to_arc
 import random
+import barcode
+from barcode.writer import SVGWriter
 
 # Optional: load a local .env file if python-dotenv is installed, so secrets
 # can be kept out of source control. Safe no-op if the package isn't present.
@@ -153,6 +156,11 @@ class Detail(db.Model):
     pierce_count = db.Column(db.Integer, nullable=False)
     calculated_price = db.Column(db.Float, nullable=False)
     geometry_json = db.Column(db.Text, nullable=True)
+    # ERP code (shown as text + Code128 barcode) and internal part code (КД №)
+    # printed on production labels - see print_label(). Optional/nullable
+    # since older catalog parts won't have these set.
+    erp_number = db.Column(db.String(50), nullable=True)
+    code_number = db.Column(db.String(100), nullable=True)
 
     material = db.relationship('MaterialPrice')
 
@@ -1314,6 +1322,8 @@ def admin_add_detail():
 
     name = request.form.get('name', '').strip()
     material_key = request.form.get('material', '')
+    erp_number = request.form.get('erp_number', '').strip() or None
+    code_number = request.form.get('code_number', '').strip() or None
 
     if not name:
         flash('Моля въведете име на детайла.', 'danger')
@@ -1348,7 +1358,8 @@ def admin_add_detail():
         new_detail = Detail(
             name=name, material_key=material_key, width=width, height=height,
             total_length=total_length, pierce_count=pierce_count,
-            calculated_price=price, geometry_json=json.dumps(shapes)
+            calculated_price=price, geometry_json=json.dumps(shapes),
+            erp_number=erp_number, code_number=code_number
         )
         db.session.add(new_detail)
         db.session.commit()
@@ -1845,6 +1856,58 @@ def admin_production_report():
     orders = Order.query.filter(Order.status != 'cancelled').order_by(Order.created_at.desc()).all()
     machines = Machine.query.order_by(Machine.name).all()
     return render_template('production_report.html', orders=orders, machines=machines, active_page='production')
+
+
+def generate_barcode_svg(code):
+    """
+    Renders `code` as an inline Code128 SVG barcode string for the label
+    print page. Uses python-barcode (small, well-tested, pure-Python)
+    instead of hand-rolling the Code128 bit tables or pulling a JS barcode
+    library from a CDN - this app has no other runtime CDN dependency.
+    """
+    buf = io.BytesIO()
+    barcode.get('code128', code, writer=SVGWriter()).write(
+        buf, options={'write_text': False, 'module_height': 12, 'quiet_zone': 1}
+    )
+    svg = buf.getvalue().decode('utf-8')
+    return svg[svg.index('<svg'):]  # drop the XML prolog/doctype so it can be embedded inline
+
+
+@app.route('/admin/print-label/<string:target_type>/<int:target_id>')
+@role_required(['admin', 'worker'])
+def print_label(target_type, target_id):
+    """
+    Renders a printable production label (see label.html) for one produced
+    batch - either a standalone-Detail OrderItem or one Product's
+    OrderItemComponent. Same target_type/target_id convention as
+    admin_production_report's POST handler above, so the print button can
+    sit right next to the existing quantity_produced input for that row.
+    """
+    if target_type == 'component':
+        row = OrderItemComponent.query.get_or_404(target_id)
+        detail = row.detail
+        name = row.detail_name_snapshot
+        quantity = row.quantity_produced
+        order = row.order_item.order
+    elif target_type == 'item':
+        row = OrderItem.query.get_or_404(target_id)
+        detail = row.detail
+        if not detail:
+            flash('Този артикул е продукт, а не самостоятелен детайл - етикет не може да бъде отпечатан за него.', 'danger')
+            return redirect(url_for('admin_production_report'))
+        name = detail.name
+        quantity = row.quantity_produced
+        order = row.order
+    else:
+        flash('Невалиден тип етикет.', 'danger')
+        return redirect(url_for('admin_production_report'))
+
+    barcode_svg = generate_barcode_svg(detail.erp_number) if detail and detail.erp_number else None
+
+    return render_template(
+        'label.html', order=order, detail=detail, name=name, quantity=quantity,
+        barcode_svg=barcode_svg, print_date=datetime.now().strftime('%d/%m/%Y')
+    )
 
 
 # ----------------- QUICK-CREATE API ENDPOINTS -----------------

@@ -7,9 +7,7 @@
     --bg-input: #1a1f30;          /* Distinct dark fill for form inputs */
 
     --accent-primary: #7c3aed;    /* Core vivid purple */
-    --accent-secondary: #a855f7;  /* Light violet for gradients */
-    --gradient-purple: linear-gradient(135deg, #6d28d9 0%, #a855f7 100%);
-    --gradient-purple-hover: linear-gradient(135deg, #5b21b6 0%, #9333ea 100%);
+    --accent-secondary: #a855f7;  /* Light violet, used for hover/accent states */
 
     --text-main: #f8fafc;         /* Bright off-white for high legibility */
     --text-muted: #94a3b8;        /* Slate gray for secondary text */
@@ -28,7 +26,6 @@
     --border-radius-lg: 16px;
 
     --border-color: #262f45;      /* Low-contrast border for clean gridlines */
-    --glow-shadow: 0 0 15px rgba(124, 58, 237, 0.25);
 }
 
 /* Base Body Reset */
@@ -79,9 +76,7 @@ body {
     font-size: 1.3rem;
     font-weight: 700;
     letter-spacing: -0.5px;
-    background: var(--gradient-purple);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+    color: var(--text-main);
 }
 .nav-links {
     display: flex;
@@ -132,25 +127,48 @@ body {
 /* ==========================================================================
    FORMS & INPUT ARCHITECTURE
    ========================================================================== */
-.admin-form, .login-form {
+.login-form {
     max-width: 100%;
+}
+/* Admin forms lay out their fields as a responsive grid (same auto-fit
+   idiom as .app-grid/.machine-grid) instead of one field per full-width
+   row - a 7-field form like "add material" would otherwise be a long
+   vertical scroll. */
+.admin-form {
+    max-width: 100%;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 4px 20px;
+    align-items: start;
+}
+.admin-form > button {
+    grid-column: 1 / -1;
+    justify-self: start;
+    margin-top: 4px;
+}
+.admin-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 24px;
 }
 .form-group {
     margin-bottom: 20px;
     display: flex;
     flex-direction: column;
 }
+.admin-form .form-group {
+    margin-bottom: 16px;
+}
 .form-group label {
-    font-size: 0.85rem;
+    font-size: 0.88rem;
     font-weight: 600;
     margin-bottom: 8px;
     color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
 }
 .form-group input[type="text"],
 .form-group input[type="password"],
-.form-group input[type="number"] {
+.form-group input[type="number"],
+.form-group select {
     background-color: var(--bg-input);
     border: 1px solid var(--border-color);
     color: var(--text-main);
@@ -158,11 +176,14 @@ body {
     border-radius: var(--border-radius-sm);
     font-size: 0.95rem;
     outline: none;
+    width: 100%;
+    box-sizing: border-box;
     transition: all 0.2s ease;
 }
-.form-group input:focus {
+.form-group input:focus,
+.form-group select:focus {
     border-color: var(--accent-secondary);
-    box-shadow: var(--glow-shadow);
+    box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.15);
 }
 .checkbox-group {
     flex-direction: row;
@@ -195,18 +216,15 @@ button, .btn {
     border: none;
 }
 
-/* Master Purple Gradients */
 .btn-submit, .btn-primary {
-    background: var(--gradient-purple);
+    background-color: var(--accent-primary);
     color: var(--text-main);
     padding: 12px 24px;
     border-radius: var(--border-radius-sm);
-    box-shadow: 0 4px 12px rgba(124, 58, 237, 0.2);
 }
 .btn-submit:hover, .btn-primary:hover {
-    background: var(--gradient-purple-hover);
+    background-color: var(--accent-secondary);
     transform: translateY(-1px);
-    box-shadow: var(--glow-shadow);
 }
 
 /* Secondary Button Framework */
@@ -280,12 +298,10 @@ button, .btn {
    ========================================================================== */
 .badge {
     padding: 4px 12px;
-    border-radius: 50px;
-    font-size: 0.75rem;
-    font-weight: 700;
+    border-radius: var(--border-radius-sm);
+    font-size: 0.78rem;
+    font-weight: 600;
     display: inline-block;
-    letter-spacing: 0.3px;
-    text-transform: uppercase;
 }
 .badge-admin {
     background-color: rgba(124, 58, 237, 0.15);
@@ -308,12 +324,10 @@ button, .btn {
    the same way just outside the users table. Color is set inline per use. */
 .user-badge {
     padding: 6px 14px;
-    border-radius: 50px;
-    font-size: 0.75rem;
-    font-weight: 700;
+    border-radius: var(--border-radius-sm);
+    font-size: 0.78rem;
+    font-weight: 600;
     display: inline-block;
-    letter-spacing: 0.3px;
-    text-transform: uppercase;
     border: 1px solid var(--border-color);
     background-color: rgba(255, 255, 255, 0.03);
 }
@@ -395,7 +409,6 @@ button, .btn {
 .upload-dropzone:hover {
     border-color: var(--accent-secondary);
     background-color: rgba(124, 58, 237, 0.02);
-    box-shadow: var(--glow-shadow);
 }
 
 /* ==========================================================================
@@ -413,10 +426,8 @@ button, .btn {
 .nav-section-links a {
     color: var(--text-muted);
     text-decoration: none;
-    font-size: 0.82rem;
-    font-weight: 700;
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
+    font-size: 0.9rem;
+    font-weight: 600;
     transition: color 0.2s ease;
 }
 .nav-section-links a:hover {
@@ -441,9 +452,7 @@ button, .btn {
     font-weight: 800;
     letter-spacing: -0.5px;
     margin: 0 0 12px;
-    background: var(--gradient-purple);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+    color: var(--text-main);
 }
 .hero-section p {
     color: var(--text-muted);
@@ -702,9 +711,7 @@ button, .btn {
 }
 
 .text-glow {
-    background: var(--gradient-purple);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+    color: var(--accent-secondary);
 }
 
 .hero-lead {
@@ -742,8 +749,6 @@ button, .btn {
     font-size: 0.85rem;
     font-weight: 600;
     color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
 }
 
 /* --- Showcase Section Structure --- */
@@ -898,7 +903,7 @@ button, .btn {
     left: 0;
     width: 100%;
     height: 2px;
-    background: var(--gradient-purple);
+    background-color: var(--accent-secondary);
 }
 
 /* ==========================================================================
@@ -928,6 +933,24 @@ button, .btn {
 .nav-toggle[aria-expanded="true"] span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
 .nav-toggle[aria-expanded="true"] span:nth-child(2) { opacity: 0; }
 .nav-toggle[aria-expanded="true"] span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
+@media (max-width: 640px) {
+    .admin-container, .dashboard-container {
+        padding: 0 12px;
+        margin: 24px auto;
+    }
+    .admin-card, .dashboard-card {
+        padding: 16px;
+    }
+    .material-price-input {
+        width: 80px;
+    }
+    .users-table th, .data-table th,
+    .users-table td, .data-table td {
+        padding: 10px;
+        font-size: 0.85rem;
+    }
+}
 
 @media (max-width: 900px) {
     .nav-toggle {
