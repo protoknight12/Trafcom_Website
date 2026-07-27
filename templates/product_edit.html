@@ -50,8 +50,17 @@
                 <label for="markup_percent">Надценка (%)</label>
                 <input type="number" id="markup_percent" name="markup_percent" step="0.1" min="0" value="{{ product.markup_percent }}">
             </div>
+            <div class="form-group">
+                <label for="erp_number">ERP № (за етикет, незадължително)</label>
+                <input type="text" id="erp_number" name="erp_number" value="{{ product.erp_number or '' }}">
+            </div>
+            <div class="form-group">
+                <label for="code_number">КД № (за етикет, незадължително)</label>
+                <input type="text" id="code_number" name="code_number" value="{{ product.code_number or '' }}">
+            </div>
             <button type="submit" class="btn-submit">Запази промените</button>
         </form>
+        <a href="{{ url_for('print_label', target_type='product', target_id=product.id, quantity=1) }}" class="btn-secondary" style="display: inline-block; margin-top: 1rem; padding: 10px 18px; border-radius: var(--border-radius-sm); font-size: 0.85rem; text-decoration: none;">Печат на етикет</a>
     </section>
 
     <section class="admin-card">

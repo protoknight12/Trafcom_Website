@@ -136,6 +136,11 @@ class MaterialPrice(db.Model):
     sheet_length_mm = db.Column(db.Float, nullable=True)
     sheet_width_mm = db.Column(db.Float, nullable=True)
     thickness_mm = db.Column(db.Float, nullable=True)
+    # ERP code (shown as text + Code128 barcode) and internal part code (КД №)
+    # printed on production labels - see print_label(). Optional/nullable
+    # since older rows won't have them.
+    erp_number = db.Column(db.String(50), nullable=True)
+    code_number = db.Column(db.String(100), nullable=True)
 
 
 class Detail(db.Model):
@@ -183,6 +188,11 @@ class Product(db.Model):
     name = db.Column(db.String(150), nullable=False)
     description = db.Column(db.Text, nullable=True)
     markup_percent = db.Column(db.Float, nullable=False, default=0.0)
+    # ERP code (shown as text + Code128 barcode) and internal part code (КД №)
+    # printed on production labels - see print_label(). Optional/nullable
+    # since older rows won't have them.
+    erp_number = db.Column(db.String(50), nullable=True)
+    code_number = db.Column(db.String(100), nullable=True)
 
     product_details = db.relationship('ProductDetail', cascade='all, delete-orphan', backref='product', lazy=True)
     extra_costs = db.relationship('ProductExtraCost', cascade='all, delete-orphan', backref='product', lazy=True)
@@ -1146,6 +1156,8 @@ def admin_update_material(key):
     material.sheet_length_mm = sheet_length_mm
     material.sheet_width_mm = sheet_width_mm
     material.thickness_mm = thickness_mm
+    material.erp_number = request.form.get('erp_number', '').strip() or None
+    material.code_number = request.form.get('code_number', '').strip() or None
     db.session.commit()
 
     flash(f'Цените за "{material.display_name}" бяха обновени успешно.', 'success')
@@ -1196,7 +1208,9 @@ def admin_add_material():
         cost_per_pierce=round(cost_per_pierce, 2),
         sheet_length_mm=sheet_length_mm,
         sheet_width_mm=sheet_width_mm,
-        thickness_mm=thickness_mm
+        thickness_mm=thickness_mm,
+        erp_number=request.form.get('erp_number', '').strip() or None,
+        code_number=request.form.get('code_number', '').strip() or None
     )
     db.session.add(new_material)
     db.session.flush()  # assigns new_material.id without a full commit yet
@@ -1464,6 +1478,8 @@ def admin_product_update(product_id):
     product.name = name
     product.description = request.form.get('description', '').strip()
     product.markup_percent = round(markup_percent, 2)
+    product.erp_number = request.form.get('erp_number', '').strip() or None
+    product.code_number = request.form.get('code_number', '').strip() or None
     db.session.commit()
 
     flash('Продуктът беше обновен успешно.', 'success')
@@ -1877,36 +1893,65 @@ def generate_barcode_svg(code):
 @role_required(['admin', 'worker'])
 def print_label(target_type, target_id):
     """
-    Renders a printable production label (see label.html) for one produced
-    batch - either a standalone-Detail OrderItem or one Product's
-    OrderItemComponent. Same target_type/target_id convention as
-    admin_production_report's POST handler above, so the print button can
-    sit right next to the existing quantity_produced input for that row.
+    Renders a printable label (see label.html) for one of:
+    - 'item' / 'component': a produced batch on an order (standalone-Detail
+      OrderItem or one Product's OrderItemComponent) - quantity comes from
+      quantity_produced, same target_type/target_id convention as
+      admin_production_report's POST handler above.
+    - 'detail' / 'product' / 'material': a catalog entry printed on its own,
+      with no order context - quantity comes from the ?quantity= query
+      param (a plain GET param since this is a browser-navigated print
+      page, not a form post).
     """
+    order = None
+    quantity = None
+
     if target_type == 'component':
         row = OrderItemComponent.query.get_or_404(target_id)
-        detail = row.detail
         name = row.detail_name_snapshot
         quantity = row.quantity_produced
         order = row.order_item.order
+        erp_number = row.detail.erp_number if row.detail else None
+        code_number = row.detail.code_number if row.detail else None
     elif target_type == 'item':
         row = OrderItem.query.get_or_404(target_id)
-        detail = row.detail
-        if not detail:
+        if not row.detail:
             flash('Този артикул е продукт, а не самостоятелен детайл - етикет не може да бъде отпечатан за него.', 'danger')
             return redirect(url_for('admin_production_report'))
-        name = detail.name
+        name = row.detail.name
         quantity = row.quantity_produced
         order = row.order
+        erp_number = row.detail.erp_number
+        code_number = row.detail.code_number
+    elif target_type == 'detail':
+        row = Detail.query.get_or_404(target_id)
+        name = row.name
+        erp_number = row.erp_number
+        code_number = row.code_number
+    elif target_type == 'product':
+        row = Product.query.get_or_404(target_id)
+        name = row.name
+        erp_number = row.erp_number
+        code_number = row.code_number
+    elif target_type == 'material':
+        row = MaterialPrice.query.get_or_404(target_id)
+        name = row.display_name
+        erp_number = row.erp_number
+        code_number = row.code_number
     else:
         flash('Невалиден тип етикет.', 'danger')
-        return redirect(url_for('admin_production_report'))
+        return redirect(url_for('admin_dashboard'))
 
-    barcode_svg = generate_barcode_svg(detail.erp_number) if detail and detail.erp_number else None
+    if quantity is None:
+        quantity = request.args.get('quantity', 1, type=int) or 1
+        quantity = max(1, quantity)
+
+    barcode_svg = generate_barcode_svg(erp_number) if erp_number else None
 
     return render_template(
-        'label.html', order=order, detail=detail, name=name, quantity=quantity,
-        barcode_svg=barcode_svg, print_date=datetime.now().strftime('%d/%m/%Y')
+        'label.html', order=order, erp_number=erp_number, code_number=code_number,
+        name=name, quantity=quantity, barcode_svg=barcode_svg,
+        print_date=datetime.now().strftime('%d/%m/%Y')
     )
 
 
