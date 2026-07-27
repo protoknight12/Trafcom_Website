@@ -15,3 +15,4 @@ migrate_add_product_material_label_fields.py
 migrate_add_sheet_dimensions.py
 migrate_erp_number_unique_int.py
 seed_test_data.py
+/change_admin_password.py
