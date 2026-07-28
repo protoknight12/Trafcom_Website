@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Стокови разписки - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .item-type-toggle { display: flex; gap: 20px; margin: 8px 0 4px; }
+        .item-type-toggle label { font-weight: normal; text-transform: none; letter-spacing: normal; display: flex; align-items: center; gap: 6px; }
+        .add-item-row { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
+        .add-item-row .form-group { flex: 1; min-width: 180px; margin-bottom: 0; }
+        .add-item-row .form-group.qty-field { flex: 0 0 120px; min-width: 100px; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Добавяне на доставчик</h3>
+        <form action="{{ url_for('admin_add_supplier') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="supplier_name">Име *</label>
+                <input type="text" id="supplier_name" name="name" placeholder="напр. Ехнатон България АД" required autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="supplier_eik">ЕИК</label>
+                <input type="text" id="supplier_eik" name="eik" placeholder="напр. 203040557">
+            </div>
+            <div class="form-group">
+                <label for="supplier_phone">Телефон</label>
+                <input type="text" id="supplier_phone" name="phone">
+            </div>
+            <div class="form-group">
+                <label for="supplier_email">Имейл</label>
+                <input type="email" id="supplier_email" name="email">
+            </div>
+            <button type="submit" class="btn-submit">Добави доставчик</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Нова стокова разписка</h3>
+        <p class="section-subtitle">Въведете данните от фактурата/стоковата разписка на доставчика - всеки ред увеличава наличността на съответния материал, детайл или продукт.</p>
+
+        <form action="{{ url_for('create_delivery_note') }}" method="POST" id="deliveryNoteForm">
+            {% include 'partials/csrf_field.html' %}
+            <div class="add-item-row" style="margin-bottom: 16px;">
+                <div class="form-group">
+                    <label for="supplier_id">Доставчик</label>
+                    <select id="supplier_id" name="supplier_id">
+                        <option value="">-- Без доставчик --</option>
+                        {% for s in suppliers %}
+                        <option value="{{ s.id }}">{{ s.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="note_number">Фактура № / Наша реф.</label>
+                    <input type="text" id="note_number" name="note_number" placeholder="напр. 0000070244">
+                </div>
+                <div class="form-group">
+                    <label for="note_date">Дата</label>
+                    <input type="date" id="note_date" name="note_date">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Тип артикул</label>
+                <div class="item-type-toggle">
+                    <label><input type="radio" name="dn_item_type" value="material" checked> Материал</label>
+                    <label><input type="radio" name="dn_item_type" value="detail"> Детайл</label>
+                    <label><input type="radio" name="dn_item_type" value="product"> Продукт</label>
+                </div>
+            </div>
+
+            <div class="add-item-row">
+                <div class="form-group" id="material_selector">
+                    <label for="dn_material_id">Материал *</label>
+                    <select id="dn_material_id">
+                        {% for m in materials %}
+                        <option value="{{ m.id }}">{{ m.display_name }}</option>
+                        {% else %}
+                        <option disabled>Няма налични материали</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group" id="detail_selector" style="display: none;">
+                    <label for="dn_detail_id">Детайл *</label>
+                    <select id="dn_detail_id">
+                        {% for d in details %}
+                        <option value="{{ d.id }}">{{ d.name }}</option>
+                        {% else %}
+                        <option disabled>Няма налични детайли</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group" id="product_selector" style="display: none;">
+                    <label for="dn_product_id">Продукт *</label>
+                    <select id="dn_product_id">
+                        {% for p in products %}
+                        <option value="{{ p.id }}">{{ p.name }}</option>
+                        {% else %}
+                        <option disabled>Няма налични продукти</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group qty-field">
+                    <label for="dn_qty">Количество</label>
+                    <input type="number" id="dn_qty" value="1" min="0.01" step="0.01">
+                </div>
+                <div class="form-group qty-field">
+                    <label for="dn_price">Ед. цена (€, по избор)</label>
+                    <input type="number" id="dn_price" min="0" step="0.01">
+                </div>
+                <div class="form-group" style="flex: 0 0 auto;">
+                    <button type="button" class="btn-secondary" onclick="addDeliveryRow()" style="padding: 12px 20px;">+ Добави</button>
+                </div>
+            </div>
+
+            <div class="table-responsive" style="margin-top: 20px;">
+                <table class="data-table" id="dnTable">
+                    <thead>
+                    <tr>
+                        <th>Артикул</th>
+                        <th>Тип</th>
+                        <th class="text-center">Кол.</th>
+                        <th class="text-right">Ед. цена</th>
+                        <th class="text-right">Действие</th>
+                    </tr>
+                    </thead>
+                    <tbody id="dnTableBody">
+                        <tr id="dnEmptyRow"><td colspan="5" class="text-center no-data">Все още няма добавени артикули.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <input type="hidden" name="items_json" id="itemsJsonInput">
+            <button type="submit" class="btn-submit" style="width: 100%; margin-top: 16px;" id="submitNoteBtn" disabled>Запази разписка и обнови наличности</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>История на разписките</h3>
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Дата на записване</th>
+                    <th>Доставчик</th>
+                    <th>Фактура №</th>
+                    <th>Артикули</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for note in notes %}
+                <tr>
+                    <td>{{ note.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+                    <td>{{ note.supplier.name if note.supplier else '-' }}</td>
+                    <td>{{ note.note_number or '-' }}</td>
+                    <td>
+                        {% for item in note.items %}
+                        <div>{{ item.description_snapshot }} &times; {{ item.quantity }}{% if item.unit_price %} @ {{ "%.2f"|format(item.unit_price) }} €{% endif %}</div>
+                        {% endfor %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" class="text-center no-data">Няма записани разписки.</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+</main>
+
+<script>
+    const MATERIALS = {{ materials_data|tojson }};
+    const DETAILS = {{ details_data|tojson }};
+    const PRODUCTS = {{ products_data|tojson }};
+    let dnItems = [];
+
+    function cell(text, opts) {
+        const td = document.createElement('td');
+        td.textContent = text;
+        if (opts && opts.className) td.className = opts.className;
+        return td;
+    }
+
+    document.querySelectorAll('input[name="dn_item_type"]').forEach(function (radio) {
+        radio.addEventListener('change', function () {
+            document.getElementById('material_selector').style.display = this.value === 'material' ? 'block' : 'none';
+            document.getElementById('detail_selector').style.display = this.value === 'detail' ? 'block' : 'none';
+            document.getElementById('product_selector').style.display = this.value === 'product' ? 'block' : 'none';
+        });
+    });
+
+    function addDeliveryRow() {
+        const type = document.querySelector('input[name="dn_item_type"]:checked').value;
+        const qty = parseFloat(document.getElementById('dn_qty').value);
+        const priceRaw = document.getElementById('dn_price').value;
+        const unitPrice = priceRaw === '' ? null : parseFloat(priceRaw);
+
+        if (!qty || qty <= 0) {
+            alert('Моля въведете валидно количество.');
+            return;
+        }
+
+        const selectorId = type === 'material' ? 'dn_material_id' : (type === 'detail' ? 'dn_detail_id' : 'dn_product_id');
+        const list = type === 'material' ? MATERIALS : (type === 'detail' ? DETAILS : PRODUCTS);
+        const sel = document.getElementById(selectorId);
+        if (!sel.value) { alert('Няма избран артикул.'); return; }
+        const id = parseInt(sel.value, 10);
+        const item = list.find(function (x) { return x.id === id; });
+        if (!item) return;
+
+        dnItems.push({ type: type, id: id, name: item.name, qty: qty, unit_price: unitPrice });
+        renderDnTable();
+    }
+
+    function removeDnRow(index) {
+        dnItems.splice(index, 1);
+        renderDnTable();
+    }
+
+    const TYPE_LABELS = { material: 'Материал', detail: 'Детайл', product: 'Продукт' };
+
+    function renderDnTable() {
+        const body = document.getElementById('dnTableBody');
+        body.innerHTML = '';
+
+        if (dnItems.length === 0) {
+            body.innerHTML = '<tr id="dnEmptyRow"><td colspan="5" class="text-center no-data">Все още няма добавени артикули.</td></tr>';
+        } else {
+            dnItems.forEach(function (item, idx) {
+                const tr = document.createElement('tr');
+                tr.appendChild(cell(item.name));
+                tr.appendChild(cell(TYPE_LABELS[item.type]));
+                tr.appendChild(cell(item.qty, { className: 'text-center' }));
+                tr.appendChild(cell(item.unit_price != null ? item.unit_price.toFixed(2) + ' €' : '-', { className: 'text-right' }));
+
+                const actionTd = document.createElement('td');
+                actionTd.className = 'text-right';
+                const removeBtn = document.createElement('button');
+                removeBtn.type = 'button';
+                removeBtn.className = 'btn-delete';
+                removeBtn.textContent = 'Премахни';
+                removeBtn.addEventListener('click', function () { removeDnRow(idx); });
+                actionTd.appendChild(removeBtn);
+                tr.appendChild(actionTd);
+
+                body.appendChild(tr);
+            });
+        }
+
+        document.getElementById('submitNoteBtn').disabled = dnItems.length === 0;
+    }
+
+    document.getElementById('deliveryNoteForm').addEventListener('submit', function (e) {
+        if (dnItems.length === 0) {
+            e.preventDefault();
+            alert('Моля добавете поне един артикул към разписката.');
+            return;
+        }
+        document.getElementById('itemsJsonInput').value = JSON.stringify(
+            dnItems.map(function (c) { return { type: c.type, id: c.id, qty: c.qty, unit_price: c.unit_price }; })
+        );
+    });
+</script>
+</body>
+</html>

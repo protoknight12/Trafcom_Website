@@ -62,6 +62,7 @@
                     <th>Материал</th>
                     <th>Размери</th>
                     <th>Цена на рязане (€)</th>
+                    <th>На склад</th>
                     <th>ERP № / КД №</th>
                     <th class="text-right">Етикет</th>
                     <th class="text-right">Действие</th>
@@ -74,6 +75,7 @@
                     <td><span class="badge badge-user">{{ detail.material.display_name if detail.material else 'Неизвестен' }}</span></td>
                     <td>{{ "%.2f"|format(detail.width) }} x {{ "%.2f"|format(detail.height) }} мм</td>
                     <td>{{ "%.2f"|format(detail.calculated_price) }} €</td>
+                    <td>{{ detail.stock_quantity|round(2) }}</td>
                     <td class="text-small text-muted">{{ detail.erp_number or '-' }} / {{ detail.code_number or '-' }}</td>
                     <td class="text-right">
                         <form action="{{ url_for('print_label', target_type='detail', target_id=detail.id) }}" method="GET" style="display:flex; gap:4px; align-items:center; justify-content:flex-end;">
@@ -90,7 +92,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="7" class="text-center no-data">Няма добавени детайли.</td>
+                    <td colspan="8" class="text-center no-data">Няма добавени детайли.</td>
                 </tr>
                 {% endfor %}
                 </tbody>

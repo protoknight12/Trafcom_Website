@@ -27,7 +27,7 @@
             display: block;
             font-weight: 600;
         }
-        .proto-toolbar input, .proto-toolbar textarea {
+        .proto-toolbar input, .proto-toolbar textarea, .proto-toolbar select {
             background-color: var(--bg-input);
             border: 1px solid var(--border-color);
             color: var(--text-main);
@@ -164,6 +164,15 @@
     <div class="form-group">
         <label for="inProviderRep">МОЛ на ТРАФКОМ (Предаващ)</label>
         <input type="text" id="inProviderRep" value="Десислав Цветанов">
+    </div>
+    <div class="form-group" style="grid-column: span 2;">
+        <label for="inClientSelect">Избери клиент от списъка (по избор, попълва полетата долу)</label>
+        <select id="inClientSelect">
+            <option value="">-- Ръчно въвеждане --</option>
+            {% for c in clients %}
+            <option value="{{ c.id }}" data-name="{{ c.name }}" data-address="{{ c.address or '' }}" data-eik="{{ c.eik or '' }}" data-mol="{{ c.mol or '' }}">{{ c.name }}</option>
+            {% endfor %}
+        </select>
     </div>
     <div class="form-group">
         <label for="inClientName">Приемаща страна (Фирма)</label>
@@ -306,6 +315,17 @@
         { input: 'inClientEik', label: 'lblClientEik', fallback: '........................' },
         { input: 'inClientRep', label: 'lblClientRep', fallback: '............................................................' }
     ];
+
+    document.getElementById('inClientSelect').addEventListener('change', function () {
+        const opt = this.options[this.selectedIndex];
+        if (!opt.value) return;
+        const fillMap = { inClientName: opt.dataset.name, inClientAddress: opt.dataset.address, inClientEik: opt.dataset.eik, inClientRep: opt.dataset.mol };
+        Object.keys(fillMap).forEach(id => {
+            const el = document.getElementById(id);
+            el.value = fillMap[id] || '';
+            el.dispatchEvent(new Event('input'));
+        });
+    });
 
     bindings.forEach(b => {
         const inputEl = document.getElementById(b.input);

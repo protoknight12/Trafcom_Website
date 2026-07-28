@@ -52,6 +52,7 @@
                     <th>Себестойност (€)</th>
                     <th>Надценка</th>
                     <th>Продажна цена (€)</th>
+                    <th>На склад</th>
                     <th>ERP № / КД №</th>
                     <th class="text-right">Действия</th>
                 </tr>
@@ -63,6 +64,7 @@
                     <td>{{ "%.2f"|format(product_pricing[product.id].total_cost) }} €</td>
                     <td>{{ product.markup_percent }}%</td>
                     <td><span style="color: var(--success-text); font-weight: 600;">{{ "%.2f"|format(product_pricing[product.id].sell_price) }} €</span></td>
+                    <td>{{ product.stock_quantity|round(2) }}</td>
                     <td class="text-small text-muted">{{ product.erp_number or '-' }} / {{ product.code_number or '-' }}</td>
                     <td class="text-right">
                         <a href="{{ url_for('admin_product_edit', product_id=product.id) }}" class="btn-secondary" style="padding: 8px 14px; border-radius: var(--border-radius-sm); font-size: 0.85rem; text-decoration: none;">Редактирай</a>
@@ -79,7 +81,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="6" class="text-center no-data">Няма създадени продукти.</td>
+                    <td colspan="7" class="text-center no-data">Няма създадени продукти.</td>
                 </tr>
                 {% endfor %}
                 </tbody>

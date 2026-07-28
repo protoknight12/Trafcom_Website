@@ -23,9 +23,20 @@
 
     <section class="admin-card">
         <h3>Добавяне на нов клиент</h3>
-        <p class="section-subtitle">Само името е задължително - имейл и телефон са по избор.</p>
+        <p class="section-subtitle">Само името е задължително - останалите полета са по избор.</p>
         <form action="{{ url_for('admin_add_client') }}" method="POST" class="admin-form">
             {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label>Тип клиент</label>
+                <div class="item-type-toggle" style="display: flex; gap: 20px; margin: 8px 0 4px;">
+                    <label style="font-weight: normal; text-transform: none; letter-spacing: normal; display: flex; align-items: center; gap: 6px;">
+                        <input type="radio" name="client_type" value="individual" checked onchange="toggleClientTypeFields()"> Физическо лице
+                    </label>
+                    <label style="font-weight: normal; text-transform: none; letter-spacing: normal; display: flex; align-items: center; gap: 6px;">
+                        <input type="radio" name="client_type" value="company" onchange="toggleClientTypeFields()"> Юридическо лице
+                    </label>
+                </div>
+            </div>
             <div class="form-group">
                 <label for="client_name">Име *</label>
                 <input type="text" id="client_name" name="name" placeholder="напр. Иван Иванов / Фирма ЕООД" required autocomplete="off">
@@ -38,6 +49,24 @@
                 <label for="client_phone">Телефон</label>
                 <input type="text" id="client_phone" name="phone" placeholder="напр. 0888 123 456">
             </div>
+            <div id="companyFields" style="display: none;">
+                <div class="form-group">
+                    <label for="client_eik">ЕИК / Булстат</label>
+                    <input type="text" id="client_eik" name="eik" placeholder="напр. 203040557">
+                </div>
+                <div class="form-group">
+                    <label for="client_vat">ИН по ДДС</label>
+                    <input type="text" id="client_vat" name="vat_number" placeholder="напр. BG203040557">
+                </div>
+                <div class="form-group">
+                    <label for="client_address">Адрес на управление</label>
+                    <input type="text" id="client_address" name="address" placeholder="напр. София, бул. ...">
+                </div>
+                <div class="form-group">
+                    <label for="client_mol">МОЛ</label>
+                    <input type="text" id="client_mol" name="mol" placeholder="напр. Иван Иванов">
+                </div>
+            </div>
             <button type="submit" class="btn-submit">Добави клиент</button>
         </form>
     </section>
@@ -49,8 +78,11 @@
                 <thead>
                 <tr>
                     <th>Име</th>
+                    <th>Тип</th>
                     <th>Имейл</th>
                     <th>Телефон</th>
+                    <th>ЕИК</th>
+                    <th class="text-right">Редакция</th>
                     <th class="text-right">Изтриване</th>
                 </tr>
                 </thead>
@@ -58,8 +90,13 @@
                 {% for client in clients %}
                 <tr>
                     <td><strong>{{ client.name }}</strong></td>
+                    <td>{{ 'Юридическо лице' if client.client_type == 'company' else 'Физическо лице' }}</td>
                     <td>{{ client.email or '-' }}</td>
                     <td>{{ client.phone or '-' }}</td>
+                    <td>{{ client.eik or '-' }}</td>
+                    <td class="text-right">
+                        <a href="{{ url_for('edit_client_window', client_id=client.id) }}" class="btn-secondary" target="_blank" rel="noopener" style="padding: 6px 10px; font-size: 0.78rem;">Редакция</a>
+                    </td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_client', client_id=client.id) }}" method="POST"
                               onsubmit="return confirm('Изтриване на клиента &quot;{{ client.name|e }}&quot;?');" style="display:inline;">
@@ -70,13 +107,20 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="4" class="text-center no-data">Няма добавени клиенти.</td>
+                    <td colspan="7" class="text-center no-data">Няма добавени клиенти.</td>
                 </tr>
                 {% endfor %}
                 </tbody>
             </table>
         </div>
     </section>
+
+    <script>
+        function toggleClientTypeFields() {
+            var isCompany = document.querySelector('input[name="client_type"]:checked').value === 'company';
+            document.getElementById('companyFields').style.display = isCompany ? 'block' : 'none';
+        }
+    </script>
 
     <section class="admin-card">
         <h3>Добавяне на нов куриер</h3>

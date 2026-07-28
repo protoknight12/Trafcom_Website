@@ -66,6 +66,20 @@
             <label for="field_{{ loop.index }}">{{ f.label }}</label>
             {% if f.type == 'textarea' %}
             <textarea id="field_{{ loop.index }}" name="{{ f.name }}" rows="6">{{ f.value }}</textarea>
+            {% elif f.type == 'select' %}
+            <select id="field_{{ loop.index }}" name="{{ f.name }}">
+                {% for opt in f.options %}
+                <option value="{{ opt.value }}" {% if opt.value == f.value %}selected{% endif %}>{{ opt.label }}</option>
+                {% endfor %}
+            </select>
+            {% elif f.type == 'datalist' %}
+            <input type="text" id="field_{{ loop.index }}" name="{{ f.name }}" value="{{ f.value }}"
+                   list="field_{{ loop.index }}_options" autocomplete="off">
+            <datalist id="field_{{ loop.index }}_options">
+                {% for opt in f.options %}
+                <option value="{{ opt }}"></option>
+                {% endfor %}
+            </datalist>
             {% else %}
             <input type="text" id="field_{{ loop.index }}" name="{{ f.name }}" value="{{ f.value }}" required>
             {% endif %}

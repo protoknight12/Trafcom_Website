@@ -109,6 +109,12 @@
 
 <div class="offer-toolbar no-print">
     <div class="form-group">
+        <select id="offerClientSelect" style="background-color: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-main); padding: 10px 14px; border-radius: var(--border-radius-sm); font-size: 0.9rem; width: 100%; box-sizing: border-box; margin-bottom: 8px;">
+            <option value="">-- Избери клиент от списъка (по избор) --</option>
+            {% for c in clients %}
+            <option value="{{ c.id }}" data-name="{{ c.name }}">{{ c.name }}</option>
+            {% endfor %}
+        </select>
         <input type="text" id="customerNameInput" placeholder="Име на клиента..." value="{{ customer_name }}">
     </div>
     <button class="btn-submit" style="padding: 12px 24px;" onclick="window.print()">Печат / PDF</button>
@@ -211,6 +217,13 @@
     const customerDisplay = document.getElementById('offerCustomerName');
     customerInput.addEventListener('input', function () {
         customerDisplay.textContent = customerInput.value.trim() || '—';
+    });
+
+    document.getElementById('offerClientSelect').addEventListener('change', function () {
+        const opt = this.options[this.selectedIndex];
+        if (!opt.value) return;
+        customerInput.value = opt.dataset.name || opt.textContent;
+        customerDisplay.textContent = customerInput.value;
     });
 </script>
 </body>

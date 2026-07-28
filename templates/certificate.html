@@ -177,6 +177,15 @@
         <input type="text" id="inProtocolNum">
     </div>
     <div class="form-group">
+        <label for="inClientSelect">Избери клиент от списъка (по избор)</label>
+        <select id="inClientSelect">
+            <option value="">-- Ръчно въвеждане --</option>
+            {% for c in clients %}
+            <option value="{{ c.id }}" data-name="{{ c.name }}">{{ c.name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="form-group">
         <label for="inClient">За клиент</label>
         <input type="text" id="inClient" placeholder="напр. Оптикоелектрон">
     </div>
@@ -265,6 +274,15 @@
             document.getElementById('inDetailNum').dispatchEvent(new Event('input'));
             document.getElementById('inQuantity').dispatchEvent(new Event('input'));
             document.getElementById('inMaterial').dispatchEvent(new Event('input'));
+        }
+    });
+
+    const clientSelectEl = document.getElementById('inClientSelect');
+    clientSelectEl.addEventListener('change', function() {
+        const selected = clientSelectEl.options[clientSelectEl.selectedIndex];
+        if (selected.value !== "") {
+            document.getElementById('inClient').value = selected.getAttribute('data-name');
+            document.getElementById('inClient').dispatchEvent(new Event('input'));
         }
     });
 

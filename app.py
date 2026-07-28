@@ -172,6 +172,9 @@ class MaterialPrice(db.Model):
     # Free-text manufacturer/variant tag (e.g. "Alcoa", "DC01") - purely
     # informational, shown alongside display_name where relevant.
     brand = db.Column(db.String(100), nullable=True)
+    # Stock on hand, bumped by recording delivery notes (see DeliveryNoteItem
+    # / admin_delivery_notes.html) - not editable by hand elsewhere.
+    stock_quantity = db.Column(db.Float, nullable=False, default=0.0)
 
 
 # Structural-form categories a material's stock can come in, driving the
@@ -189,11 +192,22 @@ MATERIAL_TYPE_LABELS = {
 
 
 class Client(db.Model):
-    """A customer an order can be placed for. Only `name` is required."""
+    """
+    A customer an order can be placed for. Only `name` is required - it
+    doubles as the company name when client_type == 'company' (no separate
+    company_name column). The legal-entity fields (eik/vat_number/address/
+    mol) are optional/blank for individuals and only meaningful once
+    client_type is switched to 'company' in the admin UI.
+    """
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(150), nullable=False)
     email = db.Column(db.String(150), nullable=True)
     phone = db.Column(db.String(50), nullable=True)
+    client_type = db.Column(db.String(20), nullable=False, default='individual')  # 'individual' or 'company'
+    eik = db.Column(db.String(20), nullable=True)  # ЕИК / Булстат
+    vat_number = db.Column(db.String(20), nullable=True)  # ИН по ДДС
+    address = db.Column(db.String(255), nullable=True)  # Адрес на управление
+    mol = db.Column(db.String(150), nullable=True)  # МОЛ - материално отговорно лице
 
 
 class Deliverer(db.Model):
@@ -227,6 +241,9 @@ class Detail(db.Model):
     # since older catalog parts won't have these set.
     erp_number = db.Column(db.Integer, nullable=True, unique=True)
     code_number = db.Column(db.String(100), nullable=True)
+    # Stock on hand, bumped by recording delivery notes (see DeliveryNoteItem
+    # / admin_delivery_notes.html) - not editable by hand elsewhere.
+    stock_quantity = db.Column(db.Float, nullable=False, default=0.0)
 
     material = db.relationship('MaterialPrice')
 
@@ -254,6 +271,9 @@ class Product(db.Model):
     # since older rows won't have them.
     erp_number = db.Column(db.Integer, nullable=True, unique=True)
     code_number = db.Column(db.String(100), nullable=True)
+    # Stock on hand, bumped by recording delivery notes (see DeliveryNoteItem
+    # / admin_delivery_notes.html) - not editable by hand elsewhere.
+    stock_quantity = db.Column(db.Float, nullable=False, default=0.0)
 
     product_details = db.relationship('ProductDetail', cascade='all, delete-orphan', backref='product', lazy=True)
     extra_costs = db.relationship('ProductExtraCost', cascade='all, delete-orphan', backref='product', lazy=True)
@@ -465,6 +485,53 @@ def calculate_product_pricing(product):
         'markup_amount': round(markup_amount, 2),
         'sell_price': round(sell_price, 2),
     }
+
+
+class Supplier(db.Model):
+    """A goods supplier a DeliveryNote can be received from (e.g. "ЕХНАТОН БЪЛГАРИЯ АД")."""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(150), nullable=False)
+    eik = db.Column(db.String(20), nullable=True)
+    phone = db.Column(db.String(50), nullable=True)
+    email = db.Column(db.String(150), nullable=True)
+
+
+class DeliveryNote(db.Model):
+    """
+    A goods-received delivery note / invoice (фактура за доставка) entered by
+    an admin/worker to bring stock into the system - see
+    admin_delivery_notes.html. Recording one just bumps stock_quantity on
+    each referenced MaterialPrice/Detail/Product line (via DeliveryNoteItem)
+    and keeps a paper trail of what came in, from whom, and at what cost.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    supplier_id = db.Column(db.Integer, db.ForeignKey('supplier.id'), nullable=True)
+    note_number = db.Column(db.String(100), nullable=True)  # Фактура № / Наша реф.
+    note_date = db.Column(db.Date, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+
+    supplier = db.relationship('Supplier')
+    created_by = db.relationship('User')
+    items = db.relationship('DeliveryNoteItem', backref='delivery_note', cascade='all, delete-orphan', lazy=True)
+
+
+class DeliveryNoteItem(db.Model):
+    """
+    One received line item on a DeliveryNote, pointing at whichever catalog
+    row it restocks - same target_type/target_id convention already used by
+    print_label()/erp_lookup() ('material' / 'detail' / 'product').
+    description_snapshot freezes the item's name at intake time (matches
+    OrderItemComponent.detail_name_snapshot), so the note stays legible even
+    if the catalog row is later renamed or deleted.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    delivery_note_id = db.Column(db.Integer, db.ForeignKey('delivery_note.id'), nullable=False)
+    target_type = db.Column(db.String(20), nullable=False)  # 'material' / 'detail' / 'product'
+    target_id = db.Column(db.Integer, nullable=False)
+    description_snapshot = db.Column(db.String(255), nullable=False)
+    quantity = db.Column(db.Float, nullable=False)
+    unit_price = db.Column(db.Float, nullable=True)
 
 
 class Machine(db.Model):
@@ -1345,6 +1412,7 @@ def admin_dashboard():
         'products': Product.query.count(),
         'clients': Client.query.count(),
         'deliverers': Deliverer.query.count(),
+        'suppliers': Supplier.query.count(),
     }
     return render_template('admin.html', counts=counts, active_page='admin')
 
@@ -1412,14 +1480,71 @@ def admin_add_client():
     if not name:
         flash('Моля въведете име на клиента.', 'danger')
         return redirect(url_for('admin_clients'))
+    client_type = 'company' if request.form.get('client_type') == 'company' else 'individual'
     client = Client(
         name=name,
         email=request.form.get('email', '').strip() or None,
         phone=request.form.get('phone', '').strip() or None,
+        client_type=client_type,
+        eik=request.form.get('eik', '').strip() or None,
+        vat_number=request.form.get('vat_number', '').strip() or None,
+        address=request.form.get('address', '').strip() or None,
+        mol=request.form.get('mol', '').strip() or None,
     )
     db.session.add(client)
     db.session.commit()
     flash(f'Клиентът "{name}" беше добавен успешно.', 'success')
+    return redirect(url_for('admin_clients'))
+
+
+@app.route('/admin/clients/<int:client_id>/edit')
+@login_required
+def edit_client_window(client_id):
+    """Popup edit window (see edit_window.html) - opened via the pencil icon on /admin/clients."""
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+    client = Client.query.get_or_404(client_id)
+    return render_template(
+        'edit_window.html', item_label='клиент', saved=request.args.get('saved') == '1',
+        action=url_for('update_client', client_id=client.id),
+        fields=[
+            {'name': 'name', 'label': 'Име', 'value': client.name, 'type': 'text'},
+            {'name': 'client_type', 'label': 'Тип клиент', 'value': client.client_type, 'type': 'select',
+             'options': [{'value': 'individual', 'label': 'Физическо лице'}, {'value': 'company', 'label': 'Юридическо лице'}]},
+            {'name': 'email', 'label': 'Имейл', 'value': client.email or '', 'type': 'text'},
+            {'name': 'phone', 'label': 'Телефон', 'value': client.phone or '', 'type': 'text'},
+            {'name': 'eik', 'label': 'ЕИК / Булстат', 'value': client.eik or '', 'type': 'text'},
+            {'name': 'vat_number', 'label': 'ИН по ДДС', 'value': client.vat_number or '', 'type': 'text'},
+            {'name': 'address', 'label': 'Адрес на управление', 'value': client.address or '', 'type': 'text'},
+            {'name': 'mol', 'label': 'МОЛ', 'value': client.mol or '', 'type': 'text'},
+        ]
+    )
+
+
+@app.route('/admin/clients/<int:client_id>/update', methods=['POST'])
+@login_required
+def update_client(client_id):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+    client = Client.query.get_or_404(client_id)
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Моля въведете име на клиента.', 'danger')
+        return redirect(url_for('admin_clients'))
+    client.name = name
+    client.client_type = 'company' if request.form.get('client_type') == 'company' else 'individual'
+    client.email = request.form.get('email', '').strip() or None
+    client.phone = request.form.get('phone', '').strip() or None
+    client.eik = request.form.get('eik', '').strip() or None
+    client.vat_number = request.form.get('vat_number', '').strip() or None
+    client.address = request.form.get('address', '').strip() or None
+    client.mol = request.form.get('mol', '').strip() or None
+    db.session.commit()
+    flash('Клиентът беше обновен успешно.', 'success')
+    if request.form.get('popup') == '1':
+        return redirect(url_for('edit_client_window', client_id=client_id, saved='1'))
     return redirect(url_for('admin_clients'))
 
 
@@ -1474,6 +1599,139 @@ def admin_delete_deliverer(deliverer_id):
     return redirect(url_for('admin_clients'))
 
 
+def _bump_stock(target, quantity):
+    """Adds `quantity` to target.stock_quantity and returns the new total.
+    Pure/no DB calls itself, so it's testable without a live database - see
+    test_delivery_note_stock.py."""
+    target.stock_quantity = (target.stock_quantity or 0) + quantity
+    return target.stock_quantity
+
+
+DELIVERY_NOTE_TARGET_MODELS = {'material': MaterialPrice, 'detail': Detail, 'product': Product}
+
+
+@app.route('/admin/delivery-notes')
+@role_required(['admin', 'worker'])
+def admin_delivery_notes():
+    """
+    Intake page for restocking Materials/Details/Products from a supplier's
+    delivery note (see CLAUDE.md task: manual form mimicking the paper
+    layout, no OCR). Building one line item at a time mirrors order_create.
+    html's cart pattern - pick a type, pick the specific catalog row, add a
+    row - just with material/detail/product instead of product/detail.
+    """
+    suppliers = Supplier.query.order_by(Supplier.name).all()
+    notes = DeliveryNote.query.order_by(DeliveryNote.created_at.desc()).all()
+    materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
+    details = Detail.query.order_by(Detail.name).all()
+    products = Product.query.order_by(Product.name).all()
+    # Plain dicts (not ORM rows) for the client-side |tojson item picker -
+    # same convention as create_order()'s products_data/details_data.
+    materials_data = [{'id': m.id, 'name': m.display_name} for m in materials]
+    details_data = [{'id': d.id, 'name': d.name} for d in details]
+    products_data = [{'id': p.id, 'name': p.name} for p in products]
+    return render_template(
+        'admin_delivery_notes.html', suppliers=suppliers, notes=notes,
+        materials=materials, details=details, products=products,
+        materials_data=materials_data, details_data=details_data, products_data=products_data,
+        active_page='admin_delivery_notes'
+    )
+
+
+@app.route('/admin/suppliers/add', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_add_supplier():
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Моля въведете име на доставчика.', 'danger')
+        return redirect(url_for('admin_delivery_notes'))
+    supplier = Supplier(
+        name=name,
+        eik=request.form.get('eik', '').strip() or None,
+        phone=request.form.get('phone', '').strip() or None,
+        email=request.form.get('email', '').strip() or None,
+    )
+    db.session.add(supplier)
+    db.session.commit()
+    flash(f'Доставчикът "{name}" беше добавен успешно.', 'success')
+    return redirect(url_for('admin_delivery_notes'))
+
+
+@app.route('/admin/delivery-notes/create', methods=['POST'])
+@role_required(['admin', 'worker'])
+def create_delivery_note():
+    """
+    Records a delivery note and bumps stock_quantity on every referenced
+    Material/Detail/Product. items_json follows the same
+    [{type, id, qty, unit_price}] shape as create_order()'s cart_json.
+    """
+    try:
+        items = json.loads(request.form.get('items_json', ''))
+        if not isinstance(items, list):
+            items = []
+    except (TypeError, ValueError):
+        items = []
+
+    if not items:
+        flash('Моля добавете поне един артикул към стоковата разписка.', 'danger')
+        return redirect(url_for('admin_delivery_notes'))
+
+    supplier_id_raw = request.form.get('supplier_id', '')
+    supplier_id = int(supplier_id_raw) if supplier_id_raw and supplier_id_raw.isdigit() else None
+    note_date_raw = request.form.get('note_date', '').strip()
+    note_date = datetime.strptime(note_date_raw, '%Y-%m-%d').date() if note_date_raw else None
+
+    note = DeliveryNote(
+        supplier_id=supplier_id,
+        note_number=request.form.get('note_number', '').strip() or None,
+        note_date=note_date,
+        created_by_id=current_user.id,
+    )
+    db.session.add(note)
+    db.session.flush()
+
+    added_any = False
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        target_model = DELIVERY_NOTE_TARGET_MODELS.get(row.get('type'))
+        if not target_model:
+            continue
+        try:
+            target_id = int(row.get('id'))
+            quantity = float(row.get('qty', 0))
+        except (TypeError, ValueError):
+            continue
+        if quantity <= 0:
+            continue
+        target = target_model.query.get(target_id)
+        if not target:
+            continue
+
+        unit_price_raw = row.get('unit_price')
+        try:
+            unit_price = float(unit_price_raw) if unit_price_raw not in (None, '') else None
+        except (TypeError, ValueError):
+            unit_price = None
+
+        description = target.display_name if row['type'] == 'material' else target.name
+        db.session.add(DeliveryNoteItem(
+            delivery_note_id=note.id, target_type=row['type'], target_id=target.id,
+            description_snapshot=description, quantity=quantity, unit_price=unit_price,
+        ))
+        _bump_stock(target, quantity)
+        added_any = True
+
+    if not added_any:
+        db.session.rollback()
+        flash('Няма валидни артикули за добавяне.', 'danger')
+        return redirect(url_for('admin_delivery_notes'))
+
+    db.session.commit()
+    flash('Стоковата разписка беше записана и наличностите бяха обновени.', 'success')
+    return redirect(url_for('admin_delivery_notes'))
+
+
 @app.route('/admin/content')
 @login_required
 def admin_content():
@@ -1495,6 +1753,15 @@ def _machine_card_home(page):
     return url_for('index') if page == 'index' else url_for('services')
 
 
+def _service_section_titles():
+    """Distinct section_title values already used on the services page (e.g.
+    'ФРЕЗОВИ ЦЕНТРОВЕ'), for the add/edit machine popup's section datalist."""
+    rows = db.session.query(ServiceMachineCard.section_title).filter(
+        ServiceMachineCard.page == 'services', ServiceMachineCard.section_title.isnot(None)
+    ).distinct().order_by(ServiceMachineCard.section_title).all()
+    return [r[0] for r in rows]
+
+
 @app.route('/services/machine-cards/new')
 @login_required
 def new_machine_card_window():
@@ -1503,15 +1770,22 @@ def new_machine_card_window():
         flash('Нямате достъп до тази страница.', 'danger')
         return redirect(url_for('dashboard'))
     page = 'index' if request.args.get('page') == 'index' else 'services'
+    fields = [
+        {'name': 'series_label', 'label': 'Кратък етикет (напр. 5-ОСНО ФРЕЗОВАНЕ)', 'value': '', 'type': 'text'},
+        {'name': 'title', 'label': 'Име на машината', 'value': '', 'type': 'text'},
+    ]
+    if page == 'services':
+        # Only the services page groups cards by section - pick an existing
+        # section (e.g. "ФРЕЗОВИ ЦЕНТРОВЕ") or type a brand-new one.
+        fields.append({'name': 'section_title', 'label': 'Раздел (напр. фрезоване, струговане, листообработка)',
+                        'value': '', 'type': 'datalist', 'options': _service_section_titles()})
+    fields += [
+        {'name': 'specs_text', 'label': 'Характеристики (незадължително, по един ред "Етикет: Стойност")', 'value': '', 'type': 'textarea'},
+        {'name': 'description', 'label': 'Описание', 'value': '', 'type': 'textarea'},
+    ]
     return render_template(
         'edit_window.html', item_label='нова машина', saved=request.args.get('saved') == '1',
-        action=url_for('create_machine_card', page=page),
-        fields=[
-            {'name': 'series_label', 'label': 'Кратък етикет (напр. 5-ОСНО ФРЕЗОВАНЕ)', 'value': '', 'type': 'text'},
-            {'name': 'title', 'label': 'Име на машината', 'value': '', 'type': 'text'},
-            {'name': 'specs_text', 'label': 'Характеристики (незадължително, по един ред "Етикет: Стойност")', 'value': '', 'type': 'textarea'},
-            {'name': 'description', 'label': 'Описание', 'value': '', 'type': 'textarea'},
-        ]
+        action=url_for('create_machine_card', page=page), fields=fields
     )
 
 
@@ -1534,6 +1808,7 @@ def create_machine_card():
         page=page,
         title=title,
         series_label=request.form.get('series_label', '').strip() or None,
+        section_title=request.form.get('section_title', '').strip() or None if page == 'services' else None,
         specs_text=request.form.get('specs_text', '').strip() or None,
         description=request.form.get('description', '').strip() or None,
     )
@@ -1552,15 +1827,20 @@ def edit_machine_card_window(card_id):
         flash('Нямате достъп до тази страница.', 'danger')
         return redirect(url_for('dashboard'))
     card = ServiceMachineCard.query.get_or_404(card_id)
+    fields = [
+        {'name': 'series_label', 'label': 'Кратък етикет (напр. 5-ОСНО ФРЕЗОВАНЕ)', 'value': card.series_label or '', 'type': 'text'},
+        {'name': 'title', 'label': 'Име на машината', 'value': card.title, 'type': 'text'},
+    ]
+    if card.page == 'services':
+        fields.append({'name': 'section_title', 'label': 'Раздел (напр. фрезоване, струговане, листообработка)',
+                        'value': card.section_title or '', 'type': 'datalist', 'options': _service_section_titles()})
+    fields += [
+        {'name': 'specs_text', 'label': 'Характеристики (незадължително, по един ред "Етикет: Стойност")', 'value': card.specs_text or '', 'type': 'textarea'},
+        {'name': 'description', 'label': 'Описание', 'value': card.description or '', 'type': 'textarea'},
+    ]
     return render_template(
         'edit_window.html', item_label='машина', saved=request.args.get('saved') == '1',
-        action=url_for('update_machine_card', card_id=card.id),
-        fields=[
-            {'name': 'series_label', 'label': 'Кратък етикет (напр. 5-ОСНО ФРЕЗОВАНЕ)', 'value': card.series_label or '', 'type': 'text'},
-            {'name': 'title', 'label': 'Име на машината', 'value': card.title, 'type': 'text'},
-            {'name': 'specs_text', 'label': 'Характеристики (незадължително, по един ред "Етикет: Стойност")', 'value': card.specs_text or '', 'type': 'textarea'},
-            {'name': 'description', 'label': 'Описание', 'value': card.description or '', 'type': 'textarea'},
-        ]
+        action=url_for('update_machine_card', card_id=card.id), fields=fields
     )
 
 
@@ -1580,6 +1860,8 @@ def update_machine_card(card_id):
 
     card.title = title
     card.series_label = request.form.get('series_label', '').strip() or None
+    if card.page == 'services':
+        card.section_title = request.form.get('section_title', '').strip() or None
     card.specs_text = request.form.get('specs_text', '').strip() or None
     card.description = request.form.get('description', '').strip() or None
     db.session.commit()
@@ -2412,7 +2694,8 @@ def admin_product_offer(product_id):
     product = Product.query.get_or_404(product_id)
     pricing = calculate_product_pricing(product)
     customer_name = request.args.get('customer', '')
-    return render_template('offer.html', product=product, pricing=pricing, customer_name=customer_name)
+    clients = Client.query.order_by(Client.name).all()
+    return render_template('offer.html', product=product, pricing=pricing, customer_name=customer_name, clients=clients)
 
 
 @app.route('/admin/products/<int:product_id>/protocol')
@@ -2423,7 +2706,8 @@ def admin_product_protocol(product_id):
         return redirect(url_for('dashboard'))
 
     product = Product.query.get_or_404(product_id)
-    return render_template('protocol.html', product=product)
+    clients = Client.query.order_by(Client.name).all()
+    return render_template('protocol.html', product=product, clients=clients)
 
 
 @app.route('/admin/products/<int:product_id>/certificates')
@@ -2434,7 +2718,8 @@ def admin_product_certificates(product_id):
         return redirect(url_for('dashboard'))
 
     product = Product.query.get_or_404(product_id)
-    return render_template('certificate.html', product=product)
+    clients = Client.query.order_by(Client.name).all()
+    return render_template('certificate.html', product=product, clients=clients)
 
 
 @app.route('/admin/delete_user/<int:user_id>', methods=['POST'])
