@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Клиенти и Куриери - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Добавяне на нов клиент</h3>
+        <p class="section-subtitle">Само името е задължително - имейл и телефон са по избор.</p>
+        <form action="{{ url_for('admin_add_client') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="client_name">Име *</label>
+                <input type="text" id="client_name" name="name" placeholder="напр. Иван Иванов / Фирма ЕООД" required autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="client_email">Имейл</label>
+                <input type="email" id="client_email" name="email" placeholder="example@mail.com">
+            </div>
+            <div class="form-group">
+                <label for="client_phone">Телефон</label>
+                <input type="text" id="client_phone" name="phone" placeholder="напр. 0888 123 456">
+            </div>
+            <button type="submit" class="btn-submit">Добави клиент</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Списък с клиенти</h3>
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Име</th>
+                    <th>Имейл</th>
+                    <th>Телефон</th>
+                    <th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for client in clients %}
+                <tr>
+                    <td><strong>{{ client.name }}</strong></td>
+                    <td>{{ client.email or '-' }}</td>
+                    <td>{{ client.phone or '-' }}</td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_delete_client', client_id=client.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на клиента &quot;{{ client.name|e }}&quot;?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" class="text-center no-data">Няма добавени клиенти.</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="admin-card">
+        <h3>Добавяне на нов куриер</h3>
+        <form action="{{ url_for('admin_add_deliverer') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="deliverer_name">Име *</label>
+                <input type="text" id="deliverer_name" name="name" placeholder="напр. Спиди / Еконт" required autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="deliverer_email">Имейл</label>
+                <input type="email" id="deliverer_email" name="email" placeholder="example@mail.com">
+            </div>
+            <div class="form-group">
+                <label for="deliverer_phone">Телефон</label>
+                <input type="text" id="deliverer_phone" name="phone" placeholder="напр. 0888 123 456">
+            </div>
+            <button type="submit" class="btn-submit">Добави куриер</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Списък с куриери</h3>
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Име</th>
+                    <th>Имейл</th>
+                    <th>Телефон</th>
+                    <th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for deliverer in deliverers %}
+                <tr>
+                    <td><strong>{{ deliverer.name }}</strong></td>
+                    <td>{{ deliverer.email or '-' }}</td>
+                    <td>{{ deliverer.phone or '-' }}</td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_delete_deliverer', deliverer_id=deliverer.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на куриера &quot;{{ deliverer.name|e }}&quot;?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" class="text-center no-data">Няма добавени куриери.</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+</main>
+
+</body>
+</html>

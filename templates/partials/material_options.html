@@ -1,0 +1,10 @@
+{# Expects `materials` (ordered by type, display_name - see MaterialPrice.query.order_by calls)
+   in scope. Groups options into <optgroup>s by structural type (sheets/rods/profiles/...)
+   so choosing e.g. "Пръти" narrows the visible list to just that stock form. #}
+{% for type_key, group in materials|groupby('type') %}
+<optgroup label="{{ material_type_label(type_key) }}">
+    {% for material in group %}
+    <option value="{{ material.key }}">{{ material.display_name }}{% if material.brand %} ({{ material.brand }}){% endif %}</option>
+    {% endfor %}
+</optgroup>
+{% endfor %}

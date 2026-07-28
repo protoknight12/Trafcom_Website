@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Детайли - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">
+            {{ message }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Библиотека с детайли</h3>
+        <p class="section-subtitle">Добавете преизползваеми детайли (DXF + материал), от които се изграждат продуктите.</p>
+
+        <form action="{{ url_for('admin_add_detail') }}" method="POST" enctype="multipart/form-data" class="admin-form" style="margin-bottom: 1.5rem;">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="detail_name">Име на детайла</label>
+                <input type="text" id="detail_name" name="name" placeholder="напр. Странична стена 400x300" required autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="detail_material">Материал</label>
+                <select id="detail_material" name="material">
+                    {% include 'partials/material_options.html' %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="detail_file">DXF файл</label>
+                <input type="file" id="detail_file" name="file" accept=".dxf" required>
+            </div>
+            <div class="form-group">
+                <label for="detail_erp_number">ERP № (незадължително - оставете празно за автоматично генериране)</label>
+                <input type="number" id="detail_erp_number" name="erp_number" placeholder="автоматично">
+            </div>
+            <div class="form-group">
+                <label for="detail_code_number">КД № (за етикет, незадължително)</label>
+                <input type="text" id="detail_code_number" name="code_number" placeholder="напр. Bulspike 01.01.01.00.02">
+            </div>
+            <button type="submit" class="btn-submit">Добави детайл</button>
+        </form>
+
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Име</th>
+                    <th>Материал</th>
+                    <th>Размери</th>
+                    <th>Цена на рязане (€)</th>
+                    <th>ERP № / КД №</th>
+                    <th class="text-right">Етикет</th>
+                    <th class="text-right">Действие</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for detail in details %}
+                <tr>
+                    <td><strong>{{ detail.name }}</strong></td>
+                    <td><span class="badge badge-user">{{ detail.material.display_name if detail.material else 'Неизвестен' }}</span></td>
+                    <td>{{ "%.2f"|format(detail.width) }} x {{ "%.2f"|format(detail.height) }} мм</td>
+                    <td>{{ "%.2f"|format(detail.calculated_price) }} €</td>
+                    <td class="text-small text-muted">{{ detail.erp_number or '-' }} / {{ detail.code_number or '-' }}</td>
+                    <td class="text-right">
+                        <form action="{{ url_for('print_label', target_type='detail', target_id=detail.id) }}" method="GET" style="display:flex; gap:4px; align-items:center; justify-content:flex-end;">
+                            <input type="number" name="quantity" min="1" value="1" class="material-price-input" style="width: 55px;">
+                            <button type="submit" class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;">Етикет</button>
+                        </form>
+                    </td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_delete_detail', detail_id=detail.id) }}" method="POST" onsubmit="return confirm('Изтриване на детайла?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="7" class="text-center no-data">Няма добавени детайли.</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+</main>
+
+</body>
+</html>

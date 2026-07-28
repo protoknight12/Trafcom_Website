@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Продукти - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">
+            {{ message }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Продукти</h3>
+        <p class="section-subtitle">Продуктите се изграждат от детайли plus допълнителни разходи (боядисване, монтаж, транспорт и др.).</p>
+
+        <form action="{{ url_for('admin_add_product') }}" method="POST" class="admin-form" style="margin-bottom: 1.5rem;">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="product_name">Име на продукта</label>
+                <input type="text" id="product_name" name="name" placeholder="напр. Метален шкаф модел А" required autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="product_description">Описание (незадължително)</label>
+                <input type="text" id="product_description" name="description" placeholder="Кратко описание...">
+            </div>
+            <div class="form-group">
+                <label for="product_markup">Надценка (%)</label>
+                <input type="number" id="product_markup" name="markup_percent" step="0.1" min="0" value="0">
+            </div>
+            <button type="submit" class="btn-submit">Създай продукт</button>
+        </form>
+
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Продукт</th>
+                    <th>Себестойност (€)</th>
+                    <th>Надценка</th>
+                    <th>Продажна цена (€)</th>
+                    <th>ERP № / КД №</th>
+                    <th class="text-right">Действия</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for product in products %}
+                <tr>
+                    <td><strong>{{ product.name }}</strong></td>
+                    <td>{{ "%.2f"|format(product_pricing[product.id].total_cost) }} €</td>
+                    <td>{{ product.markup_percent }}%</td>
+                    <td><span style="color: var(--success-text); font-weight: 600;">{{ "%.2f"|format(product_pricing[product.id].sell_price) }} €</span></td>
+                    <td class="text-small text-muted">{{ product.erp_number or '-' }} / {{ product.code_number or '-' }}</td>
+                    <td class="text-right">
+                        <a href="{{ url_for('admin_product_edit', product_id=product.id) }}" class="btn-secondary" style="padding: 8px 14px; border-radius: var(--border-radius-sm); font-size: 0.85rem; text-decoration: none;">Редактирай</a>
+                        <a href="{{ url_for('admin_product_offer', product_id=product.id) }}" class="btn-secondary" style="padding: 8px 14px; border-radius: var(--border-radius-sm); font-size: 0.85rem; text-decoration: none;">Оферта</a>
+                        <form action="{{ url_for('print_label', target_type='product', target_id=product.id) }}" method="GET" style="display:inline-flex; gap:4px; align-items:center;">
+                            <input type="number" name="quantity" min="1" value="1" class="material-price-input" style="width: 50px; padding: 6px;">
+                            <button type="submit" class="btn-secondary" style="padding: 8px 14px; border-radius: var(--border-radius-sm); font-size: 0.85rem;">Етикет</button>
+                        </form>
+                        <form action="{{ url_for('admin_product_delete', product_id=product.id) }}" method="POST" onsubmit="return confirm('Изтриване на продукта?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="text-center no-data">Няма създадени продукти.</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+</main>
+
+</body>
+</html>
