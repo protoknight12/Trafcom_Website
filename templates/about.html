@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>За нас - Trafcom</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+{% include 'partials/navbar.html' %}
+
+<main class="dmg-container">
+
+    <section class="dmg-hero">
+        <div class="hero-tag"><span>01</span> // ИСТОРИЯ НА ФИРМАТА</div>
+        <h1 class="hero-title">ЗА <span class="text-glow">ТРАФКОМ</span> ООД</h1>
+        <p class="hero-lead">Трафком ООД е основана през 1997 г. в гр. Тетевен. Първоначално фирмата произвежда
+            трансформатори и електроника за радиотехника. От 2021 г. разполага с изцяло нов механичен цех
+            (≈ 4 000 m²), чиято основна дейност е механична обработка на детайли.</p>
+
+        <div class="hero-stats">
+            <div class="stat-item">
+                <span class="stat-num">1997</span>
+                <span class="stat-label">Основана в гр. Тетевен</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-num">4 000 m²</span>
+                <span class="stat-label">Механичен цех (от 2021 г.)</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-num">5-осно</span>
+                <span class="stat-label">Фрезоване и струговане</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="dmg-showcase-section">
+        <div class="section-header-dmg">
+            <div>
+                <div class="hero-tag"><span>02</span> // КОМПЕТЕНЦИИ</div>
+                <h2 class="dmg-section-title">С КАКВО СЕ ЗАНИМАВАМЕ</h2>
+            </div>
+            <span class="dmg-line-decorative"></span>
+        </div>
+
+        <div class="competency-grid">
+            <div class="competency-item">Високоточна механична обработка на стомани, алуминиеви сплави и цветни метали</div>
+            <div class="competency-item">5-осно фрезоване и многоосно струговане със задвижвани инструменти</div>
+            <div class="competency-item">Лазерно рязане и нишкова електроерозия (Wire EDM)</div>
+            <div class="competency-item">Огъване и формоване на листов материал</div>
+            <div class="competency-item">3D измерване и контрол на качеството (CMM)</div>
+            <div class="competency-item">3D лазерно сканиране и reverse engineering</div>
+        </div>
+    </section>
+
+    <section class="dmg-showcase-section">
+        <div class="section-header-dmg">
+            <div>
+                <div class="hero-tag"><span>03</span> // ЛОКАЦИИ</div>
+                <h2 class="dmg-section-title">КЪДЕ СМЕ</h2>
+            </div>
+            <span class="dmg-line-decorative"></span>
+        </div>
+
+        <div class="info-grid">
+            <div class="info-card">
+                <h3>Офис и кореспонденция</h3>
+                <p>гр. Тетевен, ул. „Александър Стамболийски“ 36</p>
+            </div>
+            <div class="info-card">
+                <h3>Производствена база</h3>
+                <p>гр. Тетевен, ул. „Воловийте“ &middot; механичен цех ≈ 4 000 m²</p>
+            </div>
+        </div>
+    </section>
+
+</main>
+
+{% include 'partials/footer.html' %}
+
+</body>
+</html>

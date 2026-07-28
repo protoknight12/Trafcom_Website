@@ -338,6 +338,10 @@ button, .btn {
 .nav-logo {
     margin: 0;
 }
+.nav-logo-link {
+    text-decoration: none;
+    display: block;
+}
 
 /* Utility Positioning Hooks */
 .text-right { text-align: right; }
@@ -889,6 +893,115 @@ button, .btn {
     color: var(--text-muted);
     line-height: 1.6;
     margin: 0;
+}
+
+/* --- Site Footer (public marketing pages) --- */
+.site-footer {
+    border-top: 1px solid var(--border-color);
+    margin-top: 60px;
+    padding: 48px 24px 24px;
+}
+.footer-container {
+    max-width: 1340px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr;
+    gap: 40px;
+}
+.footer-col p {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    line-height: 1.7;
+    margin: 6px 0;
+}
+.footer-col a {
+    color: var(--text-muted);
+    text-decoration: none;
+}
+.footer-col a:hover {
+    color: var(--accent-secondary);
+}
+.footer-col-title {
+    display: block;
+    font-weight: 700;
+    color: var(--text-main);
+    margin-bottom: 10px;
+}
+.footer-bottom {
+    max-width: 1340px;
+    margin: 40px auto 0;
+    padding-top: 20px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+@media (max-width: 640px) {
+    .footer-container {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* --- Simple content sections (About / Contact pages) --- */
+.info-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 24px;
+    margin-top: 32px;
+}
+.info-card {
+    background-color: var(--bg-surface);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: var(--border-radius-md);
+    padding: 24px;
+}
+.info-card h3 {
+    margin: 0 0 12px 0;
+    color: var(--text-main);
+    font-size: 1.05rem;
+}
+.info-card p, .info-card a {
+    color: var(--text-muted);
+    font-size: 0.92rem;
+    line-height: 1.7;
+    text-decoration: none;
+}
+.info-card a:hover {
+    color: var(--accent-secondary);
+}
+.prose p {
+    color: var(--text-muted);
+    font-size: 1rem;
+    line-height: 1.8;
+    max-width: 780px;
+}
+.map-embed {
+    width: 100%;
+    height: 360px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: var(--border-radius-md);
+    overflow: hidden;
+    margin-top: 32px;
+}
+.map-embed iframe {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    filter: grayscale(0.3) invert(0.9) contrast(0.9);
+}
+.competency-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+    margin-top: 32px;
+}
+.competency-item {
+    background-color: rgba(255, 255, 255, 0.02);
+    border-left: 3px solid var(--accent-primary);
+    border-radius: var(--border-radius-sm);
+    padding: 16px 20px;
+    color: var(--text-main);
+    font-size: 0.92rem;
+    font-weight: 600;
 }
 
 /* Active Link Accent indicator */

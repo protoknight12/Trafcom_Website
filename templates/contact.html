@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Контакти - Trafcom</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+{% include 'partials/navbar.html' %}
+
+<main class="dmg-container">
+
+    <section class="dmg-hero">
+        <div class="hero-tag"><span>01</span> // ВРЪЗКА С НАС</div>
+        <h1 class="hero-title">КОНТАКТИ</h1>
+        <p class="hero-lead">За запитвания, оферти и въпроси относно механична обработка, лазерно рязане или
+            производство на детайли - свържете се с нас директно.</p>
+
+        <div class="info-grid">
+            <div class="info-card">
+                <h3>Адрес</h3>
+                <p>гр. Тетевен, ул. „Александър Стамболийски“ 36</p>
+            </div>
+            <div class="info-card">
+                <h3>Телефон</h3>
+                <p><a href="tel:+359886762276">+359 886 762 276</a></p>
+            </div>
+            <div class="info-card">
+                <h3>Имейл</h3>
+                <p><a href="mailto:trafcom@trafcombg.com">trafcom@trafcombg.com</a></p>
+            </div>
+        </div>
+
+        <div class="map-embed">
+            <iframe
+                src="https://www.google.com/maps?q=гр.+Тетевен,+ул.+Александър+Стамболийски+36,+Bulgaria&output=embed"
+                loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+        </div>
+    </section>
+
+</main>
+
+{% include 'partials/footer.html' %}
+
+</body>
+</html>

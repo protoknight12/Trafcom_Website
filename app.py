@@ -823,6 +823,11 @@ def role_required(roles):
 
 # ----------------- МАРШРУТИ И ЛОГИКА -----------------
 
+@app.context_processor
+def inject_current_year():
+    return {'current_year': datetime.now().year}
+
+
 @app.route('/robots.txt')
 def robots_txt():
     # Everything except '/' requires login anyway, so there's nothing for a
@@ -838,6 +843,21 @@ def index():
     # (showing "Към Таблото" instead of Login/Register). Apps like /dashboard
     # and /generator still require login via @login_required regardless.
     return render_template('index.html', active_page='index')
+
+
+@app.route('/services')
+def services():
+    return render_template('services.html', active_page='services')
+
+
+@app.route('/about')
+def about():
+    return render_template('about.html', active_page='about')
+
+
+@app.route('/contact')
+def contact():
+    return render_template('contact.html', active_page='contact')
 
 
 @app.route('/generator')

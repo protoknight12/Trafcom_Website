@@ -1,0 +1,21 @@
+<footer class="site-footer">
+    <div class="footer-container">
+        <div class="footer-col">
+            <h3 class="nav-logo">TRAFCOM</h3>
+            <p>Трафком ООД &middot; гр. Тетевен<br>Прецизна ЦПУ обработка от 1997 г.</p>
+        </div>
+        <div class="footer-col">
+            <span class="footer-col-title">Контакти</span>
+            <p>ул. „Александър Стамболийски“ 36, гр. Тетевен</p>
+            <p><a href="tel:+359886762276">+359 886 762 276</a></p>
+            <p><a href="mailto:trafcom@trafcombg.com">trafcom@trafcombg.com</a></p>
+        </div>
+        <div class="footer-col">
+            <span class="footer-col-title">Навигация</span>
+            <p><a href="{{ url_for('services') }}">Услуги</a></p>
+            <p><a href="{{ url_for('about') }}">За нас</a></p>
+            <p><a href="{{ url_for('contact') }}">Контакти</a></p>
+        </div>
+    </div>
+    <div class="footer-bottom">&copy; {{ current_year }} Трафком ООД. Всички права запазени.</div>
+</footer>

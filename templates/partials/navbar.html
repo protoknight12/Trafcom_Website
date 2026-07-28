@@ -1,6 +1,6 @@
 <nav class="navbar">
     <div class="nav-container">
-        <h2 class="nav-logo">TRAFCOM</h2>
+        <a href="{{ url_for('index') }}" class="nav-logo-link"><h2 class="nav-logo">TRAFCOM</h2></a>
 
         <button class="nav-toggle" id="navToggle" aria-label="Отвори менюто" aria-expanded="false">
             <span></span><span></span><span></span>
@@ -16,7 +16,9 @@
                     </div>
                 </div>
 
-                <a href="{{ url_for('index') }}" class="{{ 'active-nav-link' if active_page == 'index' else '' }}">Начало</a>
+                <a href="{{ url_for('services') }}" class="{{ 'active-nav-link' if active_page == 'services' else '' }}">Услуги</a>
+                <a href="{{ url_for('about') }}" class="{{ 'active-nav-link' if active_page == 'about' else '' }}">За нас</a>
+                <a href="{{ url_for('contact') }}" class="{{ 'active-nav-link' if active_page == 'contact' else '' }}">Контакти</a>
 
                 {% if current_user.is_authenticated %}
                     <a href="{{ url_for('dashboard') }}" class="{{ 'active-nav-link' if active_page == 'dashboard' else '' }}">Лична Библиотека</a>
@@ -35,10 +37,6 @@
                             </div>
                         </div>
                     {% endif %}
-                {% else %}
-                    <a href="#">Услуги</a>
-                    <a href="#">За нас</a>
-                    <a href="#">Контакти</a>
                 {% endif %}
             </div>
 
