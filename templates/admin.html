@@ -6,34 +6,38 @@
     <title>Админ Панел - Trafcom DXF</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <style>
-        .material-price-input {
-            width: 100px;
-            padding: 0.6rem 0.75rem;
-            background-color: var(--bg-input);
-            color: var(--text-main);
+        .admin-hub-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 18px;
+        }
+        .admin-hub-card {
+            display: block;
+            background-color: var(--bg-surface);
             border: 1px solid var(--border-color);
-            border-radius: var(--border-radius-sm);
-            font-size: 0.9rem;
-        }
-        .material-row-form {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 0.5rem;
-        }
-        .btn-save-price {
-            background-color: var(--accent-primary);
+            border-radius: var(--border-radius-md);
+            padding: 22px;
+            text-decoration: none;
             color: var(--text-main);
-            border: none;
-            border-radius: var(--border-radius-sm);
-            padding: 0.5rem 0.9rem;
-            cursor: pointer;
-            font-weight: 600;
-            font-size: 0.85rem;
-            transition: background-color 0.2s ease;
+            transition: border-color 0.2s ease, transform 0.2s ease;
         }
-        .btn-save-price:hover {
-            background-color: var(--accent-secondary);
+        .admin-hub-card:hover {
+            border-color: var(--accent-primary);
+            transform: translateY(-2px);
+        }
+        .admin-hub-card h4 {
+            margin: 0 0 6px 0;
+            font-size: 1.05rem;
+        }
+        .admin-hub-card .hub-count {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--accent-primary);
+        }
+        .admin-hub-card p {
+            margin: 4px 0 0 0;
+            font-size: 0.85rem;
+            color: var(--text-muted);
         }
     </style>
 </head>
@@ -66,360 +70,39 @@
         </form>
     </section>
 
-    <div class="admin-grid">
-        <section class="admin-card">
-            <h3>Създаване на нов потребител</h3>
-            <form action="{{ url_for('admin_create_user') }}" method="POST" class="admin-form">
-                {% include 'partials/csrf_field.html' %}
-                <div class="form-group">
-                    <label for="username">Потребителско име</label>
-                    <input type="text" id="username" name="username" placeholder="Въведете име..." required autocomplete="off">
-                </div>
-                <div class="form-group">
-                    <label for="password">Парола</label>
-                    <input type="password" id="password" name="password" placeholder="Въведете парола..." required>
-                </div>
-                <div class="form-group">
-                    <label for="role">Роля</label>
-                    <select id="role" name="role">
-                        <option value="regular_user" selected>Клиент</option>
-                        <option value="worker">Служител (цех)</option>
-                        <option value="web_designer">Уеб дизайнер</option>
-                        <option value="admin">Администратор</option>
-                    </select>
-                </div>
-                <button type="submit" class="btn-submit">Регистрация на акаунт</button>
-            </form>
-        </section>
-    </div>
-
     <section class="admin-card">
-        <h3>Добавяне на нов материал</h3>
-        <p class="section-subtitle">Добавете нов материал (напр. различни дебелини на един и същ метал, всяка със собствена цена).</p>
-        <form action="{{ url_for('admin_add_material') }}" method="POST" class="admin-form">
-            {% include 'partials/csrf_field.html' %}
-            <div class="form-group">
-                <label for="new_display_name">Име на материала</label>
-                <input type="text" id="new_display_name" name="display_name" placeholder="напр. Алуминий 2мм" required autocomplete="off">
-            </div>
-            <div class="form-group">
-                <label for="new_cost_per_m2">Цена на м² плоча (€)</label>
-                <input type="number" id="new_cost_per_m2" step="0.01" min="0" name="cost_per_m2" placeholder="напр. 40.00" required>
-            </div>
-            <div class="form-group">
-                <label for="new_cost_per_meter_cut">Цена на метър рязане (€)</label>
-                <input type="number" id="new_cost_per_meter_cut" step="0.01" min="0" name="cost_per_meter_cut" placeholder="напр. 2.00" required>
-            </div>
-            <div class="form-group">
-                <label for="new_cost_per_pierce">Цена на пробиване (€)</label>
-                <input type="number" id="new_cost_per_pierce" step="0.01" min="0" name="cost_per_pierce" placeholder="напр. 0.20" required>
-            </div>
-            <div class="form-group">
-                <label for="new_sheet_length_mm">Дължина на плочата (мм)</label>
-                <input type="number" id="new_sheet_length_mm" step="1" min="0" name="sheet_length_mm" placeholder="напр. 3000">
-            </div>
-            <div class="form-group">
-                <label for="new_sheet_width_mm">Ширина на плочата (мм)</label>
-                <input type="number" id="new_sheet_width_mm" step="1" min="0" name="sheet_width_mm" placeholder="напр. 1500">
-            </div>
-            <div class="form-group">
-                <label for="new_thickness_mm">Дебелина (мм)</label>
-                <input type="number" id="new_thickness_mm" step="0.1" min="0" name="thickness_mm" placeholder="напр. 2">
-            </div>
-            <div class="form-group">
-                <label for="new_material_erp_number">ERP № (незадължително - оставете празно за автоматично генериране)</label>
-                <input type="number" id="new_material_erp_number" name="erp_number" placeholder="автоматично">
-            </div>
-            <div class="form-group">
-                <label for="new_material_code_number">КД № (за етикет, незадължително)</label>
-                <input type="text" id="new_material_code_number" name="code_number">
-            </div>
-            <button type="submit" class="btn-submit">Добави материал</button>
-        </form>
-    </section>
-
-    <section class="admin-card">
-        <h3>Цени на материалите</h3>
-        <p class="section-subtitle">Редактирайте цените на материалите, използвани при изчисляване на всяка поръчка. Промените влизат в сила незабавно за всички нови изчисления.</p>
-
-        <div class="table-responsive">
-            <table class="users-table">
-                <thead>
-                <tr>
-                    <th>Материал</th>
-                    <th>Цена на м² плоча (€)</th>
-                    <th>Цена на метър рязане (€)</th>
-                    <th>Цена на пробиване (€)</th>
-                    <th>Дължина (мм)</th>
-                    <th>Ширина (мм)</th>
-                    <th>Дебелина (мм)</th>
-                    <th>ERP №</th>
-                    <th>КД №</th>
-                    <th class="text-right">Действие</th>
-                    <th class="text-right">Етикет</th>
-                    <th class="text-right">Изтриване</th>
-                </tr>
-                </thead>
-                <tbody>
-                {% for material in materials %}
-                <tr>
-                    <td><strong>{{ material.display_name }}</strong></td>
-                    <td colspan="9">
-                        <form action="{{ url_for('admin_update_material', key=material.key) }}" method="POST" class="material-row-form">
-                            {% include 'partials/csrf_field.html' %}
-                            <input type="number" step="0.01" min="0" name="cost_per_m2"
-                                   value="{{ '%.2f'|format(material.cost_per_m2) }}" class="material-price-input" required>
-                            <input type="number" step="0.01" min="0" name="cost_per_meter_cut"
-                                   value="{{ '%.2f'|format(material.cost_per_meter_cut) }}" class="material-price-input" required>
-                            <input type="number" step="0.01" min="0" name="cost_per_pierce"
-                                   value="{{ '%.2f'|format(material.cost_per_pierce) }}" class="material-price-input" required>
-                            <input type="number" step="1" min="0" name="sheet_length_mm"
-                                   value="{{ material.sheet_length_mm|int if material.sheet_length_mm is not none else '' }}"
-                                   class="material-price-input" placeholder="мм">
-                            <input type="number" step="1" min="0" name="sheet_width_mm"
-                                   value="{{ material.sheet_width_mm|int if material.sheet_width_mm is not none else '' }}"
-                                   class="material-price-input" placeholder="мм">
-                            <input type="number" step="0.1" min="0" name="thickness_mm"
-                                   value="{{ material.thickness_mm if material.thickness_mm is not none else '' }}"
-                                   class="material-price-input" placeholder="мм">
-                            <input type="number" name="erp_number" value="{{ material.erp_number or '' }}"
-                                   class="material-price-input" placeholder="автоматично">
-                            <input type="text" name="code_number" value="{{ material.code_number or '' }}"
-                                   class="material-price-input" placeholder="КД №">
-                            <button type="submit" class="btn-save-price">Запази</button>
-                        </form>
-                    </td>
-                    <td class="text-right">
-                        <form action="{{ url_for('print_label', target_type='material', target_id=material.id) }}" method="GET" style="display:flex; gap:4px; align-items:center; justify-content:flex-end;">
-                            <input type="number" name="quantity" min="1" value="1" class="material-price-input" style="width: 55px;">
-                            <button type="submit" class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;">Етикет</button>
-                        </form>
-                    </td>
-                    <td class="text-right">
-                        <form action="{{ url_for('admin_delete_material', key=material.key) }}" method="POST"
-                              onsubmit="return confirm('Изтриване на материал &quot;{{ material.display_name|e }}&quot;? Това е възможно само ако няма детайли, които го използват.');" style="display:inline;">
-                            {% include 'partials/csrf_field.html' %}
-                            <button type="submit" class="btn-delete">Изтрий</button>
-                        </form>
-                    </td>
-                </tr>
-                {% else %}
-                <tr>
-                    <td colspan="12" class="text-center no-data">
-                        Няма конфигурирани материали.
-                    </td>
-                </tr>
-                {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </section>
-
-    <section class="admin-card">
-        <h3>Библиотека с детайли</h3>
-        <p class="section-subtitle">Добавете преизползваеми детайли (DXF + материал), от които се изграждат продуктите по-долу.</p>
-
-        <form action="{{ url_for('admin_add_detail') }}" method="POST" enctype="multipart/form-data" class="admin-form" style="margin-bottom: 1.5rem;">
-            {% include 'partials/csrf_field.html' %}
-            <div class="form-group">
-                <label for="detail_name">Име на детайла</label>
-                <input type="text" id="detail_name" name="name" placeholder="напр. Странична стена 400x300" required autocomplete="off">
-            </div>
-            <div class="form-group">
-                <label for="detail_material">Материал</label>
-                <select id="detail_material" name="material">
-                    {% for material in materials %}
-                    <option value="{{ material.key }}">{{ material.display_name }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="form-group">
-                <label for="detail_file">DXF файл</label>
-                <input type="file" id="detail_file" name="file" accept=".dxf" required>
-            </div>
-            <div class="form-group">
-                <label for="detail_erp_number">ERP № (незадължително - оставете празно за автоматично генериране)</label>
-                <input type="number" id="detail_erp_number" name="erp_number" placeholder="автоматично">
-            </div>
-            <div class="form-group">
-                <label for="detail_code_number">КД № (за етикет, незадължително)</label>
-                <input type="text" id="detail_code_number" name="code_number" placeholder="напр. Bulspike 01.01.01.00.02">
-            </div>
-            <button type="submit" class="btn-submit">Добави детайл</button>
-        </form>
-
-        <div class="table-responsive">
-            <table class="users-table">
-                <thead>
-                <tr>
-                    <th>Име</th>
-                    <th>Материал</th>
-                    <th>Размери</th>
-                    <th>Цена на рязане (€)</th>
-                    <th>ERP № / КД №</th>
-                    <th class="text-right">Етикет</th>
-                    <th class="text-right">Действие</th>
-                </tr>
-                </thead>
-                <tbody>
-                {% for detail in details %}
-                <tr>
-                    <td><strong>{{ detail.name }}</strong></td>
-                    <td><span class="badge badge-user">{{ detail.material.display_name if detail.material else 'Неизвестен' }}</span></td>
-                    <td>{{ "%.2f"|format(detail.width) }} x {{ "%.2f"|format(detail.height) }} мм</td>
-                    <td>{{ "%.2f"|format(detail.calculated_price) }} €</td>
-                    <td class="text-small text-muted">{{ detail.erp_number or '-' }} / {{ detail.code_number or '-' }}</td>
-                    <td class="text-right">
-                        <form action="{{ url_for('print_label', target_type='detail', target_id=detail.id) }}" method="GET" style="display:flex; gap:4px; align-items:center; justify-content:flex-end;">
-                            <input type="number" name="quantity" min="1" value="1" class="material-price-input" style="width: 55px;">
-                            <button type="submit" class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;">Етикет</button>
-                        </form>
-                    </td>
-                    <td class="text-right">
-                        <form action="{{ url_for('admin_delete_detail', detail_id=detail.id) }}" method="POST" onsubmit="return confirm('Изтриване на детайла?');" style="display:inline;">
-                            {% include 'partials/csrf_field.html' %}
-                            <button type="submit" class="btn-delete">Изтрий</button>
-                        </form>
-                    </td>
-                </tr>
-                {% else %}
-                <tr>
-                    <td colspan="7" class="text-center no-data">Няма добавени детайли.</td>
-                </tr>
-                {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </section>
-
-    <section class="admin-card">
-        <h3>Продукти</h3>
-        <p class="section-subtitle">Продуктите се изграждат от детайли plus допълнителни разходи (боядисване, монтаж, транспорт и др.).</p>
-
-        <form action="{{ url_for('admin_add_product') }}" method="POST" class="admin-form" style="margin-bottom: 1.5rem;">
-            {% include 'partials/csrf_field.html' %}
-            <div class="form-group">
-                <label for="product_name">Име на продукта</label>
-                <input type="text" id="product_name" name="name" placeholder="напр. Метален шкаф модел А" required autocomplete="off">
-            </div>
-            <div class="form-group">
-                <label for="product_description">Описание (незадължително)</label>
-                <input type="text" id="product_description" name="description" placeholder="Кратко описание...">
-            </div>
-            <div class="form-group">
-                <label for="product_markup">Надценка (%)</label>
-                <input type="number" id="product_markup" name="markup_percent" step="0.1" min="0" value="0">
-            </div>
-            <button type="submit" class="btn-submit">Създай продукт</button>
-        </form>
-
-        <div class="table-responsive">
-            <table class="users-table">
-                <thead>
-                <tr>
-                    <th>Продукт</th>
-                    <th>Себестойност (€)</th>
-                    <th>Надценка</th>
-                    <th>Продажна цена (€)</th>
-                    <th>ERP № / КД №</th>
-                    <th class="text-right">Действия</th>
-                </tr>
-                </thead>
-                <tbody>
-                {% for product in products %}
-                <tr>
-                    <td><strong>{{ product.name }}</strong></td>
-                    <td>{{ "%.2f"|format(product_pricing[product.id].total_cost) }} €</td>
-                    <td>{{ product.markup_percent }}%</td>
-                    <td><span style="color: var(--success-text); font-weight: 600;">{{ "%.2f"|format(product_pricing[product.id].sell_price) }} €</span></td>
-                    <td class="text-small text-muted">{{ product.erp_number or '-' }} / {{ product.code_number or '-' }}</td>
-                    <td class="text-right">
-                        <a href="{{ url_for('admin_product_edit', product_id=product.id) }}" class="btn-secondary" style="padding: 8px 14px; border-radius: var(--border-radius-sm); font-size: 0.85rem; text-decoration: none;">Редактирай</a>
-                        <a href="{{ url_for('admin_product_offer', product_id=product.id) }}" class="btn-secondary" style="padding: 8px 14px; border-radius: var(--border-radius-sm); font-size: 0.85rem; text-decoration: none;">Оферта</a>
-                        <form action="{{ url_for('print_label', target_type='product', target_id=product.id) }}" method="GET" style="display:inline-flex; gap:4px; align-items:center;">
-                            <input type="number" name="quantity" min="1" value="1" class="material-price-input" style="width: 50px; padding: 6px;">
-                            <button type="submit" class="btn-secondary" style="padding: 8px 14px; border-radius: var(--border-radius-sm); font-size: 0.85rem;">Етикет</button>
-                        </form>
-                        <form action="{{ url_for('admin_product_delete', product_id=product.id) }}" method="POST" onsubmit="return confirm('Изтриване на продукта?');" style="display:inline;">
-                            {% include 'partials/csrf_field.html' %}
-                            <button type="submit" class="btn-delete">Изтрий</button>
-                        </form>
-                    </td>
-                </tr>
-                {% else %}
-                <tr>
-                    <td colspan="6" class="text-center no-data">Няма създадени продукти.</td>
-                </tr>
-                {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </section>
-
-    <section class="admin-card">
-        <h3>Списък с регистрирани потребители</h3>
-        <p class="section-subtitle">Общо регистрирани профили в системата, които имат достъп до калкулатора.</p>
-
-        <div class="table-responsive">
-            <table class="users-table">
-                <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>Потребителско име</th>
-                    <th>Роля / Права</th>
-                    <th class="text-right">Действия</th>
-                </tr>
-                </thead>
-                <tbody>
-                {% for user in users %}
-                <tr>
-                    <td>#{{ user.id }}</td>
-                    <td class="username-cell">
-                        <strong>{{ user.username }}</strong>
-                    </td>
-                    <td>
-                        {% if user.is_admin %}
-                        <span class="badge badge-admin">Администратор</span>
-                        {% elif user.is_worker %}
-                        <span class="badge badge-worker">Служител</span>
-                        {% elif user.role == 'web_designer' %}
-                        <span class="badge badge-worker">Уеб дизайнер</span>
-                        {% else %}
-                        <span class="badge badge-user">Клиент</span>
-                        {% endif %}
-                    </td>
-                    <td class="text-right">
-                        {% if user.id == current_user.id %}
-                        <span class="text-muted text-small">Текуща сесия</span>
-                        {% else %}
-                        <div style="display: flex; gap: 8px; justify-content: flex-end; align-items: center;">
-                            <form action="{{ url_for('admin_update_user_role', user_id=user.id) }}" method="POST" style="display:inline; display: flex; gap: 6px;">
-                                {% include 'partials/csrf_field.html' %}
-                                <select name="role" class="material-price-input" style="width: auto;">
-                                    <option value="regular_user" {% if user.role == 'regular_user' %}selected{% endif %}>Клиент</option>
-                                    <option value="worker" {% if user.role == 'worker' %}selected{% endif %}>Служител</option>
-                                    <option value="web_designer" {% if user.role == 'web_designer' %}selected{% endif %}>Уеб дизайнер</option>
-                                    <option value="admin" {% if user.role == 'admin' %}selected{% endif %}>Администратор</option>
-                                </select>
-                                <button type="submit" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem; border-radius: 4px;">Промени роля</button>
-                            </form>
-                            <form action="{{ url_for('admin_delete_user', user_id=user.id) }}" method="POST" onsubmit="return confirm('Изтриването на потребителя ще премахне и цялата му библиотека с чертежи! Потвърждавате ли?');" style="display:inline;">
-                                {% include 'partials/csrf_field.html' %}
-                                <button type="submit" class="btn-delete">Изтрий профила</button>
-                            </form>
-                        </div>
-                        {% endif %}
-                    </td>
-                </tr>
-                {% else %}
-                <tr>
-                    <td colspan="4" class="text-center no-data">
-                        Няма намерени регистрирани потребители в базата данни.
-                    </td>
-                </tr>
-                {% endfor %}
-                </tbody>
-            </table>
+        <h3>Управление</h3>
+        <p class="section-subtitle">Всяка област има собствена страница за управление.</p>
+        <div class="admin-hub-grid">
+            <a class="admin-hub-card" href="{{ url_for('admin_users') }}">
+                <div class="hub-count">{{ counts.users }}</div>
+                <h4>Потребители</h4>
+                <p>Създаване на акаунти и роли.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_materials') }}">
+                <div class="hub-count">{{ counts.materials }}</div>
+                <h4>Материали</h4>
+                <p>Цени, тип и марка на суровините.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_details') }}">
+                <div class="hub-count">{{ counts.details }}</div>
+                <h4>Детайли</h4>
+                <p>Библиотека с преизползваеми детайли.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_products') }}">
+                <div class="hub-count">{{ counts.products }}</div>
+                <h4>Продукти</h4>
+                <p>Продукти, изградени от детайли.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_clients') }}">
+                <div class="hub-count">{{ counts.clients }} / {{ counts.deliverers }}</div>
+                <h4>Клиенти / Куриери</h4>
+                <p>Клиенти и доставчици за поръчки.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('list_machines') }}">
+                <h4>Машини</h4>
+                <p>Производствени единици и статус.</p>
+            </a>
         </div>
     </section>
 

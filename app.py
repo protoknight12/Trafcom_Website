@@ -164,6 +164,44 @@ class MaterialPrice(db.Model):
     # since older rows won't have them.
     erp_number = db.Column(db.Integer, nullable=True, unique=True)
     code_number = db.Column(db.String(100), nullable=True)
+    # Structural form of the stock (sheet/rod/profile/pipe) - see
+    # MATERIAL_TYPE_LABELS. Existing rows are all sheet stock, so this
+    # defaults to 'sheets' rather than forcing every material select
+    # throughout the app to handle a blank/unknown group.
+    type = db.Column(db.String(30), nullable=False, default='sheets')
+    # Free-text manufacturer/variant tag (e.g. "Alcoa", "DC01") - purely
+    # informational, shown alongside display_name where relevant.
+    brand = db.Column(db.String(100), nullable=True)
+
+
+# Structural-form categories a material's stock can come in, driving the
+# <optgroup> grouping on every material <select> in the app (see
+# partials/material_options.html) and the type dropdown on the admin
+# materials page. Not a DB table - this is a fixed, small set of physical
+# stock forms, not admin-editable data.
+MATERIAL_TYPE_LABELS = {
+    'sheets': 'Листове/Плочи',
+    'rods': 'Пръти',
+    'profiles': 'Профили',
+    'pipes': 'Тръби',
+    'other': 'Други',
+}
+
+
+class Client(db.Model):
+    """A customer an order can be placed for. Only `name` is required."""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(150), nullable=False)
+    email = db.Column(db.String(150), nullable=True)
+    phone = db.Column(db.String(50), nullable=True)
+
+
+class Deliverer(db.Model):
+    """A delivery provider an order can be shipped through."""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(150), nullable=False)
+    email = db.Column(db.String(150), nullable=True)
+    phone = db.Column(db.String(50), nullable=True)
 
 
 class Detail(db.Model):
@@ -252,9 +290,18 @@ class Order(db.Model):
     status = db.Column(db.String(50), default='new')  # new, in_production, completed, cancelled
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     machine_id = db.Column(db.Integer, db.ForeignKey('machine.id'), nullable=True)
+    # Optional links to the Client/Deliverer catalogs (see order_create.html's
+    # select-or-quick-create UI). customer_name stays the field actually
+    # displayed everywhere (my_orders.html, production_report.html, offer/
+    # protocol/certificate) - it's auto-filled from the selected/created
+    # client's name, so none of those templates need to change.
+    client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True)
+    deliverer_id = db.Column(db.Integer, db.ForeignKey('deliverer.id'), nullable=True)
 
     user = db.relationship('User', backref=db.backref('orders', lazy=True))
     machine = db.relationship('Machine', backref='orders')
+    client = db.relationship('Client')
+    deliverer = db.relationship('Deliverer')
     items = db.relationship('OrderItem', backref='order', lazy=True, cascade="all, delete-orphan")
 
     @property
@@ -1005,6 +1052,8 @@ def inject_current_year():
 
 
 app.jinja_env.globals['get_text'] = get_text
+app.jinja_env.globals['material_type_label'] = lambda key: MATERIAL_TYPE_LABELS.get(key, key)
+app.jinja_env.globals['MATERIAL_TYPE_LABELS'] = MATERIAL_TYPE_LABELS
 
 
 @app.route('/robots.txt')
@@ -1059,7 +1108,7 @@ def contact():
 def generator():
     # Requires login, same as every other app (matches the "apps require an
     # account, the public site doesn't" design used across the project).
-    materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
+    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     return render_template('generator.html', materials=materials, active_page='generator')
 
 
@@ -1197,7 +1246,7 @@ def dashboard():
     # Pure library view now - uploading/calculating a new DXF lives on its
     # own page (see upload()) so the two don't get conflated in the nav.
     user_uploads = DxfFile.query.filter_by(user_id=current_user.id).order_by(DxfFile.id.desc()).all()
-    materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
+    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     return render_template('dashboard.html', uploads=user_uploads, materials=materials, active_page='dashboard')
 
 
@@ -1272,7 +1321,7 @@ def upload():
             return redirect(request.url)
 
     machines = Machine.query.all()
-    materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
+    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     return render_template('upload.html', machines=machines, materials=materials, active_page='upload')
 
 # ----------------- АДМИНИСТРАТОРСКИ МАРШРУТИ -----------------
@@ -1280,19 +1329,149 @@ def upload():
 @app.route('/admin')
 @login_required
 def admin_dashboard():
+    """
+    Hub page: just counts + links into the dedicated sub-pages below (users/
+    materials/details/products/clients) plus the cross-cutting ERP № lookup
+    box - each domain's own CRUD lives on its own route/template now instead
+    of one long admin.html.
+    """
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.')
+        return redirect(url_for('dashboard'))
+    counts = {
+        'users': User.query.count(),
+        'materials': MaterialPrice.query.count(),
+        'details': Detail.query.count(),
+        'products': Product.query.count(),
+        'clients': Client.query.count(),
+        'deliverers': Deliverer.query.count(),
+    }
+    return render_template('admin.html', counts=counts, active_page='admin')
+
+
+@app.route('/admin/users')
+@login_required
+def admin_users():
     if not current_user.is_admin:
         flash('Нямате достъп до тази страница.')
         return redirect(url_for('dashboard'))
     all_users = User.query.filter(User.id != current_user.id).all()
-    materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
+    return render_template('admin_users.html', users=all_users, active_page='admin_users')
+
+
+@app.route('/admin/materials')
+@login_required
+def admin_materials():
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.')
+        return redirect(url_for('dashboard'))
+    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    return render_template('admin_materials.html', materials=materials, active_page='admin_materials')
+
+
+@app.route('/admin/details')
+@login_required
+def admin_details():
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.')
+        return redirect(url_for('dashboard'))
+    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     details = Detail.query.order_by(Detail.name).all()
+    return render_template('admin_details.html', materials=materials, details=details, active_page='admin_details')
+
+
+@app.route('/admin/products')
+@login_required
+def admin_products():
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.')
+        return redirect(url_for('dashboard'))
     products = Product.query.order_by(Product.name).all()
     product_pricing = {p.id: calculate_product_pricing(p) for p in products}
-    return render_template(
-        'admin.html', users=all_users, materials=materials,
-        details=details, products=products, product_pricing=product_pricing,
-        active_page='admin'
+    return render_template('admin_products.html', products=products, product_pricing=product_pricing, active_page='admin_products')
+
+
+@app.route('/admin/clients')
+@login_required
+def admin_clients():
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.')
+        return redirect(url_for('dashboard'))
+    clients = Client.query.order_by(Client.name).all()
+    deliverers = Deliverer.query.order_by(Deliverer.name).all()
+    return render_template('admin_clients.html', clients=clients, deliverers=deliverers, active_page='admin_clients')
+
+
+@app.route('/admin/clients/add', methods=['POST'])
+@login_required
+def admin_add_client():
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Моля въведете име на клиента.', 'danger')
+        return redirect(url_for('admin_clients'))
+    client = Client(
+        name=name,
+        email=request.form.get('email', '').strip() or None,
+        phone=request.form.get('phone', '').strip() or None,
     )
+    db.session.add(client)
+    db.session.commit()
+    flash(f'Клиентът "{name}" беше добавен успешно.', 'success')
+    return redirect(url_for('admin_clients'))
+
+
+@app.route('/admin/clients/<int:client_id>/delete', methods=['POST'])
+@login_required
+def admin_delete_client(client_id):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+    client = Client.query.get_or_404(client_id)
+    # Orders referencing this client keep existing (client_id is nullable) -
+    # detach rather than block deletion, same pattern as delete_machine().
+    Order.query.filter_by(client_id=client.id).update({'client_id': None})
+    db.session.delete(client)
+    db.session.commit()
+    flash(f'Клиентът "{client.name}" беше изтрит.', 'success')
+    return redirect(url_for('admin_clients'))
+
+
+@app.route('/admin/deliverers/add', methods=['POST'])
+@login_required
+def admin_add_deliverer():
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Моля въведете име на куриера.', 'danger')
+        return redirect(url_for('admin_clients'))
+    deliverer = Deliverer(
+        name=name,
+        email=request.form.get('email', '').strip() or None,
+        phone=request.form.get('phone', '').strip() or None,
+    )
+    db.session.add(deliverer)
+    db.session.commit()
+    flash(f'Куриерът "{name}" беше добавен успешно.', 'success')
+    return redirect(url_for('admin_clients'))
+
+
+@app.route('/admin/deliverers/<int:deliverer_id>/delete', methods=['POST'])
+@login_required
+def admin_delete_deliverer(deliverer_id):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+    deliverer = Deliverer.query.get_or_404(deliverer_id)
+    Order.query.filter_by(deliverer_id=deliverer.id).update({'deliverer_id': None})
+    db.session.delete(deliverer)
+    db.session.commit()
+    flash(f'Куриерът "{deliverer.name}" беше изтрит.', 'success')
+    return redirect(url_for('admin_clients'))
 
 
 @app.route('/admin/content')
@@ -1477,23 +1656,23 @@ def admin_create_user():
 
     if not username or not password:
         flash('Попълнете всички полета.')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_users'))
 
     if User.query.filter_by(username=username).first():
         flash('Потребителското име вече съществува.')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_users'))
 
     role = request.form.get('role', 'regular_user')
     if role not in ('regular_user', 'worker', 'admin', 'web_designer'):
         flash('Невалидна роля.', 'danger')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_users'))
 
     secure_pass = generate_password_hash(password, method='scrypt')
     new_user = User(username=username, password=secure_pass, role=role)
     db.session.add(new_user)
     db.session.commit()
     flash(f'Успешно създаден потребител: {username}')
-    return redirect(url_for('admin_dashboard'))
+    return redirect(url_for('admin_users'))
 
 
 @app.route('/admin/update_role/<int:user_id>', methods=['POST'])
@@ -1504,18 +1683,18 @@ def admin_update_user_role(user_id):
 
     if user_id == current_user.id:
         flash('Не можете да променяте собствената си роля.', 'danger')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_users'))
 
     role = request.form.get('role', '')
     if role not in ('regular_user', 'worker', 'admin', 'web_designer'):
         flash('Невалидна роля.', 'danger')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_users'))
 
     user_to_update = User.query.get_or_404(user_id)
     user_to_update.role = role
     db.session.commit()
     flash(f'Ролята на {user_to_update.username} беше обновена успешно.', 'success')
-    return redirect(url_for('admin_dashboard'))
+    return redirect(url_for('admin_users'))
 
 
 def _parse_sheet_dimensions(form):
@@ -1562,6 +1741,12 @@ def _parse_erp_number(form):
     """
     raw = form.get('erp_number', '').strip()
     return int(raw) if raw else _next_erp_number()
+
+
+def _parse_material_type(form):
+    """Reads the material 'type' dropdown, defaulting to 'sheets' for blank/unknown values."""
+    raw = form.get('type', '').strip()
+    return raw if raw in MATERIAL_TYPE_LABELS else 'sheets'
 
 
 def _erp_number_conflict(erp_number, exclude_type=None, exclude_id=None):
@@ -1615,16 +1800,16 @@ def admin_update_material(key):
         erp_number = _parse_erp_number(request.form)
     except ValueError:
         flash('Всички цени, размери и ERP № трябва да бъдат валидни числа.', 'danger')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_materials'))
 
     if cost_per_m2 < 0 or cost_per_meter_cut < 0 or cost_per_pierce < 0:
         flash('Цените не могат да бъдат отрицателни числа.', 'danger')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_materials'))
 
     conflict = _erp_number_conflict(erp_number, exclude_type='material', exclude_id=material.id)
     if conflict:
         flash(f'ERP № {erp_number} вече се използва от {conflict}.', 'danger')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_materials'))
 
     # Round to 2 decimals - keeps prices in a simple, everyday currency
     # format rather than accumulating long float tails over repeated edits.
@@ -1636,10 +1821,12 @@ def admin_update_material(key):
     material.thickness_mm = thickness_mm
     material.erp_number = erp_number
     material.code_number = request.form.get('code_number', '').strip() or None
+    material.type = _parse_material_type(request.form)
+    material.brand = request.form.get('brand', '').strip() or None
     db.session.commit()
 
     flash(f'Цените за "{material.display_name}" бяха обновени успешно.', 'success')
-    return redirect(url_for('admin_dashboard'))
+    return redirect(url_for('admin_materials'))
 
 
 @app.route('/admin/add_material', methods=['POST'])
@@ -1652,14 +1839,14 @@ def admin_add_material():
     display_name = request.form.get('display_name', '').strip()
     if not display_name:
         flash('Моля въведете име на материала.', 'danger')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_materials'))
 
     if MaterialPrice.query.filter_by(display_name=display_name).first():
         # Lets your boss add e.g. "Алуминий 2мм" and "Алуминий 10мм" as
         # distinct priced entries, while still catching accidental exact
         # duplicates of the same name.
         flash(f'Вече съществува материал с име "{display_name}".', 'danger')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_materials'))
 
     try:
         cost_per_m2 = float(request.form.get('cost_per_m2', ''))
@@ -1669,16 +1856,16 @@ def admin_add_material():
         erp_number = _parse_erp_number(request.form)
     except ValueError:
         flash('Всички цени, размери и ERP № трябва да бъдат валидни числа.', 'danger')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_materials'))
 
     if cost_per_m2 < 0 or cost_per_meter_cut < 0 or cost_per_pierce < 0:
         flash('Цените не могат да бъдат отрицателни числа.', 'danger')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_materials'))
 
     conflict = _erp_number_conflict(erp_number)
     if conflict:
         flash(f'ERP № {erp_number} вече се използва от {conflict}.', 'danger')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_materials'))
 
     # The key is just an opaque internal identifier (used in DxfFile.material
     # and the dashboard <select> value) - it's never shown to users, so a
@@ -1694,7 +1881,9 @@ def admin_add_material():
         sheet_width_mm=sheet_width_mm,
         thickness_mm=thickness_mm,
         erp_number=erp_number,
-        code_number=request.form.get('code_number', '').strip() or None
+        code_number=request.form.get('code_number', '').strip() or None,
+        type=_parse_material_type(request.form),
+        brand=request.form.get('brand', '').strip() or None
     )
     db.session.add(new_material)
     db.session.flush()  # assigns new_material.id without a full commit yet
@@ -1702,7 +1891,7 @@ def admin_add_material():
     db.session.commit()
 
     flash(f'Материалът "{display_name}" беше добавен успешно.', 'success')
-    return redirect(url_for('admin_dashboard'))
+    return redirect(url_for('admin_materials'))
 
 
 @app.route('/admin/products/<int:product_id>/upload_image', methods=['POST'])
@@ -1864,30 +2053,30 @@ def admin_add_detail():
         erp_number = _parse_erp_number(request.form)
     except ValueError:
         flash('ERP № трябва да бъде цяло число.', 'danger')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_details'))
     code_number = request.form.get('code_number', '').strip() or None
 
     if not name:
         flash('Моля въведете име на детайла.', 'danger')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_details'))
 
     conflict = _erp_number_conflict(erp_number)
     if conflict:
         flash(f'ERP № {erp_number} вече се използва от {conflict}.', 'danger')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_details'))
 
     if not MaterialPrice.query.filter_by(key=material_key).first():
         flash('Невалиден избор на материал.', 'danger')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_details'))
 
     if 'file' not in request.files or request.files['file'].filename == '':
         flash('Моля качете .dxf файл за детайла.', 'danger')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_details'))
 
     file = request.files['file']
     if not file.filename.lower().endswith('.dxf'):
         flash('Невалиден формат! Приемат се само .dxf файлове.', 'danger')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_details'))
 
     temp_path = None
     try:
@@ -1898,7 +2087,7 @@ def admin_add_detail():
         width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(temp_path)
         if width is None:
             flash('Грешка при обработката на DXF структурата.', 'danger')
-            return redirect(url_for('admin_dashboard'))
+            return redirect(url_for('admin_details'))
 
         price = calculate_cnc_price(width, height, total_length, pierce_count, material_key)
 
@@ -1919,7 +2108,7 @@ def admin_add_detail():
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
 
-    return redirect(url_for('admin_dashboard'))
+    return redirect(url_for('admin_details'))
 
 
 @app.route('/admin/details/<int:detail_id>/edit')
@@ -1972,12 +2161,12 @@ def admin_delete_detail(detail_id):
     # product first (via the product edit page), then delete it here.
     if ProductDetail.query.filter_by(detail_id=detail.id).first():
         flash(f'Детайлът "{detail.name}" се използва в поне един продукт и не може да бъде изтрит.', 'danger')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_details'))
 
     db.session.delete(detail)
     db.session.commit()
     flash(f'Детайлът "{detail.name}" беше изтрит.', 'success')
-    return redirect(url_for('admin_dashboard'))
+    return redirect(url_for('admin_details'))
 
 
 
@@ -1994,7 +2183,7 @@ def admin_add_product():
     name = request.form.get('name', '').strip()
     if not name:
         flash('Моля въведете име на продукта.', 'danger')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_products'))
 
     description = request.form.get('description', '').strip()
 
@@ -2020,7 +2209,7 @@ def admin_product_edit(product_id):
 
     product = Product.query.get_or_404(product_id)
     all_details = Detail.query.order_by(Detail.name).all()
-    materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
+    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     pricing = calculate_product_pricing(product)
     return render_template('product_edit.html', product=product, all_details=all_details, pricing=pricing, materials=materials, active_page='admin')
 
@@ -2117,7 +2306,7 @@ def admin_product_delete(product_id):
     db.session.delete(product)  # Cascades database records
     db.session.commit()
     flash(f'Продуктът "{name}" беше изтрит.', 'success')
-    return redirect(url_for('admin_dashboard'))
+    return redirect(url_for('admin_products'))
 
 
 @app.route('/admin/products/<int:product_id>/add_detail', methods=['POST'])
@@ -2261,7 +2450,7 @@ def admin_delete_user(user_id):
     # guard against a directly crafted request too.
     if user_to_delete.id == current_user.id:
         flash('Не можете да изтриете собствения си профил оттук.', 'danger')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_users'))
 
     try:
         # Note: uploaded DXF files are only ever written temporarily during
@@ -2278,7 +2467,7 @@ def admin_delete_user(user_id):
         db.session.rollback()
         flash(f'Грешка при изтриване на данни: {str(e)}', 'danger')
 
-    return redirect(url_for('admin_dashboard'))
+    return redirect(url_for('admin_users'))
 
 
 @app.route('/logout')
@@ -2313,13 +2502,19 @@ def create_order():
 
         machine_id_raw = request.form.get('machine_id', '')
         machine_id = int(machine_id_raw) if machine_id_raw and machine_id_raw.isdigit() else None
+        client_id_raw = request.form.get('client_id', '')
+        client_id = int(client_id_raw) if client_id_raw and client_id_raw.isdigit() else None
+        deliverer_id_raw = request.form.get('deliverer_id', '')
+        deliverer_id = int(deliverer_id_raw) if deliverer_id_raw and deliverer_id_raw.isdigit() else None
 
         new_order = Order(
             order_number=generate_order_number(),
             user_id=current_user.id,
             customer_name=customer_name,
             status='new',
-            machine_id=machine_id
+            machine_id=machine_id,
+            client_id=client_id,
+            deliverer_id=deliverer_id
         )
         db.session.add(new_order)
         db.session.flush()  # Взимаме ID-то преди commit
@@ -2383,7 +2578,9 @@ def create_order():
     products = Product.query.order_by(Product.name).all()
     details = Detail.query.order_by(Detail.name).all()
     machines = Machine.query.order_by(Machine.name).all()
-    materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
+    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    clients = Client.query.order_by(Client.name).all()
+    deliverers = Deliverer.query.order_by(Deliverer.name).all()
     # Pre-computed, JSON-friendly catalogs so the cart UI can add items and
     # show live prices/totals client-side without extra round-trips.
     products_data = [
@@ -2399,7 +2596,8 @@ def create_order():
         for d in details
     ]
     return render_template('order_create.html', products=products_data, details=details_data,
-                           machines=machines, materials=materials, active_page='create_order')
+                           machines=machines, materials=materials, clients=clients, deliverers=deliverers,
+                           active_page='create_order')
 
 
 # МАРШРУТ ЗА ОБИКНОВЕНИ ПОТРЕБИТЕЛИ - ИСТОРИЯ И СТАТУС НА СОБСТВЕНИТЕ ПОРЪЧКИ
@@ -2650,12 +2848,12 @@ def erp_lookup():
     detail = Detail.query.filter_by(erp_number=erp_number).first()
     if detail:
         flash(f'Намерен детайл: "{detail.name}" (вижте таблицата с детайли по-долу).', 'success')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_details'))
 
     material = MaterialPrice.query.filter_by(erp_number=erp_number).first()
     if material:
         flash(f'Намерен материал: "{material.display_name}" (вижте таблицата с материали по-долу).', 'success')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_materials'))
 
     flash(f'Няма запис с ERP № {erp_number}.', 'danger')
     return redirect(url_for('admin_dashboard'))
@@ -2755,6 +2953,50 @@ def api_quick_create_product():
             'price': pricing['sell_price']
         }
     })
+
+
+@app.route('/api/quick-create-client', methods=['POST'])
+@login_required
+def api_quick_create_client():
+    """
+    AJAX endpoint: create a Client on the fly from the order-creation form.
+    Open to any logged-in user (not admin-only) - regular users place their
+    own orders and need to be able to add a client for themselves, unlike
+    the Detail/Product quick-create endpoints above which are catalog-
+    management actions reserved for admins.
+    """
+    name = request.form.get('name', '').strip()
+    if not name:
+        return jsonify({'status': 'error', 'message': 'Моля въведете име на клиента.'}), 400
+
+    client = Client(
+        name=name,
+        email=request.form.get('email', '').strip() or None,
+        phone=request.form.get('phone', '').strip() or None,
+    )
+    db.session.add(client)
+    db.session.commit()
+
+    return jsonify({'status': 'success', 'client': {'id': client.id, 'name': client.name}})
+
+
+@app.route('/api/quick-create-deliverer', methods=['POST'])
+@login_required
+def api_quick_create_deliverer():
+    """AJAX endpoint: create a Deliverer on the fly from the order-creation form. See api_quick_create_client()."""
+    name = request.form.get('name', '').strip()
+    if not name:
+        return jsonify({'status': 'error', 'message': 'Моля въведете име на куриера.'}), 400
+
+    deliverer = Deliverer(
+        name=name,
+        email=request.form.get('email', '').strip() or None,
+        phone=request.form.get('phone', '').strip() or None,
+    )
+    db.session.add(deliverer)
+    db.session.commit()
+
+    return jsonify({'status': 'success', 'deliverer': {'id': deliverer.id, 'name': deliverer.name}})
 
 
 @app.route('/admin/orders/<int:order_id>/assign_machine', methods=['POST'])
@@ -2876,7 +3118,7 @@ def admin_delete_material(key):
             'и не може да бъде изтрит. Изтрийте или преместете тези детайли първо.',
             'danger'
         )
-        return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('admin_materials'))
     try:
         db.session.delete(material)
         db.session.commit()
@@ -2884,7 +3126,7 @@ def admin_delete_material(key):
     except Exception as e:
         db.session.rollback()
         flash(f'Грешка при изтриване: {str(e)}', 'danger')
-    return redirect(url_for('admin_dashboard'))
+    return redirect(url_for('admin_materials'))
 
 
 if __name__ == '__main__':

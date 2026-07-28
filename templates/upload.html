@@ -31,9 +31,7 @@
             <div class="form-group" style="margin-bottom: 20px;">
                 <label for="material">Материал за изчисление *</label>
                 <select name="material" id="material" required>
-                    {% for mat in materials %}
-                    <option value="{{ mat.key }}">{{ mat.display_name }}</option>
-                    {% endfor %}
+                    {% include 'partials/material_options.html' %}
                 </select>
             </div>
 

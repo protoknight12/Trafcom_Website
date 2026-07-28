@@ -27,10 +27,15 @@
 
                     {% if current_user.is_admin or current_user.is_worker or current_user.can_edit_content %}
                         <div class="dropdown">
-                            <a class="dropdown-trigger {{ 'active-nav-link' if active_page in ['admin', 'production', 'machines', 'content'] else '' }}" href="#" tabindex="0" onclick="event.preventDefault()">Управление <span class="dropdown-arrow">▼</span></a>
+                            <a class="dropdown-trigger {{ 'active-nav-link' if active_page in ['admin', 'admin_users', 'admin_materials', 'admin_details', 'admin_products', 'admin_clients', 'production', 'machines', 'content'] else '' }}" href="#" tabindex="0" onclick="event.preventDefault()">Управление <span class="dropdown-arrow">▼</span></a>
                             <div class="dropdown-content">
                                 {% if current_user.is_admin %}
                                     <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
+                                    <a href="{{ url_for('admin_users') }}">Потребители</a>
+                                    <a href="{{ url_for('admin_materials') }}">Материали</a>
+                                    <a href="{{ url_for('admin_details') }}">Детайли</a>
+                                    <a href="{{ url_for('admin_products') }}">Продукти</a>
+                                    <a href="{{ url_for('admin_clients') }}">Клиенти / Куриери</a>
                                 {% endif %}
                                 {% if current_user.is_admin or current_user.is_worker %}
                                     <a href="{{ url_for('admin_production_report') }}">Справка Производство</a>

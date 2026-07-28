@@ -121,8 +121,29 @@
                 </select>
             </div>
             <div class="form-group" style="margin-bottom: 20px;">
-                <label for="customer_name">Име на клиент / Фирма *</label>
-                <input type="text" id="customer_name" name="customer_name" required placeholder="Въведете получател...">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <label for="client_id" style="margin-bottom: 0;">Клиент / Фирма *</label>
+                    <button type="button" onclick="openQuickClientModal()" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
+                </div>
+                <select id="client_id" name="client_id" required>
+                    <option value="">-- Изберете клиент --</option>
+                    {% for c in clients %}
+                    <option value="{{ c.id }}" data-name="{{ c.name }}">{{ c.name }}</option>
+                    {% endfor %}
+                </select>
+                <input type="hidden" name="customer_name" id="customer_name">
+            </div>
+            <div class="form-group" style="margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <label for="deliverer_id" style="margin-bottom: 0;">Куриер (по избор)</label>
+                    <button type="button" onclick="openQuickDelivererModal()" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
+                </div>
+                <select id="deliverer_id" name="deliverer_id">
+                    <option value="">-- Без конкретен куриер --</option>
+                    {% for d in deliverers %}
+                    <option value="{{ d.id }}">{{ d.name }}</option>
+                    {% endfor %}
+                </select>
             </div>
             <input type="hidden" name="cart_json" id="cartJsonInput">
             <button type="submit" class="btn-submit" style="width: 100%; margin-top: 8px;" id="submitOrderBtn" disabled>Изпрати Поръчка</button>
@@ -145,9 +166,7 @@
             <div class="form-group" style="margin-bottom: 15px;">
                 <label for="qd_material">Материал</label>
                 <select id="qd_material" name="material">
-                    {% for mat in materials %}
-                    <option value="{{ mat.key }}">{{ mat.display_name }}</option>
-                    {% endfor %}
+                    {% include 'partials/material_options.html' %}
                 </select>
             </div>
             <div class="form-group" style="margin-bottom: 20px;">
@@ -184,6 +203,54 @@
     </div>
 </div>
 {% endif %}
+
+<div id="quickClientModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
+    <div class="admin-card" style="width: 100%; max-width: 500px; margin: 20px; background-color: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 28px; box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15); position: relative;">
+        <span onclick="closeQuickClientModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
+        <h3 style="margin-top: 0; margin-bottom: 16px;">Бързо създаване на клиент</h3>
+        <form id="quickClientForm">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qc_name">Име *</label>
+                <input type="text" id="qc_name" name="name" required placeholder="напр. Иван Иванов / Фирма ЕООД">
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qc_email">Имейл</label>
+                <input type="email" id="qc_email" name="email" placeholder="example@mail.com">
+            </div>
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label for="qc_phone">Телефон</label>
+                <input type="text" id="qc_phone" name="phone" placeholder="напр. 0888 123 456">
+            </div>
+            <button type="submit" class="btn-submit" style="width: 100%;">Добави клиент</button>
+            <div id="qc_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
+        </form>
+    </div>
+</div>
+
+<div id="quickDelivererModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
+    <div class="admin-card" style="width: 100%; max-width: 500px; margin: 20px; background-color: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 28px; box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15); position: relative;">
+        <span onclick="closeQuickDelivererModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
+        <h3 style="margin-top: 0; margin-bottom: 16px;">Бързо създаване на куриер</h3>
+        <form id="quickDelivererForm">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qdv_name">Име *</label>
+                <input type="text" id="qdv_name" name="name" required placeholder="напр. Спиди / Еконт">
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qdv_email">Имейл</label>
+                <input type="email" id="qdv_email" name="email" placeholder="example@mail.com">
+            </div>
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label for="qdv_phone">Телефон</label>
+                <input type="text" id="qdv_phone" name="phone" placeholder="напр. 0888 123 456">
+            </div>
+            <button type="submit" class="btn-submit" style="width: 100%;">Добави куриер</button>
+            <div id="qdv_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
+        </form>
+    </div>
+</div>
 
 <script>
     const PRODUCTS = {{ products|tojson }};
@@ -288,12 +355,109 @@
             alert('Моля добавете поне един артикул към поръчката.');
             return;
         }
+        const clientSelect = document.getElementById('client_id');
+        const clientOpt = clientSelect.options[clientSelect.selectedIndex];
+        if (!clientSelect.value || !clientOpt) {
+            e.preventDefault();
+            alert('Моля изберете или създайте клиент.');
+            return;
+        }
+        document.getElementById('customer_name').value = clientOpt.dataset.name || clientOpt.textContent;
         document.getElementById('cartJsonInput').value = JSON.stringify(
             cart.map(function (c) { return { type: c.type, id: c.id, qty: c.qty }; })
         );
     });
 
     // Modal Control Functions
+    function openQuickClientModal() {
+        document.getElementById('quickClientModal').style.display = 'flex';
+        document.getElementById('qc_error').style.display = 'none';
+    }
+    function closeQuickClientModal() {
+        document.getElementById('quickClientModal').style.display = 'none';
+        document.getElementById('quickClientForm').reset();
+    }
+    function openQuickDelivererModal() {
+        document.getElementById('quickDelivererModal').style.display = 'flex';
+        document.getElementById('qdv_error').style.display = 'none';
+    }
+    function closeQuickDelivererModal() {
+        document.getElementById('quickDelivererModal').style.display = 'none';
+        document.getElementById('quickDelivererForm').reset();
+    }
+
+    document.getElementById('quickClientForm').addEventListener('submit', function (e) {
+        e.preventDefault();
+        const submitBtn = this.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Обработване...';
+
+        const formData = new FormData(this);
+        const errDiv = document.getElementById('qc_error');
+        errDiv.style.display = 'none';
+
+        fetch('/api/quick-create-client', { method: 'POST', body: formData })
+        .then(res => res.json())
+        .then(data => {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Добави клиент';
+            if (data.status === 'success') {
+                const sel = document.getElementById('client_id');
+                const opt = document.createElement('option');
+                opt.value = data.client.id;
+                opt.textContent = data.client.name;
+                opt.dataset.name = data.client.name;
+                sel.appendChild(opt);
+                sel.value = data.client.id;
+                closeQuickClientModal();
+            } else {
+                errDiv.textContent = data.message || 'Грешка при създаване.';
+                errDiv.style.display = 'block';
+            }
+        })
+        .catch(function () {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Добави клиент';
+            errDiv.textContent = 'Връзката със сървъра беше прекъсната.';
+            errDiv.style.display = 'block';
+        });
+    });
+
+    document.getElementById('quickDelivererForm').addEventListener('submit', function (e) {
+        e.preventDefault();
+        const submitBtn = this.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Обработване...';
+
+        const formData = new FormData(this);
+        const errDiv = document.getElementById('qdv_error');
+        errDiv.style.display = 'none';
+
+        fetch('/api/quick-create-deliverer', { method: 'POST', body: formData })
+        .then(res => res.json())
+        .then(data => {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Добави куриер';
+            if (data.status === 'success') {
+                const sel = document.getElementById('deliverer_id');
+                const opt = document.createElement('option');
+                opt.value = data.deliverer.id;
+                opt.textContent = data.deliverer.name;
+                sel.appendChild(opt);
+                sel.value = data.deliverer.id;
+                closeQuickDelivererModal();
+            } else {
+                errDiv.textContent = data.message || 'Грешка при създаване.';
+                errDiv.style.display = 'block';
+            }
+        })
+        .catch(function () {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Добави куриер';
+            errDiv.textContent = 'Връзката със сървъра беше прекъсната.';
+            errDiv.style.display = 'block';
+        });
+    });
     function openQuickDetailModal() {
         document.getElementById('quickDetailModal').style.display = 'flex';
         document.getElementById('qd_error').style.display = 'none';

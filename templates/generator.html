@@ -163,9 +163,7 @@
             <div class="control-group-title">Изчисляване на цена</div>
             <div class="form-group" style="margin-bottom: 12px;">
                 <select id="in-material" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-color); color: #fff; padding: 8px; border-radius: 4px;">
-                    {% for material in materials %}
-                    <option value="{{ material.key }}">{{ material.display_name }}</option>
-                    {% endfor %}
+                    {% include 'partials/material_options.html' %}
                 </select>
             </div>
             <button id="btn-calculate" class="btn-submit" style="width: 100%;">Изчисли цена в Калкулатора</button>
