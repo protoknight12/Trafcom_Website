@@ -14,18 +14,6 @@
     <meta property="og:site_name" content="Trafcom">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <style>
-        .edit-pencil-btn {
-            background: none;
-            border: none;
-            cursor: pointer;
-            font-size: 1rem;
-            color: var(--accent-secondary);
-            opacity: 0.85;
-        }
-        .edit-pencil-btn:hover {
-            color: #fff;
-            opacity: 1;
-        }
         .delete-card-btn {
             color: #e57373;
         }
@@ -39,6 +27,7 @@
     </style>
 </head>
 <body>
+{% from 'partials/editable.html' import text with context %}
 
 {% include 'partials/navbar.html' %}
 
@@ -47,378 +36,21 @@
     <section class="dmg-hero">
         <div class="hero-tag"><span>01</span> // МЕХАНИЧНА ОБРАБОТКА, ЛАЗЕР, ИЗМЕРВАНЕ</div>
         <h1 class="hero-title">УСЛУГИ И <br><span class="text-glow">МАШИНЕН ПАРК</span></h1>
-        <p class="hero-lead">Високоточна механична обработка на стомани, алуминиеви сплави и цветни метали, 5-осно
-            фрезоване и многоосно струговане, лазерно рязане, огъване на листов материал и пълен контрол на
-            качеството - на собствен машинен парк.</p>
+        <p class="hero-lead">{{ text('services.hero_lead', 'Високоточна механична обработка на стомани, алуминиеви сплави и цветни метали, 5-осно фрезоване и многоосно струговане, лазерно рязане, огъване на листов материал и пълен контрол на качеството - на собствен машинен парк.') }}</p>
     </section>
 
+    {% for section in machine_sections %}
     <section class="dmg-showcase-section">
         <div class="section-header-dmg">
             <div>
-                <div class="hero-tag"><span>02</span> // ОБЕМНА ОБРАБОТКА</div>
-                <h2 class="dmg-section-title">ФРЕЗОВИ ЦЕНТРОВЕ</h2>
+                <div class="hero-tag"><span>{{ '%02d'|format(loop.index + 1) }}</span> // {{ section.title }}</div>
+                <h2 class="dmg-section-title">{{ section.title }}</h2>
             </div>
             <span class="dmg-line-decorative"></span>
         </div>
 
         <div class="dmg-grid">
-            <div class="dmg-card">
-                <div class="dmg-card-header">
-                    <span class="dmg-card-series">5-ОСНО ФРЕЗОВАНЕ</span>
-                    <span class="dmg-card-num">01</span>
-                </div>
-                <h3 class="dmg-card-title">DMG MORI DMU 75 monoBLOCK</h3>
-                <div class="dmg-card-img-wrap">
-                    <img src="{{ url_for('static', filename='img/machines/dmg-mori-dmu75.jpg') }}" alt="DMG MORI DMU 75 monoBLOCK">
-                </div>
-                <div class="dmg-card-specs">
-                    <div class="spec-row"><span class="spec-name">Обработваем диаметър</span><span class="spec-val">750 - 650 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Ход X / Y / Z</span><span class="spec-val">750 / 650 / 560 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Брой инструменти</span><span class="spec-val">60</span></div>
-                    <div class="spec-row"><span class="spec-name">Обороти на шпиндела</span><span class="spec-val">18 000 об/мин</span></div>
-                    <div class="spec-row"><span class="spec-name">Наклон на ос А</span><span class="spec-val">± 120°</span></div>
-                </div>
-                <p class="dmg-card-desc">Пет осен вертикален обработващ център с ЦПУ SIEMENS 840D за средно-габаритни
-                    призматично-корпусни детайли. Бърза смяна на инструмента (5 s) и висока скорост на позициониране
-                    намаляват производственото време.</p>
-            </div>
-
-            <div class="dmg-card">
-                <div class="dmg-card-header">
-                    <span class="dmg-card-series">5-ОСНО ФРЕЗОВАНЕ</span>
-                    <span class="dmg-card-num">02</span>
-                </div>
-                <h3 class="dmg-card-title">DMG MORI Milltap 700</h3>
-                <div class="dmg-card-img-wrap">
-                    <img src="{{ url_for('static', filename='img/machines/dmg-mori-milltap700.jpg') }}" alt="DMG MORI Milltap 700">
-                </div>
-                <div class="dmg-card-specs">
-                    <div class="spec-row"><span class="spec-name">Ход X / Y / Z</span><span class="spec-val">700 / 420 / 380 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Управление</span><span class="spec-val">Siemens 840D SL</span></div>
-                    <div class="spec-row"><span class="spec-name">Обороти на шпиндела</span><span class="spec-val">20 - 10 000 об/мин</span></div>
-                    <div class="spec-row"><span class="spec-name">Магазин с инструменти</span><span class="spec-val">25 позиции</span></div>
-                    <div class="spec-row"><span class="spec-name">Смяна на инструмент</span><span class="spec-val">1,5 сек</span></div>
-                </div>
-                <p class="dmg-card-desc">Диаметър на масата 250 мм, пълна 5-осна обработка с висока скорост на
-                    подаване до 60 000 мм/мин.</p>
-            </div>
-
-            <div class="dmg-card">
-                <div class="dmg-card-header">
-                    <span class="dmg-card-series">3-ОСНО ФРЕЗОВАНЕ</span>
-                    <span class="dmg-card-num">03</span>
-                </div>
-                <h3 class="dmg-card-title">HURCO BMC 30</h3>
-                <div class="dmg-card-img-wrap">
-                    <img src="{{ url_for('static', filename='img/machines/hurco-bmc30.jpg') }}" alt="HURCO BMC 30">
-                </div>
-                <div class="dmg-card-specs">
-                    <div class="spec-row"><span class="spec-name">Маса / макс. товар</span><span class="spec-val">1020 x 400 мм / 500 кг</span></div>
-                    <div class="spec-row"><span class="spec-name">Ход X / Y / Z</span><span class="spec-val">760 / 460 / 600 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Управление</span><span class="spec-val">Ultimax 3</span></div>
-                    <div class="spec-row"><span class="spec-name">Обороти на шпиндела</span><span class="spec-val">80 - 6 000 об/мин</span></div>
-                    <div class="spec-row"><span class="spec-name">Магазин</span><span class="spec-val">24, хоризонтален</span></div>
-                </div>
-                <p class="dmg-card-desc">Вертикален обработващ център с ЦПУ, 9 kW мощност, тегло 4,5 т.</p>
-            </div>
-
-            <div class="dmg-card">
-                <div class="dmg-card-header">
-                    <span class="dmg-card-series">3-ОСНО ФРЕЗОВАНЕ</span>
-                    <span class="dmg-card-num">04</span>
-                </div>
-                <h3 class="dmg-card-title">HURCO BMC 4020 HT</h3>
-                <div class="dmg-card-img-wrap">
-                    <img src="{{ url_for('static', filename='img/machines/hurco-bmc4020ht.jpg') }}" alt="HURCO BMC 4020 HT">
-                </div>
-                <div class="dmg-card-specs">
-                    <div class="spec-row"><span class="spec-name">Маса / макс. товар</span><span class="spec-val">1220 x 510 мм / 682 кг</span></div>
-                    <div class="spec-row"><span class="spec-name">Ход X / Y / Z</span><span class="spec-val">1016 / 510 / 610 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Управление</span><span class="spec-val">Ultimax 4</span></div>
-                    <div class="spec-row"><span class="spec-name">Обороти на шпиндела</span><span class="spec-val">80 - 6 000 об/мин</span></div>
-                    <div class="spec-row"><span class="spec-name">Магазин</span><span class="spec-val">24 позиции</span></div>
-                </div>
-                <p class="dmg-card-desc">Мощност на шпиндела 11,2 / 14,9 kW, конус за инструменти SK 40.</p>
-            </div>
-        </div>
-    </section>
-
-    <section class="dmg-showcase-section">
-        <div class="section-header-dmg">
-            <div>
-                <div class="hero-tag"><span>03</span> // СТРУГОВАНЕ</div>
-                <h2 class="dmg-section-title">СТРУГОВИ ЦЕНТРОВЕ</h2>
-            </div>
-            <span class="dmg-line-decorative"></span>
-        </div>
-
-        <div class="dmg-grid">
-            <div class="dmg-card">
-                <div class="dmg-card-header">
-                    <span class="dmg-card-series">8-ОСЕН СТРУГ</span>
-                    <span class="dmg-card-num">05</span>
-                </div>
-                <h3 class="dmg-card-title">GILDEMEISTER TWIN 42</h3>
-                <div class="dmg-card-img-wrap">
-                    <img src="{{ url_for('static', filename='img/machines/gildemeister-twin42.jpg') }}" alt="GILDEMEISTER TWIN 42">
-                </div>
-                <div class="dmg-card-specs">
-                    <div class="spec-row"><span class="spec-name">Диаметър на струговане</span><span class="spec-val">120 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Дължина на струговане</span><span class="spec-val">650 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Обороти на шпиндела</span><span class="spec-val">35 - 7 000 об/мин</span></div>
-                    <div class="spec-row"><span class="spec-name">Задвижване на шпиндела</span><span class="spec-val">25 kW</span></div>
-                </div>
-                <p class="dmg-card-desc">Двушпинделен струг с ЦПУ SIEMENS 840D, основен и контрашпиндел, 2x 12-позиционна
-                    кула, B-ос 180°, снабден с прътоподаващо устройство IEMCA BOSS 545 (до 3200 мм, Ф42).</p>
-            </div>
-
-            <div class="dmg-card">
-                <div class="dmg-card-header">
-                    <span class="dmg-card-series">8-ОСЕН СТРУГ</span>
-                    <span class="dmg-card-num">06</span>
-                </div>
-                <h3 class="dmg-card-title">BENZINGER TNI-B8</h3>
-                <div class="dmg-card-img-wrap">
-                    <img src="{{ url_for('static', filename='img/machines/benzinger-tni-b8.jpg') }}" alt="BENZINGER TNI-B8">
-                </div>
-                <div class="dmg-card-specs">
-                    <div class="spec-row"><span class="spec-name">Брой шпиндели / револвери</span><span class="spec-val">2 / 3</span></div>
-                    <div class="spec-row"><span class="spec-name">Отвор на шпиндела</span><span class="spec-val">32 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Обороти на шпиндела</span><span class="spec-val">до 8 000 об/мин</span></div>
-                    <div class="spec-row"><span class="spec-name">Позиции на револвери</span><span class="spec-val">12 / 12 / 6</span></div>
-                </div>
-                <p class="dmg-card-desc">Мобилен заден шпиндел (12 kW), снабден с прътоподаващо устройство BREUNING IRCO
-                    за пръти до 3000 мм.</p>
-            </div>
-
-            <div class="dmg-card">
-                <div class="dmg-card-header">
-                    <span class="dmg-card-series">6-ОСЕН СТРУГ</span>
-                    <span class="dmg-card-num">07</span>
-                </div>
-                <h3 class="dmg-card-title">BENZINGER TNI-B6</h3>
-                <div class="dmg-card-img-wrap">
-                    <img src="{{ url_for('static', filename='img/machines/benzinger-tni-b6.jpg') }}" alt="BENZINGER TNI-B6">
-                </div>
-                <div class="dmg-card-specs">
-                    <div class="spec-row"><span class="spec-name">Брой шпиндели / револвери</span><span class="spec-val">2 / 2</span></div>
-                    <div class="spec-row"><span class="spec-name">Отвор на шпиндела</span><span class="spec-val">32 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Обороти на шпиндела</span><span class="spec-val">до 8 000 об/мин</span></div>
-                    <div class="spec-row"><span class="spec-name">Позиции на купол 1 / 2</span><span class="spec-val">12 / 12</span></div>
-                </div>
-                <p class="dmg-card-desc">Мобилен заден шпиндел (12 kW), прътоподаващо устройство BREUNING IRCO за
-                    пръти до 3000 мм.</p>
-            </div>
-
-            <div class="dmg-card">
-                <div class="dmg-card-header">
-                    <span class="dmg-card-series">4-ОСЕН СТРУГ</span>
-                    <span class="dmg-card-num">08</span>
-                </div>
-                <h3 class="dmg-card-title">DMG MORI CTX510 ecoline</h3>
-                <div class="dmg-card-img-wrap">
-                    <img src="{{ url_for('static', filename='img/machines/dmg-mori-ctx510.jpg') }}" alt="DMG MORI CTX510 ecoline">
-                </div>
-                <div class="dmg-card-specs">
-                    <div class="spec-row"><span class="spec-name">Обработваем диаметър</span><span class="spec-val">680 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Максимална дължина</span><span class="spec-val">1050 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Отвор на шпиндела</span><span class="spec-val">Ф76 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Обороти на шпиндела</span><span class="spec-val">3 250 об/мин</span></div>
-                </div>
-                <p class="dmg-card-desc">Стругов център с ЦПУ SIEMENS 840D - стругови и фрезови обработки при една
-                    установка на детайла, 12 инструмента.</p>
-            </div>
-
-            <div class="dmg-card">
-                <div class="dmg-card-header">
-                    <span class="dmg-card-series">SWISS TYPE СТРУГ</span>
-                    <span class="dmg-card-num">09</span>
-                </div>
-                <h3 class="dmg-card-title">STAR KNC 32</h3>
-                <div class="dmg-card-img-wrap">
-                    <img src="{{ url_for('static', filename='img/machines/star-knc32.jpg') }}" alt="STAR KNC 32">
-                </div>
-                <div class="dmg-card-specs">
-                    <div class="spec-row"><span class="spec-name">Макс. диаметър</span><span class="spec-val">32 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Револверни глави</span><span class="spec-val">2 x 6 живи инструмента</span></div>
-                    <div class="spec-row"><span class="spec-name">Задна обработка</span><span class="spec-val">4 инструмента</span></div>
-                </div>
-                <p class="dmg-card-desc">Swiss type автоматичен струг със заден шпиндел за детайли с малък диаметър.</p>
-            </div>
-
-            <div class="dmg-card">
-                <div class="dmg-card-header">
-                    <span class="dmg-card-series">SWISS TYPE СТРУГ</span>
-                    <span class="dmg-card-num">10</span>
-                </div>
-                <h3 class="dmg-card-title">STAR KJR 16</h3>
-                <div class="dmg-card-img-wrap">
-                    <img src="{{ url_for('static', filename='img/machines/star-kjr16.jpg') }}" alt="STAR KJR 16">
-                </div>
-                <div class="dmg-card-specs">
-                    <div class="spec-row"><span class="spec-name">Макс. диаметър</span><span class="spec-val">16 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Револверни глави</span><span class="spec-val">2 x 6 живи инструмента</span></div>
-                    <div class="spec-row"><span class="spec-name">Задна обработка</span><span class="spec-val">3 инструмента</span></div>
-                </div>
-                <p class="dmg-card-desc">Swiss type струг със заден шпиндел, снабден с прътоподаващо устройство
-                    FMB TURBO до 16 мм.</p>
-            </div>
-
-            <div class="dmg-card">
-                <div class="dmg-card-header">
-                    <span class="dmg-card-series">SWISS TYPE СТРУГ</span>
-                    <span class="dmg-card-num">11</span>
-                </div>
-                <h3 class="dmg-card-title">STAR SVR-20</h3>
-                <div class="dmg-card-specs">
-                    <div class="spec-row"><span class="spec-name">Тип</span><span class="spec-val">Swiss type lathe</span></div>
-                </div>
-                <p class="dmg-card-desc">Автоматичен Swiss type струг за прецизна обработка на детайли с малък
-                    диаметър.</p>
-            </div>
-        </div>
-    </section>
-
-    <section class="dmg-showcase-section">
-        <div class="section-header-dmg">
-            <div>
-                <div class="hero-tag"><span>04</span> // ЛИСТОВА ОБРАБОТКА</div>
-                <h2 class="dmg-section-title">ЛАЗЕРНО РЯЗАНЕ И ОГЪВАНЕ</h2>
-            </div>
-            <span class="dmg-line-decorative"></span>
-        </div>
-
-        <div class="dmg-grid">
-            <div class="dmg-card">
-                <div class="dmg-card-header">
-                    <span class="dmg-card-series">FIBER LASER</span>
-                    <span class="dmg-card-num">12</span>
-                </div>
-                <h3 class="dmg-card-title">FIBER LASER ECKERT</h3>
-                <div class="dmg-card-specs">
-                    <div class="spec-row"><span class="spec-name">Работна маса</span><span class="spec-val">6000 x 2000 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Дебелина - стомана</span><span class="spec-val">20 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Дебелина - неръждаема / алуминий</span><span class="spec-val">10 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Мощност на лазера</span><span class="spec-val">4 kW</span></div>
-                </div>
-                <p class="dmg-card-desc">Модел DIAMOND FIBER - рязане на листов материал и профили от черна,
-                    неръждаема стомана и алуминий, вкл. материал със защитно фолио, и гравиране с последващо рязане.</p>
-            </div>
-
-            <div class="dmg-card">
-                <div class="dmg-card-header">
-                    <span class="dmg-card-series">FIBER LASER</span>
-                    <span class="dmg-card-num">13</span>
-                </div>
-                <h3 class="dmg-card-title">CSF 3015/700</h3>
-                <div class="dmg-card-img-wrap">
-                    <img src="{{ url_for('static', filename='img/machines/csf-3015-laser.jpg') }}" alt="CSF 3015/700 laser">
-                </div>
-                <div class="dmg-card-specs">
-                    <div class="spec-row"><span class="spec-name">Режеща площ</span><span class="spec-val">3000 x 1500 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Точност на позициониране</span><span class="spec-val">± 0.05 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Макс. скорост X/Y</span><span class="spec-val">60 м/мин</span></div>
-                    <div class="spec-row"><span class="spec-name">Лазерен източник</span><span class="spec-val">IPG</span></div>
-                </div>
-                <p class="dmg-card-desc">Стабилна конзолна стоманена конструкция, автоматична система за абсорбиране
-                    на прах (4 всмукателни отвора), ЦПУ управление O'LASERCUT.</p>
-            </div>
-
-            <div class="dmg-card">
-                <div class="dmg-card-header">
-                    <span class="dmg-card-series">АБКАНТ ПРЕСА</span>
-                    <span class="dmg-card-num">14</span>
-                </div>
-                <h3 class="dmg-card-title">DURMA AD-R 40175</h3>
-                <div class="dmg-card-img-wrap">
-                    <img src="{{ url_for('static', filename='img/machines/durma-ad-r-30135.jpg') }}" alt="DURMA AD-R press brake">
-                </div>
-                <div class="dmg-card-specs">
-                    <div class="spec-row"><span class="spec-name">Усилие на сгъване</span><span class="spec-val">175 тона</span></div>
-                    <div class="spec-row"><span class="spec-name">Дължина на сгъване</span><span class="spec-val">4050 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Светъл отвор</span><span class="spec-val">530 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Главен двигател</span><span class="spec-val">18.5 kW</span></div>
-                </div>
-                <p class="dmg-card-desc">CNC хидравлична абкантпреса за прецизно огъване на листов материал.</p>
-            </div>
-        </div>
-    </section>
-
-    <section class="dmg-showcase-section">
-        <div class="section-header-dmg">
-            <div>
-                <div class="hero-tag"><span>05</span> // КОНТРОЛ НА КАЧЕСТВОТО</div>
-                <h2 class="dmg-section-title">ИЗМЕРВАНЕ И ДОВЪРШИТЕЛНА ОБРАБОТКА</h2>
-            </div>
-            <span class="dmg-line-decorative"></span>
-        </div>
-
-        <div class="dmg-grid">
-            <div class="dmg-card">
-                <div class="dmg-card-header">
-                    <span class="dmg-card-series">ИЗМЕРВАТЕЛНА СИСТЕМА</span>
-                    <span class="dmg-card-num">15</span>
-                </div>
-                <h3 class="dmg-card-title">DMG MORI UNO 20|40</h3>
-                <div class="dmg-card-img-wrap">
-                    <img src="{{ url_for('static', filename='img/machines/dmg-mori-uno2040.jpg') }}" alt="DMG MORI UNO 20|40 tool presetter">
-                </div>
-                <div class="dmg-card-specs">
-                    <div class="spec-row"><span class="spec-name">Макс. диаметър на инструмент</span><span class="spec-val">400 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Макс. дължина</span><span class="spec-val">400 мм</span></div>
-                    <div class="spec-row"><span class="spec-name">Екран</span><span class="spec-val">19", 45x увеличение</span></div>
-                </div>
-                <p class="dmg-card-desc">Прецизно измерване и настройка на режещи инструменти преди монтаж в
-                    машините.</p>
-            </div>
-
-            <div class="dmg-card">
-                <div class="dmg-card-header">
-                    <span class="dmg-card-series">3D КООРДИНАТНО ИЗМЕРВАНЕ</span>
-                    <span class="dmg-card-num">16</span>
-                </div>
-                <h3 class="dmg-card-title">Brown &amp; Sharpe Derby 454 (CMM)</h3>
-                <div class="dmg-card-img-wrap">
-                    <img src="{{ url_for('static', filename='img/machines/etalon-derby-454-cmm.jpg') }}" alt="Brown & Sharpe Derby 454 CMM">
-                </div>
-                <div class="dmg-card-specs">
-                    <div class="spec-row"><span class="spec-name">Тип</span><span class="spec-val">3D координатна измервателна машина</span></div>
-                </div>
-                <p class="dmg-card-desc">Пълен 3D контрол на качеството и точността на изработените детайли.</p>
-            </div>
-
-            <div class="dmg-card">
-                <div class="dmg-card-header">
-                    <span class="dmg-card-series">ПОЛИРАНЕ / ДОВЪРШВАНЕ</span>
-                    <span class="dmg-card-num">17</span>
-                </div>
-                <h3 class="dmg-card-title">Центрофужна дискова машина TE18 W</h3>
-                <div class="dmg-card-img-wrap">
-                    <img src="{{ url_for('static', filename='img/machines/te18w-polishing.jpg') }}" alt="TE18 W polishing machine">
-                </div>
-                <div class="dmg-card-specs">
-                    <div class="spec-row"><span class="spec-name">Обем на работната камера</span><span class="spec-val">18 л</span></div>
-                    <div class="spec-row"><span class="spec-name">Мощност</span><span class="spec-val">0,8 kW</span></div>
-                    <div class="spec-row"><span class="spec-name">Партида</span><span class="spec-val">3-4 кг</span></div>
-                </div>
-                <p class="dmg-card-desc">Довършителна повърхностна обработка - сваляне на заусенъци, заобляне на
-                    ръбове, обезмасляване, матиране и полиране на детайли.</p>
-            </div>
-        </div>
-    </section>
-
-    {% if extra_machine_cards or (current_user.is_authenticated and current_user.can_edit_content) %}
-    <section class="dmg-showcase-section">
-        <div class="section-header-dmg">
-            <div>
-                <div class="hero-tag"><span>06</span> // ДОПЪЛНИТЕЛНИ МАШИНИ</div>
-                <h2 class="dmg-section-title">ОЩЕ МАШИНИ</h2>
-            </div>
-            <span class="dmg-line-decorative"></span>
-        </div>
-
-        <div class="dmg-grid">
-            {% for card in extra_machine_cards %}
+            {% for card in section.cards %}
             <div class="dmg-card">
                 <div class="dmg-card-header">
                     <span class="dmg-card-series">{{ card.series_label or '' }}</span>
@@ -433,18 +65,40 @@
                     {% endif %}
                 </div>
                 <h3 class="dmg-card-title">{{ card.title }}</h3>
+                {% if card.image_filename %}
+                <div class="dmg-card-img-wrap">
+                    <img src="{{ url_for('static', filename='img/machines/' ~ card.image_filename) }}" alt="{{ card.title }}">
+                </div>
+                {% endif %}
+                {% if card.specs %}
+                <div class="dmg-card-specs">
+                    {% for label, value in card.specs %}
+                    <div class="spec-row"><span class="spec-name">{{ label }}</span><span class="spec-val">{{ value }}</span></div>
+                    {% endfor %}
+                </div>
+                {% endif %}
                 <p class="dmg-card-desc">{{ card.description or '' }}</p>
             </div>
             {% endfor %}
 
-            {% if current_user.is_authenticated and current_user.can_edit_content %}
+            {% if loop.last and current_user.is_authenticated and current_user.can_edit_content %}
             <div class="dmg-card add-machine-card">
                 <button type="button" class="btn-submit" onclick="openEditWindow('{{ url_for('new_machine_card_window') }}')">+ Добави машина</button>
             </div>
             {% endif %}
         </div>
     </section>
+    {% else %}
+    {% if current_user.is_authenticated and current_user.can_edit_content %}
+    <section class="dmg-showcase-section">
+        <div class="dmg-grid">
+            <div class="dmg-card add-machine-card">
+                <button type="button" class="btn-submit" onclick="openEditWindow('{{ url_for('new_machine_card_window') }}')">+ Добави машина</button>
+            </div>
+        </div>
+    </section>
     {% endif %}
+    {% endfor %}
 
 </main>
 

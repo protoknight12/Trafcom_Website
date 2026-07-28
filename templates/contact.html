@@ -15,6 +15,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
+{% from 'partials/editable.html' import text with context %}
 
 {% include 'partials/navbar.html' %}
 
@@ -23,17 +24,16 @@
     <section class="dmg-hero">
         <div class="hero-tag"><span>01</span> // ВРЪЗКА С НАС</div>
         <h1 class="hero-title">КОНТАКТИ</h1>
-        <p class="hero-lead">За запитвания, оферти и въпроси относно механична обработка, лазерно рязане или
-            производство на детайли - свържете се с нас директно.</p>
+        <p class="hero-lead">{{ text('contact.hero_lead', 'За запитвания, оферти и въпроси относно механична обработка, лазерно рязане или производство на детайли - свържете се с нас директно.') }}</p>
 
         <div class="info-grid">
             <div class="info-card">
                 <h3>Административен адрес</h3>
-                <p>гр. Тетевен, ул. „Александър Стамболийски“ 36</p>
+                <p>{{ text('contact.office_address', 'гр. Тетевен, ул. „Александър Стамболийски“ 36') }}</p>
             </div>
             <div class="info-card">
                 <h3>Производствена база</h3>
-                <p>ул. „Воловийте“, 5700 гр. Тетевен</p>
+                <p>{{ text('contact.production_address', 'ул. „Воловийте“, 5700 гр. Тетевен') }}</p>
             </div>
             <div class="info-card">
                 <h3>Телефон</h3>

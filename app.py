@@ -429,16 +429,50 @@ class Machine(db.Model):
 
 class ServiceMachineCard(db.Model):
     """
-    A text card shown on the public services page (see services()/services.html),
-    appended after the hardcoded machine-park cards. Lets web designers/admins add
-    new machines to that page without touching template code - deliberately just
-    title + description, no specs table or image, to keep the content editor simple.
+    A machine card shown on the public services page (see services()/services.html).
+    Originally just title + description for web-designer-added cards; now also backs
+    the migrated-from-hardcoded-HTML cards (see migrate_services_machine_cards.py),
+    which is why section_title/specs_text/image_filename exist - those three are
+    display-only extras the content editor doesn't expose for *new* cards (keeps the
+    "add a machine" popup simple), but are preserved/editable on migrated ones.
+    section_title groups cards into the page's section headers (e.g. "ФРЕЗОВИ
+    ЦЕНТРОВЕ"); rows with no section_title fall into a default trailing section.
+    specs_text is free-form "Label: Value" lines, one per spec row.
     """
     id = db.Column(db.Integer, primary_key=True)
+    section_title = db.Column(db.String(150), nullable=True)
     series_label = db.Column(db.String(100), nullable=True)
     title = db.Column(db.String(150), nullable=False)
+    specs_text = db.Column(db.Text, nullable=True)
     description = db.Column(db.Text, nullable=True)
+    image_filename = db.Column(db.String(255), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    @property
+    def specs(self):
+        """Parses specs_text ('Label: Value' per line) into [(label, value), ...] for rendering."""
+        rows = []
+        for line in (self.specs_text or '').splitlines():
+            if ':' in line:
+                label, _, value = line.partition(':')
+                rows.append((label.strip(), value.strip()))
+        return rows
+
+
+class EditableText(db.Model):
+    """
+    Generic key/value store for wiki-style editable prose blocks on public pages
+    (see get_text() and templates/partials/editable.html) - e.g. key
+    'index.hero_lead'. Missing key = the template's hardcoded default is shown, so
+    nothing needs seeding; a row only appears once someone actually edits that text.
+    """
+    key = db.Column(db.String(150), primary_key=True)
+    content = db.Column(db.Text, nullable=False)
+
+
+def get_text(key, default=''):
+    row = db.session.get(EditableText, key)
+    return row.content if row else default
 
 
 @login_manager.user_loader
@@ -485,6 +519,91 @@ def seed_material_prices():
                 cost_per_meter_cut=cfg['cost_per_meter_cut'],
                 cost_per_pierce=cfg['cost_per_pierce']
             ))
+    db.session.commit()
+
+
+# One-time seed for the public services page's machine-park cards - was hardcoded
+# HTML in services.html, now lives in ServiceMachineCard so web designers/admins can
+# edit it. specs_text is "Label: Value" per line (see ServiceMachineCard.specs).
+SERVICE_MACHINE_CARDS_SEED = [
+    {"section_title": "ФРЕЗОВИ ЦЕНТРОВЕ", "series_label": "5-ОСНО ФРЕЗОВАНЕ", "title": "DMG MORI DMU 75 monoBLOCK",
+     "image_filename": "dmg-mori-dmu75.jpg",
+     "specs_text": "Обработваем диаметър: 750 - 650 мм\nХод X / Y / Z: 750 / 650 / 560 мм\nБрой инструменти: 60\nОбороти на шпиндела: 18 000 об/мин\nНаклон на ос А: ± 120°",
+     "description": "Пет осен вертикален обработващ център с ЦПУ SIEMENS 840D за средно-габаритни призматично-корпусни детайли. Бърза смяна на инструмента (5 s) и висока скорост на позициониране намаляват производственото време."},
+    {"section_title": "ФРЕЗОВИ ЦЕНТРОВЕ", "series_label": "5-ОСНО ФРЕЗОВАНЕ", "title": "DMG MORI Milltap 700",
+     "image_filename": "dmg-mori-milltap700.jpg",
+     "specs_text": "Ход X / Y / Z: 700 / 420 / 380 мм\nУправление: Siemens 840D SL\nОбороти на шпиндела: 20 - 10 000 об/мин\nМагазин с инструменти: 25 позиции\nСмяна на инструмент: 1,5 сек",
+     "description": "Диаметър на масата 250 мм, пълна 5-осна обработка с висока скорост на подаване до 60 000 мм/мин."},
+    {"section_title": "ФРЕЗОВИ ЦЕНТРОВЕ", "series_label": "3-ОСНО ФРЕЗОВАНЕ", "title": "HURCO BMC 30",
+     "image_filename": "hurco-bmc30.jpg",
+     "specs_text": "Маса / макс. товар: 1020 x 400 мм / 500 кг\nХод X / Y / Z: 760 / 460 / 600 мм\nУправление: Ultimax 3\nОбороти на шпиндела: 80 - 6 000 об/мин\nМагазин: 24, хоризонтален",
+     "description": "Вертикален обработващ център с ЦПУ, 9 kW мощност, тегло 4,5 т."},
+    {"section_title": "ФРЕЗОВИ ЦЕНТРОВЕ", "series_label": "3-ОСНО ФРЕЗОВАНЕ", "title": "HURCO BMC 4020 HT",
+     "image_filename": "hurco-bmc4020ht.jpg",
+     "specs_text": "Маса / макс. товар: 1220 x 510 мм / 682 кг\nХод X / Y / Z: 1016 / 510 / 610 мм\nУправление: Ultimax 4\nОбороти на шпиндела: 80 - 6 000 об/мин\nМагазин: 24 позиции",
+     "description": "Мощност на шпиндела 11,2 / 14,9 kW, конус за инструменти SK 40."},
+    {"section_title": "СТРУГОВИ ЦЕНТРОВЕ", "series_label": "8-ОСЕН СТРУГ", "title": "GILDEMEISTER TWIN 42",
+     "image_filename": "gildemeister-twin42.jpg",
+     "specs_text": "Диаметър на струговане: 120 мм\nДължина на струговане: 650 мм\nОбороти на шпиндела: 35 - 7 000 об/мин\nЗадвижване на шпиндела: 25 kW",
+     "description": "Двушпинделен струг с ЦПУ SIEMENS 840D, основен и контрашпиндел, 2x 12-позиционна кула, B-ос 180°, снабден с прътоподаващо устройство IEMCA BOSS 545 (до 3200 мм, Ф42)."},
+    {"section_title": "СТРУГОВИ ЦЕНТРОВЕ", "series_label": "8-ОСЕН СТРУГ", "title": "BENZINGER TNI-B8",
+     "image_filename": "benzinger-tni-b8.jpg",
+     "specs_text": "Брой шпиндели / револвери: 2 / 3\nОтвор на шпиндела: 32 мм\nОбороти на шпиндела: до 8 000 об/мин\nПозиции на револвери: 12 / 12 / 6",
+     "description": "Мобилен заден шпиндел (12 kW), снабден с прътоподаващо устройство BREUNING IRCO за пръти до 3000 мм."},
+    {"section_title": "СТРУГОВИ ЦЕНТРОВЕ", "series_label": "6-ОСЕН СТРУГ", "title": "BENZINGER TNI-B6",
+     "image_filename": "benzinger-tni-b6.jpg",
+     "specs_text": "Брой шпиндели / револвери: 2 / 2\nОтвор на шпиндела: 32 мм\nОбороти на шпиндела: до 8 000 об/мин\nПозиции на купол 1 / 2: 12 / 12",
+     "description": "Мобилен заден шпиндел (12 kW), прътоподаващо устройство BREUNING IRCO за пръти до 3000 мм."},
+    {"section_title": "СТРУГОВИ ЦЕНТРОВЕ", "series_label": "4-ОСЕН СТРУГ", "title": "DMG MORI CTX510 ecoline",
+     "image_filename": "dmg-mori-ctx510.jpg",
+     "specs_text": "Обработваем диаметър: 680 мм\nМаксимална дължина: 1050 мм\nОтвор на шпиндела: Ф76 мм\nОбороти на шпиндела: 3 250 об/мин",
+     "description": "Стругов център с ЦПУ SIEMENS 840D - стругови и фрезови обработки при една установка на детайла, 12 инструмента."},
+    {"section_title": "СТРУГОВИ ЦЕНТРОВЕ", "series_label": "SWISS TYPE СТРУГ", "title": "STAR KNC 32",
+     "image_filename": "star-knc32.jpg",
+     "specs_text": "Макс. диаметър: 32 мм\nРеволверни глави: 2 x 6 живи инструмента\nЗадна обработка: 4 инструмента",
+     "description": "Swiss type автоматичен струг със заден шпиндел за детайли с малък диаметър."},
+    {"section_title": "СТРУГОВИ ЦЕНТРОВЕ", "series_label": "SWISS TYPE СТРУГ", "title": "STAR KJR 16",
+     "image_filename": "star-kjr16.jpg",
+     "specs_text": "Макс. диаметър: 16 мм\nРеволверни глави: 2 x 6 живи инструмента\nЗадна обработка: 3 инструмента",
+     "description": "Swiss type струг със заден шпиндел, снабден с прътоподаващо устройство FMB TURBO до 16 мм."},
+    {"section_title": "СТРУГОВИ ЦЕНТРОВЕ", "series_label": "SWISS TYPE СТРУГ", "title": "STAR SVR-20",
+     "image_filename": None,
+     "specs_text": "Тип: Swiss type lathe",
+     "description": "Автоматичен Swiss type струг за прецизна обработка на детайли с малък диаметър."},
+    {"section_title": "ЛАЗЕРНО РЯЗАНЕ И ОГЪВАНЕ", "series_label": "FIBER LASER", "title": "FIBER LASER ECKERT",
+     "image_filename": None,
+     "specs_text": "Работна маса: 6000 x 2000 мм\nДебелина - стомана: 20 мм\nДебелина - неръждаема / алуминий: 10 мм\nМощност на лазера: 4 kW",
+     "description": "Модел DIAMOND FIBER - рязане на листов материал и профили от черна, неръждаема стомана и алуминий, вкл. материал със защитно фолио, и гравиране с последващо рязане."},
+    {"section_title": "ЛАЗЕРНО РЯЗАНЕ И ОГЪВАНЕ", "series_label": "FIBER LASER", "title": "CSF 3015/700",
+     "image_filename": "csf-3015-laser.jpg",
+     "specs_text": "Режеща площ: 3000 x 1500 мм\nТочност на позициониране: ± 0.05 мм\nМакс. скорост X/Y: 60 м/мин\nЛазерен източник: IPG",
+     "description": "Стабилна конзолна стоманена конструкция, автоматична система за абсорбиране на прах (4 всмукателни отвора), ЦПУ управление O'LASERCUT."},
+    {"section_title": "ЛАЗЕРНО РЯЗАНЕ И ОГЪВАНЕ", "series_label": "АБКАНТ ПРЕСА", "title": "DURMA AD-R 40175",
+     "image_filename": "durma-ad-r-30135.jpg",
+     "specs_text": "Усилие на сгъване: 175 тона\nДължина на сгъване: 4050 мм\nСветъл отвор: 530 мм\nГлавен двигател: 18.5 kW",
+     "description": "CNC хидравлична абкантпреса за прецизно огъване на листов материал."},
+    {"section_title": "ИЗМЕРВАНЕ И ДОВЪРШИТЕЛНА ОБРАБОТКА", "series_label": "ИЗМЕРВАТЕЛНА СИСТЕМА", "title": "DMG MORI UNO 20|40",
+     "image_filename": "dmg-mori-uno2040.jpg",
+     "specs_text": "Макс. диаметър на инструмент: 400 мм\nМакс. дължина: 400 мм\nЕкран: 19\", 45x увеличение",
+     "description": "Прецизно измерване и настройка на режещи инструменти преди монтаж в машините."},
+    {"section_title": "ИЗМЕРВАНЕ И ДОВЪРШИТЕЛНА ОБРАБОТКА", "series_label": "3D КООРДИНАТНО ИЗМЕРВАНЕ", "title": "Brown & Sharpe Derby 454 (CMM)",
+     "image_filename": "etalon-derby-454-cmm.jpg",
+     "specs_text": "Тип: 3D координатна измервателна машина",
+     "description": "Пълен 3D контрол на качеството и точността на изработените детайли."},
+    {"section_title": "ИЗМЕРВАНЕ И ДОВЪРШИТЕЛНА ОБРАБОТКА", "series_label": "ПОЛИРАНЕ / ДОВЪРШВАНЕ", "title": "Центрофужна дискова машина TE18 W",
+     "image_filename": "te18w-polishing.jpg",
+     "specs_text": "Обем на работната камера: 18 л\nМощност: 0,8 kW\nПартида: 3-4 кг",
+     "description": "Довършителна повърхностна обработка - сваляне на заусенъци, заобляне на ръбове, обезмасляване, матиране и полиране на детайли."},
+]
+
+
+def seed_service_machine_cards():
+    """Populates ServiceMachineCard from SERVICE_MACHINE_CARDS_SEED, but only if the
+    table is completely empty - never re-adds a card someone deliberately deleted."""
+    if ServiceMachineCard.query.first():
+        return
+    for entry in SERVICE_MACHINE_CARDS_SEED:
+        db.session.add(ServiceMachineCard(**entry))
     db.session.commit()
 
 
@@ -847,6 +966,9 @@ def inject_current_year():
     return {'current_year': datetime.now().year}
 
 
+app.jinja_env.globals['get_text'] = get_text
+
+
 @app.route('/robots.txt')
 def robots_txt():
     # Public marketing pages (/, /services, /about, /contact) are the only
@@ -866,8 +988,21 @@ def index():
 
 @app.route('/services')
 def services():
-    extra_machine_cards = ServiceMachineCard.query.order_by(ServiceMachineCard.created_at).all()
-    return render_template('services.html', active_page='services', extra_machine_cards=extra_machine_cards)
+    """
+    Groups cards into their section headers (e.g. "ФРЕЗОВИ ЦЕНТРОВЕ") for
+    services.html, preserving insertion order. Cards with no section_title
+    (added via the "+ Добави машина" popup) fall into one trailing
+    "ДОПЪЛНИТЕЛНИ МАШИНИ" bucket, so every future addition lands together.
+    """
+    cards = ServiceMachineCard.query.order_by(ServiceMachineCard.id).all()
+    sections = []
+    for card in cards:
+        title = card.section_title or 'ДОПЪЛНИТЕЛНИ МАШИНИ'
+        if sections and sections[-1]['title'] == title:
+            sections[-1]['cards'].append(card)
+        else:
+            sections.append({'title': title, 'cards': [card]})
+    return render_template('services.html', active_page='services', machine_sections=sections)
 
 
 @app.route('/about')
@@ -1150,6 +1285,7 @@ def new_machine_card_window():
         fields=[
             {'name': 'series_label', 'label': 'Кратък етикет (напр. 5-ОСНО ФРЕЗОВАНЕ)', 'value': '', 'type': 'text'},
             {'name': 'title', 'label': 'Име на машината', 'value': '', 'type': 'text'},
+            {'name': 'specs_text', 'label': 'Характеристики (незадължително, по един ред "Етикет: Стойност")', 'value': '', 'type': 'textarea'},
             {'name': 'description', 'label': 'Описание', 'value': '', 'type': 'textarea'},
         ]
     )
@@ -1170,6 +1306,7 @@ def create_machine_card():
     card = ServiceMachineCard(
         title=title,
         series_label=request.form.get('series_label', '').strip() or None,
+        specs_text=request.form.get('specs_text', '').strip() or None,
         description=request.form.get('description', '').strip() or None,
     )
     db.session.add(card)
@@ -1193,6 +1330,7 @@ def edit_machine_card_window(card_id):
         fields=[
             {'name': 'series_label', 'label': 'Кратък етикет (напр. 5-ОСНО ФРЕЗОВАНЕ)', 'value': card.series_label or '', 'type': 'text'},
             {'name': 'title', 'label': 'Име на машината', 'value': card.title, 'type': 'text'},
+            {'name': 'specs_text', 'label': 'Характеристики (незадължително, по един ред "Етикет: Стойност")', 'value': card.specs_text or '', 'type': 'textarea'},
             {'name': 'description', 'label': 'Описание', 'value': card.description or '', 'type': 'textarea'},
         ]
     )
@@ -1213,6 +1351,7 @@ def update_machine_card(card_id):
 
     card.title = title
     card.series_label = request.form.get('series_label', '').strip() or None
+    card.specs_text = request.form.get('specs_text', '').strip() or None
     card.description = request.form.get('description', '').strip() or None
     db.session.commit()
     flash('Машината беше обновена успешно.', 'success')
@@ -1232,6 +1371,50 @@ def delete_machine_card(card_id):
     db.session.commit()
     flash('Машината беше премахната от страница "Услуги".', 'success')
     return redirect(url_for('services'))
+
+
+@app.route('/content-text/edit')
+@login_required
+def edit_text_window():
+    """
+    Popup edit window for any get_text() block on any public page (see
+    templates/partials/editable.html). key/default come from the pencil's link -
+    the default is the template's hardcoded fallback text, shown pre-filled the
+    first time a given key is edited (before any EditableText row exists for it).
+    """
+    if not current_user.can_edit_content:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+    key = request.args.get('key', '')
+    if not key:
+        flash('Липсва ключ на текста.', 'danger')
+        return redirect(url_for('dashboard'))
+    value = get_text(key, request.args.get('default', ''))
+    return render_template(
+        'edit_window.html', item_label='текст', saved=request.args.get('saved') == '1',
+        action=url_for('update_text', key=key),
+        fields=[{'name': 'content', 'label': 'Текст', 'value': value, 'type': 'textarea'}]
+    )
+
+
+@app.route('/content-text/<path:key>/update', methods=['POST'])
+@login_required
+def update_text(key):
+    if not current_user.can_edit_content:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    content = request.form.get('content', '').strip()
+    row = db.session.get(EditableText, key)
+    if row:
+        row.content = content
+    else:
+        db.session.add(EditableText(key=key, content=content))
+    db.session.commit()
+    flash('Текстът беше запазен успешно.', 'success')
+    if request.form.get('popup') == '1':
+        return redirect(url_for('edit_text_window', key=key, saved='1'))
+    return redirect(request.referrer or url_for('index'))
 
 
 @app.route('/admin/create_user', methods=['POST'])
@@ -2673,6 +2856,9 @@ if __name__ == '__main__':
         # Populate the MaterialPrice table with defaults on first run only -
         # existing rows (including any admin-edited prices) are never touched.
         seed_material_prices()
+        # Same pattern for the services page's machine-park cards - only runs
+        # if ServiceMachineCard is completely empty (see seed_service_machine_cards).
+        seed_service_machine_cards()
     # Off by default - debug mode exposes an interactive code-execution
     # debugger on unhandled exceptions, so it must be opted into explicitly.
     # Set FLASK_DEBUG=1 in your environment for local development.

@@ -15,6 +15,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
+{% from 'partials/editable.html' import text with context %}
 
 {% include 'partials/navbar.html' %}
 
@@ -23,9 +24,7 @@
     <section class="dmg-hero">
         <div class="hero-tag"><span>01</span> // ИСТОРИЯ НА ФИРМАТА</div>
         <h1 class="hero-title">ЗА <span class="text-glow">ТРАФКОМ</span> ООД</h1>
-        <p class="hero-lead">Трафком ООД е основана през 1997 г. в гр. Тетевен. Първоначално фирмата произвежда
-            трансформатори и електроника за радиотехника. От 2021 г. разполага с изцяло нов механичен цех
-            (≈ 4 000 m²), чиято основна дейност е механична обработка на детайли.</p>
+        <p class="hero-lead">{{ text('about.hero_lead', 'Трафком ООД е основана през 1997 г. в гр. Тетевен. Първоначално фирмата произвежда трансформатори и електроника за радиотехника. От 2021 г. разполага с изцяло нов механичен цех (≈ 4 000 m²), чиято основна дейност е механична обработка на детайли.') }}</p>
 
         <div class="hero-stats">
             <div class="stat-item">
@@ -74,11 +73,11 @@
         <div class="info-grid">
             <div class="info-card">
                 <h3>Офис и кореспонденция</h3>
-                <p>гр. Тетевен, ул. „Александър Стамболийски“ 36</p>
+                <p>{{ text('about.office_address', 'гр. Тетевен, ул. „Александър Стамболийски“ 36') }}</p>
             </div>
             <div class="info-card">
                 <h3>Производствена база</h3>
-                <p>гр. Тетевен, ул. „Воловийте“ &middot; механичен цех ≈ 4 000 m²</p>
+                <p>{{ text('about.production_address', 'гр. Тетевен, ул. „Воловийте“ · механичен цех ≈ 4 000 m²') }}</p>
             </div>
         </div>
     </section>

@@ -241,6 +241,21 @@ button, .btn {
     border-color: var(--text-muted);
 }
 
+/* Wiki-style content edit pencil (see partials/editable.html, static/js/inline_edit.js) */
+.edit-pencil-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1rem;
+    color: var(--accent-secondary);
+    opacity: 0.85;
+    margin-left: 6px;
+}
+.edit-pencil-btn:hover {
+    color: #fff;
+    opacity: 1;
+}
+
 /* Action Log Deletion Buttons (Red Alert Theme) */
 .btn-delete, .btn-logout {
     background-color: rgba(239, 68, 68, 0.06);
