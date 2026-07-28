@@ -62,6 +62,10 @@
 </nav>
 
 <script>
+    // Read by AJAX POST calls that build FormData() from scratch (i.e. not
+    // from an actual <form> that already carries the hidden csrf_token
+    // field) - see production_report.html's updateProduction()/assignMachine().
+    window.CSRF_TOKEN = {{ csrf_token() | tojson }};
     (function () {
         var toggle = document.getElementById('navToggle');
         var links = document.getElementById('navLinks');

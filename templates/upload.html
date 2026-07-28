@@ -26,6 +26,7 @@
         <p class="section-subtitle">Качете нов чертеж, изберете материал за ценообразуване и го свържете с конкретна машина по избор.</p>
 
         <form action="{{ url_for('upload') }}" method="POST" enctype="multipart/form-data" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
             <div class="form-group" style="margin-bottom: 20px;">
                 <label for="material">Материал за изчисление *</label>
                 <select name="material" id="material" required>

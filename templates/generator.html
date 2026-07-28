@@ -185,6 +185,7 @@
          /dashboard upload flow used by the main calculator - reuses all of
          its existing pricing/geometry logic instead of duplicating it. -->
     <form id="sendToCalculatorForm" action="{{ url_for('dashboard') }}" method="POST" enctype="multipart/form-data" style="display: none;">
+        {% include 'partials/csrf_field.html' %}
         <input type="hidden" name="material" id="calc-material-field">
         <input type="file" name="file" id="calc-file-field">
     </form>

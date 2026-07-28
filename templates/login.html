@@ -52,6 +52,7 @@
         {% endwith %}
 
         <form method="POST" action="{{ url_for('login') }}" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="username">Потребителско име</label>
                 <input type="text" id="username" name="username" placeholder="Въведете потребителско име..." required autofocus autocomplete="off">

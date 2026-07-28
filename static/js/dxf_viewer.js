@@ -24,6 +24,23 @@ document.addEventListener('DOMContentLoaded', function () {
             closeDxfViewer();
         }
     });
+
+    // Filenames come from data-* attributes (not inline onclick="..." string
+    // concatenation) so an attacker-chosen filename containing quotes can
+    // never break out of a server-rendered JS string - dataset values are
+    // plain strings, never re-parsed as script.
+    document.querySelectorAll('.dxf-viewer-trigger').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            openDxfViewer(this.dataset.id, this.dataset.filename);
+        });
+    });
+    document.querySelectorAll('.dxf-delete-form').forEach(function (form) {
+        form.addEventListener('submit', function (e) {
+            if (!confirm('Изтриване на "' + this.dataset.filename + '"? Това действие е необратимо.')) {
+                e.preventDefault();
+            }
+        });
+    });
 });
 
 function openDxfViewer(fileId, filename) {

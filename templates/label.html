@@ -125,6 +125,7 @@
 
 {% if edit_target_type %}
 <form class="label-quick-edit no-print" action="{{ url_for('update_label_codes', edit_target_type=edit_target_type, edit_target_id=edit_target_id) }}" method="POST">
+    {% include 'partials/csrf_field.html' %}
     <input type="hidden" name="return_target_type" value="{{ return_target_type }}">
     <input type="hidden" name="return_target_id" value="{{ return_target_id }}">
     {% if return_quantity %}<input type="hidden" name="return_quantity" value="{{ return_quantity }}">{% endif %}

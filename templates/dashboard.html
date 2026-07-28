@@ -110,6 +110,7 @@
         <p class="section-subtitle">Изберете индустриален материал и качете .dxf файл за пълно ценообразуване.</p>
 
         <form action="{{ url_for('dashboard') }}" method="POST" enctype="multipart/form-data" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
 
             <div class="form-group" style="margin-bottom: 1.5rem;">
                 <label for="material" style="display: block; margin-bottom: 0.5rem; font-weight: 500;">1. Изберете материал:</label>
@@ -158,8 +159,8 @@
                 <tr>
                     <td class="text-muted text-small">#{{ upload.id }}</td>
                     <td>
-                        <button type="button" class="filename-link"
-                                onclick="openDxfViewer({{ upload.id }}, '{{ upload.filename|e }}')">
+                        <button type="button" class="filename-link dxf-viewer-trigger"
+                                data-id="{{ upload.id }}" data-filename="{{ upload.filename }}">
                             {{ upload.filename }}
                         </button>
                     </td>
@@ -180,7 +181,8 @@
                     </td>
                     <td class="text-right">
                         <form action="{{ url_for('delete_dxf_file', file_id=upload.id) }}" method="POST"
-                              onsubmit="return confirm('Изтриване на &quot;{{ upload.filename|e }}&quot;? Това действие е необратимо.');" style="display:inline;">
+                              class="dxf-delete-form" data-filename="{{ upload.filename }}" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Изтрий</button>
                         </form>
                     </td>

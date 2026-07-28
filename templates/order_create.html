@@ -110,6 +110,7 @@
         </div>
 
         <form method="POST" id="orderForm" style="margin-top: 24px;">
+            {% include 'partials/csrf_field.html' %}
             <div class="form-group" style="margin-bottom: 20px;">
                 <label for="machine_id">Назначи машина (по избор)</label>
                 <select id="machine_id" name="machine_id">
@@ -136,6 +137,7 @@
         <span onclick="closeQuickDetailModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
         <h3 style="margin-top: 0; margin-bottom: 16px;">Бързо създаване на детайл</h3>
         <form id="quickDetailForm" enctype="multipart/form-data">
+            {% include 'partials/csrf_field.html' %}
             <div class="form-group" style="margin-bottom: 15px;">
                 <label for="qd_name">Име на детайла</label>
                 <input type="text" id="qd_name" name="name" required placeholder="напр. Странична стена">
@@ -163,6 +165,7 @@
         <span onclick="closeQuickProductModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
         <h3 style="margin-top: 0; margin-bottom: 16px;">Бързо създаване на продукт</h3>
         <form id="quickProductForm">
+            {% include 'partials/csrf_field.html' %}
             <div class="form-group" style="margin-bottom: 15px;">
                 <label for="qp_name">Име на продукта</label>
                 <input type="text" id="qp_name" name="name" required placeholder="напр. Метален шкаф">

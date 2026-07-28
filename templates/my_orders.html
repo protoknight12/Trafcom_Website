@@ -92,6 +92,7 @@
                 {% if order.can_cancel %}
                 <form method="POST" action="{{ url_for('cancel_order', order_id=order.id) }}"
                       onsubmit="return confirm('Наистина ли искате да отмените поръчка {{ order.order_number }}?');">
+                    {% include 'partials/csrf_field.html' %}
                     <button type="submit" class="btn-delete">Отмени поръчка</button>
                 </form>
                 {% endif %}

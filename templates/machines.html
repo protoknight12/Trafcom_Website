@@ -64,6 +64,7 @@
         <h3>Добавяне на нова машина</h3>
         <p class="section-subtitle">Въведете наименование на машината, за да я добавите към производствения списък.</p>
         <form action="{{ url_for('add_machine') }}" method="POST" class="admin-form" style="display: flex; gap: 12px; align-items: flex-end;">
+            {% include 'partials/csrf_field.html' %}
             <div class="form-group" style="flex: 1; margin-bottom: 0;">
                 <label for="machine_name">Име на машина</label>
                 <input type="text" id="machine_name" name="name" placeholder="напр. Trumpf Fiber Laser 3030" required>
@@ -111,6 +112,7 @@
                     {% if current_user.is_staff %}
                     <td class="text-right">
                         <form action="{{ url_for('update_machine_status', id=m.id) }}" method="POST" class="machine-action-form" style="justify-content: flex-end; margin: 0; padding: 0;">
+                            {% include 'partials/csrf_field.html' %}
                             <select name="status" class="select-status">
                                 <option value="idle" {% if m.status == 'idle' %}selected{% endif %}>Свободна</option>
                                 <option value="running" {% if m.status == 'running' %}selected{% endif %}>Работи</option>
@@ -124,6 +126,7 @@
                     <td class="text-right">
                         <form action="{{ url_for('delete_machine', id=m.id) }}" method="POST"
                               onsubmit="return confirm('Изтриване на машина &quot;{{ m.name|e }}&quot;? Всички свързани поръчки и чертежи ще останат, но без назначена машина.');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Изтрий</button>
                         </form>
                     </td>

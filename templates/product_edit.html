@@ -38,6 +38,7 @@
     <section class="admin-card">
         <h3>Информация за продукта</h3>
         <form action="{{ url_for('admin_product_update', product_id=product.id) }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="name">Име на продукта</label>
                 <input type="text" id="name" name="name" value="{{ product.name }}" required>
@@ -67,6 +68,7 @@
         <h3>Детайли в продукта</h3>
 
         <form action="{{ url_for('admin_product_add_detail', product_id=product.id) }}" method="POST" class="admin-form" style="margin-bottom: 1.5rem;">
+            {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <label for="detail_id" style="margin-bottom: 0;">Детайл *</label>
@@ -112,6 +114,7 @@
                     <td class="text-right">
                         <form action="{{ url_for('admin_product_remove_detail', product_id=product.id, product_detail_id=pd.id) }}" method="POST"
                               onsubmit="return confirm('Премахване на &quot;{{ (pd.detail.name if pd.detail else "детайла")|e }}&quot; от продукта?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Премахни</button>
                         </form>
                     </td>
@@ -131,6 +134,7 @@
         <p class="section-subtitle">Боядисване, монтаж, транспорт или всякакъв друг разход, специфичен за този продукт.</p>
 
         <form action="{{ url_for('admin_product_add_cost', product_id=product.id) }}" method="POST" class="admin-form" style="margin-bottom: 1.5rem;">
+            {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="label">Описание</label>
                 <input type="text" id="label" name="label" placeholder="напр. Боядисване" required>
@@ -159,6 +163,7 @@
                     <td class="text-right">
                         <form action="{{ url_for('admin_product_remove_cost', product_id=product.id, cost_id=cost.id) }}" method="POST"
                               onsubmit="return confirm('Премахване на разход &quot;{{ cost.label|e }}&quot;?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Премахни</button>
                         </form>
                     </td>
@@ -178,6 +183,7 @@
         <p class="section-subtitle">Качете чертежи, визуализации или снимки на крайния продукт, които автоматично ще се приложат към генерираната оферта.</p>
 
         <form action="{{ url_for('admin_product_upload_image', product_id=product.id) }}" method="POST" enctype="multipart/form-data" style="margin-bottom: 2rem; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+            {% include 'partials/csrf_field.html' %}
             <div style="flex: 1; min-width: 250px;">
                 <input type="file" name="images" accept="image/*" multiple required style="background: #1a1a1a; color: #fff; padding: 9px 12px; border-radius: 6px; border: 1px solid #333; width: 100%; box-sizing: border-box; font-size: 0.9rem;">
             </div>
@@ -192,6 +198,7 @@
                     <img src="{{ url_for('static', filename='uploads/products/' ~ img.filename) }}" alt="Продуктово изображение" style="max-width: 100%; max-height: 100%; object-fit: contain;">
                 </div>
                 <form action="{{ url_for('admin_product_delete_image', product_id=product.id, image_id=img.id) }}" method="POST" onsubmit="return confirm('Наистина ли искате да изтриете това изображение?');" style="margin: 0; padding: 0;">
+                    {% include 'partials/csrf_field.html' %}
                     <button type="submit" style="padding: 6px 12px; font-size: 0.82rem; background-color: #dc3545; color: #fff; border: none; border-radius: 4px; width: 100%; cursor: pointer; font-weight: 600;">Премахни</button>
                 </form>
             </div>
@@ -246,6 +253,7 @@
         <span onclick="closeQuickDetailModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
         <h3 style="margin-top: 0; margin-bottom: 16px;">Бързо създаване на детайл</h3>
         <form id="quickDetailForm" enctype="multipart/form-data">
+            {% include 'partials/csrf_field.html' %}
             <div class="form-group" style="margin-bottom: 15px;">
                 <label for="qd_name">Име на детайла</label>
                 <input type="text" id="qd_name" name="name" required placeholder="напр. Странична стена">

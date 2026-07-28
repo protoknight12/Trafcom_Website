@@ -143,6 +143,7 @@
         inputEl.value = val;
 
         const formData = new FormData();
+        formData.append('csrf_token', window.CSRF_TOKEN);
         formData.append('target_type', targetType);
         formData.append('target_id', targetId);
         formData.append('produced_qty', val);
@@ -188,6 +189,7 @@
     function assignMachine(orderId, selectEl) {
         const machineId = selectEl.value;
         const formData = new FormData();
+        formData.append('csrf_token', window.CSRF_TOKEN);
         formData.append('machine_id', machineId);
 
         selectEl.style.borderColor = '#7c3aed';

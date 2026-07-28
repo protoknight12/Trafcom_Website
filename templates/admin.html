@@ -70,6 +70,7 @@
         <section class="admin-card">
             <h3>Създаване на нов потребител</h3>
             <form action="{{ url_for('admin_create_user') }}" method="POST" class="admin-form">
+                {% include 'partials/csrf_field.html' %}
                 <div class="form-group">
                     <label for="username">Потребителско име</label>
                     <input type="text" id="username" name="username" placeholder="Въведете име..." required autocomplete="off">
@@ -95,6 +96,7 @@
         <h3>Добавяне на нов материал</h3>
         <p class="section-subtitle">Добавете нов материал (напр. различни дебелини на един и същ метал, всяка със собствена цена).</p>
         <form action="{{ url_for('admin_add_material') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="new_display_name">Име на материала</label>
                 <input type="text" id="new_display_name" name="display_name" placeholder="напр. Алуминий 2мм" required autocomplete="off">
@@ -163,6 +165,7 @@
                     <td><strong>{{ material.display_name }}</strong></td>
                     <td colspan="9">
                         <form action="{{ url_for('admin_update_material', key=material.key) }}" method="POST" class="material-row-form">
+                            {% include 'partials/csrf_field.html' %}
                             <input type="number" step="0.01" min="0" name="cost_per_m2"
                                    value="{{ '%.2f'|format(material.cost_per_m2) }}" class="material-price-input" required>
                             <input type="number" step="0.01" min="0" name="cost_per_meter_cut"
@@ -194,6 +197,7 @@
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_material', key=material.key) }}" method="POST"
                               onsubmit="return confirm('Изтриване на материал &quot;{{ material.display_name|e }}&quot;? Това е възможно само ако няма детайли, които го използват.');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Изтрий</button>
                         </form>
                     </td>
@@ -215,6 +219,7 @@
         <p class="section-subtitle">Добавете преизползваеми детайли (DXF + материал), от които се изграждат продуктите по-долу.</p>
 
         <form action="{{ url_for('admin_add_detail') }}" method="POST" enctype="multipart/form-data" class="admin-form" style="margin-bottom: 1.5rem;">
+            {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="detail_name">Име на детайла</label>
                 <input type="text" id="detail_name" name="name" placeholder="напр. Странична стена 400x300" required autocomplete="off">
@@ -271,6 +276,7 @@
                     </td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_detail', detail_id=detail.id) }}" method="POST" onsubmit="return confirm('Изтриване на детайла?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Изтрий</button>
                         </form>
                     </td>
@@ -290,6 +296,7 @@
         <p class="section-subtitle">Продуктите се изграждат от детайли plus допълнителни разходи (боядисване, монтаж, транспорт и др.).</p>
 
         <form action="{{ url_for('admin_add_product') }}" method="POST" class="admin-form" style="margin-bottom: 1.5rem;">
+            {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="product_name">Име на продукта</label>
                 <input type="text" id="product_name" name="name" placeholder="напр. Метален шкаф модел А" required autocomplete="off">
@@ -333,6 +340,7 @@
                             <button type="submit" class="btn-secondary" style="padding: 8px 14px; border-radius: var(--border-radius-sm); font-size: 0.85rem;">Етикет</button>
                         </form>
                         <form action="{{ url_for('admin_product_delete', product_id=product.id) }}" method="POST" onsubmit="return confirm('Изтриване на продукта?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Изтрий</button>
                         </form>
                     </td>
@@ -383,6 +391,7 @@
                         {% else %}
                         <div style="display: flex; gap: 8px; justify-content: flex-end; align-items: center;">
                             <form action="{{ url_for('admin_update_user_role', user_id=user.id) }}" method="POST" style="display:inline; display: flex; gap: 6px;">
+                                {% include 'partials/csrf_field.html' %}
                                 <select name="role" class="material-price-input" style="width: auto;">
                                     <option value="regular_user" {% if user.role == 'regular_user' %}selected{% endif %}>Клиент</option>
                                     <option value="worker" {% if user.role == 'worker' %}selected{% endif %}>Служител</option>
@@ -391,6 +400,7 @@
                                 <button type="submit" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem; border-radius: 4px;">Промени роля</button>
                             </form>
                             <form action="{{ url_for('admin_delete_user', user_id=user.id) }}" method="POST" onsubmit="return confirm('Изтриването на потребителя ще премахне и цялата му библиотека с чертежи! Потвърждавате ли?');" style="display:inline;">
+                                {% include 'partials/csrf_field.html' %}
                                 <button type="submit" class="btn-delete">Изтрий профила</button>
                             </form>
                         </div>

@@ -2,6 +2,7 @@ from datetime import datetime
 import os
 import json
 import math
+import re
 import uuid
 import io
 import webbrowser
@@ -11,6 +12,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_wtf.csrf import CSRFProtect
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import ezdxf
@@ -44,6 +46,15 @@ except KeyError as e:
     ) from e
 app.config['UPLOAD_FOLDER'] = os.path.join(os.getcwd(), 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
+# Belt-and-suspenders alongside CSRFProtect below: without an explicit
+# SameSite, the session cookie's cross-site behavior is left to each
+# browser's own default rather than a value this app controls.
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+
+# All state-changing (POST/PUT/PATCH/DELETE) requests must carry a valid CSRF
+# token - either the `csrf_token` form field or an `X-CSRFToken` header for
+# AJAX calls - or they're rejected with 400 before the view function runs.
+csrf = CSRFProtect(app)
 
 # Flat fee added to every job to cover machine setup/initialization overhead.
 BASE_SETUP_FEE = 5.00
@@ -866,7 +877,14 @@ def register():
 
     if request.method == 'POST':
         username = request.form.get('username')
-        password = request.form.get('password')
+        password = request.form.get('password', '')
+
+        # Same 8-character floor change_admin_password.py already enforces
+        # for the admin account - short passwords are well within the
+        # per-minute brute-force budget /login's rate limit still allows.
+        if len(password) < 8:
+            flash('Паролата трябва да бъде поне 8 символа.', 'danger')
+            return redirect(url_for('register'))
 
         # Hash the password
         hashed_password = generate_password_hash(password, method='scrypt')
@@ -885,6 +903,27 @@ def register():
         return redirect(url_for('login'))
 
     return render_template('register.html')
+
+
+# Characters with no legitimate reason to appear in a display filename but
+# that matter to an HTML/JS parser (quotes, angle brackets, control chars,
+# '&'). Unlike werkzeug's secure_filename(), this keeps non-ASCII names
+# (e.g. Cyrillic) intact - it's for safe *display* in templates, not for
+# building a filesystem path.
+_UNSAFE_FILENAME_CHARS = re.compile(r'[\x00-\x1f<>"\'&]')
+
+
+def sanitize_display_filename(filename):
+    """
+    Strips characters that could enable HTML/JS injection if this filename
+    is later rendered in a template, while preserving the user-visible name
+    otherwise. Defense in depth: templates must still escape this value
+    correctly for whatever context they place it in (see dashboard.html's
+    data-filename attribute), but a stored value that's already free of
+    quotes/angle-brackets/control-chars can't be used to break out of any
+    context in the first place.
+    """
+    return _UNSAFE_FILENAME_CHARS.sub('', filename)
 
 
 # Окончателно възстановен маршут за потребителското табло
@@ -921,7 +960,7 @@ def process_dxf_upload(file, material_key, machine_id=None):
         price = calculate_cnc_price(width, height, total_length, pierce_count, material_key)
 
         dxf_file = DxfFile(
-            filename=file.filename,
+            filename=sanitize_display_filename(file.filename),
             material=material_key,
             width=width,
             height=height,
@@ -1376,8 +1415,12 @@ def update_machine_status(id):
     if current_user.role not in ['admin', 'worker']:
         return "Unauthorized", 403
 
+    status = request.form.get('status', '')
+    if status not in ('idle', 'running', 'maintenance'):
+        return "Invalid status", 400
+
     machine = Machine.query.get_or_404(id)
-    machine.status = request.form.get('status')
+    machine.status = status
     db.session.commit()
     flash(f'Статусът на {machine.name} е актуализиран.', 'success')
     return redirect(url_for('list_machines'))
