@@ -13,6 +13,30 @@
     <meta property="og:locale" content="bg_BG">
     <meta property="og:site_name" content="Trafcom">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .edit-pencil-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 1rem;
+            color: var(--accent-secondary);
+            opacity: 0.85;
+        }
+        .edit-pencil-btn:hover {
+            color: #fff;
+            opacity: 1;
+        }
+        .delete-card-btn {
+            color: #e57373;
+        }
+        .add-machine-card {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 160px;
+            border: 1px dashed rgba(255, 255, 255, 0.15);
+        }
+    </style>
 </head>
 <body>
 
@@ -383,9 +407,49 @@
         </div>
     </section>
 
+    {% if extra_machine_cards or (current_user.is_authenticated and current_user.can_edit_content) %}
+    <section class="dmg-showcase-section">
+        <div class="section-header-dmg">
+            <div>
+                <div class="hero-tag"><span>06</span> // ДОПЪЛНИТЕЛНИ МАШИНИ</div>
+                <h2 class="dmg-section-title">ОЩЕ МАШИНИ</h2>
+            </div>
+            <span class="dmg-line-decorative"></span>
+        </div>
+
+        <div class="dmg-grid">
+            {% for card in extra_machine_cards %}
+            <div class="dmg-card">
+                <div class="dmg-card-header">
+                    <span class="dmg-card-series">{{ card.series_label or '' }}</span>
+                    {% if current_user.is_authenticated and current_user.can_edit_content %}
+                    <span style="display: flex; gap: 10px; align-items: center;">
+                        <button type="button" class="edit-pencil-btn" title="Редактирай" onclick="openEditWindow('{{ url_for('edit_machine_card_window', card_id=card.id) }}')">✎</button>
+                        <form action="{{ url_for('delete_machine_card', card_id=card.id) }}" method="POST" onsubmit="return confirm('Премахване на &quot;{{ card.title|e }}&quot; от страницата?');" style="display: inline; margin: 0;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="edit-pencil-btn delete-card-btn" title="Изтрий">✕</button>
+                        </form>
+                    </span>
+                    {% endif %}
+                </div>
+                <h3 class="dmg-card-title">{{ card.title }}</h3>
+                <p class="dmg-card-desc">{{ card.description or '' }}</p>
+            </div>
+            {% endfor %}
+
+            {% if current_user.is_authenticated and current_user.can_edit_content %}
+            <div class="dmg-card add-machine-card">
+                <button type="button" class="btn-submit" onclick="openEditWindow('{{ url_for('new_machine_card_window') }}')">+ Добави машина</button>
+            </div>
+            {% endif %}
+        </div>
+    </section>
+    {% endif %}
+
 </main>
 
 {% include 'partials/footer.html' %}
 
+<script src="{{ url_for('static', filename='js/inline_edit.js') }}"></script>
 </body>
 </html>

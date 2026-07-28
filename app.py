@@ -427,6 +427,20 @@ class Machine(db.Model):
     last_maintenance = db.Column(db.DateTime, default=datetime.utcnow)
 
 
+class ServiceMachineCard(db.Model):
+    """
+    A text card shown on the public services page (see services()/services.html),
+    appended after the hardcoded machine-park cards. Lets web designers/admins add
+    new machines to that page without touching template code - deliberately just
+    title + description, no specs table or image, to keep the content editor simple.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    series_label = db.Column(db.String(100), nullable=True)
+    title = db.Column(db.String(150), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
@@ -852,7 +866,8 @@ def index():
 
 @app.route('/services')
 def services():
-    return render_template('services.html', active_page='services')
+    extra_machine_cards = ServiceMachineCard.query.order_by(ServiceMachineCard.created_at).all()
+    return render_template('services.html', active_page='services', extra_machine_cards=extra_machine_cards)
 
 
 @app.route('/about')
@@ -1120,6 +1135,103 @@ def admin_content():
     details = Detail.query.order_by(Detail.name).all()
     products = Product.query.order_by(Product.name).all()
     return render_template('content_editor.html', details=details, products=products, active_page='content')
+
+
+@app.route('/services/machine-cards/new')
+@login_required
+def new_machine_card_window():
+    """Popup 'add new machine card' window - opened from the services page."""
+    if not current_user.can_edit_content:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+    return render_template(
+        'edit_window.html', item_label='нова машина', saved=request.args.get('saved') == '1',
+        action=url_for('create_machine_card'),
+        fields=[
+            {'name': 'series_label', 'label': 'Кратък етикет (напр. 5-ОСНО ФРЕЗОВАНЕ)', 'value': '', 'type': 'text'},
+            {'name': 'title', 'label': 'Име на машината', 'value': '', 'type': 'text'},
+            {'name': 'description', 'label': 'Описание', 'value': '', 'type': 'textarea'},
+        ]
+    )
+
+
+@app.route('/services/machine-cards/create', methods=['POST'])
+@login_required
+def create_machine_card():
+    if not current_user.can_edit_content:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    title = request.form.get('title', '').strip()
+    if not title:
+        flash('Моля въведете име на машината.', 'danger')
+        return redirect(url_for('services'))
+
+    card = ServiceMachineCard(
+        title=title,
+        series_label=request.form.get('series_label', '').strip() or None,
+        description=request.form.get('description', '').strip() or None,
+    )
+    db.session.add(card)
+    db.session.commit()
+    flash('Машината беше добавена към страница "Услуги".', 'success')
+    if request.form.get('popup') == '1':
+        return redirect(url_for('new_machine_card_window', saved='1'))
+    return redirect(url_for('services'))
+
+
+@app.route('/services/machine-cards/<int:card_id>/edit')
+@login_required
+def edit_machine_card_window(card_id):
+    if not current_user.can_edit_content:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+    card = ServiceMachineCard.query.get_or_404(card_id)
+    return render_template(
+        'edit_window.html', item_label='машина', saved=request.args.get('saved') == '1',
+        action=url_for('update_machine_card', card_id=card.id),
+        fields=[
+            {'name': 'series_label', 'label': 'Кратък етикет (напр. 5-ОСНО ФРЕЗОВАНЕ)', 'value': card.series_label or '', 'type': 'text'},
+            {'name': 'title', 'label': 'Име на машината', 'value': card.title, 'type': 'text'},
+            {'name': 'description', 'label': 'Описание', 'value': card.description or '', 'type': 'textarea'},
+        ]
+    )
+
+
+@app.route('/services/machine-cards/<int:card_id>/update', methods=['POST'])
+@login_required
+def update_machine_card(card_id):
+    if not current_user.can_edit_content:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    card = ServiceMachineCard.query.get_or_404(card_id)
+    title = request.form.get('title', '').strip()
+    if not title:
+        flash('Моля въведете име на машината.', 'danger')
+        return redirect(url_for('services'))
+
+    card.title = title
+    card.series_label = request.form.get('series_label', '').strip() or None
+    card.description = request.form.get('description', '').strip() or None
+    db.session.commit()
+    flash('Машината беше обновена успешно.', 'success')
+    if request.form.get('popup') == '1':
+        return redirect(url_for('edit_machine_card_window', card_id=card_id, saved='1'))
+    return redirect(url_for('services'))
+
+
+@app.route('/services/machine-cards/<int:card_id>/delete', methods=['POST'])
+@login_required
+def delete_machine_card(card_id):
+    if not current_user.can_edit_content:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+    card = ServiceMachineCard.query.get_or_404(card_id)
+    db.session.delete(card)
+    db.session.commit()
+    flash('Машината беше премахната от страница "Услуги".', 'success')
+    return redirect(url_for('services'))
 
 
 @app.route('/admin/create_user', methods=['POST'])
@@ -1418,6 +1530,21 @@ def add_machine():
     return redirect(url_for('list_machines'))
 
 
+@app.route('/machines/<int:id>/edit')
+@login_required
+def edit_machine_window(id):
+    """Popup edit window (see edit_window.html) - opened via the pencil icon on /machines."""
+    if not (current_user.is_admin or current_user.can_edit_content):
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+    machine = Machine.query.get_or_404(id)
+    return render_template(
+        'edit_window.html', item_label='машина', saved=request.args.get('saved') == '1',
+        action=url_for('rename_machine', id=machine.id),
+        fields=[{'name': 'name', 'label': 'Име на машина', 'value': machine.name, 'type': 'text'}]
+    )
+
+
 @app.route('/machines/<int:id>/rename', methods=['POST'])
 @login_required
 def rename_machine(id):
@@ -1434,6 +1561,8 @@ def rename_machine(id):
     machine.name = name
     db.session.commit()
     flash('Машината беше преименувана успешно.', 'success')
+    if request.form.get('popup') == '1':
+        return redirect(url_for('edit_machine_window', id=id, saved='1'))
     return redirect(url_for('list_machines'))
 
 
@@ -1559,6 +1688,21 @@ def admin_add_detail():
     return redirect(url_for('admin_dashboard'))
 
 
+@app.route('/admin/details/<int:detail_id>/edit')
+@login_required
+def edit_detail_window(detail_id):
+    """Popup edit window (see edit_window.html) - opened via the pencil icon on /admin/content."""
+    if not (current_user.is_admin or current_user.can_edit_content):
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+    detail = Detail.query.get_or_404(detail_id)
+    return render_template(
+        'edit_window.html', item_label='детайл', saved=request.args.get('saved') == '1',
+        action=url_for('admin_rename_detail', detail_id=detail.id),
+        fields=[{'name': 'name', 'label': 'Име на детайла', 'value': detail.name, 'type': 'text'}]
+    )
+
+
 @app.route('/admin/details/<int:detail_id>/rename', methods=['POST'])
 @login_required
 def admin_rename_detail(detail_id):
@@ -1575,6 +1719,8 @@ def admin_rename_detail(detail_id):
     detail.name = name
     db.session.commit()
     flash('Детайлът беше преименуван успешно.', 'success')
+    if request.form.get('popup') == '1':
+        return redirect(url_for('edit_detail_window', detail_id=detail_id, saved='1'))
     return redirect(url_for('admin_content'))
 
 
@@ -1645,6 +1791,24 @@ def admin_product_edit(product_id):
     return render_template('product_edit.html', product=product, all_details=all_details, pricing=pricing, materials=materials, active_page='admin')
 
 
+@app.route('/admin/products/<int:product_id>/edit-content')
+@login_required
+def edit_product_content_window(product_id):
+    """Popup edit window (see edit_window.html) - opened via the pencil icon on /admin/content."""
+    if not (current_user.is_admin or current_user.can_edit_content):
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+    product = Product.query.get_or_404(product_id)
+    return render_template(
+        'edit_window.html', item_label='продукт', saved=request.args.get('saved') == '1',
+        action=url_for('admin_product_update', product_id=product.id),
+        fields=[
+            {'name': 'name', 'label': 'Име на продукта', 'value': product.name, 'type': 'text'},
+            {'name': 'description', 'label': 'Описание', 'value': product.description or '', 'type': 'textarea'},
+        ]
+    )
+
+
 @app.route('/admin/products/<int:product_id>/update', methods=['POST'])
 @login_required
 def admin_product_update(product_id):
@@ -1652,10 +1816,18 @@ def admin_product_update(product_id):
         flash('Нямате достъп до тази страница.', 'danger')
         return redirect(url_for('dashboard'))
 
-    # Non-admin content editors (web designers) may only touch name/description -
-    # everything below this line (pricing, ERP №) is admin-only.
-    redirect_target = url_for('admin_product_edit', product_id=product_id) if current_user.is_admin \
-        else url_for('admin_content')
+    is_popup = request.form.get('popup') == '1'
+    # Popup (content-only) submissions never touch pricing/ERP, even from an admin -
+    # that form only ever carries name/description. The admin-only fields below are
+    # exclusive to the full admin_product_edit page.
+    edit_pricing = current_user.is_admin and not is_popup
+
+    if is_popup:
+        redirect_target = url_for('edit_product_content_window', product_id=product_id, saved='1')
+    elif current_user.is_admin:
+        redirect_target = url_for('admin_product_edit', product_id=product_id)
+    else:
+        redirect_target = url_for('admin_content')
 
     product = Product.query.get_or_404(product_id)
     name = request.form.get('name', '').strip()
@@ -1666,7 +1838,7 @@ def admin_product_update(product_id):
     product.name = name
     product.description = request.form.get('description', '').strip()
 
-    if current_user.is_admin:
+    if edit_pricing:
         try:
             markup_percent = float(request.form.get('markup_percent', '0') or 0)
             erp_number = _parse_erp_number(request.form)

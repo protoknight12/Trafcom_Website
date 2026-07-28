@@ -55,11 +55,6 @@
             color: #fff;
             opacity: 1;
         }
-        .inline-edit-form {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
     </style>
 </head>
 <body>
@@ -115,19 +110,9 @@
                 {% for m in machines %}
                 <tr>
                     <td>
-                        {% if current_user.is_admin or current_user.can_edit_content %}
-                        <span id="view-machine-{{ m.id }}">
-                            <strong>{{ m.name }}</strong>
-                            <button type="button" class="edit-pencil-btn" title="Редактирай" onclick="toggleInlineEdit('machine-{{ m.id }}')">✎</button>
-                        </span>
-                        <form id="edit-machine-{{ m.id }}" action="{{ url_for('rename_machine', id=m.id) }}" method="POST" class="inline-edit-form" style="display: none;">
-                            {% include 'partials/csrf_field.html' %}
-                            <input type="text" name="name" value="{{ m.name }}" required class="select-status" style="width: 160px;">
-                            <button type="submit" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem; border-radius: 4px;">Запази</button>
-                            <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem; border-radius: 4px;" onclick="toggleInlineEdit('machine-{{ m.id }}')">Отказ</button>
-                        </form>
-                        {% else %}
                         <strong>{{ m.name }}</strong>
+                        {% if current_user.is_admin or current_user.can_edit_content %}
+                        <button type="button" class="edit-pencil-btn" title="Редактирай" onclick="openEditWindow('{{ url_for('edit_machine_window', id=m.id) }}')">✎</button>
                         {% endif %}
                     </td>
                     <td>

@@ -1,14 +1,7 @@
-// Wiki-style inline edit: click the pencil to swap a text view for its edit
-// form in place, click cancel to swap back. Each pair of elements shares one
-// id suffix: #view-<id> and #edit-<id>.
-function toggleInlineEdit(id) {
-    var view = document.getElementById('view-' + id);
-    var edit = document.getElementById('edit-' + id);
-    var editing = edit.style.display !== 'none';
-    edit.style.display = editing ? 'none' : '';
-    view.style.display = editing ? '' : 'none';
-    if (!editing) {
-        var firstInput = edit.querySelector('input, textarea');
-        if (firstInput) firstInput.focus();
-    }
+// Wiki-style edit: click the pencil to pop open a small edit window for that
+// item (see edit_window.html). On save, that window reloads the page that
+// opened it so the list stays in sync, matching Wikipedia's "edit in a
+// separate view, save, and the article updates" flow.
+function openEditWindow(url) {
+    window.open(url, 'trafcom_edit', 'width=560,height=560');
 }

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Редакция - {{ item_label }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        body {
+            margin: 0;
+            padding: 24px;
+            background-color: var(--bg-main);
+        }
+        .edit-window-card {
+            max-width: 480px;
+            margin: 0 auto;
+        }
+        .saved-banner {
+            background-color: rgba(16, 185, 129, 0.15);
+            border: 1px solid #10b981;
+            color: #34d399;
+            padding: 10px 14px;
+            border-radius: var(--border-radius-sm);
+            margin-bottom: 16px;
+            font-size: 0.9rem;
+        }
+        .form-group textarea {
+            background-color: var(--bg-input);
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            padding: 12px 16px;
+            border-radius: var(--border-radius-sm);
+            font-size: 0.95rem;
+            font-family: inherit;
+            line-height: 1.5;
+            resize: vertical;
+            width: 100%;
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body>
+
+<div class="edit-window-card admin-card">
+    <h3>Редакция: {{ item_label }}</h3>
+
+    {% if saved %}
+    <div class="saved-banner">Запазено успешно.</div>
+    {% endif %}
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <form action="{{ action }}" method="POST" class="admin-form" style="display: block;">
+        {% include 'partials/csrf_field.html' %}
+        <input type="hidden" name="popup" value="1">
+        {% for f in fields %}
+        <div class="form-group">
+            <label for="field_{{ loop.index }}">{{ f.label }}</label>
+            {% if f.type == 'textarea' %}
+            <textarea id="field_{{ loop.index }}" name="{{ f.name }}" rows="6">{{ f.value }}</textarea>
+            {% else %}
+            <input type="text" id="field_{{ loop.index }}" name="{{ f.name }}" value="{{ f.value }}" required>
+            {% endif %}
+        </div>
+        {% endfor %}
+        <div style="display: flex; gap: 10px;">
+            <button type="submit" class="btn-submit">Запази</button>
+            <button type="button" class="btn-secondary" style="padding: 12px 24px;" onclick="window.close()">Затвори</button>
+        </div>
+    </form>
+</div>
+
+<script>
+    if ({{ 'true' if saved else 'false' }} && window.opener && !window.opener.closed) {
+        window.opener.location.reload();
+    }
+</script>
+</body>
+</html>
