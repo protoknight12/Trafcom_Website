@@ -997,42 +997,11 @@ def process_dxf_upload(file, material_key, machine_id=None):
             os.remove(temp_path)
 
 
-@app.route('/dashboard', methods=['GET', 'POST'])
+@app.route('/dashboard')
 @login_required
 def dashboard():
-    if request.method == 'POST':
-        if 'file' not in request.files:
-            flash('Грешка: Няма избран файл.', 'danger')
-            return redirect(request.url)
-
-        file = request.files['file']
-        if file.filename == '':
-            flash('Грешка: Не сте избрали файл.', 'danger')
-            return redirect(request.url)
-
-        if not file.filename.lower().endswith('.dxf'):
-            flash('Невалиден формат! Системата приема само .dxf файлове.', 'danger')
-            return redirect(url_for('dashboard'))
-
-        try:
-            chosen_material = request.form.get('material', 'steel')
-            dxf_file, pierce_count, error = process_dxf_upload(file, chosen_material)
-            if error:
-                flash(error, 'danger')
-                return redirect(url_for('dashboard'))
-
-            db.session.add(dxf_file)
-            db.session.commit()
-
-            flash(f'Файлът "{file.filename}" беше изчислен успешно с включени пробиви ({pierce_count} бр.)!',
-                  'success')
-            return redirect(url_for('dashboard'))
-
-        except Exception as e:
-            db.session.rollback()
-            flash(f'Критична грешка при обработка/запис: {str(e)}', 'danger')
-            return redirect(url_for('dashboard'))
-
+    # Pure library view now - uploading/calculating a new DXF lives on its
+    # own page (see upload()) so the two don't get conflated in the nav.
     user_uploads = DxfFile.query.filter_by(user_id=current_user.id).order_by(DxfFile.id.desc()).all()
     materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
     return render_template('dashboard.html', uploads=user_uploads, materials=materials, active_page='dashboard')
@@ -1110,7 +1079,7 @@ def upload():
 
     machines = Machine.query.all()
     materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
-    return render_template('upload.html', machines=machines, materials=materials, active_page='dashboard')
+    return render_template('upload.html', machines=machines, materials=materials, active_page='upload')
 
 # ----------------- АДМИНИСТРАТОРСКИ МАРШРУТИ -----------------
 
@@ -2373,6 +2342,20 @@ def delete_dxf_file(file_id):
         db.session.delete(dxf_file)
         db.session.commit()
         flash(f'Файлът "{filename}" беше изтрит.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Грешка при изтриване: {str(e)}', 'danger')
+    return redirect(url_for('dashboard'))
+
+
+@app.route('/dxf/delete_all', methods=['POST'])
+@login_required
+def delete_all_dxf_files():
+    """Deletes every DXF upload in the current user's own library."""
+    try:
+        deleted = DxfFile.query.filter_by(user_id=current_user.id).delete()
+        db.session.commit()
+        flash(f'Изтрити бяха {deleted} файл(а) от библиотеката.', 'success')
     except Exception as e:
         db.session.rollback()
         flash(f'Грешка при изтриване: {str(e)}', 'danger')

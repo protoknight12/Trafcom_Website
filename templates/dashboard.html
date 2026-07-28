@@ -106,40 +106,23 @@
     {% endwith %}
 
     <section class="admin-card">
-        <h3>Изчисляване на нов DXF чертеж</h3>
-        <p class="section-subtitle">Изберете индустриален материал и качете .dxf файл за пълно ценообразуване.</p>
-
-        <form action="{{ url_for('dashboard') }}" method="POST" enctype="multipart/form-data" class="admin-form">
-            {% include 'partials/csrf_field.html' %}
-
-            <div class="form-group" style="margin-bottom: 1.5rem;">
-                <label for="material" style="display: block; margin-bottom: 0.5rem; font-weight: 500;">1. Изберете материал:</label>
-                <select id="material" name="material"
-                        style="font-size: 1rem; cursor: pointer;">
-                    {% for material in materials %}
-                    <option value="{{ material.key }}">{{ material.display_name }}</option>
-                    {% endfor %}
-                </select>
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px;">
+            <div>
+                <h3>Вашата библиотека с изчисления</h3>
+                <p class="section-subtitle">Списък на всички обработени от вас CAD чертежи, съобразени с размерите и материала.
+                    Кликнете върху име на файл за 2D визуализация.</p>
             </div>
-
-            <div class="form-group">
-                <label for="dxf_file">2. Качете файл за изчисление:</label>
-                <div class="upload-dropzone" onclick="document.getElementById('dxf_file').click()"
-                     style="cursor: pointer;">
-                    <p style="margin: 0; font-weight: 500;">Кликнете тук, за да изберете .dxf файл</p>
-                    <span class="text-muted text-small">Цената автоматично включва линеен сряз, габаритна площ и брой пробиви (pierces)</span>
-                    <input type="file" id="dxf_file" name="file" accept=".dxf" style="display: none;"
-                           onchange="this.form.submit()">
-                </div>
+            <div style="display: flex; gap: 10px; flex-shrink: 0;">
+                <a href="{{ url_for('upload') }}" class="btn-submit" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; text-decoration: none;">+ Нов чертеж</a>
+                {% if uploads %}
+                <form action="{{ url_for('delete_all_dxf_files') }}" method="POST"
+                      onsubmit="return confirm('Да се изтрият ли всички {{ uploads|length }} файла от библиотеката? Действието е необратимо.');">
+                    {% include 'partials/csrf_field.html' %}
+                    <button type="submit" class="btn-delete">Изтрий всички</button>
+                </form>
+                {% endif %}
             </div>
-
-        </form>
-    </section>
-
-    <section class="admin-card">
-        <h3>Вашата библиотека с изчисления</h3>
-        <p class="section-subtitle">Списък на всички обработени от вас CAD чертежи, съобразени с размерите и материала.
-            Кликнете върху име на файл за 2D визуализация.</p>
+        </div>
 
         <div class="table-responsive">
             <table class="data-table">
@@ -190,7 +173,7 @@
                 {% else %}
                 <tr>
                     <td colspan="7" class="text-center no-data">
-                        Вашата библиотека е празна. Качете първия си чертеж по-горе.
+                        Вашата библиотека е празна. <a href="{{ url_for('upload') }}">Качете първия си чертеж</a>.
                     </td>
                 </tr>
                 {% endfor %}
