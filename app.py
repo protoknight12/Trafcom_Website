@@ -91,7 +91,7 @@ class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(50), unique=True, nullable=False)
     password = db.Column(db.String(255), nullable=False)
-    # roles: 'regular_user', 'worker', 'admin'
+    # roles: 'regular_user', 'worker', 'admin', 'web_designer'
     role = db.Column(db.String(20), default='regular_user')
 
     uploads = db.relationship('DxfFile', cascade='all, delete-orphan', backref='owner', lazy=True)
@@ -108,6 +108,11 @@ class User(db.Model, UserMixin):
     def is_staff(self):
         """Admins and workers both have production/machine-floor access."""
         return self.role in ('admin', 'worker')
+
+    @property
+    def can_edit_content(self):
+        """Admins and web designers can redact info pages (machine names, detail names, product text)."""
+        return self.role in ('admin', 'web_designer')
 
 
 class DxfFile(db.Model):
@@ -1101,6 +1106,22 @@ def admin_dashboard():
     )
 
 
+@app.route('/admin/content')
+@login_required
+def admin_content():
+    """
+    Scoped-down content editor for the 'web_designer' role (and admins):
+    only info text - detail names, product name/description - none of the
+    pricing/catalog-management surface that lives on admin_dashboard.
+    """
+    if not current_user.can_edit_content:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+    details = Detail.query.order_by(Detail.name).all()
+    products = Product.query.order_by(Product.name).all()
+    return render_template('content_editor.html', details=details, products=products, active_page='content')
+
+
 @app.route('/admin/create_user', methods=['POST'])
 @login_required
 def admin_create_user():
@@ -1117,7 +1138,7 @@ def admin_create_user():
         return redirect(url_for('admin_dashboard'))
 
     role = request.form.get('role', 'regular_user')
-    if role not in ('regular_user', 'worker', 'admin'):
+    if role not in ('regular_user', 'worker', 'admin', 'web_designer'):
         flash('Невалидна роля.', 'danger')
         return redirect(url_for('admin_dashboard'))
 
@@ -1140,7 +1161,7 @@ def admin_update_user_role(user_id):
         return redirect(url_for('admin_dashboard'))
 
     role = request.form.get('role', '')
-    if role not in ('regular_user', 'worker', 'admin'):
+    if role not in ('regular_user', 'worker', 'admin', 'web_designer'):
         flash('Невалидна роля.', 'danger')
         return redirect(url_for('admin_dashboard'))
 
@@ -1381,8 +1402,8 @@ def admin_product_upload_image(product_id):
 @app.route('/machines/add', methods=['POST'])
 @login_required
 def add_machine():
-    if current_user.role != 'admin':
-        flash("Само администратори могат да добавят машини.", "danger")
+    if not (current_user.is_admin or current_user.can_edit_content):
+        flash("Нямате права да добавяте машини.", "danger")
         return redirect(url_for('list_machines'))
 
     name = request.form.get('name', '').strip()
@@ -1394,6 +1415,25 @@ def add_machine():
     db.session.add(new_machine)
     db.session.commit()
     flash('Машината е добавена успешно!', 'success')
+    return redirect(url_for('list_machines'))
+
+
+@app.route('/machines/<int:id>/rename', methods=['POST'])
+@login_required
+def rename_machine(id):
+    if not (current_user.is_admin or current_user.can_edit_content):
+        flash("Нямате права да преименувате машини.", "danger")
+        return redirect(url_for('list_machines'))
+
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Моля въведете име на машината.', 'danger')
+        return redirect(url_for('list_machines'))
+
+    machine = Machine.query.get_or_404(id)
+    machine.name = name
+    db.session.commit()
+    flash('Машината беше преименувана успешно.', 'success')
     return redirect(url_for('list_machines'))
 
 
@@ -1417,7 +1457,7 @@ def update_machine_status(id):
 @app.route('/machines')
 @login_required
 def list_machines():
-    if not current_user.is_staff:
+    if not (current_user.is_staff or current_user.can_edit_content):
         flash('Нямате достъп до тази страница.', 'danger')
         return redirect(url_for('dashboard'))
     machines = Machine.query.all()
@@ -1519,6 +1559,25 @@ def admin_add_detail():
     return redirect(url_for('admin_dashboard'))
 
 
+@app.route('/admin/details/<int:detail_id>/rename', methods=['POST'])
+@login_required
+def admin_rename_detail(detail_id):
+    if not (current_user.is_admin or current_user.can_edit_content):
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Моля въведете име на детайла.', 'danger')
+        return redirect(url_for('admin_content'))
+
+    detail = Detail.query.get_or_404(detail_id)
+    detail.name = name
+    db.session.commit()
+    flash('Детайлът беше преименуван успешно.', 'success')
+    return redirect(url_for('admin_content'))
+
+
 @app.route('/admin/details/delete/<int:detail_id>', methods=['POST'])
 @login_required
 def admin_delete_detail(detail_id):
@@ -1589,37 +1648,45 @@ def admin_product_edit(product_id):
 @app.route('/admin/products/<int:product_id>/update', methods=['POST'])
 @login_required
 def admin_product_update(product_id):
-    if not current_user.is_admin:
+    if not (current_user.is_admin or current_user.can_edit_content):
         flash('Нямате достъп до тази страница.', 'danger')
         return redirect(url_for('dashboard'))
+
+    # Non-admin content editors (web designers) may only touch name/description -
+    # everything below this line (pricing, ERP №) is admin-only.
+    redirect_target = url_for('admin_product_edit', product_id=product_id) if current_user.is_admin \
+        else url_for('admin_content')
 
     product = Product.query.get_or_404(product_id)
     name = request.form.get('name', '').strip()
     if not name:
         flash('Моля въведете име на продукта.', 'danger')
-        return redirect(url_for('admin_product_edit', product_id=product.id))
-
-    try:
-        markup_percent = float(request.form.get('markup_percent', '0') or 0)
-        erp_number = _parse_erp_number(request.form)
-    except ValueError:
-        flash('Надценката и ERP № трябва да бъдат валидни числа.', 'danger')
-        return redirect(url_for('admin_product_edit', product_id=product.id))
-
-    conflict = _erp_number_conflict(erp_number, exclude_type='product', exclude_id=product.id)
-    if conflict:
-        flash(f'ERP № {erp_number} вече се използва от {conflict}.', 'danger')
-        return redirect(url_for('admin_product_edit', product_id=product.id))
+        return redirect(redirect_target)
 
     product.name = name
     product.description = request.form.get('description', '').strip()
-    product.markup_percent = round(markup_percent, 2)
-    product.erp_number = erp_number
-    product.code_number = request.form.get('code_number', '').strip() or None
+
+    if current_user.is_admin:
+        try:
+            markup_percent = float(request.form.get('markup_percent', '0') or 0)
+            erp_number = _parse_erp_number(request.form)
+        except ValueError:
+            flash('Надценката и ERP № трябва да бъдат валидни числа.', 'danger')
+            return redirect(redirect_target)
+
+        conflict = _erp_number_conflict(erp_number, exclude_type='product', exclude_id=product.id)
+        if conflict:
+            flash(f'ERP № {erp_number} вече се използва от {conflict}.', 'danger')
+            return redirect(redirect_target)
+
+        product.markup_percent = round(markup_percent, 2)
+        product.erp_number = erp_number
+        product.code_number = request.form.get('code_number', '').strip() or None
+
     db.session.commit()
 
     flash('Продуктът беше обновен успешно.', 'success')
-    return redirect(url_for('admin_product_edit', product_id=product.id))
+    return redirect(redirect_target)
 
 
 @app.route('/admin/products/<int:product_id>/delete', methods=['POST'])

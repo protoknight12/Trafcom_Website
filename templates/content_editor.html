@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Съдържание - TRAFCOM</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Детайли - имена</h3>
+        <p class="section-subtitle">Преименувайте детайли от библиотеката. Материал, размери и цена се редактират само от администраторския панел.</p>
+
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Име</th>
+                    <th>Материал</th>
+                    <th class="text-right">Действие</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for detail in details %}
+                <tr>
+                    <td colspan="2">
+                        <form action="{{ url_for('admin_rename_detail', detail_id=detail.id) }}" method="POST" class="material-row-form">
+                            {% include 'partials/csrf_field.html' %}
+                            <input type="text" name="name" value="{{ detail.name }}" required class="material-price-input" style="width: 260px;">
+                            <span class="badge badge-user">{{ detail.material.display_name if detail.material else 'Неизвестен' }}</span>
+                            <button type="submit" class="btn-save-price">Запази</button>
+                        </form>
+                    </td>
+                    <td></td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="3" class="text-center no-data">Няма добавени детайли.</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="admin-card">
+        <h3>Продукти - име и описание</h3>
+        <p class="section-subtitle">Редактирайте текстовете на продуктите. Надценка, ERP № и състав се редактират само от администраторския панел.</p>
+
+        {% for product in products %}
+        <form action="{{ url_for('admin_product_update', product_id=product.id) }}" method="POST" class="admin-form" style="margin-bottom: 1.5rem; border-bottom: 1px solid var(--border-color); padding-bottom: 1.5rem;">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="name_{{ product.id }}">Име на продукта</label>
+                <input type="text" id="name_{{ product.id }}" name="name" value="{{ product.name }}" required>
+            </div>
+            <div class="form-group">
+                <label for="description_{{ product.id }}">Описание</label>
+                <input type="text" id="description_{{ product.id }}" name="description" value="{{ product.description or '' }}">
+            </div>
+            <button type="submit" class="btn-submit">Запази промените</button>
+        </form>
+        {% else %}
+        <p class="text-center no-data">Няма добавени продукти.</p>
+        {% endfor %}
+    </section>
+
+</main>
+</body>
+</html>

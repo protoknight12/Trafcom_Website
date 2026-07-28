@@ -25,15 +25,22 @@
                     <a href="{{ url_for('create_order') }}" class="{{ 'active-nav-link' if active_page == 'create_order' else '' }}">Нова Поръчка</a>
                     <a href="{{ url_for('my_orders') }}" class="{{ 'active-nav-link' if active_page == 'my_orders' else '' }}">Моите Поръчки</a>
 
-                    {% if current_user.is_admin or current_user.is_worker %}
+                    {% if current_user.is_admin or current_user.is_worker or current_user.can_edit_content %}
                         <div class="dropdown">
-                            <a class="dropdown-trigger {{ 'active-nav-link' if active_page in ['admin', 'production', 'machines'] else '' }}" href="#" tabindex="0" onclick="event.preventDefault()">Управление <span class="dropdown-arrow">▼</span></a>
+                            <a class="dropdown-trigger {{ 'active-nav-link' if active_page in ['admin', 'production', 'machines', 'content'] else '' }}" href="#" tabindex="0" onclick="event.preventDefault()">Управление <span class="dropdown-arrow">▼</span></a>
                             <div class="dropdown-content">
                                 {% if current_user.is_admin %}
                                     <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
                                 {% endif %}
-                                <a href="{{ url_for('admin_production_report') }}">Справка Производство</a>
-                                <a href="{{ url_for('list_machines') }}">Машини</a>
+                                {% if current_user.is_admin or current_user.is_worker %}
+                                    <a href="{{ url_for('admin_production_report') }}">Справка Производство</a>
+                                {% endif %}
+                                {% if current_user.is_admin or current_user.is_worker or current_user.can_edit_content %}
+                                    <a href="{{ url_for('list_machines') }}">Машини</a>
+                                {% endif %}
+                                {% if current_user.can_edit_content %}
+                                    <a href="{{ url_for('admin_content') }}">Съдържание</a>
+                                {% endif %}
                             </div>
                         </div>
                     {% endif %}
@@ -46,6 +53,8 @@
                         <span class="user-badge" style="border-color: var(--danger-border); color: #ff7675;">АДМИНИСТРАТОР &middot; {{ current_user.username }}</span>
                     {% elif current_user.is_worker %}
                         <span class="user-badge" style="border-color: #17a2b8; color: #5bc8dd;">СЛУЖИТЕЛ &middot; {{ current_user.username }}</span>
+                    {% elif current_user.role == 'web_designer' %}
+                        <span class="user-badge" style="border-color: #8e44ad; color: #c39bd3;">УЕБ ДИЗАЙНЕР &middot; {{ current_user.username }}</span>
                     {% else %}
                         <span class="user-badge">{{ current_user.username }}</span>
                     {% endif %}
