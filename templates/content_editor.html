@@ -5,6 +5,72 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Съдържание - TRAFCOM</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .edit-pencil-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 1rem;
+            color: var(--accent-secondary);
+            opacity: 0.85;
+            margin-left: 6px;
+            flex-shrink: 0;
+        }
+        .edit-pencil-btn:hover {
+            color: #fff;
+            opacity: 1;
+        }
+        .inline-edit-form {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .inline-edit-form-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .inline-edit-form .form-actions {
+            display: flex;
+            gap: 8px;
+        }
+        .content-item {
+            padding: 14px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .content-item:last-child {
+            border-bottom: none;
+        }
+        .content-item-desc-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 6px;
+            margin-top: 6px;
+        }
+        .content-big-desc {
+            font-size: 0.95rem;
+            color: var(--text-muted);
+            line-height: 1.6;
+            max-width: 640px;
+            margin: 0;
+        }
+        .content-edit-textarea {
+            width: 100%;
+            max-width: 640px;
+            min-height: 100px;
+            padding: 10px 12px;
+            background-color: var(--bg-input);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-sm);
+            font-size: 0.95rem;
+            font-family: inherit;
+            line-height: 1.5;
+            resize: vertical;
+            box-sizing: border-box;
+        }
+    </style>
 </head>
 <body>
 {% include 'partials/navbar.html' %}
@@ -23,62 +89,62 @@
 
     <section class="admin-card">
         <h3>Детайли - имена</h3>
-        <p class="section-subtitle">Преименувайте детайли от библиотеката. Материал, размери и цена се редактират само от администраторския панел.</p>
+        <p class="section-subtitle">Материал, размери и цена се редактират само от администраторския панел.</p>
 
-        <div class="table-responsive">
-            <table class="users-table">
-                <thead>
-                <tr>
-                    <th>Име</th>
-                    <th>Материал</th>
-                    <th class="text-right">Действие</th>
-                </tr>
-                </thead>
-                <tbody>
-                {% for detail in details %}
-                <tr>
-                    <td colspan="2">
-                        <form action="{{ url_for('admin_rename_detail', detail_id=detail.id) }}" method="POST" class="material-row-form">
-                            {% include 'partials/csrf_field.html' %}
-                            <input type="text" name="name" value="{{ detail.name }}" required class="material-price-input" style="width: 260px;">
-                            <span class="badge badge-user">{{ detail.material.display_name if detail.material else 'Неизвестен' }}</span>
-                            <button type="submit" class="btn-save-price">Запази</button>
-                        </form>
-                    </td>
-                    <td></td>
-                </tr>
-                {% else %}
-                <tr>
-                    <td colspan="3" class="text-center no-data">Няма добавени детайли.</td>
-                </tr>
-                {% endfor %}
-                </tbody>
-            </table>
+        {% for detail in details %}
+        <div class="content-item">
+            <span id="view-detail-{{ detail.id }}">
+                <strong>{{ detail.name }}</strong>
+                <button type="button" class="edit-pencil-btn" title="Редактирай" onclick="toggleInlineEdit('detail-{{ detail.id }}')">✎</button>
+                <span class="badge badge-user">{{ detail.material.display_name if detail.material else 'Неизвестен' }}</span>
+            </span>
+            <form id="edit-detail-{{ detail.id }}" action="{{ url_for('admin_rename_detail', detail_id=detail.id) }}" method="POST" class="inline-edit-form-row" style="display: none;">
+                {% include 'partials/csrf_field.html' %}
+                <input type="text" name="name" value="{{ detail.name }}" required class="material-price-input" style="width: 260px;">
+                <button type="submit" class="btn-save-price">Запази</button>
+                <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem; border-radius: 4px;" onclick="toggleInlineEdit('detail-{{ detail.id }}')">Отказ</button>
+            </form>
         </div>
+        {% else %}
+        <p class="text-center no-data">Няма добавени детайли.</p>
+        {% endfor %}
     </section>
 
     <section class="admin-card">
         <h3>Продукти - име и описание</h3>
-        <p class="section-subtitle">Редактирайте текстовете на продуктите. Надценка, ERP № и състав се редактират само от администраторския панел.</p>
+        <p class="section-subtitle">Надценка, ERP № и състав се редактират само от администраторския панел.</p>
 
         {% for product in products %}
-        <form action="{{ url_for('admin_product_update', product_id=product.id) }}" method="POST" class="admin-form" style="margin-bottom: 1.5rem; border-bottom: 1px solid var(--border-color); padding-bottom: 1.5rem;">
-            {% include 'partials/csrf_field.html' %}
-            <div class="form-group">
-                <label for="name_{{ product.id }}">Име на продукта</label>
-                <input type="text" id="name_{{ product.id }}" name="name" value="{{ product.name }}" required>
-            </div>
-            <div class="form-group">
-                <label for="description_{{ product.id }}">Описание</label>
-                <input type="text" id="description_{{ product.id }}" name="description" value="{{ product.description or '' }}">
-            </div>
-            <button type="submit" class="btn-submit">Запази промените</button>
-        </form>
+        <div class="content-item">
+            <span id="view-product-{{ product.id }}">
+                <strong>{{ product.name }}</strong>
+                <div class="content-item-desc-row">
+                    <p class="content-big-desc">{{ product.description or 'Няма описание.' }}</p>
+                    <button type="button" class="edit-pencil-btn" title="Редактирай" onclick="toggleInlineEdit('product-{{ product.id }}')">✎</button>
+                </div>
+            </span>
+            <form id="edit-product-{{ product.id }}" action="{{ url_for('admin_product_update', product_id=product.id) }}" method="POST" class="inline-edit-form" style="display: none;">
+                {% include 'partials/csrf_field.html' %}
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label for="name_{{ product.id }}">Име на продукта</label>
+                    <input type="text" id="name_{{ product.id }}" name="name" value="{{ product.name }}" required>
+                </div>
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label for="description_{{ product.id }}">Описание</label>
+                    <textarea id="description_{{ product.id }}" name="description" class="content-edit-textarea" rows="4">{{ product.description or '' }}</textarea>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn-submit">Запази</button>
+                    <button type="button" class="btn-secondary" style="padding: 12px 20px;" onclick="toggleInlineEdit('product-{{ product.id }}')">Отказ</button>
+                </div>
+            </form>
+        </div>
         {% else %}
         <p class="text-center no-data">Няма добавени продукти.</p>
         {% endfor %}
     </section>
 
 </main>
+<script src="{{ url_for('static', filename='js/inline_edit.js') }}"></script>
 </body>
 </html>
