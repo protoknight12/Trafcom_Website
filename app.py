@@ -429,17 +429,21 @@ class Machine(db.Model):
 
 class ServiceMachineCard(db.Model):
     """
-    A machine card shown on the public services page (see services()/services.html).
-    Originally just title + description for web-designer-added cards; now also backs
-    the migrated-from-hardcoded-HTML cards (see migrate_services_machine_cards.py),
-    which is why section_title/specs_text/image_filename exist - those three are
-    display-only extras the content editor doesn't expose for *new* cards (keeps the
-    "add a machine" popup simple), but are preserved/editable on migrated ones.
-    section_title groups cards into the page's section headers (e.g. "ФРЕЗОВИ
-    ЦЕНТРОВЕ"); rows with no section_title fall into a default trailing section.
-    specs_text is free-form "Label: Value" lines, one per spec row.
+    A machine card shown on the public services page or homepage (see services(),
+    index(), services.html, index.html). Originally just title + description for
+    web-designer-added cards; now also backs the migrated-from-hardcoded-HTML cards
+    (see SERVICE_MACHINE_CARDS_SEED / INDEX_MACHINE_CARDS_SEED), which is why
+    section_title/specs_text/image_filename exist - those three are display-only
+    extras the content editor doesn't expose for *new* cards (keeps the "add a
+    machine" popup simple), but are preserved/editable on migrated ones.
+    page ('services' or 'index') scopes which page a card shows up on - the two
+    pages curate different wording for some of the same physical machines, so they
+    deliberately don't share rows. section_title groups cards into the services
+    page's section headers (e.g. "ФРЕЗОВИ ЦЕНТРОВЕ"); unused on the homepage, which
+    renders one flat grid. specs_text is free-form "Label: Value" lines.
     """
     id = db.Column(db.Integer, primary_key=True)
+    page = db.Column(db.String(20), nullable=False, default='services')
     section_title = db.Column(db.String(150), nullable=True)
     series_label = db.Column(db.String(100), nullable=True)
     title = db.Column(db.String(150), nullable=False)
@@ -598,11 +602,45 @@ SERVICE_MACHINE_CARDS_SEED = [
 
 
 def seed_service_machine_cards():
-    """Populates ServiceMachineCard from SERVICE_MACHINE_CARDS_SEED, but only if the
-    table is completely empty - never re-adds a card someone deliberately deleted."""
-    if ServiceMachineCard.query.first():
+    """Populates the services-page cards from SERVICE_MACHINE_CARDS_SEED, but only
+    if none exist yet for that page - never re-adds a card someone deliberately
+    deleted."""
+    if ServiceMachineCard.query.filter_by(page='services').first():
         return
     for entry in SERVICE_MACHINE_CARDS_SEED:
+        db.session.add(ServiceMachineCard(**entry))
+    db.session.commit()
+
+
+# One-time seed for the homepage's "МАШИНЕН ПАРК" highlight cards - was hardcoded
+# HTML in index.html. Deliberately a separate, smaller curated set from the
+# services-page cards above (different wording for some of the same machines),
+# not shared rows - see the page column on ServiceMachineCard.
+INDEX_MACHINE_CARDS_SEED = [
+    {"page": "index", "series_label": "CNC MILLING // 5-ОСНО", "title": "DMG MORI DMU 75 monoBLOCK",
+     "image_filename": "dmg-mori-dmu75.jpg",
+     "specs_text": "Обороти на шпиндела: 18 000 об/мин\nРаботен ход (X/Y/Z): 750/650/560 мм\nИнструментален магазин: 60 инструмента",
+     "description": "Пет осен вертикален обработващ център с ЦПУ SIEMENS 840D за средно-габаритни призматично-корпусни детайли с висока точност на позициониране."},
+    {"page": "index", "series_label": "CNC TURNING // 8-ОСЕН", "title": "GILDEMEISTER TWIN 42",
+     "image_filename": "gildemeister-twin42.jpg",
+     "specs_text": "Диаметър на струговане: 120 мм\nДължина на струговане: 650 мм\nТип управление: SIEMENS 840D",
+     "description": "Двушпинделен струг с основен и контрашпиндел, 2x 12-позиционна кула и прътоподаващо устройство IEMCA BOSS 545."},
+    {"page": "index", "series_label": "SHEET PROCESSING // LASER", "title": "CSF 3015/700 лазерен център",
+     "image_filename": "csf-3015-laser.jpg",
+     "specs_text": "Режеща площ: 3000 x 1500 мм\nТочност на позициониране: ± 0.05 мм\nЛазерен източник: IPG",
+     "description": "Автоматична система за абсорбиране на прах и стабилна конзолна стоманена конструкция за прецизно лазерно рязане."},
+    {"page": "index", "series_label": "QUALITY CONTROL // CMM", "title": "Brown & Sharpe Derby 454",
+     "image_filename": "etalon-derby-454-cmm.jpg",
+     "specs_text": "Тип: 3D координатна измервателна машина\nПриложение: Контрол на качеството",
+     "description": "3D измерване и контрол на качеството на всеки изработен детайл преди доставка."},
+]
+
+
+def seed_index_machine_cards():
+    """Same idempotent pattern as seed_service_machine_cards(), scoped to page='index'."""
+    if ServiceMachineCard.query.filter_by(page='index').first():
+        return
+    for entry in INDEX_MACHINE_CARDS_SEED:
         db.session.add(ServiceMachineCard(**entry))
     db.session.commit()
 
@@ -983,7 +1021,8 @@ def index():
     # index.html adapts its nav CTA based on current_user.is_authenticated
     # (showing "Към Таблото" instead of Login/Register). Apps like /dashboard
     # and /generator still require login via @login_required regardless.
-    return render_template('index.html', active_page='index')
+    machine_cards = ServiceMachineCard.query.filter_by(page='index').order_by(ServiceMachineCard.id).all()
+    return render_template('index.html', active_page='index', machine_cards=machine_cards)
 
 
 @app.route('/services')
@@ -994,7 +1033,7 @@ def services():
     (added via the "+ Добави машина" popup) fall into one trailing
     "ДОПЪЛНИТЕЛНИ МАШИНИ" bucket, so every future addition lands together.
     """
-    cards = ServiceMachineCard.query.order_by(ServiceMachineCard.id).all()
+    cards = ServiceMachineCard.query.filter_by(page='services').order_by(ServiceMachineCard.id).all()
     sections = []
     for card in cards:
         title = card.section_title or 'ДОПЪЛНИТЕЛНИ МАШИНИ'
@@ -1272,16 +1311,22 @@ def admin_content():
     return render_template('content_editor.html', details=details, products=products, active_page='content')
 
 
+def _machine_card_home(page):
+    """Which public route a card's 'back to the page' redirect goes to."""
+    return url_for('index') if page == 'index' else url_for('services')
+
+
 @app.route('/services/machine-cards/new')
 @login_required
 def new_machine_card_window():
-    """Popup 'add new machine card' window - opened from the services page."""
+    """Popup 'add new machine card' window - opened from services.html or index.html."""
     if not current_user.can_edit_content:
         flash('Нямате достъп до тази страница.', 'danger')
         return redirect(url_for('dashboard'))
+    page = 'index' if request.args.get('page') == 'index' else 'services'
     return render_template(
         'edit_window.html', item_label='нова машина', saved=request.args.get('saved') == '1',
-        action=url_for('create_machine_card'),
+        action=url_for('create_machine_card', page=page),
         fields=[
             {'name': 'series_label', 'label': 'Кратък етикет (напр. 5-ОСНО ФРЕЗОВАНЕ)', 'value': '', 'type': 'text'},
             {'name': 'title', 'label': 'Име на машината', 'value': '', 'type': 'text'},
@@ -1298,12 +1343,16 @@ def create_machine_card():
         flash('Нямате достъп до тази страница.', 'danger')
         return redirect(url_for('dashboard'))
 
+    page = 'index' if request.args.get('page') == 'index' else 'services'
+    redirect_target = _machine_card_home(page)
+
     title = request.form.get('title', '').strip()
     if not title:
         flash('Моля въведете име на машината.', 'danger')
-        return redirect(url_for('services'))
+        return redirect(redirect_target)
 
     card = ServiceMachineCard(
+        page=page,
         title=title,
         series_label=request.form.get('series_label', '').strip() or None,
         specs_text=request.form.get('specs_text', '').strip() or None,
@@ -1311,10 +1360,10 @@ def create_machine_card():
     )
     db.session.add(card)
     db.session.commit()
-    flash('Машината беше добавена към страница "Услуги".', 'success')
+    flash('Машината беше добавена успешно.', 'success')
     if request.form.get('popup') == '1':
-        return redirect(url_for('new_machine_card_window', saved='1'))
-    return redirect(url_for('services'))
+        return redirect(url_for('new_machine_card_window', page=page, saved='1'))
+    return redirect(redirect_target)
 
 
 @app.route('/services/machine-cards/<int:card_id>/edit')
@@ -1344,10 +1393,11 @@ def update_machine_card(card_id):
         return redirect(url_for('dashboard'))
 
     card = ServiceMachineCard.query.get_or_404(card_id)
+    redirect_target = _machine_card_home(card.page)
     title = request.form.get('title', '').strip()
     if not title:
         flash('Моля въведете име на машината.', 'danger')
-        return redirect(url_for('services'))
+        return redirect(redirect_target)
 
     card.title = title
     card.series_label = request.form.get('series_label', '').strip() or None
@@ -1357,7 +1407,7 @@ def update_machine_card(card_id):
     flash('Машината беше обновена успешно.', 'success')
     if request.form.get('popup') == '1':
         return redirect(url_for('edit_machine_card_window', card_id=card_id, saved='1'))
-    return redirect(url_for('services'))
+    return redirect(redirect_target)
 
 
 @app.route('/services/machine-cards/<int:card_id>/delete', methods=['POST'])
@@ -1367,10 +1417,11 @@ def delete_machine_card(card_id):
         flash('Нямате достъп до тази страница.', 'danger')
         return redirect(url_for('dashboard'))
     card = ServiceMachineCard.query.get_or_404(card_id)
+    redirect_target = _machine_card_home(card.page)
     db.session.delete(card)
     db.session.commit()
-    flash('Машината беше премахната от страница "Услуги".', 'success')
-    return redirect(url_for('services'))
+    flash('Машината беше премахната успешно.', 'success')
+    return redirect(redirect_target)
 
 
 @app.route('/content-text/edit')
@@ -2859,6 +2910,7 @@ if __name__ == '__main__':
         # Same pattern for the services page's machine-park cards - only runs
         # if ServiceMachineCard is completely empty (see seed_service_machine_cards).
         seed_service_machine_cards()
+        seed_index_machine_cards()
     # Off by default - debug mode exposes an interactive code-execution
     # debugger on unhandled exceptions, so it must be opted into explicitly.
     # Set FLASK_DEBUG=1 in your environment for local development.

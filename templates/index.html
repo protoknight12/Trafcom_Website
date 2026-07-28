@@ -52,119 +52,45 @@
         </div>
 
         <div class="dmg-grid">
-
+            {% for card in machine_cards %}
             <div class="dmg-card">
                 <div class="dmg-card-header">
-                    <span class="dmg-card-series">CNC MILLING // 5-ОСНО</span>
-                    <span class="dmg-card-num">01</span>
+                    <span class="dmg-card-series">{{ card.series_label or '' }}</span>
+                    {% if current_user.is_authenticated and current_user.can_edit_content %}
+                    <span style="display: flex; gap: 10px; align-items: center;">
+                        <button type="button" class="edit-pencil-btn" title="Редактирай" onclick="openEditWindow('{{ url_for('edit_machine_card_window', card_id=card.id) }}')">✎</button>
+                        <form action="{{ url_for('delete_machine_card', card_id=card.id) }}" method="POST" onsubmit="return confirm('Премахване на &quot;{{ card.title|e }}&quot; от страницата?');" style="display: inline; margin: 0;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="edit-pencil-btn" style="color: #e57373;" title="Изтрий">✕</button>
+                        </form>
+                    </span>
+                    {% endif %}
                 </div>
-                <h3 class="dmg-card-title">DMG MORI DMU 75 monoBLOCK</h3>
-
+                <h3 class="dmg-card-title">{{ card.title }}</h3>
+                {% if card.image_filename %}
                 <div class="dmg-card-img-wrap">
-                    <img src="{{ url_for('static', filename='img/machines/dmg-mori-dmu75.jpg') }}" alt="DMG MORI DMU 75 monoBLOCK">
+                    <img src="{{ url_for('static', filename='img/machines/' ~ card.image_filename) }}" alt="{{ card.title }}">
                 </div>
-
+                {% endif %}
+                {% if card.specs %}
                 <div class="dmg-card-specs">
+                    {% for label, value in card.specs %}
                     <div class="spec-row">
-                        <span class="spec-name">Обороти на шпиндела</span>
-                        <span class="spec-val">18 000 об/мин</span>
+                        <span class="spec-name">{{ label }}</span>
+                        <span class="spec-val">{{ value }}</span>
                     </div>
-                    <div class="spec-row">
-                        <span class="spec-name">Работен ход (X/Y/Z)</span>
-                        <span class="spec-val">750/650/560 мм</span>
-                    </div>
-                    <div class="spec-row">
-                        <span class="spec-name">Инструментален магазин</span>
-                        <span class="spec-val">60 инструмента</span>
-                    </div>
+                    {% endfor %}
                 </div>
-                <p class="dmg-card-desc">Пет осен вертикален обработващ център с ЦПУ SIEMENS 840D за средно-габаритни
-                    призматично-корпусни детайли с висока точност на позициониране.</p>
+                {% endif %}
+                <p class="dmg-card-desc">{{ card.description or '' }}</p>
             </div>
+            {% endfor %}
 
-            <div class="dmg-card">
-                <div class="dmg-card-header">
-                    <span class="dmg-card-series">CNC TURNING // 8-ОСЕН</span>
-                    <span class="dmg-card-num">02</span>
-                </div>
-                <h3 class="dmg-card-title">GILDEMEISTER TWIN 42</h3>
-
-                <div class="dmg-card-img-wrap">
-                    <img src="{{ url_for('static', filename='img/machines/gildemeister-twin42.jpg') }}" alt="GILDEMEISTER TWIN 42">
-                </div>
-
-                <div class="dmg-card-specs">
-                    <div class="spec-row">
-                        <span class="spec-name">Диаметър на струговане</span>
-                        <span class="spec-val">120 мм</span>
-                    </div>
-                    <div class="spec-row">
-                        <span class="spec-name">Дължина на струговане</span>
-                        <span class="spec-val">650 мм</span>
-                    </div>
-                    <div class="spec-row">
-                        <span class="spec-name">Тип управление</span>
-                        <span class="spec-val">SIEMENS 840D</span>
-                    </div>
-                </div>
-                <p class="dmg-card-desc">Двушпинделен струг с основен и контрашпиндел, 2x 12-позиционна кула и
-                    прътоподаващо устройство IEMCA BOSS 545.</p>
+            {% if current_user.is_authenticated and current_user.can_edit_content %}
+            <div class="dmg-card" style="display: flex; align-items: center; justify-content: center; min-height: 160px; border: 1px dashed rgba(255, 255, 255, 0.15);">
+                <button type="button" class="btn-submit" onclick="openEditWindow('{{ url_for('new_machine_card_window', page='index') }}')">+ Добави машина</button>
             </div>
-
-            <div class="dmg-card">
-                <div class="dmg-card-header">
-                    <span class="dmg-card-series">SHEET PROCESSING // LASER</span>
-                    <span class="dmg-card-num">03</span>
-                </div>
-                <h3 class="dmg-card-title">CSF 3015/700 лазерен център</h3>
-
-                <div class="dmg-card-img-wrap">
-                    <img src="{{ url_for('static', filename='img/machines/csf-3015-laser.jpg') }}" alt="CSF 3015/700 лазерен център">
-                </div>
-
-                <div class="dmg-card-specs">
-                    <div class="spec-row">
-                        <span class="spec-name">Режеща площ</span>
-                        <span class="spec-val">3000 x 1500 мм</span>
-                    </div>
-                    <div class="spec-row">
-                        <span class="spec-name">Точност на позициониране</span>
-                        <span class="spec-val">± 0.05 мм</span>
-                    </div>
-                    <div class="spec-row">
-                        <span class="spec-name">Лазерен източник</span>
-                        <span class="spec-val">IPG</span>
-                    </div>
-                </div>
-                <p class="dmg-card-desc">Автоматична система за абсорбиране на прах и стабилна конзолна стоманена
-                    конструкция за прецизно лазерно рязане.</p>
-            </div>
-
-            <div class="dmg-card">
-                <div class="dmg-card-header">
-                    <span class="dmg-card-series">QUALITY CONTROL // CMM</span>
-                    <span class="dmg-card-num">04</span>
-                </div>
-                <h3 class="dmg-card-title">Brown &amp; Sharpe Derby 454</h3>
-
-                <div class="dmg-card-img-wrap">
-                    <img src="{{ url_for('static', filename='img/machines/etalon-derby-454-cmm.jpg') }}" alt="Brown & Sharpe Derby 454 CMM">
-                </div>
-
-                <div class="dmg-card-specs">
-                    <div class="spec-row">
-                        <span class="spec-name">Тип</span>
-                        <span class="spec-val">3D координатна измервателна машина</span>
-                    </div>
-                    <div class="spec-row">
-                        <span class="spec-name">Приложение</span>
-                        <span class="spec-val">Контрол на качеството</span>
-                    </div>
-                </div>
-                <p class="dmg-card-desc">3D измерване и контрол на качеството на всеки изработен детайл преди
-                    доставка.</p>
-            </div>
-
+            {% endif %}
         </div>
 
         <div style="margin-top: 32px;">
@@ -192,5 +118,6 @@
 
 {% include 'partials/footer.html' %}
 
+<script src="{{ url_for('static', filename='js/inline_edit.js') }}"></script>
 </body>
 </html>
