@@ -830,9 +830,9 @@ def inject_current_year():
 
 @app.route('/robots.txt')
 def robots_txt():
-    # Everything except '/' requires login anyway, so there's nothing for a
-    # crawler to reach that auth doesn't already gate - allow indexing so
-    # customers can actually find the site via search.
+    # Public marketing pages (/, /services, /about, /contact) are the only
+    # ones worth indexing - everything else requires login anyway. Just
+    # allow everything rather than maintaining a path list here.
     return app.response_class('User-agent: *\nAllow: /\n', mimetype='text/plain')
 
 
