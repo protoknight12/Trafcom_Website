@@ -1,6 +1,6 @@
 # Trafcom DXF Calculate
 
-A Flask app for a CNC/laser cutting shop (Trafcom): upload a DXF drawing and
+A Flask app for a CNC/laser cutting company (Trafcom): upload a DXF drawing and
 get its cutting price calculated automatically from geometry (area, cut
 length, pierce count), build a catalog of reusable "Details" and "Products"
 from priced drawings, track stock via delivery notes, and run customer
