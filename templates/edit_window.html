@@ -88,7 +88,12 @@
             {% endif %}
             <input type="file" id="field_{{ loop.index }}" name="{{ f.name }}" accept="image/*">
             {% else %}
-            <input type="text" id="field_{{ loop.index }}" name="{{ f.name }}" value="{{ f.value }}" required>
+            <input type="text" id="field_{{ loop.index }}" name="{{ f.name }}" value="{{ f.value }}"
+                   {% if f.required %}required{% endif %}
+                   {% if f.pattern %}pattern="{{ f.pattern }}"{% endif %}
+                   {% if f.maxlength %}maxlength="{{ f.maxlength }}"{% endif %}
+                   {% if f.inputmode %}inputmode="{{ f.inputmode }}"{% endif %}
+                   {% if f.title %}title="{{ f.title }}"{% endif %}>
             {% endif %}
         </div>
         {% endfor %}

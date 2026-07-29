@@ -196,6 +196,20 @@ MATERIAL_TYPE_LABELS = {
 }
 
 
+def _validate_eik(raw):
+    """
+    ЕИК/Булстат is optional everywhere it appears, but when provided must be
+    exactly 9 digits - not the old 9-or-13-digit Bulstat format, per explicit
+    business rule. Returns (cleaned_value_or_None, error_message_or_None).
+    """
+    value = (raw or '').strip()
+    if not value:
+        return None, None
+    if not re.fullmatch(r'\d{9}', value):
+        return None, 'ЕИК трябва да съдържа точно 9 цифри.'
+    return value, None
+
+
 class Client(db.Model):
     """
     A customer an order can be placed for. Only `name` is required - it
@@ -216,11 +230,20 @@ class Client(db.Model):
 
 
 class Deliverer(db.Model):
-    """A delivery provider an order can be shipped through."""
+    """
+    A delivery provider (куриер) an order can be shipped through. Same
+    legal-entity pattern as Client - `name` doubles as the company name, the
+    fields below are optional/blank unless the courier is a registered
+    company.
+    """
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(150), nullable=False)
     email = db.Column(db.String(150), nullable=True)
     phone = db.Column(db.String(50), nullable=True)
+    eik = db.Column(db.String(20), nullable=True)
+    vat_number = db.Column(db.String(20), nullable=True)
+    address = db.Column(db.String(255), nullable=True)
+    mol = db.Column(db.String(150), nullable=True)
 
 
 class Detail(db.Model):
@@ -497,6 +520,7 @@ class Supplier(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(150), nullable=False)
     eik = db.Column(db.String(20), nullable=True)
+    vat_number = db.Column(db.String(20), nullable=True)
     phone = db.Column(db.String(50), nullable=True)
     email = db.Column(db.String(150), nullable=True)
 
@@ -529,6 +553,12 @@ class DeliveryNoteItem(db.Model):
     description_snapshot freezes the item's name at intake time (matches
     OrderItemComponent.detail_name_snapshot), so the note stays legible even
     if the catalog row is later renamed or deleted.
+
+    width/height/thickness/brand are pre-filled from the selected catalog
+    row's own parameters (see admin_delivery_notes() *_data lists) but are
+    editable per line before saving - a real paper delivery note can list a
+    batch that differs slightly from the catalog default. notes is a free
+    custom description on top of that, for anything else worth recording.
     """
     id = db.Column(db.Integer, primary_key=True)
     delivery_note_id = db.Column(db.Integer, db.ForeignKey('delivery_note.id'), nullable=False)
@@ -537,6 +567,11 @@ class DeliveryNoteItem(db.Model):
     description_snapshot = db.Column(db.String(255), nullable=False)
     quantity = db.Column(db.Float, nullable=False)
     unit_price = db.Column(db.Float, nullable=True)
+    notes = db.Column(db.String(255), nullable=True)
+    width = db.Column(db.Float, nullable=True)
+    height = db.Column(db.Float, nullable=True)
+    thickness = db.Column(db.Float, nullable=True)
+    brand = db.Column(db.String(100), nullable=True)
 
 
 class Machine(db.Model):
@@ -1146,22 +1181,35 @@ def index():
     return render_template('index.html', active_page='index', machine_cards=machine_cards)
 
 
-@app.route('/services')
-def services():
+def _group_service_cards_by_section(cards):
     """
-    Groups cards into their section headers (e.g. "ФРЕЗОВИ ЦЕНТРОВЕ") for
-    services.html, preserving insertion order. Cards with no section_title
-    (added via the "+ Добави машина" popup) fall into one trailing
-    "ДОПЪЛНИТЕЛНИ МАШИНИ" bucket, so every future addition lands together.
+    Groups cards into their section headers (e.g. "ФРЕЗОВИ ЦЕНТРОВЕ"), keyed
+    by section_title regardless of insertion order - a new machine added to
+    an existing section must join that section's card grid, not spawn a
+    second same-titled section further down the page just because a
+    differently-sectioned card was created in between (cards are ordered by
+    id, i.e. creation time, so sections interleave over time). Cards with no
+    section_title (added via the "+ Добави машина" popup) fall into one
+    trailing "ДОПЪЛНИТЕЛНИ МАШИНИ" bucket, so every future addition lands
+    together. First-appearance order of each title is preserved. Pure/no DB
+    calls itself, so it's testable without a live database - see
+    test_service_sections_grouping.py.
     """
-    cards = ServiceMachineCard.query.filter_by(page='services').order_by(ServiceMachineCard.id).all()
+    sections_by_title = {}
     sections = []
     for card in cards:
         title = card.section_title or 'ДОПЪЛНИТЕЛНИ МАШИНИ'
-        if sections and sections[-1]['title'] == title:
-            sections[-1]['cards'].append(card)
-        else:
-            sections.append({'title': title, 'cards': [card]})
+        if title not in sections_by_title:
+            sections_by_title[title] = {'title': title, 'cards': []}
+            sections.append(sections_by_title[title])
+        sections_by_title[title]['cards'].append(card)
+    return sections
+
+
+@app.route('/services')
+def services():
+    cards = ServiceMachineCard.query.filter_by(page='services').order_by(ServiceMachineCard.id).all()
+    sections = _group_service_cards_by_section(cards)
     return render_template('services.html', active_page='services', machine_sections=sections)
 
 
@@ -1485,13 +1533,17 @@ def admin_add_client():
     if not name:
         flash('Моля въведете име на клиента.', 'danger')
         return redirect(url_for('admin_clients'))
+    eik, eik_error = _validate_eik(request.form.get('eik'))
+    if eik_error:
+        flash(eik_error, 'danger')
+        return redirect(url_for('admin_clients'))
     client_type = 'company' if request.form.get('client_type') == 'company' else 'individual'
     client = Client(
         name=name,
         email=request.form.get('email', '').strip() or None,
         phone=request.form.get('phone', '').strip() or None,
         client_type=client_type,
-        eik=request.form.get('eik', '').strip() or None,
+        eik=eik,
         vat_number=request.form.get('vat_number', '').strip() or None,
         address=request.form.get('address', '').strip() or None,
         mol=request.form.get('mol', '').strip() or None,
@@ -1514,12 +1566,13 @@ def edit_client_window(client_id):
         'edit_window.html', item_label='клиент', saved=request.args.get('saved') == '1',
         action=url_for('update_client', client_id=client.id),
         fields=[
-            {'name': 'name', 'label': 'Име', 'value': client.name, 'type': 'text'},
+            {'name': 'name', 'label': 'Име', 'value': client.name, 'type': 'text', 'required': True},
             {'name': 'client_type', 'label': 'Тип клиент', 'value': client.client_type, 'type': 'select',
              'options': [{'value': 'individual', 'label': 'Физическо лице'}, {'value': 'company', 'label': 'Юридическо лице'}]},
             {'name': 'email', 'label': 'Имейл', 'value': client.email or '', 'type': 'text'},
             {'name': 'phone', 'label': 'Телефон', 'value': client.phone or '', 'type': 'text'},
-            {'name': 'eik', 'label': 'ЕИК / Булстат', 'value': client.eik or '', 'type': 'text'},
+            {'name': 'eik', 'label': 'ЕИК / Булстат', 'value': client.eik or '', 'type': 'text',
+             'pattern': r'\d{9}', 'maxlength': 9, 'inputmode': 'numeric', 'title': 'Точно 9 цифри'},
             {'name': 'vat_number', 'label': 'ИН по ДДС', 'value': client.vat_number or '', 'type': 'text'},
             {'name': 'address', 'label': 'Адрес на управление', 'value': client.address or '', 'type': 'text'},
             {'name': 'mol', 'label': 'МОЛ', 'value': client.mol or '', 'type': 'text'},
@@ -1538,11 +1591,15 @@ def update_client(client_id):
     if not name:
         flash('Моля въведете име на клиента.', 'danger')
         return redirect(url_for('admin_clients'))
+    eik, eik_error = _validate_eik(request.form.get('eik'))
+    if eik_error:
+        flash(eik_error, 'danger')
+        return redirect(url_for('admin_clients'))
     client.name = name
     client.client_type = 'company' if request.form.get('client_type') == 'company' else 'individual'
     client.email = request.form.get('email', '').strip() or None
     client.phone = request.form.get('phone', '').strip() or None
-    client.eik = request.form.get('eik', '').strip() or None
+    client.eik = eik
     client.vat_number = request.form.get('vat_number', '').strip() or None
     client.address = request.form.get('address', '').strip() or None
     client.mol = request.form.get('mol', '').strip() or None
@@ -1579,14 +1636,75 @@ def admin_add_deliverer():
     if not name:
         flash('Моля въведете име на куриера.', 'danger')
         return redirect(url_for('admin_clients'))
+    eik, eik_error = _validate_eik(request.form.get('eik'))
+    if eik_error:
+        flash(eik_error, 'danger')
+        return redirect(url_for('admin_clients'))
     deliverer = Deliverer(
         name=name,
         email=request.form.get('email', '').strip() or None,
         phone=request.form.get('phone', '').strip() or None,
+        eik=eik,
+        vat_number=request.form.get('vat_number', '').strip() or None,
+        address=request.form.get('address', '').strip() or None,
+        mol=request.form.get('mol', '').strip() or None,
     )
     db.session.add(deliverer)
     db.session.commit()
     flash(f'Куриерът "{name}" беше добавен успешно.', 'success')
+    return redirect(url_for('admin_clients'))
+
+
+@app.route('/admin/deliverers/<int:deliverer_id>/edit')
+@login_required
+def edit_deliverer_window(deliverer_id):
+    """Popup edit window (see edit_window.html) - opened via the pencil icon on /admin/clients, mirrors edit_client_window."""
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+    deliverer = Deliverer.query.get_or_404(deliverer_id)
+    return render_template(
+        'edit_window.html', item_label='куриер', saved=request.args.get('saved') == '1',
+        action=url_for('update_deliverer', deliverer_id=deliverer.id),
+        fields=[
+            {'name': 'name', 'label': 'Име', 'value': deliverer.name, 'type': 'text', 'required': True},
+            {'name': 'email', 'label': 'Имейл', 'value': deliverer.email or '', 'type': 'text'},
+            {'name': 'phone', 'label': 'Телефон', 'value': deliverer.phone or '', 'type': 'text'},
+            {'name': 'eik', 'label': 'ЕИК / Булстат', 'value': deliverer.eik or '', 'type': 'text',
+             'pattern': r'\d{9}', 'maxlength': 9, 'inputmode': 'numeric', 'title': 'Точно 9 цифри'},
+            {'name': 'vat_number', 'label': 'ИН по ДДС', 'value': deliverer.vat_number or '', 'type': 'text'},
+            {'name': 'address', 'label': 'Адрес на управление', 'value': deliverer.address or '', 'type': 'text'},
+            {'name': 'mol', 'label': 'МОЛ', 'value': deliverer.mol or '', 'type': 'text'},
+        ]
+    )
+
+
+@app.route('/admin/deliverers/<int:deliverer_id>/update', methods=['POST'])
+@login_required
+def update_deliverer(deliverer_id):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+    deliverer = Deliverer.query.get_or_404(deliverer_id)
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Моля въведете име на куриера.', 'danger')
+        return redirect(url_for('admin_clients'))
+    eik, eik_error = _validate_eik(request.form.get('eik'))
+    if eik_error:
+        flash(eik_error, 'danger')
+        return redirect(url_for('admin_clients'))
+    deliverer.name = name
+    deliverer.email = request.form.get('email', '').strip() or None
+    deliverer.phone = request.form.get('phone', '').strip() or None
+    deliverer.eik = eik
+    deliverer.vat_number = request.form.get('vat_number', '').strip() or None
+    deliverer.address = request.form.get('address', '').strip() or None
+    deliverer.mol = request.form.get('mol', '').strip() or None
+    db.session.commit()
+    flash('Куриерът беше обновен успешно.', 'success')
+    if request.form.get('popup') == '1':
+        return redirect(url_for('edit_deliverer_window', deliverer_id=deliverer_id, saved='1'))
     return redirect(url_for('admin_clients'))
 
 
@@ -1631,10 +1749,15 @@ def admin_delivery_notes():
     details = Detail.query.order_by(Detail.name).all()
     products = Product.query.order_by(Product.name).all()
     # Plain dicts (not ORM rows) for the client-side |tojson item picker -
-    # same convention as create_order()'s products_data/details_data.
-    materials_data = [{'id': m.id, 'name': m.display_name} for m in materials]
-    details_data = [{'id': d.id, 'name': d.name} for d in details]
-    products_data = [{'id': p.id, 'name': p.name} for p in products]
+    # same convention as create_order()'s products_data/details_data. width/
+    # height/thickness/brand pre-fill the (editable) line-item fields on the
+    # delivery note form from each catalog row's own parameters.
+    materials_data = [{'id': m.id, 'name': m.display_name, 'width': m.sheet_width_mm, 'height': m.sheet_length_mm,
+                        'thickness': m.thickness_mm, 'brand': m.brand} for m in materials]
+    details_data = [{'id': d.id, 'name': d.name, 'width': d.width, 'height': d.height,
+                      'thickness': d.material.thickness_mm if d.material else None,
+                      'brand': d.material.brand if d.material else None} for d in details]
+    products_data = [{'id': p.id, 'name': p.name, 'width': None, 'height': None, 'thickness': None, 'brand': None} for p in products]
     return render_template(
         'admin_delivery_notes.html', suppliers=suppliers, notes=notes,
         materials=materials, details=details, products=products,
@@ -1650,9 +1773,14 @@ def admin_add_supplier():
     if not name:
         flash('Моля въведете име на доставчика.', 'danger')
         return redirect(url_for('admin_delivery_notes'))
+    eik, eik_error = _validate_eik(request.form.get('eik'))
+    if eik_error:
+        flash(eik_error, 'danger')
+        return redirect(url_for('admin_delivery_notes'))
     supplier = Supplier(
         name=name,
-        eik=request.form.get('eik', '').strip() or None,
+        eik=eik,
+        vat_number=request.form.get('vat_number', '').strip() or None,
         phone=request.form.get('phone', '').strip() or None,
         email=request.form.get('email', '').strip() or None,
     )
@@ -1719,10 +1847,20 @@ def create_delivery_note():
         except (TypeError, ValueError):
             unit_price = None
 
+        def _optional_float(key):
+            raw = row.get(key)
+            try:
+                return float(raw) if raw not in (None, '') else None
+            except (TypeError, ValueError):
+                return None
+
         description = target.display_name if row['type'] == 'material' else target.name
         db.session.add(DeliveryNoteItem(
             delivery_note_id=note.id, target_type=row['type'], target_id=target.id,
             description_snapshot=description, quantity=quantity, unit_price=unit_price,
+            notes=(row.get('notes') or '').strip() or None,
+            width=_optional_float('width'), height=_optional_float('height'), thickness=_optional_float('thickness'),
+            brand=(row.get('brand') or '').strip() or None,
         ))
         _bump_stock(target, quantity)
         added_any = True
@@ -1800,7 +1938,7 @@ def new_machine_card_window():
     page = 'index' if request.args.get('page') == 'index' else 'services'
     fields = [
         {'name': 'series_label', 'label': 'Кратък етикет (напр. 5-ОСНО ФРЕЗОВАНЕ)', 'value': '', 'type': 'text'},
-        {'name': 'title', 'label': 'Име на машината', 'value': '', 'type': 'text'},
+        {'name': 'title', 'label': 'Име на машината', 'value': '', 'type': 'text', 'required': True},
         {'name': 'image', 'label': 'Снимка на машината (по избор)', 'value': '', 'type': 'file'},
     ]
     if page == 'services':
@@ -1859,7 +1997,7 @@ def edit_machine_card_window(card_id):
     card = ServiceMachineCard.query.get_or_404(card_id)
     fields = [
         {'name': 'series_label', 'label': 'Кратък етикет (напр. 5-ОСНО ФРЕЗОВАНЕ)', 'value': card.series_label or '', 'type': 'text'},
-        {'name': 'title', 'label': 'Име на машината', 'value': card.title, 'type': 'text'},
+        {'name': 'title', 'label': 'Име на машината', 'value': card.title, 'type': 'text', 'required': True},
         {'name': 'image', 'label': 'Снимка на машината (по избор - оставете празно, за да запазите текущата)', 'value': '', 'type': 'file',
          'preview_url': url_for('static', filename='img/machines/' + card.image_filename) if card.image_filename else None},
     ]
@@ -2293,7 +2431,7 @@ def edit_machine_window(id):
     return render_template(
         'edit_window.html', item_label='машина', saved=request.args.get('saved') == '1',
         action=url_for('rename_machine', id=machine.id),
-        fields=[{'name': 'name', 'label': 'Име на машина', 'value': machine.name, 'type': 'text'}]
+        fields=[{'name': 'name', 'label': 'Име на машина', 'value': machine.name, 'type': 'text', 'required': True}]
     )
 
 
@@ -2451,7 +2589,7 @@ def edit_detail_window(detail_id):
     return render_template(
         'edit_window.html', item_label='детайл', saved=request.args.get('saved') == '1',
         action=url_for('admin_rename_detail', detail_id=detail.id),
-        fields=[{'name': 'name', 'label': 'Име на детайла', 'value': detail.name, 'type': 'text'}]
+        fields=[{'name': 'name', 'label': 'Име на детайла', 'value': detail.name, 'type': 'text', 'required': True}]
     )
 
 
@@ -2555,7 +2693,7 @@ def edit_product_content_window(product_id):
         'edit_window.html', item_label='продукт', saved=request.args.get('saved') == '1',
         action=url_for('admin_product_update', product_id=product.id),
         fields=[
-            {'name': 'name', 'label': 'Име на продукта', 'value': product.name, 'type': 'text'},
+            {'name': 'name', 'label': 'Име на продукта', 'value': product.name, 'type': 'text', 'required': True},
             {'name': 'description', 'label': 'Описание', 'value': product.description or '', 'type': 'textarea'},
         ]
     )

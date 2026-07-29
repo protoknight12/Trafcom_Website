@@ -38,7 +38,12 @@
             </div>
             <div class="form-group">
                 <label for="supplier_eik">ЕИК</label>
-                <input type="text" id="supplier_eik" name="eik" placeholder="напр. 203040557">
+                <input type="text" id="supplier_eik" name="eik" placeholder="напр. 203040557"
+                       pattern="\d{9}" maxlength="9" inputmode="numeric" title="Точно 9 цифри">
+            </div>
+            <div class="form-group">
+                <label for="supplier_vat">ИН по ДДС</label>
+                <input type="text" id="supplier_vat" name="vat_number" placeholder="напр. BG203040557">
             </div>
             <div class="form-group">
                 <label for="supplier_phone">Телефон</label>
@@ -126,6 +131,29 @@
                     <label for="dn_price">Ед. цена (€, по избор)</label>
                     <input type="number" id="dn_price" min="0" step="0.01">
                 </div>
+            </div>
+
+            <div class="add-item-row">
+                <div class="form-group qty-field">
+                    <label for="dn_width">Ширина (мм)</label>
+                    <input type="number" id="dn_width" min="0" step="0.01">
+                </div>
+                <div class="form-group qty-field">
+                    <label for="dn_height">Дължина/Височина (мм)</label>
+                    <input type="number" id="dn_height" min="0" step="0.01">
+                </div>
+                <div class="form-group qty-field">
+                    <label for="dn_thickness">Дебелина (мм)</label>
+                    <input type="number" id="dn_thickness" min="0" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label for="dn_brand">Марка</label>
+                    <input type="text" id="dn_brand">
+                </div>
+                <div class="form-group">
+                    <label for="dn_notes">Описание (по избор)</label>
+                    <input type="text" id="dn_notes" placeholder="напр. партида, забележка">
+                </div>
                 <div class="form-group" style="flex: 0 0 auto;">
                     <button type="button" class="btn-secondary" onclick="addDeliveryRow()" style="padding: 12px 20px;">+ Добави</button>
                 </div>
@@ -139,11 +167,13 @@
                         <th>Тип</th>
                         <th class="text-center">Кол.</th>
                         <th class="text-right">Ед. цена</th>
+                        <th>Параметри</th>
+                        <th>Описание</th>
                         <th class="text-right">Действие</th>
                     </tr>
                     </thead>
                     <tbody id="dnTableBody">
-                        <tr id="dnEmptyRow"><td colspan="5" class="text-center no-data">Все още няма добавени артикули.</td></tr>
+                        <tr id="dnEmptyRow"><td colspan="7" class="text-center no-data">Все още няма добавени артикули.</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -173,7 +203,16 @@
                     <td>{{ note.note_number or '-' }}</td>
                     <td>
                         {% for item in note.items %}
-                        <div>{{ item.description_snapshot }} &times; {{ item.quantity }}{% if item.unit_price %} @ {{ "%.2f"|format(item.unit_price) }} €{% endif %}</div>
+                        <div>
+                            {{ item.description_snapshot }} &times; {{ item.quantity }}{% if item.unit_price %} @ {{ "%.2f"|format(item.unit_price) }} €{% endif %}
+                            {%- set params = [] %}
+                            {%- if item.width %}{% set _ = params.append('Ш: ' ~ item.width) %}{% endif %}
+                            {%- if item.height %}{% set _ = params.append('Д: ' ~ item.height) %}{% endif %}
+                            {%- if item.thickness %}{% set _ = params.append('Деб: ' ~ item.thickness) %}{% endif %}
+                            {%- if item.brand %}{% set _ = params.append(item.brand) %}{% endif %}
+                            {%- if params %} ({{ params|join(', ') }}){% endif %}
+                            {%- if item.notes %} - {{ item.notes }}{% endif %}
+                        </div>
                         {% endfor %}
                     </td>
                 </tr>
@@ -202,13 +241,33 @@
         return td;
     }
 
+    function currentSelector(type) {
+        return type === 'material' ? 'dn_material_id' : (type === 'detail' ? 'dn_detail_id' : 'dn_product_id');
+    }
+
+    function fillParamsFromSelection() {
+        const type = document.querySelector('input[name="dn_item_type"]:checked').value;
+        const list = type === 'material' ? MATERIALS : (type === 'detail' ? DETAILS : PRODUCTS);
+        const sel = document.getElementById(currentSelector(type));
+        const item = sel.value ? list.find(function (x) { return x.id === parseInt(sel.value, 10); }) : null;
+        document.getElementById('dn_width').value = item && item.width != null ? item.width : '';
+        document.getElementById('dn_height').value = item && item.height != null ? item.height : '';
+        document.getElementById('dn_thickness').value = item && item.thickness != null ? item.thickness : '';
+        document.getElementById('dn_brand').value = item && item.brand ? item.brand : '';
+    }
+
     document.querySelectorAll('input[name="dn_item_type"]').forEach(function (radio) {
         radio.addEventListener('change', function () {
             document.getElementById('material_selector').style.display = this.value === 'material' ? 'block' : 'none';
             document.getElementById('detail_selector').style.display = this.value === 'detail' ? 'block' : 'none';
             document.getElementById('product_selector').style.display = this.value === 'product' ? 'block' : 'none';
+            fillParamsFromSelection();
         });
     });
+    ['dn_material_id', 'dn_detail_id', 'dn_product_id'].forEach(function (id) {
+        document.getElementById(id).addEventListener('change', fillParamsFromSelection);
+    });
+    fillParamsFromSelection();
 
     function addDeliveryRow() {
         const type = document.querySelector('input[name="dn_item_type"]:checked').value;
@@ -221,15 +280,25 @@
             return;
         }
 
-        const selectorId = type === 'material' ? 'dn_material_id' : (type === 'detail' ? 'dn_detail_id' : 'dn_product_id');
         const list = type === 'material' ? MATERIALS : (type === 'detail' ? DETAILS : PRODUCTS);
-        const sel = document.getElementById(selectorId);
+        const sel = document.getElementById(currentSelector(type));
         if (!sel.value) { alert('Няма избран артикул.'); return; }
         const id = parseInt(sel.value, 10);
         const item = list.find(function (x) { return x.id === id; });
         if (!item) return;
 
-        dnItems.push({ type: type, id: id, name: item.name, qty: qty, unit_price: unitPrice });
+        function numOrNull(elId) {
+            const raw = document.getElementById(elId).value;
+            return raw === '' ? null : parseFloat(raw);
+        }
+
+        dnItems.push({
+            type: type, id: id, name: item.name, qty: qty, unit_price: unitPrice,
+            width: numOrNull('dn_width'), height: numOrNull('dn_height'), thickness: numOrNull('dn_thickness'),
+            brand: document.getElementById('dn_brand').value.trim() || null,
+            notes: document.getElementById('dn_notes').value.trim() || null,
+        });
+        document.getElementById('dn_notes').value = '';
         renderDnTable();
     }
 
@@ -245,7 +314,7 @@
         body.innerHTML = '';
 
         if (dnItems.length === 0) {
-            body.innerHTML = '<tr id="dnEmptyRow"><td colspan="5" class="text-center no-data">Все още няма добавени артикули.</td></tr>';
+            body.innerHTML = '<tr id="dnEmptyRow"><td colspan="7" class="text-center no-data">Все още няма добавени артикули.</td></tr>';
         } else {
             dnItems.forEach(function (item, idx) {
                 const tr = document.createElement('tr');
@@ -253,6 +322,15 @@
                 tr.appendChild(cell(TYPE_LABELS[item.type]));
                 tr.appendChild(cell(item.qty, { className: 'text-center' }));
                 tr.appendChild(cell(item.unit_price != null ? item.unit_price.toFixed(2) + ' €' : '-', { className: 'text-right' }));
+
+                const params = [
+                    item.width != null ? 'Ш: ' + item.width : null,
+                    item.height != null ? 'Д: ' + item.height : null,
+                    item.thickness != null ? 'Деб: ' + item.thickness : null,
+                    item.brand || null,
+                ].filter(Boolean).join(', ');
+                tr.appendChild(cell(params || '-'));
+                tr.appendChild(cell(item.notes || '-'));
 
                 const actionTd = document.createElement('td');
                 actionTd.className = 'text-right';
@@ -278,7 +356,12 @@
             return;
         }
         document.getElementById('itemsJsonInput').value = JSON.stringify(
-            dnItems.map(function (c) { return { type: c.type, id: c.id, qty: c.qty, unit_price: c.unit_price }; })
+            dnItems.map(function (c) {
+                return {
+                    type: c.type, id: c.id, qty: c.qty, unit_price: c.unit_price,
+                    width: c.width, height: c.height, thickness: c.thickness, brand: c.brand, notes: c.notes,
+                };
+            })
         );
     });
 </script>

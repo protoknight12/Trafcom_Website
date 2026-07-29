@@ -52,7 +52,8 @@
             <div id="companyFields" style="display: none; grid-column: 1 / -1; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 4px 20px;">
                 <div class="form-group">
                     <label for="client_eik">ЕИК / Булстат</label>
-                    <input type="text" id="client_eik" name="eik" placeholder="напр. 203040557">
+                    <input type="text" id="client_eik" name="eik" placeholder="напр. 203040557"
+                           pattern="\d{9}" maxlength="9" inputmode="numeric" title="Точно 9 цифри">
                 </div>
                 <div class="form-group">
                     <label for="client_vat">ИН по ДДС</label>
@@ -138,6 +139,23 @@
                 <label for="deliverer_phone">Телефон</label>
                 <input type="text" id="deliverer_phone" name="phone" placeholder="напр. 0888 123 456">
             </div>
+            <div class="form-group">
+                <label for="deliverer_eik">ЕИК / Булстат</label>
+                <input type="text" id="deliverer_eik" name="eik" placeholder="напр. 203040557"
+                       pattern="\d{9}" maxlength="9" inputmode="numeric" title="Точно 9 цифри">
+            </div>
+            <div class="form-group">
+                <label for="deliverer_vat">ИН по ДДС</label>
+                <input type="text" id="deliverer_vat" name="vat_number" placeholder="напр. BG203040557">
+            </div>
+            <div class="form-group">
+                <label for="deliverer_address">Адрес на управление</label>
+                <input type="text" id="deliverer_address" name="address" placeholder="напр. София, бул. ...">
+            </div>
+            <div class="form-group">
+                <label for="deliverer_mol">МОЛ</label>
+                <input type="text" id="deliverer_mol" name="mol" placeholder="напр. Иван Иванов">
+            </div>
             <button type="submit" class="btn-submit">Добави куриер</button>
         </form>
     </section>
@@ -151,6 +169,8 @@
                     <th>Име</th>
                     <th>Имейл</th>
                     <th>Телефон</th>
+                    <th>ЕИК</th>
+                    <th class="text-right">Редакция</th>
                     <th class="text-right">Изтриване</th>
                 </tr>
                 </thead>
@@ -160,6 +180,10 @@
                     <td><strong>{{ deliverer.name }}</strong></td>
                     <td>{{ deliverer.email or '-' }}</td>
                     <td>{{ deliverer.phone or '-' }}</td>
+                    <td>{{ deliverer.eik or '-' }}</td>
+                    <td class="text-right">
+                        <a href="{{ url_for('edit_deliverer_window', deliverer_id=deliverer.id) }}" class="btn-secondary" target="_blank" rel="noopener" style="padding: 6px 10px; font-size: 0.78rem;">Редакция</a>
+                    </td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_deliverer', deliverer_id=deliverer.id) }}" method="POST"
                               onsubmit="return confirm('Изтриване на куриера &quot;{{ deliverer.name|e }}&quot;?');" style="display:inline;">
@@ -170,7 +194,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="4" class="text-center no-data">Няма добавени куриери.</td>
+                    <td colspan="6" class="text-center no-data">Няма добавени куриери.</td>
                 </tr>
                 {% endfor %}
                 </tbody>
