@@ -1,10 +1,26 @@
 # Trafcom DXF Calculate
 
+![Python](https://img.shields.io/badge/python-3-3776AB?logo=python&logoColor=white)
+![Flask](https://img.shields.io/badge/flask-3776AB?logo=flask&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/postgresql-4169E1?logo=postgresql&logoColor=white)
+![UI language](https://img.shields.io/badge/UI-Bulgarian-4B8BBE)
+
 A Flask app for a CNC/laser cutting company (Trafcom): upload a DXF drawing and
 get its cutting price calculated automatically from geometry (area, cut
 length, pierce count), build a catalog of reusable "Details" and "Products"
 from priced drawings, track stock via delivery notes, and run customer
 orders through production tracking. The UI is in Bulgarian.
+
+## Contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Running it](#running-it)
+- [Project structure](#project-structure)
+- [Schema changes](#schema-changes)
+- [Tests](#tests)
+- [Configuration notes](#configuration-notes)
 
 ## Features
 
@@ -85,6 +101,8 @@ set up the database).
 - [`wsgi.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/wsgi.py) — production entrypoint (gunicorn/waitress)
 - [`requirements.txt`](https://github.com/protoknight12/Trafcom_Website/blob/main/requirements.txt)
 - [`.env.example`](https://github.com/protoknight12/Trafcom_Website/blob/main/.env.example)
+- `uploads/` — private scratch folder for in-flight DXF uploads (not on GitHub — gitignored)
+
 <details>
 <summary><a href="https://github.com/protoknight12/Trafcom_Website/tree/main/templates"><code>templates/</code></a> — Jinja2 templates, one per page/route</summary>
 
@@ -116,6 +134,7 @@ set up the database).
   - [`register.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/register.html)
   - [`services.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/services.html)
   - [`upload.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/upload.html)
+
   <details>
   <summary><a href="https://github.com/protoknight12/Trafcom_Website/tree/main/templates/partials"><code>partials/</code></a> — shared chrome (navbar, footer, CSRF field, editable-text blocks)</summary>
 
@@ -124,8 +143,11 @@ set up the database).
     - [`editable.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/partials/editable.html)
     - [`csrf_field.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/partials/csrf_field.html)
     - [`material_options.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/partials/material_options.html)
+
   </details>
+
 </details>
+
 <details>
 <summary><a href="https://github.com/protoknight12/Trafcom_Website/tree/main/static"><code>static/</code></a> — CSS, client-side JS, images, and web-accessible uploads</summary>
 
@@ -134,7 +156,9 @@ set up the database).
   - [`css/style.css`](https://github.com/protoknight12/Trafcom_Website/blob/main/static/css/style.css)
   - [`img/`](https://github.com/protoknight12/Trafcom_Website/tree/main/static/img)
   - `uploads/products/` — persistent, web-accessible product images
+
 </details>
+
 <details>
 <summary><a href="https://github.com/protoknight12/Trafcom_Website/tree/main/migration"><code>migration/</code></a> — one-off migration/backfill/seed scripts (see below)</summary>
 
@@ -144,7 +168,9 @@ set up the database).
   - [`seed_real_machines.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/migration/seed_real_machines.py)
   - [`seed_test_data.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/migration/seed_test_data.py)
   - ...plus the `migrate_add_*.py` / `migrate_erp_number_unique_int.py` schema-change scripts — [browse the full folder](https://github.com/protoknight12/Trafcom_Website/tree/main/migration)
+
 </details>
+
 <details>
 <summary><a href="https://github.com/protoknight12/Trafcom_Website/tree/main/testing"><code>testing/</code></a> — test scripts (see below)</summary>
 
@@ -160,6 +186,7 @@ set up the database).
   - [`test_security_fixes.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_security_fixes.py)
   - [`test_quick_create_material.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_quick_create_material.py)
   - [`test_quick_create_product_components.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_quick_create_product_components.py)
+
 </details>
 
 </details>
