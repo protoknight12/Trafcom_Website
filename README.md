@@ -161,7 +161,6 @@ set up the database).
   - [`test_quick_create_material.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_quick_create_material.py)
   - [`test_quick_create_product_components.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_quick_create_product_components.py)
 </details>
-- `uploads/` — private scratch folder for in-flight DXF uploads (not on GitHub — gitignored)
 
 </details>
 
