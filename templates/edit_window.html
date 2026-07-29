@@ -58,7 +58,7 @@
     {% endif %}
     {% endwith %}
 
-    <form action="{{ action }}" method="POST" class="admin-form" style="display: block;">
+    <form action="{{ action }}" method="POST" enctype="multipart/form-data" class="admin-form" style="display: block;">
         {% include 'partials/csrf_field.html' %}
         <input type="hidden" name="popup" value="1">
         {% for f in fields %}
@@ -80,6 +80,13 @@
                 <option value="{{ opt }}"></option>
                 {% endfor %}
             </datalist>
+            {% elif f.type == 'file' %}
+            {% if f.preview_url %}
+            <div style="margin-bottom: 8px;">
+                <img src="{{ f.preview_url }}" alt="" style="max-width: 160px; max-height: 120px; border-radius: var(--border-radius-sm); border: 1px solid var(--border-color); display: block;">
+            </div>
+            {% endif %}
+            <input type="file" id="field_{{ loop.index }}" name="{{ f.name }}" accept="image/*">
             {% else %}
             <input type="text" id="field_{{ loop.index }}" name="{{ f.name }}" value="{{ f.value }}" required>
             {% endif %}

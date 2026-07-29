@@ -83,6 +83,11 @@ limiter = Limiter(get_remote_address, app=app, default_limits=["300 per hour"])
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 app.config['PRODUCT_IMAGES_FOLDER'] = os.path.join(app.static_folder, 'uploads', 'products')
 os.makedirs(app.config['PRODUCT_IMAGES_FOLDER'], exist_ok=True)
+# Same folder the seeded machine cards' images already live in (see
+# SERVICE_MACHINE_CARDS_SEED/INDEX_MACHINE_CARDS_SEED) - admin-uploaded
+# machine images join them here.
+app.config['MACHINE_IMAGES_FOLDER'] = os.path.join(app.static_folder, 'img', 'machines')
+os.makedirs(app.config['MACHINE_IMAGES_FOLDER'], exist_ok=True)
 
 
 # ----------------- МОДЕЛИ В БАЗАТА ДАННИ -----------------
@@ -1762,6 +1767,29 @@ def _service_section_titles():
     return [r[0] for r in rows]
 
 
+MACHINE_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp', 'gif'}
+# Only filenames our own upload code produces look like this - the seeded
+# cards' images (e.g. "dmg-mori-dmu75.jpg") never do, and several seeded
+# cards on different pages deliberately share the same committed image file,
+# so only a file matching this prefix is ever safe to delete from disk.
+_UPLOADED_IMAGE_PREFIX_RE = re.compile(r'^[0-9a-f]{32}_')
+
+
+def _save_machine_card_image(file):
+    """Saves an uploaded machine-card image into MACHINE_IMAGES_FOLDER with a
+    collision-safe filename; returns the saved filename, or None if no valid
+    image file was submitted."""
+    if not file or file.filename == '':
+        return None
+    ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else ''
+    if ext not in MACHINE_IMAGE_EXTENSIONS:
+        return None
+    filename = secure_filename(file.filename)
+    unique_filename = f"{uuid.uuid4().hex}_{filename}"
+    file.save(os.path.join(app.config['MACHINE_IMAGES_FOLDER'], unique_filename))
+    return unique_filename
+
+
 @app.route('/services/machine-cards/new')
 @login_required
 def new_machine_card_window():
@@ -1773,6 +1801,7 @@ def new_machine_card_window():
     fields = [
         {'name': 'series_label', 'label': 'Кратък етикет (напр. 5-ОСНО ФРЕЗОВАНЕ)', 'value': '', 'type': 'text'},
         {'name': 'title', 'label': 'Име на машината', 'value': '', 'type': 'text'},
+        {'name': 'image', 'label': 'Снимка на машината (по избор)', 'value': '', 'type': 'file'},
     ]
     if page == 'services':
         # Only the services page groups cards by section - pick an existing
@@ -1811,6 +1840,7 @@ def create_machine_card():
         section_title=request.form.get('section_title', '').strip() or None if page == 'services' else None,
         specs_text=request.form.get('specs_text', '').strip() or None,
         description=request.form.get('description', '').strip() or None,
+        image_filename=_save_machine_card_image(request.files.get('image')),
     )
     db.session.add(card)
     db.session.commit()
@@ -1830,6 +1860,8 @@ def edit_machine_card_window(card_id):
     fields = [
         {'name': 'series_label', 'label': 'Кратък етикет (напр. 5-ОСНО ФРЕЗОВАНЕ)', 'value': card.series_label or '', 'type': 'text'},
         {'name': 'title', 'label': 'Име на машината', 'value': card.title, 'type': 'text'},
+        {'name': 'image', 'label': 'Снимка на машината (по избор - оставете празно, за да запазите текущата)', 'value': '', 'type': 'file',
+         'preview_url': url_for('static', filename='img/machines/' + card.image_filename) if card.image_filename else None},
     ]
     if card.page == 'services':
         fields.append({'name': 'section_title', 'label': 'Раздел (напр. фрезоване, струговане, листообработка)',
@@ -1864,6 +1896,21 @@ def update_machine_card(card_id):
         card.section_title = request.form.get('section_title', '').strip() or None
     card.specs_text = request.form.get('specs_text', '').strip() or None
     card.description = request.form.get('description', '').strip() or None
+
+    new_image_filename = _save_machine_card_image(request.files.get('image'))
+    if new_image_filename:
+        # Only ever delete files our own upload code produced - several
+        # seeded cards deliberately share the same committed image file, so
+        # a seed filename must never be removed from disk here.
+        if card.image_filename and _UPLOADED_IMAGE_PREFIX_RE.match(card.image_filename):
+            old_path = os.path.join(app.config['MACHINE_IMAGES_FOLDER'], card.image_filename)
+            if os.path.exists(old_path):
+                try:
+                    os.remove(old_path)
+                except Exception as e:
+                    print(f"Error deleting old machine image: {e}")
+        card.image_filename = new_image_filename
+
     db.session.commit()
     flash('Машината беше обновена успешно.', 'success')
     if request.form.get('popup') == '1':
