@@ -3,7 +3,7 @@ Floods GET /login past its per-minute cap and confirms a 429 shows up -
 catches a missing/broken decorator without needing a live Postgres
 connection (GET /login for an anonymous session never touches the DB).
 
-    python test_rate_limiting.py
+    python -m testing.test_rate_limiting
 """
 from app import app
 

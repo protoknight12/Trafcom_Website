@@ -6,7 +6,7 @@ automatically (it only refuses to touch tables that already exist) - only
 the new client_id/deliverer_id columns on the existing order table need a
 manual ALTER. Safe to run more than once.
 
-    python migrate_add_client_deliverer.py
+    python -m migration.migrate_add_client_deliverer
 """
 from sqlalchemy import text
 

@@ -2,7 +2,7 @@
 One-off schema migration: adds a VAT/ДДС number field to Supplier
 (already has eik, was missing vat_number).
 
-    python migrate_add_supplier_vat.py
+    python -m migration.migrate_add_supplier_vat
 
 Safe to run more than once.
 """

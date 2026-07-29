@@ -3,7 +3,7 @@ intake (see create_delivery_note() in app.py) - a delivery note line item
 should add its quantity onto the target's stock_quantity, starting from
 None (fresh row, never restocked before) or an existing value.
 
-    python test_delivery_note_stock.py
+    python -m testing.test_delivery_note_stock
 """
 from types import SimpleNamespace
 

@@ -4,7 +4,7 @@ backfills every existing row to type='sheets' (all pre-existing materials
 were sheet stock - see MATERIAL_TYPE_LABELS in app.py for the other
 categories rods/profiles/pipes/other). Safe to run more than once.
 
-    python migrate_add_material_brand_type.py
+    python -m migration.migrate_add_material_brand_type
 """
 from sqlalchemy import text
 

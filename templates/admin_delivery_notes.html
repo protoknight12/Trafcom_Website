@@ -94,34 +94,42 @@
 
             <div class="add-item-row">
                 <div class="form-group" id="material_selector">
-                    <label for="dn_material_id">Материал *</label>
-                    <select id="dn_material_id">
-                        {% for m in materials %}
-                        <option value="{{ m.id }}">{{ m.display_name }}</option>
-                        {% else %}
-                        <option disabled>Няма налични материали</option>
+                    <label for="dn_material_select">Материал *</label>
+                    <select id="dn_material_select">
+                        {% for type_key, group in materials|groupby('type') %}
+                        <optgroup label="{{ material_type_label(type_key) }}">
+                            {% for m in group %}
+                            <option value="{{ m.display_name }}">{{ m.display_name }}{% if m.brand %} ({{ m.brand }}){% endif %}</option>
+                            {% endfor %}
+                        </optgroup>
                         {% endfor %}
+                        <option value="__new__">+ Нов материал...</option>
                     </select>
+                    <input type="text" id="dn_material_name_new" placeholder="Име на новия материал" autocomplete="off" style="display: none; margin-top: 8px;">
                 </div>
                 <div class="form-group" id="detail_selector" style="display: none;">
-                    <label for="dn_detail_id">Детайл *</label>
-                    <select id="dn_detail_id">
-                        {% for d in details %}
-                        <option value="{{ d.id }}">{{ d.name }}</option>
-                        {% else %}
-                        <option disabled>Няма налични детайли</option>
-                        {% endfor %}
+                    <label for="dn_detail_select">Детайл *</label>
+                    <select id="dn_detail_select">
+                        <optgroup label="Детайли">
+                            {% for d in details %}
+                            <option value="{{ d.name }}">{{ d.name }}</option>
+                            {% endfor %}
+                        </optgroup>
+                        <option value="__new__">+ Нов детайл...</option>
                     </select>
+                    <input type="text" id="dn_detail_name_new" placeholder="Име на новия детайл" autocomplete="off" style="display: none; margin-top: 8px;">
                 </div>
                 <div class="form-group" id="product_selector" style="display: none;">
-                    <label for="dn_product_id">Продукт *</label>
-                    <select id="dn_product_id">
-                        {% for p in products %}
-                        <option value="{{ p.id }}">{{ p.name }}</option>
-                        {% else %}
-                        <option disabled>Няма налични продукти</option>
-                        {% endfor %}
+                    <label for="dn_product_select">Продукт *</label>
+                    <select id="dn_product_select">
+                        <optgroup label="Продукти">
+                            {% for p in products %}
+                            <option value="{{ p.name }}">{{ p.name }}</option>
+                            {% endfor %}
+                        </optgroup>
+                        <option value="__new__">+ Нов продукт...</option>
                     </select>
+                    <input type="text" id="dn_product_name_new" placeholder="Име на новия продукт" autocomplete="off" style="display: none; margin-top: 8px;">
                 </div>
                 <div class="form-group qty-field">
                     <label for="dn_qty">Количество</label>
@@ -130,6 +138,15 @@
                 <div class="form-group qty-field">
                     <label for="dn_price">Ед. цена (€, по избор)</label>
                     <input type="number" id="dn_price" min="0" step="0.01">
+                </div>
+            </div>
+
+            <div class="add-item-row" id="detail_material_row" style="display: none;">
+                <div class="form-group">
+                    <label for="dn_detail_material_id">Материал на детайла *</label>
+                    <select id="dn_detail_material_id">
+                        {% include 'partials/material_options.html' %}
+                    </select>
                 </div>
             </div>
 
@@ -203,14 +220,15 @@
                     <td>{{ note.note_number or '-' }}</td>
                     <td>
                         {% for item in note.items %}
+                        {#- Format: (item) (brand) x (quantity) (parameters separated by ,) - see CLAUDE.md delivery-note history task #}
                         <div>
-                            {{ item.description_snapshot }} &times; {{ item.quantity }}{% if item.unit_price %} @ {{ "%.2f"|format(item.unit_price) }} €{% endif %}
+                            {{ item.description_snapshot }}{% if item.brand %} {{ item.brand }}{% endif %} &times; {{ item.quantity }}
                             {%- set params = [] %}
                             {%- if item.width %}{% set _ = params.append('Ш: ' ~ item.width) %}{% endif %}
                             {%- if item.height %}{% set _ = params.append('Д: ' ~ item.height) %}{% endif %}
                             {%- if item.thickness %}{% set _ = params.append('Деб: ' ~ item.thickness) %}{% endif %}
-                            {%- if item.brand %}{% set _ = params.append(item.brand) %}{% endif %}
                             {%- if params %} ({{ params|join(', ') }}){% endif %}
+                            {%- if item.unit_price %} @ {{ "%.2f"|format(item.unit_price) }} €{% endif %}
                             {%- if item.notes %} - {{ item.notes }}{% endif %}
                         </div>
                         {% endfor %}
@@ -241,19 +259,47 @@
         return td;
     }
 
-    function currentSelector(type) {
-        return type === 'material' ? 'dn_material_id' : (type === 'detail' ? 'dn_detail_id' : 'dn_product_id');
+    function currentSelectField(type) {
+        return type === 'material' ? 'dn_material_select' : (type === 'detail' ? 'dn_detail_select' : 'dn_product_select');
     }
 
+    function currentNewNameField(type) {
+        return type === 'material' ? 'dn_material_name_new' : (type === 'detail' ? 'dn_detail_name_new' : 'dn_product_name_new');
+    }
+
+    // The select's chosen option is the item's name directly (matches the
+    // catalog exactly by construction); "+ Нов ..." switches to the free-text
+    // fallback field for a name that isn't in the catalog yet.
+    function effectiveName(type) {
+        const sel = document.getElementById(currentSelectField(type));
+        if (sel.value === '__new__') {
+            return document.getElementById(currentNewNameField(type)).value.trim();
+        }
+        return sel.value;
+    }
+
+    // Exact-name match against the existing catalog - purely a convenience
+    // autofill. What actually decides "same item vs. new item" on submit is
+    // the backend's _find_or_create_delivery_target, which compares every
+    // field, not just the name.
     function fillParamsFromSelection() {
         const type = document.querySelector('input[name="dn_item_type"]:checked').value;
         const list = type === 'material' ? MATERIALS : (type === 'detail' ? DETAILS : PRODUCTS);
-        const sel = document.getElementById(currentSelector(type));
-        const item = sel.value ? list.find(function (x) { return x.id === parseInt(sel.value, 10); }) : null;
+        const sel = document.getElementById(currentSelectField(type));
+        const newNameInput = document.getElementById(currentNewNameField(type));
+        const isNew = sel.value === '__new__';
+        newNameInput.style.display = isNew ? 'block' : 'none';
+        if (!isNew) newNameInput.value = '';
+
+        const item = !isNew ? list.find(function (x) { return x.name === sel.value; }) : null;
         document.getElementById('dn_width').value = item && item.width != null ? item.width : '';
         document.getElementById('dn_height').value = item && item.height != null ? item.height : '';
         document.getElementById('dn_thickness').value = item && item.thickness != null ? item.thickness : '';
         document.getElementById('dn_brand').value = item && item.brand ? item.brand : '';
+        document.getElementById('dn_price').value = item && item.price != null ? item.price : '';
+        if (type === 'detail') {
+            document.getElementById('dn_detail_material_id').value = item && item.material_key ? item.material_key : '';
+        }
     }
 
     document.querySelectorAll('input[name="dn_item_type"]').forEach(function (radio) {
@@ -261,10 +307,11 @@
             document.getElementById('material_selector').style.display = this.value === 'material' ? 'block' : 'none';
             document.getElementById('detail_selector').style.display = this.value === 'detail' ? 'block' : 'none';
             document.getElementById('product_selector').style.display = this.value === 'product' ? 'block' : 'none';
+            document.getElementById('detail_material_row').style.display = this.value === 'detail' ? 'flex' : 'none';
             fillParamsFromSelection();
         });
     });
-    ['dn_material_id', 'dn_detail_id', 'dn_product_id'].forEach(function (id) {
+    ['dn_material_select', 'dn_detail_select', 'dn_product_select'].forEach(function (id) {
         document.getElementById(id).addEventListener('change', fillParamsFromSelection);
     });
     fillParamsFromSelection();
@@ -280,12 +327,14 @@
             return;
         }
 
-        const list = type === 'material' ? MATERIALS : (type === 'detail' ? DETAILS : PRODUCTS);
-        const sel = document.getElementById(currentSelector(type));
-        if (!sel.value) { alert('Няма избран артикул.'); return; }
-        const id = parseInt(sel.value, 10);
-        const item = list.find(function (x) { return x.id === id; });
-        if (!item) return;
+        const name = effectiveName(type);
+        if (!name) { alert('Моля изберете или въведете име на артикула.'); return; }
+
+        let materialKey = null;
+        if (type === 'detail') {
+            materialKey = document.getElementById('dn_detail_material_id').value;
+            if (!materialKey) { alert('Моля изберете материал за детайла.'); return; }
+        }
 
         function numOrNull(elId) {
             const raw = document.getElementById(elId).value;
@@ -293,7 +342,7 @@
         }
 
         dnItems.push({
-            type: type, id: id, name: item.name, qty: qty, unit_price: unitPrice,
+            type: type, name: name, material_key: materialKey, qty: qty, unit_price: unitPrice,
             width: numOrNull('dn_width'), height: numOrNull('dn_height'), thickness: numOrNull('dn_thickness'),
             brand: document.getElementById('dn_brand').value.trim() || null,
             notes: document.getElementById('dn_notes').value.trim() || null,
@@ -358,7 +407,7 @@
         document.getElementById('itemsJsonInput').value = JSON.stringify(
             dnItems.map(function (c) {
                 return {
-                    type: c.type, id: c.id, qty: c.qty, unit_price: c.unit_price,
+                    type: c.type, name: c.name, material_key: c.material_key, qty: c.qty, unit_price: c.unit_price,
                     width: c.width, height: c.height, thickness: c.thickness, brand: c.brand, notes: c.notes,
                 };
             })

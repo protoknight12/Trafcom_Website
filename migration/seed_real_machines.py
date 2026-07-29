@@ -4,7 +4,7 @@ DMU') with the real machine park listed on the public services page
 is detached (machine_id set to NULL), same as delete_machine() in app.py -
 orders/uploads are never deleted, just unassigned.
 
-    python seed_real_machines.py
+    python -m migration.seed_real_machines
 """
 from app import app, db, Machine, Order, DxfFile
 

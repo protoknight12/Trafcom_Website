@@ -1126,6 +1126,38 @@ def refresh_order_status(order):
         order.status = 'new'
 
 
+def order_missing_items(order):
+    """
+    Live shortfall check for one order: for each line, compares
+    quantity_ordered against the current stock_quantity of the Detail/
+    Product it points at (same finished-goods stock delivery notes bump -
+    see CLAUDE.md order-fulfillment task) and returns only the lines that
+    fall short. Recomputed on demand rather than snapshotted at order-
+    creation time, so it stays correct as stock is replenished or other
+    orders are placed - stock_quantity is never reserved/decremented
+    anywhere in this app (see _bump_stock), so "available" here just means
+    "on hand right now", same as everywhere else stock_quantity is read.
+    Returns a list of {item_name, needed, available, missing} dicts.
+    """
+    shortfalls = []
+    for item in order.items:
+        if item.product_id:
+            available = item.product.stock_quantity or 0
+        elif item.detail_id:
+            available = item.detail.stock_quantity or 0
+        else:
+            continue
+        missing = item.quantity_ordered - available
+        if missing > 0:
+            shortfalls.append({
+                'item_name': item.item_name,
+                'needed': item.quantity_ordered,
+                'available': available,
+                'missing': missing,
+            })
+    return shortfalls
+
+
 from functools import wraps
 
 
@@ -1262,7 +1294,7 @@ def register():
         username = request.form.get('username')
         password = request.form.get('password', '')
 
-        # Same 8-character floor change_admin_password.py already enforces
+        # Same 8-character floor migration/change_admin_password.py already enforces
         # for the admin account - short passwords are well within the
         # per-minute brute-force budget /login's rate limit still allows.
         if len(password) < 8:
@@ -1733,6 +1765,72 @@ def _bump_stock(target, quantity):
 DELIVERY_NOTE_TARGET_MODELS = {'material': MaterialPrice, 'detail': Detail, 'product': Product}
 
 
+def _find_or_create_delivery_target(item_type, name, brand, width, height, thickness, unit_price, material_key):
+    """
+    Resolves one delivery-note line to a catalog row: reuses an existing
+    Material/Detail/Product only if every descriptive field matches exactly,
+    otherwise creates a brand-new bare-bones row (no DXF geometry / BOM -
+    just what the paper delivery note itself carries). This is deliberate -
+    two lines that differ in even one parameter (brand, a dimension, or
+    price) must never be folded into the same stock count, per the
+    "keep separate items separate" rule (see CLAUDE.md delivery-note task).
+
+    Detail still requires material_key (hard FK, see admin_delete_material's
+    docstring) - a bare-bones Detail can skip total_length/pierce_count
+    (no DXF was uploaded), but not the material it's cut from.
+    Product carries no dimension/brand/price columns of its own, so a
+    brand-new Product only matches/dedupes on name.
+    """
+    name = (name or '').strip()
+    brand = (brand or '').strip() or None
+
+    if item_type == 'material':
+        existing = MaterialPrice.query.filter_by(
+            display_name=name, brand=brand, sheet_width_mm=width,
+            sheet_length_mm=height, thickness_mm=thickness
+        ).first()
+        if existing:
+            return existing
+        new_row = MaterialPrice(
+            key='pending', display_name=name, cost_per_m2=0.0, cost_per_meter_cut=0.0,
+            cost_per_pierce=0.0, sheet_width_mm=width, sheet_length_mm=height,
+            thickness_mm=thickness, brand=brand, type='sheets', erp_number=_next_erp_number(),
+        )
+        db.session.add(new_row)
+        db.session.flush()
+        new_row.key = f'material_{new_row.id}'
+        return new_row
+
+    if item_type == 'detail':
+        if not material_key or not MaterialPrice.query.filter_by(key=material_key).first():
+            return None
+        existing = Detail.query.filter_by(
+            name=name, material_key=material_key, width=width or 0.0,
+            height=height or 0.0, calculated_price=unit_price or 0.0
+        ).first()
+        if existing:
+            return existing
+        new_row = Detail(
+            name=name, material_key=material_key, width=width or 0.0, height=height or 0.0,
+            total_length=0.0, pierce_count=0, calculated_price=unit_price or 0.0,
+            erp_number=_next_erp_number(),
+        )
+        db.session.add(new_row)
+        db.session.flush()
+        return new_row
+
+    if item_type == 'product':
+        existing = Product.query.filter_by(name=name).first()
+        if existing:
+            return existing
+        new_row = Product(name=name, erp_number=_next_erp_number())
+        db.session.add(new_row)
+        db.session.flush()
+        return new_row
+
+    return None
+
+
 @app.route('/admin/delivery-notes')
 @role_required(['admin', 'worker'])
 def admin_delivery_notes():
@@ -1745,19 +1843,23 @@ def admin_delivery_notes():
     """
     suppliers = Supplier.query.order_by(Supplier.name).all()
     notes = DeliveryNote.query.order_by(DeliveryNote.created_at.desc()).all()
-    materials = MaterialPrice.query.order_by(MaterialPrice.display_name).all()
+    # Ordered by type first so the template's |groupby('type') optgroups
+    # (same structural-type sectioning as partials/material_options.html)
+    # come out contiguous - Jinja's groupby needs pre-sorted input.
+    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     details = Detail.query.order_by(Detail.name).all()
     products = Product.query.order_by(Product.name).all()
     # Plain dicts (not ORM rows) for the client-side |tojson item picker -
     # same convention as create_order()'s products_data/details_data. width/
     # height/thickness/brand pre-fill the (editable) line-item fields on the
     # delivery note form from each catalog row's own parameters.
-    materials_data = [{'id': m.id, 'name': m.display_name, 'width': m.sheet_width_mm, 'height': m.sheet_length_mm,
-                        'thickness': m.thickness_mm, 'brand': m.brand} for m in materials]
-    details_data = [{'id': d.id, 'name': d.name, 'width': d.width, 'height': d.height,
+    materials_data = [{'name': m.display_name, 'width': m.sheet_width_mm, 'height': m.sheet_length_mm,
+                        'thickness': m.thickness_mm, 'brand': m.brand, 'price': None} for m in materials]
+    details_data = [{'name': d.name, 'width': d.width, 'height': d.height,
                       'thickness': d.material.thickness_mm if d.material else None,
-                      'brand': d.material.brand if d.material else None} for d in details]
-    products_data = [{'id': p.id, 'name': p.name, 'width': None, 'height': None, 'thickness': None, 'brand': None} for p in products]
+                      'brand': d.material.brand if d.material else None,
+                      'material_key': d.material_key, 'price': d.calculated_price} for d in details]
+    products_data = [{'name': p.name, 'width': None, 'height': None, 'thickness': None, 'brand': None, 'price': None} for p in products]
     return render_template(
         'admin_delivery_notes.html', suppliers=suppliers, notes=notes,
         materials=materials, details=details, products=products,
@@ -1795,8 +1897,13 @@ def admin_add_supplier():
 def create_delivery_note():
     """
     Records a delivery note and bumps stock_quantity on every referenced
-    Material/Detail/Product. items_json follows the same
-    [{type, id, qty, unit_price}] shape as create_order()'s cart_json.
+    Material/Detail/Product - creating a new bare-bones catalog row when a
+    line doesn't exactly match an existing one (see
+    _find_or_create_delivery_target). items_json follows
+    [{type, name, material_key, qty, unit_price, width, height, thickness,
+    brand, notes}] - no id, since the row to bump/create is resolved from
+    the line's own fields, not a pre-picked id (that's what used to let a
+    line silently bump the wrong/dissimilar catalog row).
     """
     try:
         items = json.loads(request.form.get('items_json', ''))
@@ -1827,25 +1934,18 @@ def create_delivery_note():
     for row in items:
         if not isinstance(row, dict):
             continue
-        target_model = DELIVERY_NOTE_TARGET_MODELS.get(row.get('type'))
-        if not target_model:
+        item_type = row.get('type')
+        if item_type not in DELIVERY_NOTE_TARGET_MODELS:
+            continue
+        name = (row.get('name') or '').strip()
+        if not name:
             continue
         try:
-            target_id = int(row.get('id'))
             quantity = float(row.get('qty', 0))
         except (TypeError, ValueError):
             continue
         if quantity <= 0:
             continue
-        target = target_model.query.get(target_id)
-        if not target:
-            continue
-
-        unit_price_raw = row.get('unit_price')
-        try:
-            unit_price = float(unit_price_raw) if unit_price_raw not in (None, '') else None
-        except (TypeError, ValueError):
-            unit_price = None
 
         def _optional_float(key):
             raw = row.get(key)
@@ -1854,13 +1954,25 @@ def create_delivery_note():
             except (TypeError, ValueError):
                 return None
 
-        description = target.display_name if row['type'] == 'material' else target.name
+        unit_price = _optional_float('unit_price')
+        width = _optional_float('width')
+        height = _optional_float('height')
+        thickness = _optional_float('thickness')
+        brand = (row.get('brand') or '').strip() or None
+        material_key = (row.get('material_key') or '').strip() or None
+
+        target = _find_or_create_delivery_target(
+            item_type, name, brand, width, height, thickness, unit_price, material_key
+        )
+        if not target:
+            continue
+
+        description = target.display_name if item_type == 'material' else target.name
         db.session.add(DeliveryNoteItem(
-            delivery_note_id=note.id, target_type=row['type'], target_id=target.id,
+            delivery_note_id=note.id, target_type=item_type, target_id=target.id,
             description_snapshot=description, quantity=quantity, unit_price=unit_price,
             notes=(row.get('notes') or '').strip() or None,
-            width=_optional_float('width'), height=_optional_float('height'), thickness=_optional_float('thickness'),
-            brand=(row.get('brand') or '').strip() or None,
+            width=width, height=height, thickness=thickness, brand=brand,
         ))
         _bump_stock(target, quantity)
         added_any = True
@@ -3043,6 +3155,17 @@ def create_order():
 
         db.session.commit()
         flash(f'Поръчка {new_order.order_number} беше успешно изпратена!', 'success')
+
+        shortfalls = order_missing_items(new_order)
+        if shortfalls:
+            missing_desc = '; '.join(
+                f"{s['item_name']} (нужни {s['needed']}, налични {s['available']})" for s in shortfalls
+            )
+            flash(
+                f'Внимание: поръчка {new_order.order_number} има недостатъчна наличност за: {missing_desc}. '
+                'Виж таблото "Липсваща наличност".',
+                'danger'
+            )
         return redirect(url_for('my_orders'))
 
     products = Product.query.order_by(Product.name).all()
@@ -3149,6 +3272,31 @@ def admin_production_report():
     orders = Order.query.filter(Order.status != 'cancelled').order_by(Order.created_at.desc()).all()
     machines = Machine.query.order_by(Machine.name).all()
     return render_template('production_report.html', orders=orders, machines=machines, active_page='production')
+
+
+@app.route('/admin/missing-stock')
+@role_required(['admin', 'worker'])
+def admin_missing_stock():
+    """
+    Dashboard for admins/workers: every open (not completed/cancelled) order
+    that currently doesn't have enough Detail/Product stock to fulfill it -
+    see order_missing_items() for what "enough" means. Recomputed live on
+    every load rather than stored, so it's never stale.
+    """
+    open_orders = Order.query.filter(
+        Order.status.in_(['new', 'in_production'])
+    ).order_by(Order.created_at.desc()).all()
+
+    orders_with_shortfalls = []
+    for order in open_orders:
+        shortfalls = order_missing_items(order)
+        if shortfalls:
+            orders_with_shortfalls.append({'order': order, 'shortfalls': shortfalls})
+
+    return render_template(
+        'admin_missing_stock.html', orders_with_shortfalls=orders_with_shortfalls,
+        active_page='admin_missing_stock'
+    )
 
 
 def generate_barcode_svg(code):
@@ -3615,7 +3763,8 @@ if __name__ == '__main__':
         # No auto-created default admin account anymore - a hardcoded
         # admin/admin123 credential sitting in public source was a real risk.
         # To create the first admin on a brand-new database, run
-        # change_admin_password.py (creates the user if it doesn't exist yet).
+        # python -m migration.change_admin_password (creates the user if it
+        # doesn't exist yet).
         # Populate the MaterialPrice table with defaults on first run only -
         # existing rows (including any admin-edited prices) are never touched.
         seed_material_prices()

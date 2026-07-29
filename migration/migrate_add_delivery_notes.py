@@ -6,7 +6,7 @@ db.create_all() creates them automatically - only the new stock_quantity
 columns on the existing material_price/detail/product tables need a manual
 ALTER.
 
-    python migrate_add_delivery_notes.py
+    python -m migration.migrate_add_delivery_notes
 
 Safe to run more than once.
 """

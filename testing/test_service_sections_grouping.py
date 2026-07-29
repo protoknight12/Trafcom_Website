@@ -4,7 +4,7 @@ second, same-titled section instead of joining the existing one, because
 cards were only merged into the *immediately preceding* section instead of
 being keyed by title. See app.py's services()/CLAUDE.md task 4.
 
-    python test_service_sections_grouping.py
+    python -m testing.test_service_sections_grouping
 """
 from types import SimpleNamespace
 

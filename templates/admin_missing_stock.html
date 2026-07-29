@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Липсваща наличност - TRAFCOM</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .status-badge { padding: 4px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; display: inline-block; }
+        .status-new { background-color: #ffc107; color: #000; }
+        .status-in_production { background-color: #17a2b8; color: #fff; }
+        .order-card-header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+        .missing-qty { color: #ff7675; font-weight: bold; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container" style="max-width: 1100px; margin: 30px auto; padding: 0 15px;">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <h2 style="margin-bottom: 20px;">Липсваща наличност по поръчки</h2>
+    <p class="section-subtitle" style="margin-top: -10px;">Поръчки в статус "Нова" или "В производство", за които наличното количество на детайл/продукт не покрива поръчаното. Обновява се веднага след всяка стокова разписка.</p>
+
+    {% for row in orders_with_shortfalls %}
+    {% set order = row.order %}
+    <section class="admin-card">
+        <div class="order-card-header">
+            <div>
+                <strong style="font-size: 1.1rem;">{{ order.order_number }}</strong> &nbsp;—&nbsp; {{ order.customer_name }}
+                <div class="text-muted text-small">{{ order.created_at.strftime('%d.%m.%Y %H:%M') }} · Потребител: {{ order.user.username if order.user else 'Изтрит потребител' }}</div>
+            </div>
+            <span class="status-badge status-{{ order.status }}">{{ order.status_label }}</span>
+        </div>
+
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                <tr>
+                    <th>Артикул</th>
+                    <th class="text-center">Нужно к-во</th>
+                    <th class="text-center">Налично к-во</th>
+                    <th class="text-center">Липсва</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for s in row.shortfalls %}
+                <tr>
+                    <td>{{ s.item_name }}</td>
+                    <td class="text-center">{{ s.needed }}</td>
+                    <td class="text-center">{{ s.available }}</td>
+                    <td class="text-center missing-qty">{{ s.missing }}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    {% else %}
+    <section class="admin-card">
+        <p class="no-data text-center">Няма поръчки с липсваща наличност в момента.</p>
+    </section>
+    {% endfor %}
+
+</main>
+</body>
+</html>

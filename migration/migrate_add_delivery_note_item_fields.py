@@ -4,7 +4,7 @@ thickness/brand parameter fields to DeliveryNoteItem, so a delivery note
 line can record a batch's actual parameters instead of only its catalog
 name/quantity/price.
 
-    python migrate_add_delivery_note_item_fields.py
+    python -m migration.migrate_add_delivery_note_item_fields
 
 Safe to run more than once.
 """

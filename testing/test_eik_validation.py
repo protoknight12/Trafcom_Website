@@ -2,7 +2,7 @@
 when provided, and is optional otherwise (Client/Deliverer/Supplier all
 route through this one helper).
 
-    python test_eik_validation.py
+    python -m testing.test_eik_validation
 """
 from app import _validate_eik
 

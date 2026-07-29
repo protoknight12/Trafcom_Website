@@ -9,7 +9,7 @@ script can drive cleanly.
 
 Run with:
     pip install pytest flask-wtf
-    pytest test_security_fixes.py -v
+    pytest testing/test_security_fixes.py -v
 
 Uses a throwaway file-based SQLite DB (not the real Postgres DATABASE_URL)
 so tests run in isolation and never touch a real database.

@@ -7,7 +7,7 @@ than once (IF NOT EXISTS). A brand-new database doesn't need this - db.create_al
 already creates the current schema directly. Run this once with your normal project
 environment active:
 
-    python migrate_add_service_card_fields.py
+    python -m migration.migrate_add_service_card_fields
 """
 from sqlalchemy import text
 

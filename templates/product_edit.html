@@ -77,11 +77,13 @@
                     {% endif %}
                 </div>
                 <select id="detail_id" name="detail_id">
+                    <optgroup label="Детайли">
                     {% for detail in all_details %}
                     <option value="{{ detail.id }}">{{ detail.name }} ({{ detail.material.display_name }}, {{ "%.2f"|format(detail.calculated_price) }} €)</option>
                     {% else %}
                     <option disabled>Няма налични детайли - добавете такива в Админ Панела</option>
                     {% endfor %}
+                    </optgroup>
                 </select>
             </div>
             <div class="form-group">

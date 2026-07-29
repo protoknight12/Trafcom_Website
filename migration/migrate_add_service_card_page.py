@@ -7,7 +7,7 @@ before this migration. Safe to run more than once (IF NOT EXISTS). A brand-new
 database doesn't need this - db.create_all() already creates the current schema
 directly. Run this once with your normal project environment active:
 
-    python migrate_add_service_card_page.py
+    python -m migration.migrate_add_service_card_page
 """
 from sqlalchemy import text
 

@@ -5,7 +5,7 @@ and web designers specifically must not be able to touch pricing fields via
 admin_product_update() (they share that endpoint with admins - see the
 current_user.is_admin branch inside it).
 
-    python test_web_designer_role.py
+    python -m testing.test_web_designer_role
 """
 from app import User
 
