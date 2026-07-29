@@ -78,16 +78,92 @@ set up the database).
 
 ## Project structure
 
-```
-app.py               — models, DXF geometry/pricing logic, and all routes (single file)
-wsgi.py               — production entrypoint (gunicorn/waitress)
-templates/            — Jinja2 templates, one per page/route
-static/js/             — dxf_viewer.js (canvas rendering), inline_edit.js (content editing)
-migration/             — one-off migration/backfill/seed scripts (see below)
-testing/               — test scripts (see below)
-uploads/                — private scratch folder for in-flight DXF uploads
-static/uploads/products/ — persistent, web-accessible product images
-```
+<details>
+<summary>Click to expand</summary>
+
+- [`app.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/app.py) — models, DXF geometry/pricing logic, and all routes (single file)
+- [`wsgi.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/wsgi.py) — production entrypoint (gunicorn/waitress)
+- [`requirements.txt`](https://github.com/protoknight12/Trafcom_Website/blob/main/requirements.txt)
+- [`.env.example`](https://github.com/protoknight12/Trafcom_Website/blob/main/.env.example)
+<details>
+<summary><a href="https://github.com/protoknight12/Trafcom_Website/tree/main/templates"><code>templates/</code></a> — Jinja2 templates, one per page/route</summary>
+
+  - [`about.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/about.html)
+  - [`admin.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin.html)
+  - [`admin_clients.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_clients.html)
+  - [`admin_delivery_notes.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_delivery_notes.html)
+  - [`admin_details.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_details.html)
+  - [`admin_materials.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_materials.html)
+  - [`admin_missing_stock.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_missing_stock.html)
+  - [`admin_products.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_products.html)
+  - [`admin_users.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_users.html)
+  - [`certificate.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/certificate.html)
+  - [`contact.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/contact.html)
+  - [`content_editor.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/content_editor.html)
+  - [`dashboard.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/dashboard.html)
+  - [`edit_window.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/edit_window.html)
+  - [`generator.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/generator.html)
+  - [`index.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/index.html)
+  - [`label.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/label.html)
+  - [`login.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/login.html)
+  - [`machines.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/machines.html)
+  - [`my_orders.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/my_orders.html)
+  - [`offer.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/offer.html)
+  - [`order_create.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/order_create.html)
+  - [`product_edit.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/product_edit.html)
+  - [`production_report.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/production_report.html)
+  - [`protocol.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/protocol.html)
+  - [`register.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/register.html)
+  - [`services.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/services.html)
+  - [`upload.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/upload.html)
+  <details>
+  <summary><a href="https://github.com/protoknight12/Trafcom_Website/tree/main/templates/partials"><code>partials/</code></a> — shared chrome (navbar, footer, CSRF field, editable-text blocks)</summary>
+
+    - [`navbar.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/partials/navbar.html)
+    - [`footer.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/partials/footer.html)
+    - [`editable.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/partials/editable.html)
+    - [`csrf_field.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/partials/csrf_field.html)
+    - [`material_options.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/partials/material_options.html)
+  </details>
+</details>
+<details>
+<summary><a href="https://github.com/protoknight12/Trafcom_Website/tree/main/static"><code>static/</code></a> — CSS, client-side JS, images, and web-accessible uploads</summary>
+
+  - [`js/dxf_viewer.js`](https://github.com/protoknight12/Trafcom_Website/blob/main/static/js/dxf_viewer.js) — canvas rendering of DXF geometry
+  - [`js/inline_edit.js`](https://github.com/protoknight12/Trafcom_Website/blob/main/static/js/inline_edit.js) — front-end for inline content editing
+  - [`css/style.css`](https://github.com/protoknight12/Trafcom_Website/blob/main/static/css/style.css)
+  - [`img/`](https://github.com/protoknight12/Trafcom_Website/tree/main/static/img)
+  - `uploads/products/` — persistent, web-accessible product images
+</details>
+<details>
+<summary><a href="https://github.com/protoknight12/Trafcom_Website/tree/main/migration"><code>migration/</code></a> — one-off migration/backfill/seed scripts (see below)</summary>
+
+  - [`change_admin_password.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/migration/change_admin_password.py)
+  - [`backfill_erp_numbers.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/migration/backfill_erp_numbers.py)
+  - [`backfill_service_machine_cards.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/migration/backfill_service_machine_cards.py)
+  - [`seed_real_machines.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/migration/seed_real_machines.py)
+  - [`seed_test_data.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/migration/seed_test_data.py)
+  - ...plus the `migrate_add_*.py` / `migrate_erp_number_unique_int.py` schema-change scripts — [browse the full folder](https://github.com/protoknight12/Trafcom_Website/tree/main/migration)
+</details>
+<details>
+<summary><a href="https://github.com/protoknight12/Trafcom_Website/tree/main/testing"><code>testing/</code></a> — test scripts (see below)</summary>
+
+  - [`test_label_barcode.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_label_barcode.py)
+  - [`test_sheet_dimensions.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_sheet_dimensions.py)
+  - [`test_rate_limiting.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_rate_limiting.py)
+  - [`test_delivery_note_stock.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_delivery_note_stock.py)
+  - [`test_delivery_note_matching.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_delivery_note_matching.py)
+  - [`test_web_designer_role.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_web_designer_role.py)
+  - [`test_eik_validation.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_eik_validation.py)
+  - [`test_service_sections_grouping.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_service_sections_grouping.py)
+  - [`test_material_option_format.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_material_option_format.py)
+  - [`test_security_fixes.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_security_fixes.py)
+  - [`test_quick_create_material.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_quick_create_material.py)
+  - [`test_quick_create_product_components.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_quick_create_product_components.py)
+</details>
+- `uploads/` — private scratch folder for in-flight DXF uploads (not on GitHub — gitignored)
+
+</details>
 
 ## Schema changes
 
