@@ -266,9 +266,17 @@
                     {% include 'partials/material_options.html' %}
                 </select>
             </div>
-            <div class="form-group" style="margin-bottom: 20px;">
+            <div class="form-group" style="margin-bottom: 15px;">
                 <label for="qd_file">DXF файл</label>
                 <input type="file" id="qd_file" name="file" accept=".dxf" required style="color: #fff;">
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qd_erp_number">ERP № (незадължително - оставете празно за автоматично генериране)</label>
+                <input type="number" id="qd_erp_number" name="erp_number" placeholder="автоматично">
+            </div>
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label for="qd_code_number">КД № (за етикет, незадължително)</label>
+                <input type="text" id="qd_code_number" name="code_number">
             </div>
             <button type="submit" class="btn-submit" style="width: 100%;">Добави детайл</button>
             <div id="qd_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>

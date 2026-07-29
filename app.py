@@ -1190,9 +1190,29 @@ def inject_current_year():
     return {'current_year': datetime.now().year}
 
 
+def format_material_option(material):
+    """
+    Standardized display text for every material <select> in the app:
+    "Name (Brand, Width mm, Length mm, Thickness mm)" - any of brand/
+    width/length/thickness that's blank/None is simply omitted (not shown
+    as an empty slot), and the parenthesized part disappears entirely if
+    nothing is set.
+    """
+    parts = []
+    if material.brand:
+        parts.append(material.brand)
+    for dim in (material.sheet_width_mm, material.sheet_length_mm, material.thickness_mm):
+        if dim is not None:
+            parts.append(f"{dim:g}mm")
+    if not parts:
+        return material.display_name
+    return f"{material.display_name} ({', '.join(parts)})"
+
+
 app.jinja_env.globals['get_text'] = get_text
 app.jinja_env.globals['material_type_label'] = lambda key: MATERIAL_TYPE_LABELS.get(key, key)
 app.jinja_env.globals['MATERIAL_TYPE_LABELS'] = MATERIAL_TYPE_LABELS
+app.jinja_env.globals['format_material_option'] = format_material_option
 
 
 @app.route('/robots.txt')
@@ -1765,7 +1785,8 @@ def _bump_stock(target, quantity):
 DELIVERY_NOTE_TARGET_MODELS = {'material': MaterialPrice, 'detail': Detail, 'product': Product}
 
 
-def _find_or_create_delivery_target(item_type, name, brand, width, height, thickness, unit_price, material_key):
+def _find_or_create_delivery_target(item_type, name, brand, width, height, thickness, unit_price, material_key,
+                                     cost_per_m2=None, cost_per_meter_cut=None, cost_per_pierce=None):
     """
     Resolves one delivery-note line to a catalog row: reuses an existing
     Material/Detail/Product only if every descriptive field matches exactly,
@@ -1780,6 +1801,13 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
     (no DXF was uploaded), but not the material it's cut from.
     Product carries no dimension/brand/price columns of its own, so a
     brand-new Product only matches/dedupes on name.
+
+    A *new* material must come with real cost_per_m2/cost_per_meter_cut/
+    cost_per_pierce (mirrors admin_add_material's required fields) - without
+    them we'd otherwise silently create a zero-priced row that produces
+    €0.00 CNC prices everywhere it's later picked. Returns None (skip the
+    line) rather than defaulting to 0.0. Matching an *existing* material is
+    unaffected - those keep whatever pricing they already have.
     """
     name = (name or '').strip()
     brand = (brand or '').strip() or None
@@ -1791,9 +1819,11 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
         ).first()
         if existing:
             return existing
+        if cost_per_m2 is None or cost_per_meter_cut is None or cost_per_pierce is None:
+            return None
         new_row = MaterialPrice(
-            key='pending', display_name=name, cost_per_m2=0.0, cost_per_meter_cut=0.0,
-            cost_per_pierce=0.0, sheet_width_mm=width, sheet_length_mm=height,
+            key='pending', display_name=name, cost_per_m2=cost_per_m2, cost_per_meter_cut=cost_per_meter_cut,
+            cost_per_pierce=cost_per_pierce, sheet_width_mm=width, sheet_length_mm=height,
             thickness_mm=thickness, brand=brand, type='sheets', erp_number=_next_erp_number(),
         )
         db.session.add(new_row)
@@ -1810,9 +1840,11 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
         ).first()
         if existing:
             return existing
+        if unit_price is None:
+            return None
         new_row = Detail(
             name=name, material_key=material_key, width=width or 0.0, height=height or 0.0,
-            total_length=0.0, pierce_count=0, calculated_price=unit_price or 0.0,
+            total_length=0.0, pierce_count=0, calculated_price=unit_price,
             erp_number=_next_erp_number(),
         )
         db.session.add(new_row)
@@ -1960,9 +1992,13 @@ def create_delivery_note():
         thickness = _optional_float('thickness')
         brand = (row.get('brand') or '').strip() or None
         material_key = (row.get('material_key') or '').strip() or None
+        cost_per_m2 = _optional_float('cost_per_m2')
+        cost_per_meter_cut = _optional_float('cost_per_meter_cut')
+        cost_per_pierce = _optional_float('cost_per_pierce')
 
         target = _find_or_create_delivery_target(
-            item_type, name, brand, width, height, thickness, unit_price, material_key
+            item_type, name, brand, width, height, thickness, unit_price, material_key,
+            cost_per_m2=cost_per_m2, cost_per_meter_cut=cost_per_meter_cut, cost_per_pierce=cost_per_pierce
         )
         if not target:
             continue
@@ -3492,6 +3528,16 @@ def api_quick_create_detail():
     if not name:
         return jsonify({'status': 'error', 'message': 'Моля въведете име на детайла.'}), 400
 
+    try:
+        erp_number = _parse_erp_number(request.form)
+    except ValueError:
+        return jsonify({'status': 'error', 'message': 'ERP № трябва да бъде цяло число.'}), 400
+    code_number = request.form.get('code_number', '').strip() or None
+
+    conflict = _erp_number_conflict(erp_number)
+    if conflict:
+        return jsonify({'status': 'error', 'message': f'ERP № {erp_number} вече се използва от {conflict}.'}), 400
+
     if not MaterialPrice.query.filter_by(key=material_key).first():
         return jsonify({'status': 'error', 'message': 'Невалиден избор на материал.'}), 400
 
@@ -3518,7 +3564,8 @@ def api_quick_create_detail():
         new_detail = Detail(
             name=name, material_key=material_key, width=width, height=height,
             total_length=total_length, pierce_count=pierce_count,
-            calculated_price=price, geometry_json=json.dumps(shapes)
+            calculated_price=price, geometry_json=json.dumps(shapes),
+            erp_number=erp_number, code_number=code_number
         )
         db.session.add(new_detail)
         db.session.commit()
@@ -3587,10 +3634,19 @@ def api_quick_create_client():
     if not name:
         return jsonify({'status': 'error', 'message': 'Моля въведете име на клиента.'}), 400
 
+    eik, eik_error = _validate_eik(request.form.get('eik'))
+    if eik_error:
+        return jsonify({'status': 'error', 'message': eik_error}), 400
+
     client = Client(
         name=name,
         email=request.form.get('email', '').strip() or None,
         phone=request.form.get('phone', '').strip() or None,
+        client_type='company' if request.form.get('client_type') == 'company' else 'individual',
+        eik=eik,
+        vat_number=request.form.get('vat_number', '').strip() or None,
+        address=request.form.get('address', '').strip() or None,
+        mol=request.form.get('mol', '').strip() or None,
     )
     db.session.add(client)
     db.session.commit()
@@ -3606,10 +3662,18 @@ def api_quick_create_deliverer():
     if not name:
         return jsonify({'status': 'error', 'message': 'Моля въведете име на куриера.'}), 400
 
+    eik, eik_error = _validate_eik(request.form.get('eik'))
+    if eik_error:
+        return jsonify({'status': 'error', 'message': eik_error}), 400
+
     deliverer = Deliverer(
         name=name,
         email=request.form.get('email', '').strip() or None,
         phone=request.form.get('phone', '').strip() or None,
+        eik=eik,
+        vat_number=request.form.get('vat_number', '').strip() or None,
+        address=request.form.get('address', '').strip() or None,
+        mol=request.form.get('mol', '').strip() or None,
     )
     db.session.add(deliverer)
     db.session.commit()

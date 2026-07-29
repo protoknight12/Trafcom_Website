@@ -173,9 +173,17 @@
                     {% include 'partials/material_options.html' %}
                 </select>
             </div>
-            <div class="form-group" style="margin-bottom: 20px;">
+            <div class="form-group" style="margin-bottom: 15px;">
                 <label for="qd_file">DXF файл</label>
                 <input type="file" id="qd_file" name="file" accept=".dxf" required style="color: #fff;">
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qd_erp_number">ERP № (незадължително - оставете празно за автоматично генериране)</label>
+                <input type="number" id="qd_erp_number" name="erp_number" placeholder="автоматично">
+            </div>
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label for="qd_code_number">КД № (за етикет, незадължително)</label>
+                <input type="text" id="qd_code_number" name="code_number">
             </div>
             <button type="submit" class="btn-submit" style="width: 100%;">Добави детайл</button>
             <div id="qd_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
@@ -215,6 +223,17 @@
         <form id="quickClientForm">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group" style="margin-bottom: 15px;">
+                <label>Тип клиент</label>
+                <div class="item-type-toggle" style="display: flex; flex-wrap: wrap; gap: 20px; margin: 8px 0 4px;">
+                    <label style="font-weight: normal; text-transform: none; letter-spacing: normal; display: flex; align-items: center; gap: 6px; white-space: nowrap;">
+                        <input type="radio" name="client_type" value="individual" checked onchange="toggleQcCompanyFields()"> Физическо лице
+                    </label>
+                    <label style="font-weight: normal; text-transform: none; letter-spacing: normal; display: flex; align-items: center; gap: 6px; white-space: nowrap;">
+                        <input type="radio" name="client_type" value="company" onchange="toggleQcCompanyFields()"> Юридическо лице
+                    </label>
+                </div>
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
                 <label for="qc_name">Име *</label>
                 <input type="text" id="qc_name" name="name" required placeholder="напр. Иван Иванов / Фирма ЕООД">
             </div>
@@ -222,9 +241,28 @@
                 <label for="qc_email">Имейл</label>
                 <input type="email" id="qc_email" name="email" placeholder="example@mail.com">
             </div>
-            <div class="form-group" style="margin-bottom: 20px;">
+            <div class="form-group" style="margin-bottom: 15px;">
                 <label for="qc_phone">Телефон</label>
                 <input type="text" id="qc_phone" name="phone" placeholder="напр. 0888 123 456">
+            </div>
+            <div id="qcCompanyFields" style="display: none;">
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label for="qc_eik">ЕИК / Булстат</label>
+                    <input type="text" id="qc_eik" name="eik" placeholder="напр. 203040557"
+                           pattern="\d{9}" maxlength="9" inputmode="numeric" title="Точно 9 цифри">
+                </div>
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label for="qc_vat">ИН по ДДС</label>
+                    <input type="text" id="qc_vat" name="vat_number" placeholder="напр. BG203040557">
+                </div>
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label for="qc_address">Адрес на управление</label>
+                    <input type="text" id="qc_address" name="address" placeholder="напр. София, бул. ...">
+                </div>
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label for="qc_mol">МОЛ</label>
+                    <input type="text" id="qc_mol" name="mol" placeholder="напр. Иван Иванов">
+                </div>
             </div>
             <button type="submit" class="btn-submit" style="width: 100%;">Добави клиент</button>
             <div id="qc_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
@@ -246,9 +284,26 @@
                 <label for="qdv_email">Имейл</label>
                 <input type="email" id="qdv_email" name="email" placeholder="example@mail.com">
             </div>
-            <div class="form-group" style="margin-bottom: 20px;">
+            <div class="form-group" style="margin-bottom: 15px;">
                 <label for="qdv_phone">Телефон</label>
                 <input type="text" id="qdv_phone" name="phone" placeholder="напр. 0888 123 456">
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qdv_eik">ЕИК / Булстат</label>
+                <input type="text" id="qdv_eik" name="eik" placeholder="напр. 203040557"
+                       pattern="\d{9}" maxlength="9" inputmode="numeric" title="Точно 9 цифри">
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qdv_vat">ИН по ДДС</label>
+                <input type="text" id="qdv_vat" name="vat_number" placeholder="напр. BG203040557">
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qdv_address">Адрес на управление</label>
+                <input type="text" id="qdv_address" name="address" placeholder="напр. София, бул. ...">
+            </div>
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label for="qdv_mol">МОЛ</label>
+                <input type="text" id="qdv_mol" name="mol" placeholder="напр. Иван Иванов">
             </div>
             <button type="submit" class="btn-submit" style="width: 100%;">Добави куриер</button>
             <div id="qdv_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
@@ -372,6 +427,11 @@
         );
     });
 
+    function toggleQcCompanyFields() {
+        var isCompany = document.querySelector('input[name="client_type"]:checked').value === 'company';
+        document.getElementById('qcCompanyFields').style.display = isCompany ? 'block' : 'none';
+    }
+
     // Modal Control Functions
     function openQuickClientModal() {
         document.getElementById('quickClientModal').style.display = 'flex';
@@ -380,6 +440,7 @@
     function closeQuickClientModal() {
         document.getElementById('quickClientModal').style.display = 'none';
         document.getElementById('quickClientForm').reset();
+        toggleQcCompanyFields();
     }
     function openQuickDelivererModal() {
         document.getElementById('quickDelivererModal').style.display = 'flex';

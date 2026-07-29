@@ -4,7 +4,7 @@
 {% for type_key, group in materials|groupby('type') %}
 <optgroup label="{{ material_type_label(type_key) }}">
     {% for material in group %}
-    <option value="{{ material.key }}">{{ material.display_name }}{% if material.brand %} ({{ material.brand }}){% endif %}</option>
+    <option value="{{ material.key }}">{{ format_material_option(material) }}</option>
     {% endfor %}
 </optgroup>
 {% endfor %}

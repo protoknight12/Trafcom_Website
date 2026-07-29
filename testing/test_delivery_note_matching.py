@@ -38,15 +38,29 @@ with app.app_context():
 
     # -- Material: identical params reuse the same row, any one differing
     #    field creates a new one -------------------------------------------
-    m1 = _find_or_create_delivery_target('material', 'Ламарина DC01', 'Alcoa', 1000.0, 2000.0, 2.0, None, None)
+    m1 = _find_or_create_delivery_target('material', 'Ламарина DC01', 'Alcoa', 1000.0, 2000.0, 2.0, None, None,
+                                          cost_per_m2=40.0, cost_per_meter_cut=2.0, cost_per_pierce=0.2)
     db.session.commit()
-    m2 = _find_or_create_delivery_target('material', 'Ламарина DC01', 'Alcoa', 1000.0, 2000.0, 2.0, None, None)
+    m2 = _find_or_create_delivery_target('material', 'Ламарина DC01', 'Alcoa', 1000.0, 2000.0, 2.0, None, None,
+                                          cost_per_m2=40.0, cost_per_meter_cut=2.0, cost_per_pierce=0.2)
     assert m1.id == m2.id, "identical material params must reuse the same catalog row"
 
-    m3 = _find_or_create_delivery_target('material', 'Ламарина DC01', 'Alcoa', 1000.0, 2000.0, 3.0, None, None)  # different thickness
+    m3 = _find_or_create_delivery_target('material', 'Ламарина DC01', 'Alcoa', 1000.0, 2000.0, 3.0, None, None,  # different thickness
+                                          cost_per_m2=40.0, cost_per_meter_cut=2.0, cost_per_pierce=0.2)
     db.session.commit()
     assert m3.id != m1.id, "a differing thickness must create a separate material row"
     assert MaterialPrice.query.count() == 2
+
+    # -- Material: a brand-new material without full pricing must be refused
+    #    rather than silently created with cost_per_m2=0.0 etc. (would
+    #    silently produce €0.00 CNC prices everywhere it's later picked) ----
+    no_price = _find_or_create_delivery_target('material', 'Титан Grade 5', None, None, None, None, None, None)
+    assert no_price is None, "a new material with no pricing must be refused, not created zero-priced"
+    assert MaterialPrice.query.filter_by(display_name='Титан Grade 5').first() is None
+    partial_price = _find_or_create_delivery_target(
+        'material', 'Титан Grade 5', None, None, None, None, None, None, cost_per_m2=100.0
+    )
+    assert partial_price is None, "all three of cost_per_m2/cost_per_meter_cut/cost_per_pierce are required, not just one"
 
     # -- Detail: needs a material_key; price is part of the match, so a
     #    different unit_price must NOT bump the old row's stock -----------
@@ -63,6 +77,9 @@ with app.app_context():
 
     no_material = _find_or_create_delivery_target('detail', 'Планка Б', None, 10.0, 10.0, None, 1.0, 'not-a-real-key')
     assert no_material is None, "an unknown material_key must refuse to create a detail (hard FK)"
+
+    no_detail_price = _find_or_create_delivery_target('detail', 'Планка В', None, 10.0, 10.0, None, None, mat.key)
+    assert no_detail_price is None, "a new detail with no unit_price must be refused, not created at price 0.00"
 
     # -- Product: bare-bones, matches on name only -------------------------
     p1 = _find_or_create_delivery_target('product', 'Готова кутия', None, None, None, None, 20.0, None)

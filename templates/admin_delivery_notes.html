@@ -99,13 +99,18 @@
                         {% for type_key, group in materials|groupby('type') %}
                         <optgroup label="{{ material_type_label(type_key) }}">
                             {% for m in group %}
-                            <option value="{{ m.display_name }}">{{ m.display_name }}{% if m.brand %} ({{ m.brand }}){% endif %}</option>
+                            <option value="{{ m.display_name }}">{{ format_material_option(m) }}</option>
                             {% endfor %}
                         </optgroup>
                         {% endfor %}
                         <option value="__new__">+ Нов материал...</option>
                     </select>
                     <input type="text" id="dn_material_name_new" placeholder="Име на новия материал" autocomplete="off" style="display: none; margin-top: 8px;">
+                    <div id="dn_material_new_pricing" style="display: none; margin-top: 8px; gap: 8px; flex-wrap: wrap;">
+                        <input type="number" id="dn_material_cost_per_m2" step="0.01" min="0" placeholder="Цена/м² (€) *" style="flex: 1; min-width: 120px;">
+                        <input type="number" id="dn_material_cost_per_meter_cut" step="0.01" min="0" placeholder="Цена/м рязане (€) *" style="flex: 1; min-width: 120px;">
+                        <input type="number" id="dn_material_cost_per_pierce" step="0.01" min="0" placeholder="Цена/пробиване (€) *" style="flex: 1; min-width: 120px;">
+                    </div>
                 </div>
                 <div class="form-group" id="detail_selector" style="display: none;">
                     <label for="dn_detail_select">Детайл *</label>
@@ -291,6 +296,15 @@
         newNameInput.style.display = isNew ? 'block' : 'none';
         if (!isNew) newNameInput.value = '';
 
+        const materialPricing = document.getElementById('dn_material_new_pricing');
+        const showMaterialPricing = type === 'material' && isNew;
+        materialPricing.style.display = showMaterialPricing ? 'flex' : 'none';
+        if (!showMaterialPricing) {
+            ['dn_material_cost_per_m2', 'dn_material_cost_per_meter_cut', 'dn_material_cost_per_pierce'].forEach(function (id) {
+                document.getElementById(id).value = '';
+            });
+        }
+
         const item = !isNew ? list.find(function (x) { return x.name === sel.value; }) : null;
         document.getElementById('dn_width').value = item && item.width != null ? item.width : '';
         document.getElementById('dn_height').value = item && item.height != null ? item.height : '';
@@ -330,10 +344,16 @@
         const name = effectiveName(type);
         if (!name) { alert('Моля изберете или въведете име на артикула.'); return; }
 
+        const isNewItem = document.getElementById(currentSelectField(type)).value === '__new__';
+
         let materialKey = null;
         if (type === 'detail') {
             materialKey = document.getElementById('dn_detail_material_id').value;
             if (!materialKey) { alert('Моля изберете материал за детайла.'); return; }
+            if (isNewItem && unitPrice === null) {
+                alert('Моля въведете ед. цена за новия детайл - иначе ще влезе в каталога с цена 0.00 €.');
+                return;
+            }
         }
 
         function numOrNull(elId) {
@@ -341,11 +361,23 @@
             return raw === '' ? null : parseFloat(raw);
         }
 
+        let costPerM2 = null, costPerMeterCut = null, costPerPierce = null;
+        if (type === 'material' && isNewItem) {
+            costPerM2 = numOrNull('dn_material_cost_per_m2');
+            costPerMeterCut = numOrNull('dn_material_cost_per_meter_cut');
+            costPerPierce = numOrNull('dn_material_cost_per_pierce');
+            if (costPerM2 === null || costPerMeterCut === null || costPerPierce === null) {
+                alert('Моля въведете цена/м², цена/м рязане и цена/пробиване за новия материал.');
+                return;
+            }
+        }
+
         dnItems.push({
             type: type, name: name, material_key: materialKey, qty: qty, unit_price: unitPrice,
             width: numOrNull('dn_width'), height: numOrNull('dn_height'), thickness: numOrNull('dn_thickness'),
             brand: document.getElementById('dn_brand').value.trim() || null,
             notes: document.getElementById('dn_notes').value.trim() || null,
+            cost_per_m2: costPerM2, cost_per_meter_cut: costPerMeterCut, cost_per_pierce: costPerPierce,
         });
         document.getElementById('dn_notes').value = '';
         renderDnTable();
@@ -409,6 +441,7 @@
                 return {
                     type: c.type, name: c.name, material_key: c.material_key, qty: c.qty, unit_price: c.unit_price,
                     width: c.width, height: c.height, thickness: c.thickness, brand: c.brand, notes: c.notes,
+                    cost_per_m2: c.cost_per_m2, cost_per_meter_cut: c.cost_per_meter_cut, cost_per_pierce: c.cost_per_pierce,
                 };
             })
         );
