@@ -1193,19 +1193,14 @@ def inject_current_year():
 def format_material_option(material):
     """
     Standardized display text for every material <select> in the app:
-    "Name (Brand, Width mm, Length mm, Thickness mm)" - any of brand/
-    width/length/thickness that's blank/None is simply omitted (not shown
-    as an empty slot), and the parenthesized part disappears entirely if
-    nothing is set.
+    "Name (Brand, Width mm, Length mm, Thickness mm)" - always all four
+    slots, with a "-" placeholder for whichever of brand/width/length/
+    thickness is blank/None, so every option in a dropdown lines up in the
+    same shape regardless of how much data that particular row has.
     """
-    parts = []
-    if material.brand:
-        parts.append(material.brand)
+    parts = [material.brand or '-']
     for dim in (material.sheet_width_mm, material.sheet_length_mm, material.thickness_mm):
-        if dim is not None:
-            parts.append(f"{dim:g}mm")
-    if not parts:
-        return material.display_name
+        parts.append(f"{dim:g}mm" if dim is not None else '-')
     return f"{material.display_name} ({', '.join(parts)})"
 
 
