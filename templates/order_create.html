@@ -168,7 +168,10 @@
                 <input type="text" id="qd_name" name="name" required placeholder="напр. Странична стена">
             </div>
             <div class="form-group" style="margin-bottom: 15px;">
-                <label for="qd_material">Материал</label>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <label for="qd_material" style="margin-bottom: 0;">Материал</label>
+                    <button type="button" onclick="openQuickMaterialModal('qd_material')" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
+                </div>
                 <select id="qd_material" name="material">
                     {% include 'partials/material_options.html' %}
                 </select>
@@ -191,6 +194,66 @@
     </div>
 </div>
 
+<div id="quickMaterialModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1100; align-items: center; justify-content: center;">
+    <div class="admin-card" style="width: 100%; max-width: 500px; margin: 20px; background-color: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 28px; box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15); position: relative; max-height: 90vh; overflow-y: auto;">
+        <span onclick="closeQuickMaterialModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
+        <h3 style="margin-top: 0; margin-bottom: 16px;">Бързо създаване на материал</h3>
+        <form id="quickMaterialForm">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qm_display_name">Име на материала</label>
+                <input type="text" id="qm_display_name" name="display_name" required placeholder="напр. Алуминий 2мм">
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qm_type">Тип (форма на суровината)</label>
+                <select id="qm_type" name="type">
+                    {% for type_key, type_label in MATERIAL_TYPE_LABELS.items() %}
+                    <option value="{{ type_key }}" {% if type_key == 'sheets' %}selected{% endif %}>{{ type_label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qm_brand">Марка (незадължително)</label>
+                <input type="text" id="qm_brand" name="brand" placeholder="напр. Alcoa">
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qm_cost_per_m2">Цена на м² плоча (€)</label>
+                <input type="number" id="qm_cost_per_m2" step="0.01" min="0" name="cost_per_m2" required>
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qm_cost_per_meter_cut">Цена на метър рязане (€)</label>
+                <input type="number" id="qm_cost_per_meter_cut" step="0.01" min="0" name="cost_per_meter_cut" required>
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qm_cost_per_pierce">Цена на пробиване (€)</label>
+                <input type="number" id="qm_cost_per_pierce" step="0.01" min="0" name="cost_per_pierce" required>
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qm_sheet_length_mm">Дължина на плочата (мм)</label>
+                <input type="number" id="qm_sheet_length_mm" step="1" min="0" name="sheet_length_mm">
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qm_sheet_width_mm">Ширина на плочата (мм)</label>
+                <input type="number" id="qm_sheet_width_mm" step="1" min="0" name="sheet_width_mm">
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qm_thickness_mm">Дебелина (мм)</label>
+                <input type="number" id="qm_thickness_mm" step="0.1" min="0" name="thickness_mm">
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qm_erp_number">ERP № (незадължително - оставете празно за автоматично генериране)</label>
+                <input type="number" id="qm_erp_number" name="erp_number" placeholder="автоматично">
+            </div>
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label for="qm_code_number">КД № (за етикет, незадължително)</label>
+                <input type="text" id="qm_code_number" name="code_number">
+            </div>
+            <button type="submit" class="btn-submit" style="width: 100%;">Добави материал</button>
+            <div id="qm_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
+        </form>
+    </div>
+</div>
+
 <div id="quickProductModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
     <div class="admin-card" style="width: 100%; max-width: 500px; margin: 20px; background-color: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 28px; box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15); position: relative;">
         <span onclick="closeQuickProductModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
@@ -208,6 +271,27 @@
             <div class="form-group" style="margin-bottom: 20px;">
                 <label for="qp_markup">Надценка (%)</label>
                 <input type="number" id="qp_markup" name="markup_percent" step="0.1" min="0" value="0">
+            </div>
+            <div class="form-group" style="margin-bottom: 10px;">
+                <label for="qp_detail_id">Компоненти (детайли)</label>
+                <div style="display: flex; gap: 8px;">
+                    <select id="qp_detail_id" style="flex: 1;">
+                        <optgroup label="Детайли">
+                        {% for d in details %}
+                        <option value="{{ d.id }}">{{ d.name }}</option>
+                        {% else %}
+                        <option disabled>Няма налични детайли</option>
+                        {% endfor %}
+                        </optgroup>
+                    </select>
+                    <input type="number" id="qp_detail_qty" value="1" min="1" style="width: 70px;">
+                    <button type="button" class="btn-secondary" onclick="addQpComponent()" style="padding: 0 14px;">+</button>
+                </div>
+                <table class="data-table" id="qpComponentsTable" style="margin-top: 10px;">
+                    <tbody id="qpComponentsBody">
+                        <tr id="qpComponentsEmptyRow"><td class="text-center no-data">Няма добавени компоненти.</td></tr>
+                    </tbody>
+                </table>
             </div>
             <button type="submit" class="btn-submit" style="width: 100%;">Създай продукт</button>
             <div id="qp_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
@@ -531,6 +615,17 @@
         document.getElementById('quickDetailModal').style.display = 'none';
         document.getElementById('quickDetailForm').reset();
     }
+
+    let qmTargetSelectId = null;
+    function openQuickMaterialModal(targetSelectId) {
+        qmTargetSelectId = targetSelectId;
+        document.getElementById('quickMaterialModal').style.display = 'flex';
+        document.getElementById('qm_error').style.display = 'none';
+    }
+    function closeQuickMaterialModal() {
+        document.getElementById('quickMaterialModal').style.display = 'none';
+        document.getElementById('quickMaterialForm').reset();
+    }
     function openQuickProductModal() {
         document.getElementById('quickProductModal').style.display = 'flex';
         document.getElementById('qp_error').style.display = 'none';
@@ -538,9 +633,95 @@
     function closeQuickProductModal() {
         document.getElementById('quickProductModal').style.display = 'none';
         document.getElementById('quickProductForm').reset();
+        qpComponents = [];
+        renderQpComponentsTable();
+    }
+
+    let qpComponents = [];
+
+    function addQpComponent() {
+        const sel = document.getElementById('qp_detail_id');
+        if (!sel.value) { alert('Няма налични детайли за добавяне.'); return; }
+        const detailId = parseInt(sel.value, 10);
+        const quantity = parseInt(document.getElementById('qp_detail_qty').value, 10);
+        if (!quantity || quantity < 1) { alert('Моля въведете валидно количество.'); return; }
+
+        const existing = qpComponents.find(function (c) { return c.detailId === detailId; });
+        if (existing) {
+            existing.quantity += quantity;
+        } else {
+            qpComponents.push({ detailId: detailId, name: sel.options[sel.selectedIndex].textContent, quantity: quantity });
+        }
+        renderQpComponentsTable();
+    }
+
+    function removeQpComponent(index) {
+        qpComponents.splice(index, 1);
+        renderQpComponentsTable();
+    }
+
+    function renderQpComponentsTable() {
+        const body = document.getElementById('qpComponentsBody');
+        body.innerHTML = '';
+        if (qpComponents.length === 0) {
+            body.innerHTML = '<tr id="qpComponentsEmptyRow"><td class="text-center no-data">Няма добавени компоненти.</td></tr>';
+            return;
+        }
+        qpComponents.forEach(function (c, idx) {
+            const tr = document.createElement('tr');
+            tr.appendChild(cell(c.name + ' × ' + c.quantity));
+            const actionTd = document.createElement('td');
+            actionTd.className = 'text-right';
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.className = 'btn-delete';
+            removeBtn.textContent = 'Премахни';
+            removeBtn.addEventListener('click', function () { removeQpComponent(idx); });
+            actionTd.appendChild(removeBtn);
+            tr.appendChild(actionTd);
+            body.appendChild(tr);
+        });
     }
 
     {% if current_user.is_admin %}
+    document.getElementById('quickMaterialForm').addEventListener('submit', function (e) {
+        e.preventDefault();
+        const submitBtn = this.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Обработване...';
+
+        const formData = new FormData(this);
+        const errDiv = document.getElementById('qm_error');
+        errDiv.style.display = 'none';
+
+        fetch('/api/quick-create-material', { method: 'POST', body: formData })
+        .then(res => res.json())
+        .then(data => {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Добави материал';
+            if (data.status === 'success') {
+                if (qmTargetSelectId) {
+                    const sel = document.getElementById(qmTargetSelectId);
+                    const opt = document.createElement('option');
+                    opt.value = data.material.key;
+                    opt.textContent = data.material.option_text;
+                    sel.appendChild(opt);
+                    sel.value = data.material.key;
+                }
+                closeQuickMaterialModal();
+            } else {
+                errDiv.textContent = data.message || 'Грешка при създаване.';
+                errDiv.style.display = 'block';
+            }
+        })
+        .catch(function () {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Добави материал';
+            errDiv.textContent = 'Връзката със сървъра беше прекъсната.';
+            errDiv.style.display = 'block';
+        });
+    });
+
     document.getElementById('quickDetailForm').addEventListener('submit', function (e) {
         e.preventDefault();
         const submitBtn = this.querySelector('button[type="submit"]');
@@ -571,6 +752,10 @@
                 opt.textContent = data.detail.name;
                 sel.appendChild(opt);
                 sel.value = data.detail.id;
+                const qpOpt = document.createElement('option');
+                qpOpt.value = data.detail.id;
+                qpOpt.textContent = data.detail.name;
+                document.getElementById('qp_detail_id').appendChild(qpOpt);
                 closeQuickDetailModal();
             } else {
                 errDiv.textContent = data.message || 'Грешка при създаване.';
@@ -592,9 +777,12 @@
         submitBtn.textContent = 'Обработване...';
         
         const formData = new FormData(this);
+        formData.append('components_json', JSON.stringify(
+            qpComponents.map(function (c) { return { detail_id: c.detailId, quantity: c.quantity }; })
+        ));
         const errDiv = document.getElementById('qp_error');
         errDiv.style.display = 'none';
-        
+
         fetch('/api/quick-create-product', {
             method: 'POST',
             body: formData

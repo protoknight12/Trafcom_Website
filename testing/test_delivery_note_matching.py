@@ -29,7 +29,7 @@ os.environ['DATABASE_URL'] = f'sqlite:///{_db_path}'
 from werkzeug.security import generate_password_hash
 
 from app import (
-    app, db, MaterialPrice, Detail, Product, Order, OrderItem, User,
+    app, db, MaterialPrice, Detail, Product, ProductDetail, Order, OrderItem, User,
     _find_or_create_delivery_target, order_missing_items,
 )
 
@@ -87,6 +87,22 @@ with app.app_context():
     p2 = _find_or_create_delivery_target('product', 'Готова кутия', None, None, None, None, 999.0, None)
     assert p1.id == p2.id, "products dedupe on name only (no dims/brand/price columns of their own)"
     assert Product.query.count() == 1
+
+    # -- Product: an optional `components` dict attaches ProductDetail rows
+    #    only when a brand-new product is created, never on a match --------
+    p3 = _find_or_create_delivery_target(
+        'product', 'Продукт с компоненти', None, None, None, None, None, None, components={d1.id: 2}
+    )
+    db.session.commit()
+    rows = ProductDetail.query.filter_by(product_id=p3.id).all()
+    assert len(rows) == 1 and rows[0].detail_id == d1.id and rows[0].quantity == 2
+
+    p4 = _find_or_create_delivery_target(
+        'product', 'Продукт с компоненти', None, None, None, None, None, None, components={d1.id: 99}
+    )
+    assert p4.id == p3.id, "identical name must still dedupe even when components are passed"
+    assert ProductDetail.query.filter_by(product_id=p3.id).count() == 1, \
+        "matching an existing product must never attach/duplicate components"
 
     # -- order_missing_items: shortfall until stock covers the order -------
     d1.stock_quantity = 2.0

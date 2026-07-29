@@ -1781,7 +1781,7 @@ DELIVERY_NOTE_TARGET_MODELS = {'material': MaterialPrice, 'detail': Detail, 'pro
 
 
 def _find_or_create_delivery_target(item_type, name, brand, width, height, thickness, unit_price, material_key,
-                                     cost_per_m2=None, cost_per_meter_cut=None, cost_per_pierce=None):
+                                     cost_per_m2=None, cost_per_meter_cut=None, cost_per_pierce=None, components=None):
     """
     Resolves one delivery-note line to a catalog row: reuses an existing
     Material/Detail/Product only if every descriptive field matches exactly,
@@ -1795,7 +1795,12 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
     docstring) - a bare-bones Detail can skip total_length/pierce_count
     (no DXF was uploaded), but not the material it's cut from.
     Product carries no dimension/brand/price columns of its own, so a
-    brand-new Product only matches/dedupes on name.
+    brand-new Product only matches/dedupes on name; `components` (an
+    optional {detail_id: quantity} dict, already validated by the caller)
+    is only applied when a brand-new Product row is created - unlike
+    material/detail it's not required, since a bare product (no BOM yet) is
+    a normal, pre-existing state here (same as api_quick_create_product with
+    no components attached).
 
     A *new* material must come with real cost_per_m2/cost_per_meter_cut/
     cost_per_pierce (mirrors admin_add_material's required fields) - without
@@ -1853,6 +1858,8 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
         new_row = Product(name=name, erp_number=_next_erp_number())
         db.session.add(new_row)
         db.session.flush()
+        for detail_id, quantity in (components or {}).items():
+            db.session.add(ProductDetail(product_id=new_row.id, detail_id=detail_id, quantity=quantity))
         return new_row
 
     return None
@@ -1928,9 +1935,12 @@ def create_delivery_note():
     line doesn't exactly match an existing one (see
     _find_or_create_delivery_target). items_json follows
     [{type, name, material_key, qty, unit_price, width, height, thickness,
-    brand, notes}] - no id, since the row to bump/create is resolved from
+    brand, notes, cost_per_m2, cost_per_meter_cut, cost_per_pierce,
+    components}] - no id, since the row to bump/create is resolved from
     the line's own fields, not a pre-picked id (that's what used to let a
-    line silently bump the wrong/dissimilar catalog row).
+    line silently bump the wrong/dissimilar catalog row). `components`
+    ([{detail_id, quantity}]) only applies to a brand-new product line -
+    see _find_or_create_delivery_target.
     """
     try:
         items = json.loads(request.form.get('items_json', ''))
@@ -1991,9 +2001,23 @@ def create_delivery_note():
         cost_per_meter_cut = _optional_float('cost_per_meter_cut')
         cost_per_pierce = _optional_float('cost_per_pierce')
 
+        components = {}  # detail_id -> quantity, merging duplicates; malformed/unknown entries are just skipped
+        for comp in (row.get('components') or []):
+            if not isinstance(comp, dict):
+                continue
+            try:
+                comp_detail_id = int(comp.get('detail_id'))
+                comp_quantity = int(comp.get('quantity'))
+            except (TypeError, ValueError):
+                continue
+            if comp_quantity < 1 or not Detail.query.get(comp_detail_id):
+                continue
+            components[comp_detail_id] = components.get(comp_detail_id, 0) + comp_quantity
+
         target = _find_or_create_delivery_target(
             item_type, name, brand, width, height, thickness, unit_price, material_key,
-            cost_per_m2=cost_per_m2, cost_per_meter_cut=cost_per_meter_cut, cost_per_pierce=cost_per_pierce
+            cost_per_m2=cost_per_m2, cost_per_meter_cut=cost_per_meter_cut, cost_per_pierce=cost_per_pierce,
+            components=components
         )
         if not target:
             continue
@@ -3585,7 +3609,16 @@ def api_quick_create_detail():
 @app.route('/api/quick-create-product', methods=['POST'])
 @login_required
 def api_quick_create_product():
-    """AJAX endpoint: create a bare Product (no details yet), returns JSON."""
+    """
+    AJAX endpoint: create a Product, optionally with its Detail components
+    (BOM) attached in the same call - unlike admin_add_product(), which
+    always creates a bare product and sends the admin on to
+    admin_product_edit() to attach details afterward, this is the one path
+    where "quick" still means picking the recipe up front. components_json
+    follows [{detail_id, quantity}], same shape admin_product_add_detail()
+    accepts one row at a time; duplicate detail_ids here are summed rather
+    than creating two ProductDetail rows for the same detail.
+    """
     if not current_user.is_admin:
         return jsonify({'status': 'error', 'message': 'Нямате достъп.'}), 403
 
@@ -3599,8 +3632,35 @@ def api_quick_create_product():
     except ValueError:
         markup_percent = 0.0
 
+    try:
+        raw_components = json.loads(request.form.get('components_json', '') or '[]')
+        if not isinstance(raw_components, list):
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify({'status': 'error', 'message': 'Невалидни компоненти.'}), 400
+
+    components = {}  # detail_id -> quantity, merging duplicates
+    for row in raw_components:
+        if not isinstance(row, dict):
+            return jsonify({'status': 'error', 'message': 'Невалидни компоненти.'}), 400
+        try:
+            detail_id = int(row.get('detail_id'))
+            quantity = int(row.get('quantity'))
+        except (TypeError, ValueError):
+            return jsonify({'status': 'error', 'message': 'Невалиден детайл или количество.'}), 400
+        if quantity < 1:
+            return jsonify({'status': 'error', 'message': 'Количеството трябва да бъде поне 1.'}), 400
+        if not Detail.query.get(detail_id):
+            return jsonify({'status': 'error', 'message': 'Невалиден избор на детайл.'}), 400
+        components[detail_id] = components.get(detail_id, 0) + quantity
+
     new_product = Product(name=name, description=description, markup_percent=round(markup_percent, 2))
     db.session.add(new_product)
+    db.session.flush()
+
+    for detail_id, quantity in components.items():
+        db.session.add(ProductDetail(product_id=new_product.id, detail_id=detail_id, quantity=quantity))
+
     db.session.commit()
 
     pricing = calculate_product_pricing(new_product)
@@ -3612,6 +3672,67 @@ def api_quick_create_product():
             'name': new_product.name,
             'price': pricing['sell_price']
         }
+    })
+
+
+@app.route('/api/quick-create-material', methods=['POST'])
+@login_required
+def api_quick_create_material():
+    """
+    AJAX endpoint: create a MaterialPrice on the fly (same required fields
+    and validation as admin_add_material()) from wherever a material
+    <select> needs one that doesn't exist yet - the quick-create-detail
+    modal and the delivery-note detail-material picker. Admin-only, same as
+    the Detail/Product quick-create endpoints (catalog-management action).
+    """
+    if not current_user.is_admin:
+        return jsonify({'status': 'error', 'message': 'Нямате достъп.'}), 403
+
+    display_name = request.form.get('display_name', '').strip()
+    if not display_name:
+        return jsonify({'status': 'error', 'message': 'Моля въведете име на материала.'}), 400
+
+    if MaterialPrice.query.filter_by(display_name=display_name).first():
+        return jsonify({'status': 'error', 'message': f'Вече съществува материал с име "{display_name}".'}), 400
+
+    try:
+        cost_per_m2 = float(request.form.get('cost_per_m2', ''))
+        cost_per_meter_cut = float(request.form.get('cost_per_meter_cut', ''))
+        cost_per_pierce = float(request.form.get('cost_per_pierce', ''))
+        sheet_length_mm, sheet_width_mm, thickness_mm = _parse_sheet_dimensions(request.form)
+        erp_number = _parse_erp_number(request.form)
+    except ValueError:
+        return jsonify({'status': 'error', 'message': 'Всички цени, размери и ERP № трябва да бъдат валидни числа.'}), 400
+
+    if cost_per_m2 < 0 or cost_per_meter_cut < 0 or cost_per_pierce < 0:
+        return jsonify({'status': 'error', 'message': 'Цените не могат да бъдат отрицателни числа.'}), 400
+
+    conflict = _erp_number_conflict(erp_number)
+    if conflict:
+        return jsonify({'status': 'error', 'message': f'ERP № {erp_number} вече се използва от {conflict}.'}), 400
+
+    new_material = MaterialPrice(
+        key='pending',
+        display_name=display_name,
+        cost_per_m2=round(cost_per_m2, 2),
+        cost_per_meter_cut=round(cost_per_meter_cut, 2),
+        cost_per_pierce=round(cost_per_pierce, 2),
+        sheet_length_mm=sheet_length_mm,
+        sheet_width_mm=sheet_width_mm,
+        thickness_mm=thickness_mm,
+        erp_number=erp_number,
+        code_number=request.form.get('code_number', '').strip() or None,
+        type=_parse_material_type(request.form),
+        brand=request.form.get('brand', '').strip() or None
+    )
+    db.session.add(new_material)
+    db.session.flush()
+    new_material.key = f'material_{new_material.id}'
+    db.session.commit()
+
+    return jsonify({
+        'status': 'success',
+        'material': {'key': new_material.key, 'option_text': format_material_option(new_material)}
     })
 
 
