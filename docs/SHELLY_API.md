@@ -376,6 +376,13 @@ zero or more — a checkbox group in the template, not a `<select>`). Strips a p
 already in the table (flash error naming the conflict), redirects back to `/admin/power` either
 way. See `ShellyDevice` under Configuration for the model this writes to.
 
+### `POST /admin/power/devices/<id>/rename`
+
+Form field: `name` (required, rejects blank/whitespace-only with a flash error, leaving the old
+name in place). Only touches the label — `host`, any `machines` links, and everything the meter
+itself reports are untouched, since `name` is purely local to this app and has no bearing on
+which physical device is being polled.
+
 ### `POST /admin/power/devices/<id>/delete`
 
 Removes the row (and, via the `shelly_device_machines` many-to-many table, any Machine links it
@@ -502,9 +509,10 @@ the real tables were left exactly as found.
 ## Extension points, roughly cheapest first
 
 1. **Relabel a device, or change which Machine(s) it's linked to.** Both are already UI
-   actions — edit isn't separately exposed for the name, but delete + re-add is one page load;
-   relinking is a checkbox group per device on `/admin/power` with its own "Запази" button
-   (tick/untick any number of machines, save replaces the full set). No code change either way.
+   actions on `/admin/power` — renaming is an inline text field + "Запази" button per device
+   row (`admin_power_rename_device()`); relinking is a checkbox group with its own "Запази"
+   button (tick/untick any number of machines, save replaces the full set). No code change
+   either way.
 2. **Add another meter — any generation.** Fill in the form on `/admin/power`; no need to know
    or declare which generation it is, `_shelly_get_status()` figures that out on first contact.
    Takes effect on the next poll, no restart. The dashboard's cross-machine total summary card

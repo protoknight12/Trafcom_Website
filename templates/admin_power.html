@@ -44,6 +44,7 @@
         .machine-checklist { max-height: 160px; overflow-y: auto; border: 1px solid #333; border-radius: 6px; padding: 8px 10px; background-color: #1a1f30; }
         .machine-checklist-item { display: block; font-size: 0.85rem; padding: 3px 0; font-weight: normal; }
         .machine-checklist-item input { margin-right: 6px; }
+        .rename-input { padding: 4px 8px; background-color: #1a1f30; color: #fff; border: 1px solid #333; border-radius: 6px; font-size: 0.85rem; }
     </style>
 </head>
 <body>
@@ -114,7 +115,15 @@
                 <tbody>
                 {% for d in devices %}
                 <tr>
-                    <td>{{ d.name }}</td>
+                    <td>
+                        <form action="{{ url_for('admin_power_rename_device', device_id=d.id) }}" method="POST"
+                              style="display:flex; gap: 6px;">
+                            {% include 'partials/csrf_field.html' %}
+                            <input type="text" name="name" value="{{ d.name }}" maxlength="100" required
+                                   class="rename-input" style="width: 140px;">
+                            <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Запази</button>
+                        </form>
+                    </td>
                     <td>{{ d.host }}</td>
                     <td>
                         <form action="{{ url_for('admin_power_set_device_machines', device_id=d.id) }}" method="POST">

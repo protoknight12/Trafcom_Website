@@ -4620,6 +4620,21 @@ def admin_power_add_device():
     return redirect(url_for('admin_power'))
 
 
+@app.route('/admin/power/devices/<int:device_id>/rename', methods=['POST'])
+@role_required('admin')
+def admin_power_rename_device(device_id):
+    """Change a device's display label - host/machines/history all stay put, only the name shown on the dashboard changes."""
+    device = ShellyDevice.query.get_or_404(device_id)
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Името не може да бъде празно.', 'danger')
+        return redirect(url_for('admin_power'))
+    device.name = name
+    db.session.commit()
+    flash(f'Машината беше преименувана на "{name}".', 'success')
+    return redirect(url_for('admin_power'))
+
+
 @app.route('/admin/power/devices/<int:device_id>/delete', methods=['POST'])
 @role_required('admin')
 def admin_power_delete_device(device_id):

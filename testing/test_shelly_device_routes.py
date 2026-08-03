@@ -122,6 +122,32 @@ def test_add_device_rejects_duplicate_host(admin_client):
         assert matches[0].name == 'First'  # the duplicate attempt didn't overwrite it
 
 
+def test_rename_device(admin_client):
+    with flask_app.app_context():
+        d = ShellyDevice(name='Old Name', host='10.0.0.17')
+        db.session.add(d)
+        db.session.commit()
+        device_id = d.id
+
+    admin_client.post(f'/admin/power/devices/{device_id}/rename', data={'name': 'New Name'})
+    with flask_app.app_context():
+        assert ShellyDevice.query.get(device_id).name == 'New Name'
+        # host and any machine links are untouched by a rename
+        assert ShellyDevice.query.get(device_id).host == '10.0.0.17'
+
+
+def test_rename_device_rejects_blank_name(admin_client):
+    with flask_app.app_context():
+        d = ShellyDevice(name='Keep This Name', host='10.0.0.18')
+        db.session.add(d)
+        db.session.commit()
+        device_id = d.id
+
+    admin_client.post(f'/admin/power/devices/{device_id}/rename', data={'name': '   '})
+    with flask_app.app_context():
+        assert ShellyDevice.query.get(device_id).name == 'Keep This Name'
+
+
 def test_add_device_with_single_machine_link(admin_client):
     with flask_app.app_context():
         laser_id = _machine_id('QA Laser')
@@ -229,3 +255,16 @@ def test_worker_forbidden(worker_client):
     assert res.status_code == 302  # role_required redirects rather than 403ing
     with flask_app.app_context():
         assert ShellyDevice.query.filter_by(host='10.0.0.15').first() is None
+
+
+def test_worker_forbidden_from_rename(worker_client):
+    with flask_app.app_context():
+        d = ShellyDevice(name='Protected Name', host='10.0.0.19')
+        db.session.add(d)
+        db.session.commit()
+        device_id = d.id
+
+    res = worker_client.post(f'/admin/power/devices/{device_id}/rename', data={'name': 'Hacked'})
+    assert res.status_code == 302
+    with flask_app.app_context():
+        assert ShellyDevice.query.get(device_id).name == 'Protected Name'
