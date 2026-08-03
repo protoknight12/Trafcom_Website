@@ -2876,10 +2876,17 @@ def detail_dxf_dashboard(detail_id):
 @app.route('/details/<int:detail_id>/files/upload', methods=['POST'])
 @login_required
 def upload_detail_dxf(detail_id):
+    """
+    Accepts any file type - not just .dxf. The dashboard is a general file
+    repository for a detail (reference photos, spec sheets, revisions...);
+    only .dxf files get the 2D preview button (see detail_dxf_dashboard.html
+    and get_detail_dxf_geometry() below), everything else just sits there
+    for download.
+    """
     detail = Detail.query.get_or_404(detail_id)
     file = request.files.get('file')
-    if not file or file.filename == '' or not file.filename.lower().endswith('.dxf'):
-        flash('Моля изберете валиден .dxf файл.', 'danger')
+    if not file or file.filename == '':
+        flash('Моля изберете файл.', 'danger')
         return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
     original_filename = secure_filename(file.filename)
@@ -2890,7 +2897,7 @@ def upload_detail_dxf(detail_id):
         uploaded_by_id=current_user.id
     ))
     db.session.commit()
-    flash('DXF файлът беше качен успешно.', 'success')
+    flash('Файлът беше качен успешно.', 'success')
     return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
 
@@ -2904,6 +2911,49 @@ def download_detail_dxf(file_id):
         app.config['DETAIL_DXF_FOLDER'], dxf_file.filename,
         as_attachment=True, download_name=dxf_file.original_filename
     )
+
+
+@app.route('/details/files/geometry/<int:file_id>')
+@role_required('admin')
+def get_detail_dxf_geometry(file_id):
+    """
+    Same admin-only gate as download_detail_dxf() - a rendered preview still
+    exposes the design, just not the raw bytes - and the same response shape
+    as get_geometry() (see static/js/dxf_viewer.js's openDxfViewer, shared
+    between /dashboard and this page via its optional `endpoint` param).
+    The id must be the last URL segment - dxf_viewer.js builds the request
+    as `${endpoint}${fileId}`, the same convention /geometry/<id> uses.
+    Parsed on demand rather than cached, since DXF parsing is cheap and this
+    table has no geometry_json column of its own.
+    """
+    dxf_file = DetailDxfFile.query.get_or_404(file_id)
+    if not dxf_file.original_filename.lower().endswith('.dxf'):
+        return jsonify({'error': 'Визуализацията е налична само за .dxf файлове.'}), 400
+
+    path = os.path.join(app.config['DETAIL_DXF_FOLDER'], dxf_file.filename)
+    try:
+        width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(path)
+    except Exception:
+        width, height, shapes = None, None, []
+
+    if width is None:
+        return jsonify({'error': 'Грешка при обработката на DXF структурата.'}), 400
+
+    return jsonify({'filename': dxf_file.original_filename, 'width': width, 'height': height, 'shapes': shapes})
+
+
+@app.route('/details/files/<int:file_id>/delete', methods=['POST'])
+@role_required('admin')
+def delete_detail_dxf(file_id):
+    dxf_file = DetailDxfFile.query.get_or_404(file_id)
+    detail_id = dxf_file.detail_id
+    path = os.path.join(app.config['DETAIL_DXF_FOLDER'], dxf_file.filename)
+    if os.path.exists(path):
+        os.remove(path)
+    db.session.delete(dxf_file)
+    db.session.commit()
+    flash('Файлът беше премахнат успешно.', 'success')
+    return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
 
 @app.route('/admin/details/<int:detail_id>/edit')

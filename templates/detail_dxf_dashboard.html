@@ -3,8 +3,75 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DXF файлове - {{ detail.name }} - Trafcom DXF</title>
+    <title>Файлове - {{ detail.name }} - Trafcom DXF</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        /* ---------- 2D DXF Viewer Modal (same as dashboard.html) ---------- */
+        .viewer-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.75);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .viewer-overlay.active {
+            display: flex;
+        }
+        .viewer-modal {
+            background-color: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 10px;
+            width: 90vw;
+            max-width: 900px;
+            height: 80vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .viewer-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid #333;
+        }
+        .viewer-header h4 {
+            margin: 0;
+            font-weight: 600;
+        }
+        .viewer-close-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted, #999);
+            font-size: 1.5rem;
+            line-height: 1;
+            cursor: pointer;
+        }
+        .viewer-close-btn:hover {
+            color: #fff;
+        }
+        .viewer-body {
+            flex: 1;
+            position: relative;
+            background-color: #101010;
+        }
+        .viewer-canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        .viewer-status {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-muted, #999);
+            font-size: 0.95rem;
+        }
+    </style>
 </head>
 <body>
 {% include 'partials/navbar.html' %}
@@ -24,17 +91,17 @@
     {% endwith %}
 
     <section class="admin-card">
-        <h3>DXF файлове: {{ detail.name }}</h3>
+        <h3>Файлове: {{ detail.name }}</h3>
         <p class="section-subtitle">
-            Хранилище на DXF файлове за този детайл.
-            {% if current_user.is_admin %}Само администратори могат да ги изтеглят.{% endif %}
+            Хранилище на файлове за този детайл - всякакъв тип (DXF чертежи, снимки, спецификации...).
+            {% if current_user.is_admin %}Само администратори могат да ги изтеглят, преглеждат и премахват.{% endif %}
         </p>
 
         <form action="{{ url_for('upload_detail_dxf', detail_id=detail.id) }}" method="POST" enctype="multipart/form-data" class="admin-form" style="margin-bottom: 1.5rem;">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
-                <label for="dxf_file">Качване на нов DXF файл</label>
-                <input type="file" id="dxf_file" name="file" accept=".dxf" required>
+                <label for="dxf_file">Качване на нов файл</label>
+                <input type="file" id="dxf_file" name="file" required>
             </div>
             <button type="submit" class="btn-submit">Качи</button>
         </form>
@@ -57,7 +124,18 @@
                     <td>{{ f.uploaded_at.strftime('%d.%m.%Y %H:%M') if f.uploaded_at else '-' }}</td>
                     <td class="text-right">
                         {% if current_user.is_admin %}
-                        <a href="{{ url_for('download_detail_dxf', file_id=f.id) }}" class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;">Изтегли</a>
+                        <div style="display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap;">
+                            {% if f.original_filename.lower().endswith('.dxf') %}
+                            <button type="button" class="btn-secondary dxf-viewer-trigger"
+                                    data-id="{{ f.id }}" data-filename="{{ f.original_filename }}" data-endpoint="/details/files/geometry/"
+                                    style="padding: 6px 10px; font-size: 0.78rem;">Преглед</button>
+                            {% endif %}
+                            <a href="{{ url_for('download_detail_dxf', file_id=f.id) }}" class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;">Изтегли</a>
+                            <form action="{{ url_for('delete_detail_dxf', file_id=f.id) }}" method="POST" class="dxf-delete-form" data-filename="{{ f.original_filename }}" style="display: inline; margin: 0;">
+                                {% include 'partials/csrf_field.html' %}
+                                <button type="submit" class="btn-delete" style="padding: 6px 10px; font-size: 0.78rem;">Изтрий</button>
+                            </form>
+                        </div>
                         {% else %}
                         <span class="text-muted text-small">Само за администратори</span>
                         {% endif %}
@@ -65,7 +143,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="4" class="text-center no-data">Няма качени DXF файлове.</td>
+                    <td colspan="4" class="text-center no-data">Няма качени файлове.</td>
                 </tr>
                 {% endfor %}
                 </tbody>
@@ -75,5 +153,19 @@
 
 </main>
 
+<div class="viewer-overlay" id="viewerOverlay">
+    <div class="viewer-modal">
+        <div class="viewer-header">
+            <h4 id="viewerTitle">Визуализация</h4>
+            <button type="button" class="viewer-close-btn" onclick="closeDxfViewer()">&times;</button>
+        </div>
+        <div class="viewer-body">
+            <div class="viewer-status" id="viewerStatus">Зареждане...</div>
+            <canvas class="viewer-canvas" id="viewerCanvas"></canvas>
+        </div>
+    </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/dxf_viewer.js') }}"></script>
 </body>
 </html>

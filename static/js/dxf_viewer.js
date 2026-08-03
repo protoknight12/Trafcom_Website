@@ -31,7 +31,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // plain strings, never re-parsed as script.
     document.querySelectorAll('.dxf-viewer-trigger').forEach(function (btn) {
         btn.addEventListener('click', function () {
-            openDxfViewer(this.dataset.id, this.dataset.filename);
+            openDxfViewer(this.dataset.id, this.dataset.filename, this.dataset.endpoint);
         });
     });
     document.querySelectorAll('.dxf-delete-form').forEach(function (form) {
@@ -43,18 +43,20 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 });
 
-function openDxfViewer(fileId, filename) {
+function openDxfViewer(fileId, filename, endpoint) {
     dxfViewerTitle.textContent = filename;
     dxfViewerStatus.style.display = 'flex';
     dxfViewerStatus.textContent = 'Зареждане...';
     dxfViewerOverlay.classList.add('active');
 
-    fetch(`/geometry/${fileId}`)
+    fetch(`${endpoint || '/geometry/'}${fileId}`)
         .then(function (response) {
-            if (!response.ok) {
-                throw new Error('Грешка при зареждане на геометрията.');
-            }
-            return response.json();
+            return response.json().then(function (data) {
+                if (!response.ok) {
+                    throw new Error(data.error || 'Грешка при зареждане на геометрията.');
+                }
+                return data;
+            });
         })
         .then(function (data) {
             if (!data.shapes || data.shapes.length === 0) {
