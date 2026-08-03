@@ -34,6 +34,16 @@
         .summary-chip { background: var(--bg-input); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); padding: 8px 14px; font-size: 0.85rem; }
         .summary-chip strong { color: var(--text-main); }
         .summary-chip.offline { opacity: 0.6; }
+
+        /* Same labels/colors as templates/machines.html - one machine, one status, shown consistently everywhere. */
+        .machine-status-badge { padding: 3px 10px; border-radius: 12px; font-size: 0.78rem; font-weight: bold; display: inline-block; }
+        .status-idle { background-color: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid #10b981; }
+        .status-running { background-color: rgba(23, 162, 184, 0.15); color: #17a2b8; border: 1px solid #17a2b8; }
+        .status-maintenance { background-color: rgba(255, 193, 7, 0.15); color: #ffc107; border: 1px solid #ffc107; }
+        .machine-link-row { margin-top: 6px; font-size: 0.85rem; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+        .machine-checklist { max-height: 160px; overflow-y: auto; border: 1px solid #333; border-radius: 6px; padding: 8px 10px; background-color: #1a1f30; }
+        .machine-checklist-item { display: block; font-size: 0.85rem; padding: 3px 0; font-weight: normal; }
+        .machine-checklist-item input { margin-right: 6px; }
     </style>
 </head>
 <body>
@@ -52,12 +62,96 @@
         се включва или изключва машина. <span id="lastUpdate" class="text-muted"></span>
     </p>
 
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    {% if not focus_host %}
+    <section class="admin-card">
+        <h3 style="margin-top: 0;">Управление на машините</h3>
+        <form action="{{ url_for('admin_power_add_device') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label>Име на машината</label>
+                <input type="text" name="name" placeholder="напр. Лазер CO2" maxlength="100">
+            </div>
+            <div class="form-group">
+                <label>IP адрес</label>
+                <input type="text" name="host" placeholder="напр. 192.168.18.80" maxlength="100" required>
+            </div>
+            <div class="form-group">
+                <label>Свързани машини (по избор, може повече от една)</label>
+                <div class="machine-checklist">
+                    {% for m in machines %}
+                    <label class="machine-checklist-item">
+                        <input type="checkbox" name="machine_ids" value="{{ m.id }}"> {{ m.name }}
+                    </label>
+                    {% else %}
+                    <span class="text-muted text-small">Няма добавени машини в списъка с машини.</span>
+                    {% endfor %}
+                </div>
+            </div>
+            <button type="submit" class="btn-submit">Добави машина</button>
+        </form>
+
+        {% if devices %}
+        <div class="table-responsive" style="margin-top: 18px;">
+            <table class="data-table">
+                <thead>
+                <tr>
+                    <th>Име</th>
+                    <th>IP адрес</th>
+                    <th>Свързана машина</th>
+                    <th></th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for d in devices %}
+                <tr>
+                    <td>{{ d.name }}</td>
+                    <td>{{ d.host }}</td>
+                    <td>
+                        <form action="{{ url_for('admin_power_set_device_machines', device_id=d.id) }}" method="POST">
+                            {% include 'partials/csrf_field.html' %}
+                            <div class="machine-checklist">
+                                {% for m in machines %}
+                                <label class="machine-checklist-item">
+                                    <input type="checkbox" name="machine_ids" value="{{ m.id }}"
+                                           {% if m in d.machines %}checked{% endif %}> {{ m.name }}
+                                </label>
+                                {% else %}
+                                <span class="text-muted text-small">Няма добавени машини в списъка с машини.</span>
+                                {% endfor %}
+                            </div>
+                            <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem; margin-top: 6px;">Запази</button>
+                        </form>
+                    </td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_power_delete_device', device_id=d.id) }}" method="POST"
+                              onsubmit="return confirm('Премахване на машина &quot;{{ d.name|e }}&quot;?');"
+                              style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Премахни</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+    </section>
+    {% endif %}
+
     {% if not devices %}
     <section class="admin-card">
-        <p class="no-data text-center">
-            Няма конфигуриран електромер.<br>
-            Задайте променливата на средата <code>SHELLY_DEVICES</code> и рестартирайте приложението.
-        </p>
+        <p class="no-data text-center">Няма добавени машини. Добавете първата от формата по-горе.</p>
     </section>
     {% else %}
     <section class="admin-card summary-card" id="summaryCard" style="display: none;">
@@ -95,6 +189,20 @@
     const FOCUS_HOST = {{ focus_host|tojson }};
 
     const fmt = (v, digits) => (v === null || v === undefined) ? '—' : Number(v).toFixed(digits);
+
+    // Same three states/labels as templates/machines.html's Machine.status badge.
+    const MACHINE_STATUS_LABELS = { idle: 'Свободна', running: 'Работи', maintenance: 'Поддръжка' };
+    function machineLinkHtml(d) {
+        // d.machines is a list - one meter can feed several machines at once
+        // (a shared feed/sub-panel), so this renders one chip per linked machine.
+        if (!d.machines || !d.machines.length) return '';
+        const chips = d.machines.map(m => {
+            const cls = 'status-' + (MACHINE_STATUS_LABELS[m.status] ? m.status : 'maintenance');
+            const label = MACHINE_STATUS_LABELS[m.status] || m.status;
+            return `<span>${m.name} <span class="machine-status-badge ${cls}">${label}</span></span>`;
+        }).join('');
+        return `<div class="machine-link-row">Машина(и):${chips}</div>`;
+    }
 
     function drawSpark(canvas, points) {
         // Rolling line of total power. Kept as a plain canvas on purpose -
@@ -164,6 +272,7 @@
                 <div>
                     <a href="${POWER_URL}?host=${encodeURIComponent(d.host)}" style="font-size: 1.1rem; font-weight: 700;">${d.name}</a>
                     <div class="text-muted text-small">${d.host}</div>
+                    ${machineLinkHtml(d)}
                 </div>
                 ${state}
             </div>

@@ -1,8 +1,10 @@
 # Shelly energy monitoring — API reference
 
 Live power monitoring off Shelly energy meters on the shop LAN. Everything lives in one section
-of [`app.py`](../app.py) (search for `SHELLY ENERGY MONITORING`) — no new dependencies, no DB
-tables, no migration. The meter itself is the archive.
+of [`app.py`](../app.py) (search for `SHELLY ENERGY MONITORING`) — no new dependencies. Live
+readings are never stored (the meter itself is the archive for history); which meters exist is
+the one thing that *is* now a DB table (`ShellyDevice`, name + host), managed straight from
+`/admin/power` — see Configuration below.
 
 **Two device generations are in use, and their APIs share nothing.** The shop turned out to
 have both a newer Shelly Pro 3EM (Gen2, `GET /rpc/Shelly.GetStatus`) and an older Shelly 3EM
@@ -31,29 +33,71 @@ require the separate Shelly Pro 3EM Switch Add-on, which is not installed.)
 
 ## Configuration
 
-One environment variable, no DB table:
+Meters are rows in the `ShellyDevice` table (`id`, `name`, `host`, `host` unique) — added and
+removed directly from the **"Управление на машините"** panel at the top of `/admin/power`: a
+name + an IP, submit, done. Takes effect on the very next poll (2s) — **no app restart**, unlike
+the env-var-only config this replaced.
 
+```python
+shelly_device_machines = db.Table(
+    'shelly_device_machine',
+    db.Column('shelly_device_id', db.Integer, db.ForeignKey('shelly_device.id'), primary_key=True),
+    db.Column('machine_id', db.Integer, db.ForeignKey('machine.id'), primary_key=True),
+)
+
+class ShellyDevice(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    host = db.Column(db.String(100), nullable=False, unique=True)
+    machines = db.relationship('Machine', secondary=shelly_device_machines, backref='shelly_devices')
 ```
-SHELLY_DEVICES=Име=host, Друго=host2
-```
 
-- Comma-separated `Име=host` pairs. A bare `host` with no `Име=` is allowed and labels itself
-  with its own address.
-- Unset or blank disables the feature — `/admin/power` renders a "not configured" notice
-  instead of erroring.
-- Example from this shop: `SHELLY_DEVICES=Главно табло=192.168.18.72`.
+`machines` is **many-to-many**, not a single FK: one meter can genuinely feed more than one
+machine (a shared sub-panel/circuit — exactly the kind of ambiguous shared feed the phase-C
+standing-load investigation turned up, see `CLAUDE.md`), and one machine can have more than one
+meter on it. A plain `secondary=` association table, not a mapped model of its own — nothing
+about the link itself needs its own fields (no "since when", no notes), so there's nothing to
+hang a dedicated class on.
 
-Parsed once at import time into the module-level `SHELLY_DEVICES` list of `(name, host)` tuples
-by `_parse_shelly_devices(raw)`.
+- `admin_power_add_device()` — `POST /admin/power/devices/add`. Strips a pasted `http://`/`https://`
+  prefix defensively (a likely mistake when copying an address from a browser bar), rejects a
+  blank or space-containing host, rejects a host already in the table (flash message naming the
+  conflict), defaults `name` to the host itself if left blank.
+- `admin_power_delete_device(device_id)` — `POST /admin/power/devices/<id>/delete`. Removes a
+  row; the dashboard simply stops polling it starting the next cycle.
+- Both are `@role_required('admin')`, both use the shared `partials/csrf_field.html` in a plain
+  HTML form (full-page redirect back to `/admin/power` on submit) — same CRUD pattern as
+  `admin_clients.html`'s add/delete client forms, not a new one invented for this.
+- Nothing about a device's **generation** is declared when adding one — `_shelly_get_status()`
+  figures out Gen1 vs Gen2 itself on first contact (see its section below), so the add form is
+  genuinely just "name + IP."
 
-**Why an env var and not a `Machine` table column:** the installed meter runs the `triphase`
-profile, meaning its three CT clamps measure one 3-phase feed as a whole — there's no
-per-machine mapping to store yet (confirmed by phase-correlation analysis of the meter's own
-history: phases A/B correlate at r=+1.000 and stay within ~8% of each other at full load, i.e.
-one balanced 3-phase load, not independent circuits). If a meter is ever rewired/reprofiled so
-one channel corresponds to one machine, that's the point to add a `Machine.shelly_host` column
-(with a hand-written `migration/migrate_*.py`, per this repo's schema-change convention — see
-`CLAUDE.md` → Schema changes).
+**This replaced an env-var-only config (`SHELLY_DEVICES=Име=host, Друго=host2`)** that made
+sense when there was exactly one meter and no reason to expose a management UI for a list of
+one. `_parse_shelly_devices(raw)` still exists — it's now only called by `seed_shelly_devices()`
+below, to migrate whatever was in that env var into the table **once**, the first time the app
+starts after upgrading to this version. After that, the table is the sole source of truth; the
+app never reads `SHELLY_DEVICES` at request time again.
+
+### `seed_shelly_devices()`
+
+Called once in the `if __name__ == '__main__':` startup block, same slot as
+`seed_material_prices()`. A no-op the instant the `ShellyDevice` table has any row at all — so
+it only ever does something on the very first run after this feature was added. **Known
+caveat**, shared with `seed_service_machine_cards()`'s equivalent: if every device is later
+deleted through the UI *and* `SHELLY_DEVICES` is still set in the environment, the table looks
+empty again on the next restart and this reseeds from the env var. Unset `SHELLY_DEVICES` once
+machines are fully managed through the UI to avoid that surprise.
+
+**Why a DB table now, when an env var was the deliberate original choice:** the earlier
+reasoning was "no per-machine mapping worth storing" — true when there was one meter and adding
+a second meant editing a config file and restarting the app. That stopped being true the moment
+someone wanted to add a machine from the dashboard itself without touching `.env` or restarting
+anything; a DB table with an admin CRUD panel is exactly this repo's existing pattern for that
+(`Client`, `Deliverer`, `Supplier`, `Machine`, `MaterialPrice`...), so this section now follows
+it too rather than staying the one exception. This is unrelated to, and doesn't resolve, the
+separate question of per-*clamp* wiring — see the `Machine.shelly_host` note further down for
+that.
 
 ## Functions
 
@@ -134,9 +178,15 @@ Polls every configured meter **concurrently** and returns a list of snapshot dic
 answers first.
 
 ```python
-shelly_fleet_snapshot(SHELLY_DEVICES)
+shelly_fleet_snapshot([(d.name, d.host) for d in ShellyDevice.query.all()])
 # [{'name': 'Главно табло', 'host': '192.168.18.72', 'online': True, ...}, ...]
 ```
+
+Note this function itself knows nothing about `ShellyDevice` or the DB — it only ever takes
+plain `(name, host)` pairs. The Machine-catalog link (see Configuration above) is joined in by
+the caller (`admin_power_data()`), not threaded down into this function or
+`shelly_device_snapshot()` — those two exist purely to talk to a meter, not to know the Machine
+catalog exists.
 
 Backed by a plain `concurrent.futures.ThreadPoolExecutor` (stdlib, no new dependency) sized to
 `len(devices)` workers — these are blocking network reads, not CPU work, so the GIL doesn't
@@ -293,17 +343,53 @@ dropped outright, since it's unusable for anything time-series related.
 
 ### `_parse_shelly_devices(raw)`
 
-Pure helper parsing the `SHELLY_DEVICES` env var, described under Configuration above.
+Pure helper parsing the legacy `SHELLY_DEVICES` env var format. Only still called by
+`seed_shelly_devices()` for the one-time migration — see Configuration above.
+
+### `_parse_machine_ids(form)` / `_resolve_machines_or_none(machine_ids)`
+
+Form-field helpers shared by the add and relink routes. `_parse_machine_ids` reads
+`form.getlist('machine_ids')` (repeated form fields from a checkbox group, not a single value)
+into a de-duplicated list of `int`s — no checkboxes ticked is a normal, valid "nothing linked"
+state and returns `[]`, not an error. `_resolve_machines_or_none` looks every id up in one query
+(`Machine.id.in_(...)`) and returns `None` (distinct from `[]`) if any of them doesn't exist, so
+callers can tell "linked to nothing" apart from "one of the ids was bogus" with a single `is
+None` check.
 
 ## HTTP routes (in this app, not on the Shelly device)
 
-Both admin-only (`@role_required('admin')`).
+All admin-only (`@role_required('admin')`).
 
 ### `GET /admin/power`
 
-Renders `templates/admin_power.html` — static chrome. Passes `devices=SHELLY_DEVICES` so the
-template can show a "not configured" message when the list is empty; all live data comes from
-polling the JSON feed below client-side.
+Renders `templates/admin_power.html` — the live-dashboard chrome plus the server-rendered
+"Управление на машините" management panel (add form + list-with-delete-and-relink), built from
+`ShellyDevice.query.all()` and `Machine.query.all()`. The live cards below it are fed by polling
+the JSON feed below client-side; the management panel is fully server-rendered, so
+adding/deleting/relinking a device is a normal POST + redirect, not part of the polling loop.
+
+### `POST /admin/power/devices/add`
+
+Form fields: `name` (optional, defaults to `host`), `host` (required), `machine_ids` (optional,
+zero or more — a checkbox group in the template, not a `<select>`). Strips a pasted
+`http://`/`https://` prefix from `host` defensively, rejects blank/whitespace hosts and hosts
+already in the table (flash error naming the conflict), redirects back to `/admin/power` either
+way. See `ShellyDevice` under Configuration for the model this writes to.
+
+### `POST /admin/power/devices/<id>/delete`
+
+Removes the row (and, via the `shelly_device_machines` many-to-many table, any Machine links it
+had). The next poll simply stops including it — no separate "are you sure" step server-side
+(the template's delete button has a `confirm()` dialog client-side instead, same pattern as
+`admin_clients.html`'s delete-client button).
+
+### `POST /admin/power/devices/<id>/set-machines`
+
+**Replaces** the full set of Machines a device is linked to with whatever `machine_ids` were
+submitted — not additive, so re-submitting with fewer boxes ticked drops the ones left
+unchecked. No boxes ticked at all means fully unlinked. Kept separate from the add route
+because the link is very often decided *after* a meter's already been added and polling — see
+the `ShellyDevice.machines` docstring for why.
 
 ### `GET /admin/power/data`
 
@@ -323,18 +409,30 @@ polling the JSON feed below client-side.
       "total_power": 2785.5,
       "total_energy": 200.53,
       "temperature": 47.8,
-      "rssi": -52
+      "rssi": -52,
+      "machines": [
+        {"name": "FIBER LASER ECKERT", "status": "idle"},
+        {"name": "Some Shared-Feed Machine", "status": "running"}
+      ]
     }
   ]
 }
 ```
 
+`machines` is a **list** — usually empty (the common case for a freshly-added meter, before
+anyone's confirmed which machine(s) it's on) or one entry, but can be more than one when a
+single meter feeds a shared circuit. It's joined in by this route from the `ShellyDevice` rows
+it already queried, *after* `shelly_fleet_snapshot()` returns — that function and everything it
+calls only ever deal in plain `(name, host)` pairs and know nothing about the Machine catalog.
+
 Polled every 2s by `admin_power.html` (paused via the Page Visibility API when the tab isn't
 active). Server-side polling means meters only ever need to be reachable from the app host,
 never from every admin's browser — relevant since the meters are LAN-only and have no auth.
 
-Calls `shelly_fleet_snapshot(SHELLY_DEVICES)` — every configured meter concurrently, one HTTP
-round-trip to the app per dashboard refresh regardless of fleet size.
+`?host=<ip>` filters the underlying `ShellyDevice` query to one row before calling
+`shelly_fleet_snapshot()` — the single-machine view (see `GET /admin/power`'s `?host=` handling)
+has no use for every other meter's reading, so there's no reason to poll them every 2s just to
+discard the result client-side.
 
 The client aggregates a shop-wide total across all `devices[].total_power` itself (see
 `admin_power.html`'s `renderSummary()`) rather than the server pre-computing it, since the
@@ -344,10 +442,13 @@ payload already carries everything needed — no reason to compute the same sum 
 
 | Name | Value | Purpose |
 |---|---|---|
-| `SHELLY_DEVICES` | parsed from env at import time | `[(name, host), ...]` |
 | `SHELLY_TIMEOUT` | `3.0` | Per-request timeout for live reads (`shelly_rpc` default) |
 | `SHELLY_HISTORY_CHUNK` | `86400` (1 day) | Window size `shelly_history()` splits requests into |
 | `SHELLY_HISTORY_TIMEOUT` | `60.0` | Per-chunk timeout for history reads |
+| `_shelly_gen_cache` | `{}`, in-memory | `host -> 'gen1'\|'gen2'`, see `_shelly_get_status()` |
+
+There is no `SHELLY_DEVICES` module-level constant anymore — the device list is a live DB query
+(`ShellyDevice.query...`) at each request, not a value computed once at import time.
 
 ## Testing
 
@@ -383,14 +484,33 @@ live-network path are not covered by this script — they were verified by hand 
 real devices while building this feature (see conversation history / commit messages, not a
 regression test).
 
+`testing/test_shelly_device_routes.py` — pytest, same fixture pattern as
+`test_quick_create_material.py` (throwaway SQLite, real login sessions, real CSRF-disabled
+requests). Covers the `ShellyDevice` CRUD routes end-to-end: add (with/without machine links,
+duplicate-host rejection, pasted-URL stripping, blank-host rejection, unknown-machine
+rejection), `set-machines` (linking, **replacing** rather than appending to the set, unlinking
+everything, two meters linked to the same machine), delete, worker-role rejection, and
+`delete_machine()`'s association-row cleanup (a linked `ShellyDevice` survives a `Machine`
+delete with that one link gone but any *other* machine link on the same device intact — the
+multi-link case specifically, not just the single-link one). The migration script itself isn't
+covered by an automated test; it and the route behavior above were also verified by hand
+against the real dev database while building this (linking/unlinking real meters to real
+`Machine` rows, confirming the JSON feed reflects it, confirming a `Machine` delete detaches
+without an FK error) — each exercised directly and any temporary state cleaned up afterward so
+the real tables were left exactly as found.
+
 ## Extension points, roughly cheapest first
 
-1. **Relabel a device.** Edit `SHELLY_DEVICES` in `.env`, restart. No code change.
-2. **Add another meter — any generation.** Add another `Име=host` pair to `SHELLY_DEVICES`; no
-   need to know or declare which generation it is, `_shelly_get_status()` figures that out on
-   first contact. The dashboard's cross-machine total summary card (in `admin_power.html`)
-   activates automatically once 2+ devices are configured — it's hidden with exactly one,
-   since a "total across machines" number would just repeat that one machine's own card.
+1. **Relabel a device, or change which Machine(s) it's linked to.** Both are already UI
+   actions — edit isn't separately exposed for the name, but delete + re-add is one page load;
+   relinking is a checkbox group per device on `/admin/power` with its own "Запази" button
+   (tick/untick any number of machines, save replaces the full set). No code change either way.
+2. **Add another meter — any generation.** Fill in the form on `/admin/power`; no need to know
+   or declare which generation it is, `_shelly_get_status()` figures that out on first contact.
+   Takes effect on the next poll, no restart. The dashboard's cross-machine total summary card
+   (in `admin_power.html`) activates automatically once 2+ devices exist — it's hidden with
+   exactly one, since a "total across machines" number would just repeat that one machine's
+   own card.
 3. **Chart recent history in the UI, for Gen2 meters.** `shelly_history()` already exists and
    is tested; needs a new route (thin wrapper picking a sensible default window, e.g. "today")
    plus a chart in the template. No DB work — the meter answers on demand. Gen1 meters aren't

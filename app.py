@@ -665,6 +665,49 @@ class Machine(db.Model):
     last_maintenance = db.Column(db.DateTime, default=datetime.utcnow)
 
 
+#  One meter can legitimately feed more than one machine (a shared sub-panel
+#  or bus - exactly the kind of ambiguous shared feed the phase-C standing
+#  load investigation turned up, see the Shelly section further down), and
+#  one machine could in principle have more than one meter on it (a main
+#  drive meter plus a separate auxiliary meter). Plain many-to-many, not a FK
+#  column on either side.
+shelly_device_machines = db.Table(
+    'shelly_device_machine',
+    db.Column('shelly_device_id', db.Integer, db.ForeignKey('shelly_device.id'), primary_key=True),
+    db.Column('machine_id', db.Integer, db.ForeignKey('machine.id'), primary_key=True),
+)
+
+
+class ShellyDevice(db.Model):
+    """
+    A Shelly energy meter feeding the live power dashboard (/admin/power) -
+    see the SHELLY ENERGY MONITORING section near the bottom of this file.
+    Added/removed directly from that page (admin_power_add_device() /
+    admin_power_delete_device()) and takes effect on the very next poll, no
+    app restart - this replaced the original SHELLY_DEVICES env var as the
+    source of truth once machines needed to be manageable from the UI rather
+    than by editing a config file (see seed_shelly_devices() for the one-time
+    migration of whatever was in that env var). host is unique so the same
+    meter can't end up polled twice under two different labels.
+
+    `machines` optionally ties a meter to any number of real Machine rows
+    (the shop's CNC/laser catalog, via the shelly_device_machines table
+    above) so the power dashboard can show which machine(s) a reading
+    belongs to, and each one's own status. Deliberately optional and
+    separate from `name`: a meter can be added and monitored before anyone
+    has confirmed which physical machine(s) its clamps are actually on (see
+    the panel-inspection note in the Shelly section) - the free-text label
+    always works, machine links are filled in once that's known. No cascade
+    config needed beyond the plain secondary table: SQLAlchemy removes the
+    matching shelly_device_machine rows itself when either side is deleted,
+    same effect delete_machine() already gets explicitly for Order/DxfFile.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    host = db.Column(db.String(100), nullable=False, unique=True)
+    machines = db.relationship('Machine', secondary=shelly_device_machines, backref='shelly_devices')
+
+
 class ServiceMachineCard(db.Model):
     """
     A machine card shown on the public services page or homepage (see services(),
@@ -4100,15 +4143,20 @@ def delete_all_dxf_files():
 @role_required('admin')
 def delete_machine(id):
     """
-    Deletes a machine. Orders and DxfFiles that reference it keep
-    existing (machine_id is nullable on both), so they're detached
-    rather than deleted - a removed machine shouldn't take historical
-    orders/uploads down with it.
+    Deletes a machine. Orders and DxfFiles that reference it keep existing
+    (machine_id is nullable on both), so they're detached rather than
+    deleted - a removed machine shouldn't take historical orders/uploads
+    down with it. Any ShellyDevice meters linked to it (many-to-many, see
+    shelly_device_machines) simply lose that one link and keep monitoring -
+    removing a machine record was never a reason to stop watching a meter.
     """
     machine = Machine.query.get_or_404(id)
     try:
         Order.query.filter_by(machine_id=machine.id).update({'machine_id': None})
         DxfFile.query.filter_by(machine_id=machine.id).update({'machine_id': None})
+        db.session.execute(
+            shelly_device_machines.delete().where(shelly_device_machines.c.machine_id == machine.id)
+        )
         db.session.delete(machine)
         db.session.commit()
         flash(f'Машина "{machine.name}" беше изтрита.', 'success')
@@ -4163,20 +4211,27 @@ def admin_delete_material(key):
 # feature sitting on a device we happen to already own - don't wire up a
 # Relay.Set/Switch.Set call without that conversation happening first.
 #
-# Meters are configured out-of-band via the SHELLY_DEVICES env var rather than
-# a DB table, because there is no per-machine mapping worth storing yet: the
-# one installed meter runs the 'triphase' profile, i.e. it measures a single
-# 3-phase feed as a whole, not one machine per clamp. If the meters are ever
-# rewired/reprofiled so one channel == one machine, that's the point to add a
-# Machine.shelly_host column (plus a migration/migrate_*.py - see the schema
-# note at the bottom of this file).
+# Meters are managed as the ShellyDevice DB table (add/remove from the
+# /admin/power page itself, see admin_power_add_device()/
+# admin_power_delete_device() near the routes below) - takes effect on the
+# very next poll, no app restart. This replaced an env-var-only config
+# (SHELLY_DEVICES) that made sense when there was exactly one meter and no
+# UI to manage a list of them; seed_shelly_devices() migrates whatever was in
+# that env var into the table once, on first startup after upgrading.
 #
-# Format: "Име=host, Друго=host2". A bare "host" with no "Име=" is allowed and
-# labels itself. Unset/blank disables the feature and admin_power() renders a
-# "not configured" notice instead of erroring.
+# There is still no per-machine *wiring* mapping beyond the label a device is
+# given here: the Pro 3EM runs the 'triphase' profile, i.e. it measures a
+# single 3-phase feed as a whole, not one machine per clamp. If a meter's
+# clamps are ever rewired/reprofiled so one channel == one machine, that's a
+# separate, later change (see the note further down on Machine.shelly_host).
 
 def _parse_shelly_devices(raw):
-    """'Табло 1=192.168.18.72,10.0.0.5' -> [('Табло 1', '192.168.18.72'), ('10.0.0.5', '10.0.0.5')]."""
+    """
+    'Табло 1=192.168.18.72,10.0.0.5' -> [('Табло 1', '192.168.18.72'), ('10.0.0.5', '10.0.0.5')].
+    Only still used by seed_shelly_devices() below, to migrate the legacy
+    SHELLY_DEVICES env var into the DB once - the app itself no longer reads
+    this env var at request time.
+    """
     devices = []
     for chunk in (raw or '').split(','):
         name, _, host = chunk.partition('=')
@@ -4188,7 +4243,28 @@ def _parse_shelly_devices(raw):
     return devices
 
 
-SHELLY_DEVICES = _parse_shelly_devices(os.environ.get('SHELLY_DEVICES'))
+def seed_shelly_devices():
+    """
+    One-time migration: if the ShellyDevice table is completely empty and the
+    legacy SHELLY_DEVICES env var has entries, copy them in as the starting
+    set. After that the table is the sole source of truth - machines are
+    added/removed from /admin/power directly. Safe to call on every startup,
+    same pattern as seed_material_prices(): a no-op the moment the table has
+    any row.
+
+    Caveat shared with seed_service_machine_cards(): if every device is later
+    deleted through the UI and SHELLY_DEVICES is still set in the
+    environment, the table looks empty again on the next restart and this
+    reseeds from it. Unset SHELLY_DEVICES once machines are fully managed
+    through the UI to avoid that.
+    """
+    if ShellyDevice.query.first():
+        return
+    for name, host in _parse_shelly_devices(os.environ.get('SHELLY_DEVICES')):
+        db.session.add(ShellyDevice(name=name, host=host))
+    db.session.commit()
+
+
 SHELLY_TIMEOUT = 3.0
 
 
@@ -4470,19 +4546,112 @@ def shelly_fleet_snapshot(devices):
 @role_required('admin')
 def admin_power():
     """
-    Live power-consumption dashboard for the shop's Shelly energy meters. The
-    page is static chrome - admin_power_data() below feeds it on an interval.
+    Live power-consumption dashboard for the shop's Shelly energy meters, plus
+    the add/remove-a-machine management panel (see admin_power_add_device()/
+    admin_power_delete_device()). The page is mostly static chrome -
+    admin_power_data() below feeds the live cards on an interval; the
+    management panel is server-rendered from `devices` directly, so an
+    add/delete takes a normal full-page redirect back here rather than going
+    through the JS polling path.
 
     ?host=<ip> scopes the page to one machine (clicking a machine's name in the
     all-machines view links here with it set) - same template, same JS, just a
     single-device payload instead of the whole fleet. Not validated against
-    SHELLY_DEVICES: an unknown host simply matches nothing and renders an
+    what's configured: an unknown host simply matches nothing and renders an
     empty page, same as a fleet with zero configured meters.
     """
+    devices = ShellyDevice.query.order_by(ShellyDevice.id).all()
+    machines = Machine.query.order_by(Machine.name).all()
     focus_host = request.args.get('host') or None
-    focus_name = next((name for name, host in SHELLY_DEVICES if host == focus_host), focus_host)
-    return render_template('admin_power.html', devices=SHELLY_DEVICES, active_page='admin_power',
-                           focus_host=focus_host, focus_name=focus_name)
+    focus_name = next((d.name for d in devices if d.host == focus_host), focus_host)
+    return render_template('admin_power.html', devices=devices, machines=machines,
+                           active_page='admin_power', focus_host=focus_host, focus_name=focus_name)
+
+
+def _parse_machine_ids(form):
+    """
+    Multi-select/checkbox field 'machine_ids' -> a de-duplicated list of int
+    Machine ids, in the order submitted. No entries selected is a normal,
+    valid "no machine linked yet" state, not an error - returns [].
+    """
+    ids = []
+    for raw in form.getlist('machine_ids'):
+        raw = (raw or '').strip()
+        if raw and raw not in ids:
+            ids.append(raw)
+    return [int(i) for i in ids]
+
+
+def _resolve_machines_or_none(machine_ids):
+    """Look up every id at once; returns None (not an empty list) if any id doesn't exist."""
+    if not machine_ids:
+        return []
+    found = Machine.query.filter(Machine.id.in_(machine_ids)).all()
+    return found if len(found) == len(machine_ids) else None
+
+
+@app.route('/admin/power/devices/add', methods=['POST'])
+@role_required('admin')
+def admin_power_add_device():
+    """
+    Add a machine to the power dashboard. Takes effect on the very next poll
+    (2s) - no app restart, unlike the old SHELLY_DEVICES env var this
+    replaced. Only a label + IP + any number of linked Machines; nothing
+    about the meter's generation needs declaring, _shelly_get_status()
+    figures that out itself on first contact.
+    """
+    name = request.form.get('name', '').strip()
+    host = request.form.get('host', '').strip()
+    host = re.sub(r'^https?://', '', host).rstrip('/')  # tolerate a pasted URL
+    if not host or ' ' in host:
+        flash('Моля въведете валиден IP адрес на електромера.', 'danger')
+        return redirect(url_for('admin_power'))
+    if ShellyDevice.query.filter_by(host=host).first():
+        flash(f'Вече има добавена машина с адрес "{host}".', 'danger')
+        return redirect(url_for('admin_power'))
+    machines = _resolve_machines_or_none(_parse_machine_ids(request.form))
+    if machines is None:
+        flash('Една от избраните машини не съществува.', 'danger')
+        return redirect(url_for('admin_power'))
+    device = ShellyDevice(name=name or host, host=host, machines=machines)
+    db.session.add(device)
+    db.session.commit()
+    flash(f'Машината "{name or host}" беше добавена.', 'success')
+    return redirect(url_for('admin_power'))
+
+
+@app.route('/admin/power/devices/<int:device_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_power_delete_device(device_id):
+    """Remove a machine from the power dashboard - stops polling it immediately."""
+    device = ShellyDevice.query.get_or_404(device_id)
+    db.session.delete(device)
+    db.session.commit()
+    flash(f'Машината "{device.name}" беше премахната от таблото.', 'success')
+    return redirect(url_for('admin_power'))
+
+
+@app.route('/admin/power/devices/<int:device_id>/set-machines', methods=['POST'])
+@role_required('admin')
+def admin_power_set_device_machines(device_id):
+    """
+    Replace the full set of Machines an already-added meter is linked to
+    (none selected = fully unlinked) - separate from admin_power_add_device()
+    since the link is often only confirmed after the meter's already been
+    added and someone has physically checked which machine(s) its clamps are
+    actually on. One meter can link to several machines at once (a shared
+    feed/sub-panel) and one machine can have several meters (see
+    shelly_device_machines) - this route doesn't need to special-case either.
+    """
+    device = ShellyDevice.query.get_or_404(device_id)
+    machines = _resolve_machines_or_none(_parse_machine_ids(request.form))
+    if machines is None:
+        flash('Една от избраните машини не съществува.', 'danger')
+        return redirect(url_for('admin_power'))
+    device.machines = machines
+    db.session.commit()
+    flash(f'Връзките за "{device.name}" бяха обновени.', 'success')
+    return redirect(url_for('admin_power'))
 
 
 @app.route('/admin/power/data')
@@ -4498,10 +4667,19 @@ def admin_power_data():
     them every 2s just to throw the result away client-side.
     """
     host = request.args.get('host')
-    devices = [d for d in SHELLY_DEVICES if d[1] == host] if host else SHELLY_DEVICES
+    query = ShellyDevice.query.filter_by(host=host) if host else ShellyDevice.query
+    rows = query.order_by(ShellyDevice.id).all()
+    snapshots = shelly_fleet_snapshot([(d.name, d.host) for d in rows])
+    # Join the Machine link in at the route layer rather than threading a
+    # Machine dependency down into shelly_fleet_snapshot/shelly_device_snapshot -
+    # those talk to meters and shouldn't need to know the catalog exists.
+    by_host = {d.host: d for d in rows}
+    for snap in snapshots:
+        device = by_host.get(snap['host'])
+        snap['machines'] = [{'name': m.name, 'status': m.status} for m in device.machines] if device else []
     return jsonify({
         'ts': datetime.now().strftime('%H:%M:%S'),
-        'devices': shelly_fleet_snapshot(devices),
+        'devices': snapshots,
     })
 
 
@@ -4530,6 +4708,9 @@ if __name__ == '__main__':
         # if ServiceMachineCard is completely empty (see seed_service_machine_cards).
         seed_service_machine_cards()
         seed_index_machine_cards()
+        # One-time migration of the legacy SHELLY_DEVICES env var into the
+        # ShellyDevice table - only runs if that table is completely empty.
+        seed_shelly_devices()
     # Off by default - debug mode exposes an interactive code-execution
     # debugger on unhandled exceptions, so it must be opted into explicitly.
     # Set FLASK_DEBUG=1 in your environment for local development.
