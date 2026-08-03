@@ -106,6 +106,13 @@
                         <option value="__new__">+ Нов материал...</option>
                     </select>
                     <input type="text" id="dn_material_name_new" placeholder="Име на новия материал" autocomplete="off" style="display: none; margin-top: 8px;">
+                    <div id="dn_material_type_group" style="display: none; margin-top: 8px;">
+                        <select id="dn_material_type" style="width: 100%;">
+                            {% for type_key, type_label in MATERIAL_TYPE_LABELS.items() %}
+                            <option value="{{ type_key }}" {% if type_key == 'sheets' %}selected{% endif %}>{{ type_label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
                     <div id="dn_material_new_pricing" style="display: none; margin-top: 8px; gap: 8px; flex-wrap: wrap;">
                         <input type="number" id="dn_material_cost_per_m2" step="0.01" min="0" placeholder="Цена/м² (€) *" style="flex: 1; min-width: 120px;">
                         <input type="number" id="dn_material_cost_per_meter_cut" step="0.01" min="0" placeholder="Цена/м рязане (€) *" style="flex: 1; min-width: 120px;">
@@ -198,7 +205,7 @@
                     <label for="dn_height">Дължина/Височина (мм)</label>
                     <input type="number" id="dn_height" min="0" step="0.01">
                 </div>
-                <div class="form-group qty-field">
+                <div class="form-group qty-field" id="dn_thickness_group">
                     <label for="dn_thickness">Дебелина (мм)</label>
                     <input type="number" id="dn_thickness" min="0" step="0.01">
                 </div>
@@ -300,7 +307,7 @@
                     <input type="text" id="qm_brand" name="brand" placeholder="напр. Alcoa">
                 </div>
                 <div class="form-group" style="margin-bottom: 15px;">
-                    <label for="qm_cost_per_m2">Цена на м² плоча (€)</label>
+                    <label for="qm_cost_per_m2" id="qm_cost_per_m2_label">Цена на м² плоча (€)</label>
                     <input type="number" id="qm_cost_per_m2" step="0.01" min="0" name="cost_per_m2" required>
                 </div>
                 <div class="form-group" style="margin-bottom: 15px;">
@@ -311,15 +318,15 @@
                     <label for="qm_cost_per_pierce">Цена на пробиване (€)</label>
                     <input type="number" id="qm_cost_per_pierce" step="0.01" min="0" name="cost_per_pierce" required>
                 </div>
-                <div class="form-group" style="margin-bottom: 15px;">
+                <div class="form-group" style="margin-bottom: 15px;" id="qm_sheet_length_mm_group">
                     <label for="qm_sheet_length_mm">Дължина на плочата (мм)</label>
                     <input type="number" id="qm_sheet_length_mm" step="1" min="0" name="sheet_length_mm">
                 </div>
-                <div class="form-group" style="margin-bottom: 15px;">
+                <div class="form-group" style="margin-bottom: 15px;" id="qm_sheet_width_mm_group">
                     <label for="qm_sheet_width_mm">Ширина на плочата (мм)</label>
                     <input type="number" id="qm_sheet_width_mm" step="1" min="0" name="sheet_width_mm">
                 </div>
-                <div class="form-group" style="margin-bottom: 15px;">
+                <div class="form-group" style="margin-bottom: 15px;" id="qm_thickness_mm_group">
                     <label for="qm_thickness_mm">Дебелина (мм)</label>
                     <input type="number" id="qm_thickness_mm" step="0.1" min="0" name="thickness_mm">
                 </div>
@@ -493,7 +500,78 @@
     function closeQuickMaterialModal() {
         document.getElementById('quickMaterialModal').style.display = 'none';
         document.getElementById('quickMaterialForm').reset();
+        applyQuickMaterialDimensionLabels();
     }
+
+    // Relabels/hides the 3 generic dimension fields based on the chosen type -
+    // mirrors MATERIAL_DIMENSION_LABELS/material_price_m2_label in app.py, same
+    // as the standalone add-material form on admin_materials.html.
+    const QM_DIMENSION_FIELD_LABELS = {
+        sheets: ['Дължина на плочата (мм)', 'Ширина на плочата (мм)', 'Дебелина (мм)'],
+        rods: ['Дължина (мм)', 'Диаметър (мм)', null],
+        pipes: ['Дължина (мм)', 'Външен диаметър (мм)', 'Дебелина на стената (мм)'],
+        profiles: ['Дължина (мм)', 'Ширина (мм)', 'Дебелина на стената (мм)'],
+        other: [null, null, null],
+    };
+    const QM_DIMENSION_FIELD_IDS = ['qm_sheet_length_mm', 'qm_sheet_width_mm', 'qm_thickness_mm'];
+
+    function applyQuickMaterialDimensionLabels() {
+        const typeSelect = document.getElementById('qm_type');
+        const labels = QM_DIMENSION_FIELD_LABELS[typeSelect.value] || QM_DIMENSION_FIELD_LABELS.sheets;
+        QM_DIMENSION_FIELD_IDS.forEach((fieldId, i) => {
+            const group = document.getElementById(fieldId + '_group');
+            const label = group.querySelector('label');
+            if (labels[i]) {
+                group.style.display = '';
+                label.textContent = labels[i];
+            } else {
+                group.style.display = 'none';
+            }
+        });
+        document.getElementById('qm_cost_per_m2_label').textContent =
+            typeSelect.value === 'sheets' ? 'Цена на м² плоча (€)' : 'Цена на м² материал (€)';
+    }
+
+    document.getElementById('qm_type').addEventListener('change', applyQuickMaterialDimensionLabels);
+    applyQuickMaterialDimensionLabels();
+
+    const DN_DIMENSION_DEFAULT_LABELS = { width: 'Ширина (мм)', height: 'Дължина/Височина (мм)', thickness: 'Дебелина (мм)' };
+
+    // The shared dn_width/dn_height/dn_thickness fields double as a new
+    // material's own catalog dimensions (see _find_or_create_delivery_target)
+    // when adding a brand-new material row - relabel them the same way as
+    // the quick-create-material modal above whenever that's the case;
+    // otherwise (existing material, or a detail/product row) they're just
+    // generic per-line dimensions, so keep the original wording.
+    function applyDnMaterialDimensionLabels() {
+        const type = document.querySelector('input[name="dn_item_type"]:checked').value;
+        const isNew = document.getElementById('dn_material_select').value === '__new__';
+        const widthLabel = document.querySelector('label[for=dn_width]');
+        const heightLabel = document.querySelector('label[for=dn_height]');
+        const thicknessGroup = document.getElementById('dn_thickness_group');
+        const thicknessLabel = document.querySelector('label[for=dn_thickness]');
+
+        if (type === 'material' && isNew) {
+            const labels = QM_DIMENSION_FIELD_LABELS[document.getElementById('dn_material_type').value] || QM_DIMENSION_FIELD_LABELS.sheets;
+            heightLabel.textContent = labels[0];
+            widthLabel.textContent = labels[1];
+            if (labels[2]) {
+                thicknessGroup.style.display = '';
+                thicknessLabel.textContent = labels[2];
+            } else {
+                thicknessGroup.style.display = 'none';
+                document.getElementById('dn_thickness').value = '';
+            }
+        } else {
+            widthLabel.textContent = DN_DIMENSION_DEFAULT_LABELS.width;
+            heightLabel.textContent = DN_DIMENSION_DEFAULT_LABELS.height;
+            thicknessGroup.style.display = '';
+            thicknessLabel.textContent = DN_DIMENSION_DEFAULT_LABELS.thickness;
+        }
+    }
+
+    document.getElementById('dn_material_type').addEventListener('change', applyDnMaterialDimensionLabels);
+
     document.getElementById('quickMaterialForm').addEventListener('submit', function (e) {
         e.preventDefault();
         const submitBtn = this.querySelector('button[type="submit"]');
@@ -575,11 +653,13 @@
         const materialPricing = document.getElementById('dn_material_new_pricing');
         const showMaterialPricing = type === 'material' && isNew;
         materialPricing.style.display = showMaterialPricing ? 'flex' : 'none';
+        document.getElementById('dn_material_type_group').style.display = showMaterialPricing ? 'block' : 'none';
         if (!showMaterialPricing) {
             ['dn_material_cost_per_m2', 'dn_material_cost_per_meter_cut', 'dn_material_cost_per_pierce'].forEach(function (id) {
                 document.getElementById(id).value = '';
             });
         }
+        applyDnMaterialDimensionLabels();
 
         const showProductComponents = type === 'product' && isNew;
         document.getElementById('product_components_row').style.display = showProductComponents ? 'flex' : 'none';
@@ -644,7 +724,7 @@
             return raw === '' ? null : parseFloat(raw);
         }
 
-        let costPerM2 = null, costPerMeterCut = null, costPerPierce = null;
+        let costPerM2 = null, costPerMeterCut = null, costPerPierce = null, materialType = null;
         if (type === 'material' && isNewItem) {
             costPerM2 = numOrNull('dn_material_cost_per_m2');
             costPerMeterCut = numOrNull('dn_material_cost_per_meter_cut');
@@ -653,6 +733,7 @@
                 alert('Моля въведете цена/м², цена/м рязане и цена/пробиване за новия материал.');
                 return;
             }
+            materialType = document.getElementById('dn_material_type').value;
         }
 
         const components = (type === 'product' && isNewItem)
@@ -665,6 +746,7 @@
             brand: document.getElementById('dn_brand').value.trim() || null,
             notes: document.getElementById('dn_notes').value.trim() || null,
             cost_per_m2: costPerM2, cost_per_meter_cut: costPerMeterCut, cost_per_pierce: costPerPierce,
+            material_type: materialType,
             components: components,
         });
         document.getElementById('dn_notes').value = '';
@@ -732,7 +814,7 @@
                     type: c.type, name: c.name, material_key: c.material_key, qty: c.qty, unit_price: c.unit_price,
                     width: c.width, height: c.height, thickness: c.thickness, brand: c.brand, notes: c.notes,
                     cost_per_m2: c.cost_per_m2, cost_per_meter_cut: c.cost_per_meter_cut, cost_per_pierce: c.cost_per_pierce,
-                    components: c.components,
+                    material_type: c.material_type, components: c.components,
                 };
             })
         );

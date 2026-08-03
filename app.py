@@ -7,7 +7,7 @@ import uuid
 import io
 import webbrowser
 import threading
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_limiter import Limiter
@@ -88,6 +88,12 @@ os.makedirs(app.config['PRODUCT_IMAGES_FOLDER'], exist_ok=True)
 # machine images join them here.
 app.config['MACHINE_IMAGES_FOLDER'] = os.path.join(app.static_folder, 'img', 'machines')
 os.makedirs(app.config['MACHINE_IMAGES_FOLDER'], exist_ok=True)
+# Private (non-static) storage for Detail DXF files - unlike UPLOAD_FOLDER,
+# files saved here are kept permanently, not deleted after processing. Never
+# served via Flask's static route; only download_detail_dxf() (admin-only)
+# reads from it.
+app.config['DETAIL_DXF_FOLDER'] = os.path.join(os.getcwd(), 'detail_dxf_files')
+os.makedirs(app.config['DETAIL_DXF_FOLDER'], exist_ok=True)
 
 
 # ----------------- МОДЕЛИ В БАЗАТА ДАННИ -----------------
@@ -195,6 +201,58 @@ MATERIAL_TYPE_LABELS = {
     'other': 'Други',
 }
 
+# Per-type display labels for the 3 generic dimension columns (sheet_length_mm,
+# sheet_width_mm, thickness_mm - in that order), so a rod's "width" column
+# reads "Диаметър" instead of "Ширина", etc. None hides that slot's meaning
+# for the type (still stored/editable, just not a relevant physical
+# dimension) - see material_dimension_labels() and admin_materials.html.
+# ponytail: reuses the 3 existing sheet-named columns instead of adding
+# dedicated diameter_mm/wall_thickness_mm columns - avoids a migration, at
+# the cost of the column names not matching what they mean for non-sheet
+# types. Add real columns if this ever needs to be less confusing at the DB
+# level.
+MATERIAL_DIMENSION_LABELS = {
+    'sheets': ('Дължина на плочата (мм)', 'Ширина на плочата (мм)', 'Дебелина (мм)'),
+    'rods': ('Дължина (мм)', 'Диаметър (мм)', None),
+    'pipes': ('Дължина (мм)', 'Външен диаметър (мм)', 'Дебелина на стената (мм)'),
+    'profiles': ('Дължина (мм)', 'Ширина (мм)', 'Дебелина на стената (мм)'),
+    'other': (None, None, None),
+}
+
+
+def material_dimension_labels(type_key):
+    """(length_label, width_label, thickness_label) for a material type, falling
+    back to the sheet labels for unknown/blank types - same default as
+    _parse_material_type()."""
+    return MATERIAL_DIMENSION_LABELS.get(type_key, MATERIAL_DIMENSION_LABELS['sheets'])
+
+
+def material_price_m2_label(type_key):
+    """
+    cost_per_m2 is still literally area-based for every type (calculate_cnc_price()
+    always prices off the DXF bounding-box area, regardless of stock form), so the
+    field itself doesn't change - only 'plate' in the label is sheet-specific and
+    reads oddly for rods/pipes/profiles.
+    """
+    return 'Цена на м² плоча (€)' if type_key == 'sheets' else 'Цена на м² материал (€)'
+
+
+def format_cut_dimensions(width, height, material_type):
+    """
+    Displays a cut part's DXF bounding-box width/height (see
+    analyze_dxf_geometry/compute_bounding_box - always the same two numbers
+    regardless of stock type) with vocabulary that matches the material's
+    structural form: a rod/pipe's cross-section reads as a diameter, not a
+    generic width. Used for Detail rows (admin_details.html) and personal
+    DxfFile upload history (dashboard.html) - both list mixed material types
+    in one flat table, so this is a per-row label, not a column header.
+    """
+    if width is None or height is None:
+        return '-'
+    if material_type in ('rods', 'pipes'):
+        return f"⌀{width:.2f} x {height:.2f} мм"
+    return f"{width:.2f} x {height:.2f} мм"
+
 
 def _validate_eik(raw):
     """
@@ -274,6 +332,27 @@ class Detail(db.Model):
     stock_quantity = db.Column(db.Float, nullable=False, default=0.0)
 
     material = db.relationship('MaterialPrice')
+
+
+class DetailDxfFile(db.Model):
+    """
+    An original .dxf file kept for a Detail, shown on its admin-only file
+    dashboard (see detail_dxf_dashboard()). Separate from Detail.geometry_json
+    (the parsed shape data used for pricing/rendering) - process_dxf_upload()
+    and the old admin_add_detail() flow used to delete the raw upload once
+    geometry/price were extracted; this table is what keeps it around instead.
+    Any logged-in user can upload a file here (e.g. a revision), but only
+    admins may download - see download_detail_dxf().
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=False)
+    filename = db.Column(db.String(255), nullable=False)  # on-disk name (uuid-prefixed, collision-safe)
+    original_filename = db.Column(db.String(255), nullable=False)  # shown in the UI / used as download name
+    uploaded_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    detail = db.relationship('Detail', backref=db.backref('dxf_files', cascade='all, delete-orphan', lazy=True))
+    uploaded_by = db.relationship('User')
 
 
 class ProductImage(db.Model):
@@ -598,6 +677,10 @@ class ServiceMachineCard(db.Model):
     """
     id = db.Column(db.Integer, primary_key=True)
     page = db.Column(db.String(20), nullable=False, default='services')
+    # 'machine' (default, existing sectioned grid) or 'product' (new flat
+    # grid on the services page, mirrors the index page's machine layout -
+    # see services()/services.html). Products never use section_title.
+    kind = db.Column(db.String(20), nullable=False, default='machine')
     section_title = db.Column(db.String(150), nullable=True)
     series_label = db.Column(db.String(100), nullable=True)
     title = db.Column(db.String(150), nullable=False)
@@ -1208,6 +1291,9 @@ app.jinja_env.globals['get_text'] = get_text
 app.jinja_env.globals['material_type_label'] = lambda key: MATERIAL_TYPE_LABELS.get(key, key)
 app.jinja_env.globals['MATERIAL_TYPE_LABELS'] = MATERIAL_TYPE_LABELS
 app.jinja_env.globals['format_material_option'] = format_material_option
+app.jinja_env.globals['material_dimension_labels'] = material_dimension_labels
+app.jinja_env.globals['material_price_m2_label'] = material_price_m2_label
+app.jinja_env.globals['format_cut_dimensions'] = format_cut_dimensions
 
 
 @app.route('/robots.txt')
@@ -1255,9 +1341,12 @@ def _group_service_cards_by_section(cards):
 
 @app.route('/services')
 def services():
-    cards = ServiceMachineCard.query.filter_by(page='services').order_by(ServiceMachineCard.id).all()
+    cards = ServiceMachineCard.query.filter_by(page='services', kind='machine').order_by(ServiceMachineCard.id).all()
     sections = _group_service_cards_by_section(cards)
-    return render_template('services.html', active_page='services', machine_sections=sections)
+    # Products are a flat grid (like the index page's machine cards), not
+    # sectioned by section_title - see ServiceMachineCard.kind.
+    product_cards = ServiceMachineCard.query.filter_by(page='services', kind='product').order_by(ServiceMachineCard.id).all()
+    return render_template('services.html', active_page='services', machine_sections=sections, product_cards=product_cards)
 
 
 @app.route('/about')
@@ -1781,7 +1870,8 @@ DELIVERY_NOTE_TARGET_MODELS = {'material': MaterialPrice, 'detail': Detail, 'pro
 
 
 def _find_or_create_delivery_target(item_type, name, brand, width, height, thickness, unit_price, material_key,
-                                     cost_per_m2=None, cost_per_meter_cut=None, cost_per_pierce=None, components=None):
+                                     cost_per_m2=None, cost_per_meter_cut=None, cost_per_pierce=None, components=None,
+                                     material_type='sheets'):
     """
     Resolves one delivery-note line to a catalog row: reuses an existing
     Material/Detail/Product only if every descriptive field matches exactly,
@@ -1813,9 +1903,10 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
     brand = (brand or '').strip() or None
 
     if item_type == 'material':
+        material_type = material_type if material_type in MATERIAL_TYPE_LABELS else 'sheets'
         existing = MaterialPrice.query.filter_by(
             display_name=name, brand=brand, sheet_width_mm=width,
-            sheet_length_mm=height, thickness_mm=thickness
+            sheet_length_mm=height, thickness_mm=thickness, type=material_type
         ).first()
         if existing:
             return existing
@@ -1824,7 +1915,7 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
         new_row = MaterialPrice(
             key='pending', display_name=name, cost_per_m2=cost_per_m2, cost_per_meter_cut=cost_per_meter_cut,
             cost_per_pierce=cost_per_pierce, sheet_width_mm=width, sheet_length_mm=height,
-            thickness_mm=thickness, brand=brand, type='sheets', erp_number=_next_erp_number(),
+            thickness_mm=thickness, brand=brand, type=material_type, erp_number=_next_erp_number(),
         )
         db.session.add(new_row)
         db.session.flush()
@@ -1936,7 +2027,10 @@ def create_delivery_note():
     _find_or_create_delivery_target). items_json follows
     [{type, name, material_key, qty, unit_price, width, height, thickness,
     brand, notes, cost_per_m2, cost_per_meter_cut, cost_per_pierce,
-    components}] - no id, since the row to bump/create is resolved from
+    material_type, components}] - material_type (sheets/rods/profiles/pipes/
+    other) only matters for a brand-new material line; defaults to 'sheets'
+    if missing, same as _parse_material_type(). No id, since the row to
+    bump/create is resolved from
     the line's own fields, not a pre-picked id (that's what used to let a
     line silently bump the wrong/dissimilar catalog row). `components`
     ([{detail_id, quantity}]) only applies to a brand-new product line -
@@ -2000,6 +2094,7 @@ def create_delivery_note():
         cost_per_m2 = _optional_float('cost_per_m2')
         cost_per_meter_cut = _optional_float('cost_per_meter_cut')
         cost_per_pierce = _optional_float('cost_per_pierce')
+        material_type = (row.get('material_type') or 'sheets').strip()
 
         components = {}  # detail_id -> quantity, merging duplicates; malformed/unknown entries are just skipped
         for comp in (row.get('components') or []):
@@ -2017,7 +2112,7 @@ def create_delivery_note():
         target = _find_or_create_delivery_target(
             item_type, name, brand, width, height, thickness, unit_price, material_key,
             cost_per_m2=cost_per_m2, cost_per_meter_cut=cost_per_meter_cut, cost_per_pierce=cost_per_pierce,
-            components=components
+            components=components, material_type=material_type
         )
         if not target:
             continue
@@ -2098,19 +2193,22 @@ def _save_machine_card_image(file):
 @app.route('/services/machine-cards/new')
 @login_required
 def new_machine_card_window():
-    """Popup 'add new machine card' window - opened from services.html or index.html."""
+    """Popup 'add new machine/product card' window - opened from services.html or index.html."""
     if not current_user.can_edit_content:
         flash('Нямате достъп до тази страница.', 'danger')
         return redirect(url_for('dashboard'))
     page = 'index' if request.args.get('page') == 'index' else 'services'
+    kind = 'product' if request.args.get('kind') == 'product' else 'machine'
+    noun = 'продукта' if kind == 'product' else 'машината'
     fields = [
         {'name': 'series_label', 'label': 'Кратък етикет (напр. 5-ОСНО ФРЕЗОВАНЕ)', 'value': '', 'type': 'text'},
-        {'name': 'title', 'label': 'Име на машината', 'value': '', 'type': 'text', 'required': True},
-        {'name': 'image', 'label': 'Снимка на машината (по избор)', 'value': '', 'type': 'file'},
+        {'name': 'title', 'label': f'Име на {noun}', 'value': '', 'type': 'text', 'required': True},
+        {'name': 'image', 'label': f'Снимка на {noun} (по избор)', 'value': '', 'type': 'file'},
     ]
-    if page == 'services':
-        # Only the services page groups cards by section - pick an existing
-        # section (e.g. "ФРЕЗОВИ ЦЕНТРОВЕ") or type a brand-new one.
+    if page == 'services' and kind == 'machine':
+        # Only the services page's machines are grouped by section - pick an
+        # existing section (e.g. "ФРЕЗОВИ ЦЕНТРОВЕ") or type a brand-new one.
+        # Products are always a flat grid, so they skip this field.
         fields.append({'name': 'section_title', 'label': 'Раздел (напр. фрезоване, струговане, листообработка)',
                         'value': '', 'type': 'datalist', 'options': _service_section_titles()})
     fields += [
@@ -2118,8 +2216,9 @@ def new_machine_card_window():
         {'name': 'description', 'label': 'Описание', 'value': '', 'type': 'textarea'},
     ]
     return render_template(
-        'edit_window.html', item_label='нова машина', saved=request.args.get('saved') == '1',
-        action=url_for('create_machine_card', page=page), fields=fields
+        'edit_window.html', item_label='нов продукт' if kind == 'product' else 'нова машина',
+        saved=request.args.get('saved') == '1',
+        action=url_for('create_machine_card', page=page, kind=kind), fields=fields
     )
 
 
@@ -2131,27 +2230,29 @@ def create_machine_card():
         return redirect(url_for('dashboard'))
 
     page = 'index' if request.args.get('page') == 'index' else 'services'
+    kind = 'product' if request.args.get('kind') == 'product' else 'machine'
     redirect_target = _machine_card_home(page)
 
     title = request.form.get('title', '').strip()
     if not title:
-        flash('Моля въведете име на машината.', 'danger')
+        flash('Моля въведете име.', 'danger')
         return redirect(redirect_target)
 
     card = ServiceMachineCard(
         page=page,
+        kind=kind,
         title=title,
         series_label=request.form.get('series_label', '').strip() or None,
-        section_title=request.form.get('section_title', '').strip() or None if page == 'services' else None,
+        section_title=request.form.get('section_title', '').strip() or None if page == 'services' and kind == 'machine' else None,
         specs_text=request.form.get('specs_text', '').strip() or None,
         description=request.form.get('description', '').strip() or None,
         image_filename=_save_machine_card_image(request.files.get('image')),
     )
     db.session.add(card)
     db.session.commit()
-    flash('Машината беше добавена успешно.', 'success')
+    flash('Добавено успешно.', 'success')
     if request.form.get('popup') == '1':
-        return redirect(url_for('new_machine_card_window', page=page, saved='1'))
+        return redirect(url_for('new_machine_card_window', page=page, kind=kind, saved='1'))
     return redirect(redirect_target)
 
 
@@ -2162,13 +2263,14 @@ def edit_machine_card_window(card_id):
         flash('Нямате достъп до тази страница.', 'danger')
         return redirect(url_for('dashboard'))
     card = ServiceMachineCard.query.get_or_404(card_id)
+    noun = 'продукта' if card.kind == 'product' else 'машината'
     fields = [
         {'name': 'series_label', 'label': 'Кратък етикет (напр. 5-ОСНО ФРЕЗОВАНЕ)', 'value': card.series_label or '', 'type': 'text'},
-        {'name': 'title', 'label': 'Име на машината', 'value': card.title, 'type': 'text', 'required': True},
-        {'name': 'image', 'label': 'Снимка на машината (по избор - оставете празно, за да запазите текущата)', 'value': '', 'type': 'file',
+        {'name': 'title', 'label': f'Име на {noun}', 'value': card.title, 'type': 'text', 'required': True},
+        {'name': 'image', 'label': f'Снимка на {noun} (по избор - оставете празно, за да запазите текущата)', 'value': '', 'type': 'file',
          'preview_url': url_for('static', filename='img/machines/' + card.image_filename) if card.image_filename else None},
     ]
-    if card.page == 'services':
+    if card.page == 'services' and card.kind == 'machine':
         fields.append({'name': 'section_title', 'label': 'Раздел (напр. фрезоване, струговане, листообработка)',
                         'value': card.section_title or '', 'type': 'datalist', 'options': _service_section_titles()})
     fields += [
@@ -2176,7 +2278,8 @@ def edit_machine_card_window(card_id):
         {'name': 'description', 'label': 'Описание', 'value': card.description or '', 'type': 'textarea'},
     ]
     return render_template(
-        'edit_window.html', item_label='машина', saved=request.args.get('saved') == '1',
+        'edit_window.html', item_label='продукт' if card.kind == 'product' else 'машина',
+        saved=request.args.get('saved') == '1',
         action=url_for('update_machine_card', card_id=card.id), fields=fields
     )
 
@@ -2192,12 +2295,12 @@ def update_machine_card(card_id):
     redirect_target = _machine_card_home(card.page)
     title = request.form.get('title', '').strip()
     if not title:
-        flash('Моля въведете име на машината.', 'danger')
+        flash('Моля въведете име.', 'danger')
         return redirect(redirect_target)
 
     card.title = title
     card.series_label = request.form.get('series_label', '').strip() or None
-    if card.page == 'services':
+    if card.page == 'services' and card.kind == 'machine':
         card.section_title = request.form.get('section_title', '').strip() or None
     card.specs_text = request.form.get('specs_text', '').strip() or None
     card.description = request.form.get('description', '').strip() or None
@@ -2217,7 +2320,7 @@ def update_machine_card(card_id):
         card.image_filename = new_image_filename
 
     db.session.commit()
-    flash('Машината беше обновена успешно.', 'success')
+    flash('Обновено успешно.', 'success')
     if request.form.get('popup') == '1':
         return redirect(url_for('edit_machine_card_window', card_id=card_id, saved='1'))
     return redirect(redirect_target)
@@ -2233,7 +2336,7 @@ def delete_machine_card(card_id):
     redirect_target = _machine_card_home(card.page)
     db.session.delete(card)
     db.session.commit()
-    flash('Машината беше премахната успешно.', 'success')
+    flash('Премахнато успешно.', 'success')
     return redirect(redirect_target)
 
 
@@ -2712,15 +2815,20 @@ def admin_add_detail():
         flash('Невалиден формат! Приемат се само .dxf файлове.', 'danger')
         return redirect(url_for('admin_details'))
 
-    temp_path = None
+    # Saved straight into DETAIL_DXF_FOLDER (not the scratch UPLOAD_FOLDER) so
+    # the file survives past this request - see detail_dxf_dashboard() /
+    # DetailDxfFile. Only removed again below if something fails.
+    stored_path = None
     try:
-        filename = secure_filename(file.filename)
-        temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{uuid.uuid4().hex}_{filename}")
-        file.save(temp_path)
+        original_filename = secure_filename(file.filename)
+        stored_filename = f"{uuid.uuid4().hex}_{original_filename}"
+        stored_path = os.path.join(app.config['DETAIL_DXF_FOLDER'], stored_filename)
+        file.save(stored_path)
 
-        width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(temp_path)
+        width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(stored_path)
         if width is None:
             flash('Грешка при обработката на DXF структурата.', 'danger')
+            os.remove(stored_path)
             return redirect(url_for('admin_details'))
 
         price = calculate_cnc_price(width, height, total_length, pierce_count, material_key)
@@ -2732,17 +2840,70 @@ def admin_add_detail():
             erp_number=erp_number, code_number=code_number
         )
         db.session.add(new_detail)
+        db.session.flush()  # assigns new_detail.id for the DetailDxfFile FK below
+        db.session.add(DetailDxfFile(
+            detail_id=new_detail.id, filename=stored_filename, original_filename=original_filename,
+            uploaded_by_id=current_user.id
+        ))
         db.session.commit()
         flash(f'Детайлът "{name}" беше добавен успешно.', 'success')
+        return redirect(url_for('admin_details'))
 
     except Exception as e:
         db.session.rollback()
         flash(f'Грешка при обработка/запис: {str(e)}', 'danger')
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            os.remove(temp_path)
+        if stored_path and os.path.exists(stored_path):
+            os.remove(stored_path)
 
     return redirect(url_for('admin_details'))
+
+
+@app.route('/details/<int:detail_id>/files')
+@login_required
+def detail_dxf_dashboard(detail_id):
+    """
+    A Detail's DXF file repository - reached by clicking the detail's name on
+    /admin/details (admins) or by a direct link (any logged-in user, e.g. to
+    upload a revision - see the DXF dashboard access decision in the task
+    notes). Anyone logged in can view the list and upload, but only admins
+    get a working download link - see download_detail_dxf().
+    """
+    detail = Detail.query.get_or_404(detail_id)
+    files = DetailDxfFile.query.filter_by(detail_id=detail_id).order_by(DetailDxfFile.uploaded_at.desc()).all()
+    return render_template('detail_dxf_dashboard.html', detail=detail, files=files, active_page='admin_details')
+
+
+@app.route('/details/<int:detail_id>/files/upload', methods=['POST'])
+@login_required
+def upload_detail_dxf(detail_id):
+    detail = Detail.query.get_or_404(detail_id)
+    file = request.files.get('file')
+    if not file or file.filename == '' or not file.filename.lower().endswith('.dxf'):
+        flash('Моля изберете валиден .dxf файл.', 'danger')
+        return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
+
+    original_filename = secure_filename(file.filename)
+    stored_filename = f"{uuid.uuid4().hex}_{original_filename}"
+    file.save(os.path.join(app.config['DETAIL_DXF_FOLDER'], stored_filename))
+    db.session.add(DetailDxfFile(
+        detail_id=detail.id, filename=stored_filename, original_filename=original_filename,
+        uploaded_by_id=current_user.id
+    ))
+    db.session.commit()
+    flash('DXF файлът беше качен успешно.', 'success')
+    return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
+
+
+@app.route('/details/files/<int:file_id>/download')
+@role_required('admin')
+def download_detail_dxf(file_id):
+    """Strictly admin-only, per the access decision - regular users/workers can
+    upload to a detail's dashboard but must never be able to pull the raw file back out."""
+    dxf_file = DetailDxfFile.query.get_or_404(file_id)
+    return send_from_directory(
+        app.config['DETAIL_DXF_FOLDER'], dxf_file.filename,
+        as_attachment=True, download_name=dxf_file.original_filename
+    )
 
 
 @app.route('/admin/details/<int:detail_id>/edit')
@@ -2796,6 +2957,11 @@ def admin_delete_detail(detail_id):
     if ProductDetail.query.filter_by(detail_id=detail.id).first():
         flash(f'Детайлът "{detail.name}" се използва в поне един продукт и не може да бъде изтрит.', 'danger')
         return redirect(url_for('admin_details'))
+
+    for dxf_file in detail.dxf_files:
+        dxf_path = os.path.join(app.config['DETAIL_DXF_FOLDER'], dxf_file.filename)
+        if os.path.exists(dxf_path):
+            os.remove(dxf_path)
 
     db.session.delete(detail)
     db.session.commit()

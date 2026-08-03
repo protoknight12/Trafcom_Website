@@ -4,6 +4,7 @@ __pycache__/
 .env
 uploads/
 static/uploads/products/*
+detail_dxf_files/
 
 # Local-only dev docs - not part of the public site repo
 CLAUDE.md

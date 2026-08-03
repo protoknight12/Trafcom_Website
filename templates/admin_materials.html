@@ -76,7 +76,7 @@
                 <input type="text" id="new_brand" name="brand" placeholder="напр. Alcoa">
             </div>
             <div class="form-group">
-                <label for="new_cost_per_m2">Цена на м² плоча (€)</label>
+                <label for="new_cost_per_m2" id="new_cost_per_m2_label">Цена на м² плоча (€)</label>
                 <input type="number" id="new_cost_per_m2" step="0.01" min="0" name="cost_per_m2" placeholder="напр. 40.00" required>
             </div>
             <div class="form-group">
@@ -87,15 +87,15 @@
                 <label for="new_cost_per_pierce">Цена на пробиване (€)</label>
                 <input type="number" id="new_cost_per_pierce" step="0.01" min="0" name="cost_per_pierce" placeholder="напр. 0.20" required>
             </div>
-            <div class="form-group">
+            <div class="form-group" id="new_sheet_length_mm_group">
                 <label for="new_sheet_length_mm">Дължина на плочата (мм)</label>
                 <input type="number" id="new_sheet_length_mm" step="1" min="0" name="sheet_length_mm" placeholder="напр. 3000">
             </div>
-            <div class="form-group">
+            <div class="form-group" id="new_sheet_width_mm_group">
                 <label for="new_sheet_width_mm">Ширина на плочата (мм)</label>
                 <input type="number" id="new_sheet_width_mm" step="1" min="0" name="sheet_width_mm" placeholder="напр. 1500">
             </div>
-            <div class="form-group">
+            <div class="form-group" id="new_thickness_mm_group">
                 <label for="new_thickness_mm">Дебелина (мм)</label>
                 <input type="number" id="new_thickness_mm" step="0.1" min="0" name="thickness_mm" placeholder="напр. 2">
             </div>
@@ -116,6 +116,7 @@
         <p class="section-subtitle">Редактирайте цените на материалите, използвани при изчисляване на всяка поръчка. Промените влизат в сила незабавно за всички нови изчисления.</p>
 
         {% for type_key, group in materials|groupby('type') %}
+        {% set dim_labels = material_dimension_labels(type_key) %}
         <h4 style="margin-top: 1.5rem;">{{ material_type_label(type_key) }}</h4>
         <div class="table-responsive">
             <table class="users-table">
@@ -124,12 +125,12 @@
                     <th>Материал</th>
                     <th>Марка</th>
                     <th>Тип</th>
-                    <th>Цена на м² плоча (€)</th>
+                    <th>{{ material_price_m2_label(type_key) }}</th>
                     <th>Цена на метър рязане (€)</th>
                     <th>Цена на пробиване (€)</th>
-                    <th>Дължина (мм)</th>
-                    <th>Ширина (мм)</th>
-                    <th>Дебелина (мм)</th>
+                    <th>{{ dim_labels[0] or '—' }}</th>
+                    <th>{{ dim_labels[1] or '—' }}</th>
+                    <th>{{ dim_labels[2] or '—' }}</th>
                     <th>На склад</th>
                     <th>ERP №</th>
                     <th>КД №</th>
@@ -199,6 +200,45 @@
     </section>
 
 </main>
+
+<script>
+    // Relabels/hides the 3 generic dimension fields on the "add material" form
+    // based on the chosen type - mirrors MATERIAL_DIMENSION_LABELS in app.py
+    // (server-side, used for the already-saved materials' table headers below).
+    const MATERIAL_DIMENSION_FIELD_LABELS = {
+        sheets: ['Дължина на плочата (мм)', 'Ширина на плочата (мм)', 'Дебелина (мм)'],
+        rods: ['Дължина (мм)', 'Диаметър (мм)', null],
+        pipes: ['Дължина (мм)', 'Външен диаметър (мм)', 'Дебелина на стената (мм)'],
+        profiles: ['Дължина (мм)', 'Ширина (мм)', 'Дебелина на стената (мм)'],
+        other: [null, null, null],
+    };
+    const DIMENSION_FIELD_IDS = ['new_sheet_length_mm', 'new_sheet_width_mm', 'new_thickness_mm'];
+
+    function applyMaterialDimensionLabels() {
+        const typeSelect = document.getElementById('new_type');
+        if (!typeSelect) return;
+        const labels = MATERIAL_DIMENSION_FIELD_LABELS[typeSelect.value] || MATERIAL_DIMENSION_FIELD_LABELS.sheets;
+        DIMENSION_FIELD_IDS.forEach((fieldId, i) => {
+            const group = document.getElementById(fieldId + '_group');
+            const label = group.querySelector('label');
+            if (labels[i]) {
+                group.style.display = '';
+                label.textContent = labels[i];
+            } else {
+                group.style.display = 'none';
+            }
+        });
+
+        // cost_per_m2 is still area-based pricing for every type (see
+        // material_price_m2_label() in app.py) - only "plate" in the label
+        // is sheet-specific wording.
+        document.getElementById('new_cost_per_m2_label').textContent =
+            typeSelect.value === 'sheets' ? 'Цена на м² плоча (€)' : 'Цена на м² материал (€)';
+    }
+
+    document.getElementById('new_type').addEventListener('change', applyMaterialDimensionLabels);
+    applyMaterialDimensionLabels();
+</script>
 
 </body>
 </html>

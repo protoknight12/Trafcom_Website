@@ -310,7 +310,7 @@
                 <input type="text" id="qm_brand" name="brand" placeholder="напр. Alcoa">
             </div>
             <div class="form-group" style="margin-bottom: 15px;">
-                <label for="qm_cost_per_m2">Цена на м² плоча (€)</label>
+                <label for="qm_cost_per_m2" id="qm_cost_per_m2_label">Цена на м² плоча (€)</label>
                 <input type="number" id="qm_cost_per_m2" step="0.01" min="0" name="cost_per_m2" required>
             </div>
             <div class="form-group" style="margin-bottom: 15px;">
@@ -321,15 +321,15 @@
                 <label for="qm_cost_per_pierce">Цена на пробиване (€)</label>
                 <input type="number" id="qm_cost_per_pierce" step="0.01" min="0" name="cost_per_pierce" required>
             </div>
-            <div class="form-group" style="margin-bottom: 15px;">
+            <div class="form-group" style="margin-bottom: 15px;" id="qm_sheet_length_mm_group">
                 <label for="qm_sheet_length_mm">Дължина на плочата (мм)</label>
                 <input type="number" id="qm_sheet_length_mm" step="1" min="0" name="sheet_length_mm">
             </div>
-            <div class="form-group" style="margin-bottom: 15px;">
+            <div class="form-group" style="margin-bottom: 15px;" id="qm_sheet_width_mm_group">
                 <label for="qm_sheet_width_mm">Ширина на плочата (мм)</label>
                 <input type="number" id="qm_sheet_width_mm" step="1" min="0" name="sheet_width_mm">
             </div>
-            <div class="form-group" style="margin-bottom: 15px;">
+            <div class="form-group" style="margin-bottom: 15px;" id="qm_thickness_mm_group">
                 <label for="qm_thickness_mm">Дебелина (мм)</label>
                 <input type="number" id="qm_thickness_mm" step="0.1" min="0" name="thickness_mm">
             </div>
@@ -357,7 +357,41 @@
     function closeQuickMaterialModal() {
         document.getElementById('quickMaterialModal').style.display = 'none';
         document.getElementById('quickMaterialForm').reset();
+        applyQuickMaterialDimensionLabels();
     }
+
+    // Relabels/hides the 3 generic dimension fields based on the chosen type -
+    // mirrors MATERIAL_DIMENSION_LABELS/material_price_m2_label in app.py, same
+    // as the standalone add-material form on admin_materials.html.
+    const QM_DIMENSION_FIELD_LABELS = {
+        sheets: ['Дължина на плочата (мм)', 'Ширина на плочата (мм)', 'Дебелина (мм)'],
+        rods: ['Дължина (мм)', 'Диаметър (мм)', null],
+        pipes: ['Дължина (мм)', 'Външен диаметър (мм)', 'Дебелина на стената (мм)'],
+        profiles: ['Дължина (мм)', 'Ширина (мм)', 'Дебелина на стената (мм)'],
+        other: [null, null, null],
+    };
+    const QM_DIMENSION_FIELD_IDS = ['qm_sheet_length_mm', 'qm_sheet_width_mm', 'qm_thickness_mm'];
+
+    function applyQuickMaterialDimensionLabels() {
+        const typeSelect = document.getElementById('qm_type');
+        const labels = QM_DIMENSION_FIELD_LABELS[typeSelect.value] || QM_DIMENSION_FIELD_LABELS.sheets;
+        QM_DIMENSION_FIELD_IDS.forEach((fieldId, i) => {
+            const group = document.getElementById(fieldId + '_group');
+            const label = group.querySelector('label');
+            if (labels[i]) {
+                group.style.display = '';
+                label.textContent = labels[i];
+            } else {
+                group.style.display = 'none';
+            }
+        });
+        document.getElementById('qm_cost_per_m2_label').textContent =
+            typeSelect.value === 'sheets' ? 'Цена на м² плоча (€)' : 'Цена на м² материал (€)';
+    }
+
+    document.getElementById('qm_type').addEventListener('change', applyQuickMaterialDimensionLabels);
+    applyQuickMaterialDimensionLabels();
+
     document.getElementById('quickMaterialForm').addEventListener('submit', function (e) {
         e.preventDefault();
         const submitBtn = this.querySelector('button[type="submit"]');

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DXF файлове - {{ detail.name }} - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">
+            {{ message }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>DXF файлове: {{ detail.name }}</h3>
+        <p class="section-subtitle">
+            Хранилище на DXF файлове за този детайл.
+            {% if current_user.is_admin %}Само администратори могат да ги изтеглят.{% endif %}
+        </p>
+
+        <form action="{{ url_for('upload_detail_dxf', detail_id=detail.id) }}" method="POST" enctype="multipart/form-data" class="admin-form" style="margin-bottom: 1.5rem;">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="dxf_file">Качване на нов DXF файл</label>
+                <input type="file" id="dxf_file" name="file" accept=".dxf" required>
+            </div>
+            <button type="submit" class="btn-submit">Качи</button>
+        </form>
+
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Файл</th>
+                    <th>Качен от</th>
+                    <th>Дата</th>
+                    <th class="text-right">Действие</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for f in files %}
+                <tr>
+                    <td>{{ f.original_filename }}</td>
+                    <td>{{ f.uploaded_by.username if f.uploaded_by else '-' }}</td>
+                    <td>{{ f.uploaded_at.strftime('%d.%m.%Y %H:%M') if f.uploaded_at else '-' }}</td>
+                    <td class="text-right">
+                        {% if current_user.is_admin %}
+                        <a href="{{ url_for('download_detail_dxf', file_id=f.id) }}" class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;">Изтегли</a>
+                        {% else %}
+                        <span class="text-muted text-small">Само за администратори</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" class="text-center no-data">Няма качени DXF файлове.</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+</main>
+
+</body>
+</html>

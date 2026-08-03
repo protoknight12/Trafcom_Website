@@ -149,16 +149,17 @@
                     </td>
                     <td>
     <span class="badge badge-user">
-        {% set ns = namespace(display_name=upload.material) %}
+        {% set ns = namespace(display_name=upload.material, type='sheets') %}
         {% for mat in materials %}
             {% if mat.key == upload.material %}
                 {% set ns.display_name = mat.display_name %}
+                {% set ns.type = mat.type %}
             {% endif %}
         {% endfor %}
         {{ ns.display_name }}
     </span>
                     </td>
-                    <td>{{ "%.2f"|format(upload.width) }} x {{ "%.2f"|format(upload.height) }} мм</td>
+                    <td>{{ format_cut_dimensions(upload.width, upload.height, ns.type) }}</td>
                     <td>{{ "%.2f"|format(upload.total_length) }} мм</td>
                     <td><span style="   color: var(--success-text); font-weight: 600;">{{ "%.2f"|format(upload.calculated_price) }} €</span>
                     </td>
