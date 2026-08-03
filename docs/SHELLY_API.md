@@ -1,8 +1,14 @@
 # Shelly energy monitoring — API reference
 
-Live power monitoring off Shelly Pro 3EM energy meters on the shop LAN. Everything lives in
-one section of [`app.py`](../app.py) (search for `SHELLY ENERGY MONITORING`) — no new
-dependencies, no DB tables, no migration. The meter itself is the archive.
+Live power monitoring off Shelly energy meters on the shop LAN. Everything lives in one section
+of [`app.py`](../app.py) (search for `SHELLY ENERGY MONITORING`) — no new dependencies, no DB
+tables, no migration. The meter itself is the archive.
+
+**Two device generations are in use, and their APIs share nothing.** The shop turned out to
+have both a newer Shelly Pro 3EM (Gen2, `GET /rpc/Shelly.GetStatus`) and an older Shelly 3EM
+(Gen1, `GET /status`, no `/rpc/` namespace at all) — discovered when the Gen1 one was added to
+`SHELLY_DEVICES` and came back `404` against the Gen2-only endpoint this integration originally
+assumed everything spoke. `_shelly_get_status()` hides the split; see Functions below.
 
 This document is the API reference for that section: every function, its inputs/outputs, the
 two HTTP routes, and the limits/gotchas discovered by actually running this against a real
@@ -10,14 +16,18 @@ device. For the "why does this feature exist / what did we learn about the shop'
 narrative, see the **Shelly energy monitoring** section in [`CLAUDE.md`](../CLAUDE.md) instead
 — this file is the how, that one is the why.
 
-## Hard constraint: read-only, by hardware, not by policy
+## Hard constraint: read-only, by policy — not always by hardware
 
-**The Shelly Pro 3EM has no relay.** It measures current through a clamp; it cannot switch
-anything. Every function below only ever issues a `GET` to the device. Nothing here can turn a
-machine on or off, and nothing should call a `Switch.Set`/`*.Set` method without a deliberate,
-separate decision about machine safety — remote-starting CNC/laser machinery is a regulated
-area (EN 60204-1 / EN ISO 12100), not just a coding task. Controlling contactors would require
-the separate **Shelly Pro 3EM Switch Add-on** hardware, which is not installed.
+**The Shelly Pro 3EM has no relay at all.** It measures current through a clamp; it physically
+cannot switch anything. The older Shelly 3EM (Gen1) is different: it **does** have one onboard
+relay (visible as `relays` in its `/status`) — Gen1 hardware was designed as metering-plus-a-
+16A-switch, unlike the Pro 3EM which dropped the relay entirely. That relay is real and callable
+in principle, but every function below only ever issues a `GET`. Nothing here calls it, and
+nothing should call a `Relay.Set`/`Switch.Set`/`*.Set` method without a deliberate, separate
+decision about machine safety first — remote-starting or remote-stopping CNC/laser machinery is
+a regulated area (EN 60204-1 / EN ISO 12100), not just a coding task, regardless of whether the
+hardware in hand happens to support it. (Controlling the Pro 3EM specifically would additionally
+require the separate Shelly Pro 3EM Switch Add-on, which is not installed.)
 
 ## Configuration
 
@@ -90,6 +100,33 @@ password is ever set (`Shelly.SetAuth` — recommended, since without it anyone 
 factory-reset or reflash a meter), every call through this function starts returning HTTP 401
 until HTTP digest auth is added here.
 
+**Gen2 only.** A Gen1 device answers this with a `404` (no `/rpc/` namespace exists on Gen1
+firmware at all) — that's the whole reason `_shelly_get_status()` below exists, rather than
+every caller using `shelly_rpc` directly.
+
+### `_shelly_get_status_gen1(host, timeout)` / `_shelly_get_status(host, timeout=SHELLY_TIMEOUT)`
+
+The Gen1 equivalent of `Shelly.GetStatus` isn't an RPC method at all — it's a plain
+`GET http://<host>/status`, and the JSON shape has nothing in common with Gen2's (an `emeters`
+list instead of `em:0`/`em1:N` components; see `_shelly_readings` below for the full contrast).
+`_shelly_get_status_gen1` is that one plain fetch.
+
+`_shelly_get_status` is the function everything else should call — it hides the generation
+split entirely:
+
+```python
+_shelly_get_status('192.168.18.72')   # Gen2 meter -> tries Shelly.GetStatus, succeeds
+_shelly_get_status('192.168.18.78')   # Gen1 meter -> tries Shelly.GetStatus (404), falls
+                                       # back to GET /status, succeeds
+```
+
+A host is remembered in the module-level `_shelly_gen_cache` dict (`host -> 'gen1'|'gen2'`,
+in-memory only, resets on app restart) after its first successful call, so **steady-state
+polling of a known Gen1 meter costs one request, not two** — only the very first poll after
+each restart pays for the failed Gen2 attempt before falling back. A non-404 HTTP error (a
+500, or a 401 from a password-protected meter) propagates rather than being silently
+reinterpreted as "must be Gen1" — guarded directly in `testing/test_shelly_status.py`.
+
 ### `shelly_fleet_snapshot(devices)`
 
 Polls every configured meter **concurrently** and returns a list of snapshot dicts (see
@@ -116,9 +153,14 @@ This is what `GET /admin/power/data` calls — see Routes below.
 
 ### `shelly_device_snapshot(name, host)`
 
-Polls one meter and returns a render-ready dict. **Never raises** — an unreachable meter
-(Wi-Fi drop, panel powered down) is a normal state on a shop floor, and one dead device must
-not blank out the whole dashboard or the whole fleet poll.
+Polls one meter (either generation, via `_shelly_get_status`) and returns a render-ready dict.
+**Never raises** — an unreachable meter (Wi-Fi drop, panel powered down) is a normal state on a
+shop floor, and one dead device must not blank out the whole dashboard or the whole fleet poll.
+
+For a Gen1 device, `temperature` is always `None` (Gen1's `/status` doesn't expose an internal
+temperature sensor the way Gen2's `temperature:0` component does) and `rssi` is read from
+`wifi_sta.rssi` instead of Gen2's `wifi.rssi` — both handled internally, the returned dict
+shape is identical either way.
 
 ```python
 shelly_device_snapshot('Главно табло', '192.168.18.72')
@@ -148,25 +190,38 @@ shelly_device_snapshot('Главно табло', '192.168.18.72')
 
 ### `_shelly_readings(status)`
 
-Flattens a `Shelly.GetStatus` payload into `(channels, total_power_W, total_energy_kWh)`.
-Internal helper (leading underscore) — called by `shelly_device_snapshot`, not meant to be
-called directly, but documented here because its branching is the single most
-regression-prone part of this integration.
+Flattens a full-status payload (from `_shelly_get_status`, either generation) into
+`(channels, total_power_W, total_energy_kWh)`. Internal helper (leading underscore) — called
+by `shelly_device_snapshot`, not meant to be called directly, but documented here because its
+branching is the single most regression-prone part of this integration: **three** payload
+shapes, not two, and none of them share field names.
 
-Handles **both** Shelly EM device profiles, because a meter can be reprofiled at any time via
-`Shelly.SetProfile` and this must not silently start rendering nothing:
+- **Gen2 `triphase`** (the installed Pro 3EM's current profile): one `em:0` component holding
+  three phases (`a_*`, `b_*`, `c_*`) of **one 3-phase feed**. Rendered as `Фаза A` / `Фаза B` /
+  `Фаза C`. Total energy from `emdata:0.total_act`, already in Wh.
+- **Gen2 `monophase`**: up to three independent `em1:0`/`em1:1`/`em1:2` components, each its
+  own circuit with its own energy counter (`em1data:N`). Rendered as `Вход 1` / `Вход 2` /
+  `Вход 3`. A Gen2 meter can be reprofiled between these two at any time via `Shelly.SetProfile`
+  — this function must not silently start rendering nothing if that happens.
+- **Gen1** (older Shelly EM/3EM, e.g. the second meter at 192.168.18.78): an `emeters` list,
+  one dict per channel (`power`, `pf`, `current`, `voltage`, `total`/`total_returned`), no
+  `em:0`/`em1:N` involved at all. A 3-channel Gen1 device is always a 3EM measuring one
+  3-phase feed (Gen1 has no separate monophase/triphase profile the way Gen2 does), so 3
+  channels render as `Фаза A/B/C`; anything else (a 2-channel Shelly EM) renders as
+  `Вход 1`/`Вход 2` — independent circuits. Two things Gen1 doesn't report that Gen2 does:
+  - **Apparent power** isn't in the payload at all — derived as `voltage * current` (the
+    actual definition of apparent power, S = V·I), rather than left blank.
+  - **Per-channel frequency** isn't exposed in `/status` — left as `None`.
 
-- **`triphase`** (current profile on the installed meter): one `em:0` component holding three
-  phases (`a_*`, `b_*`, `c_*`) of **one 3-phase feed**. Rendered as `Фаза A` / `Фаза B` /
-  `Фаза C`.
-- **`monophase`**: up to three independent `em1:0`/`em1:1`/`em1:2` components, each its own
-  circuit with its own energy counter (`em1data:N`). Rendered as `Вход 1` / `Вход 2` / `Вход 3`.
-  Would apply if the clamps were ever rewired to one machine per clamp.
+  Gen1's own cumulative energy counter (`total`) is in **Watt-minutes**, not Wh — divided by
+  `60000` for kWh, vs. Gen2's `/1000` (Wh → kWh). Getting this conversion wrong would silently
+  under-report energy by 60×, so it's covered directly in `testing/test_shelly_status.py`
+  against a real captured payload rather than trusted by inspection.
 
-Branches on **key presence** (`'em:0' in status`), not truthiness — a meter mid-reboot sends
-`"em:0": {}` (or `null`), which is still a triphase device and must not fall through to the
-monophase branch and render zero channels. All field reads use `.get(...) or 0.0`-style
-defaults so a partial payload never raises.
+Branches on **key presence** (`'em:0' in status`, then `'emeters' in status`), not truthiness —
+a meter mid-reboot sends `"em:0": {}` (or `null`), which is still a triphase Gen2 device and
+must not fall through to a different branch and render zero/wrong channels. All field reads
+use `.get(...) or 0.0`-style defaults so a partial payload never raises.
 
 ### `shelly_history(host, start_ts, end_ts, em_id=0)`
 
@@ -210,6 +265,16 @@ whichever gets requested first: a "chart the last shift" view (call this on dema
 storage), or a "kWh per order/month" report (needs a Postgres table + a periodic copy job,
 since this function alone can't outlive the 45-day window). Building both would be premature —
 see the note in `CLAUDE.md`.
+
+**Gen2 only, unlike the rest of this integration.** A Gen1 meter passed here will 404 — Gen1
+history lives at a different endpoint (confirmed against the real device: `GET
+/emeter/<channel>/em_data.csv`, one CSV per channel/phase rather than one call for the whole
+meter) with a different CSV shape (`Date/time UTC, Active energy Wh (A), Returned energy Wh
+(A)` — energy per interval already in Wh, not the Watt-minute totals `/status` uses) and,
+from a quick check, coarser ~10-minute sample spacing rather than Gen2's per-minute. None of
+that has been fully mapped out or implemented, since nothing calls `shelly_history()` at all
+today — extending it for Gen1 is a real follow-up task, not a same-day add-on, and would need
+its own investigation before writing code against it.
 
 ### `_shelly_time_chunks(start_ts, end_ts, step=SHELLY_HISTORY_CHUNK)`
 
@@ -292,10 +357,14 @@ payload already carries everything needed — no reason to compute the same sum 
 python -m testing.test_shelly_status
 ```
 
-Covers, using trimmed real captures from the installed meter:
+Covers, using trimmed real captures from both installed meters (Gen2 Pro 3EM at
+192.168.18.72, Gen1 3EM at 192.168.18.78):
 
 - `_parse_shelly_devices` — blank/bare/labelled/mixed env values.
-- `_shelly_readings` — both profiles, partial payloads, null-valued components.
+- `_shelly_readings` — all three payload shapes (Gen2 triphase, Gen2 monophase, Gen1), partial
+  payloads, null-valued components, the Gen1 Watt-minutes→kWh conversion checked against a real
+  captured payload (not just trusted by inspection, since a sign/scale error here silently
+  under-reports energy by 60×).
 - `_shelly_time_chunks` — exact fits, short tails, sub-step windows, empty windows, no
   gaps/overlap across a multi-chunk range.
 - `_parse_shelly_csv` — valid rows, blank cells (partial row survives), unusable timestamps
@@ -303,37 +372,50 @@ Covers, using trimmed real captures from the installed meter:
 - `shelly_fleet_snapshot` — monkeypatches `shelly_rpc` with an artificial sleep and asserts a
   5-device poll finishes in under `5 × sleep` (proves it's concurrent, not sequential) and
   that results preserve input order regardless of completion order.
+- `_shelly_get_status` — monkeypatches both `shelly_rpc` and `_shelly_get_status_gen1` to prove
+  the dispatch/cache/fallback logic without any network: a Gen2 host never touches the Gen1
+  path; a Gen1 host falls back on the first 404 and is cached so the second call skips the
+  Gen2 attempt entirely; a non-404 HTTP error propagates instead of being mistaken for "must be
+  Gen1".
 
-`shelly_rpc`, `shelly_history`, and `shelly_device_snapshot`'s live-network path are not
-covered by this script — they were verified by hand against the real device at
-`192.168.18.72` while building this feature (see conversation history / commit messages, not
-a regression test).
+`shelly_rpc`, `_shelly_get_status_gen1`, `shelly_history`, and `shelly_device_snapshot`'s
+live-network path are not covered by this script — they were verified by hand against the two
+real devices while building this feature (see conversation history / commit messages, not a
+regression test).
 
 ## Extension points, roughly cheapest first
 
 1. **Relabel a device.** Edit `SHELLY_DEVICES` in `.env`, restart. No code change.
-2. **Add a second meter.** Add another `Име=host` pair to `SHELLY_DEVICES`. The dashboard's
-   cross-machine total summary card (in `admin_power.html`) activates automatically once 2+
-   devices are configured — it's hidden with exactly one, since a "total across machines"
-   number would just repeat that one machine's own card.
-3. **Chart recent history in the UI.** `shelly_history()` already exists and is tested; needs
-   a new route (thin wrapper picking a sensible default window, e.g. "today") plus a chart in
-   the template. No DB work — the meter answers on demand.
-4. **Alerting** (e.g. "phase C exceeded 3kW"). Shelly's own webhook system can push to a Flask
+2. **Add another meter — any generation.** Add another `Име=host` pair to `SHELLY_DEVICES`; no
+   need to know or declare which generation it is, `_shelly_get_status()` figures that out on
+   first contact. The dashboard's cross-machine total summary card (in `admin_power.html`)
+   activates automatically once 2+ devices are configured — it's hidden with exactly one,
+   since a "total across machines" number would just repeat that one machine's own card.
+3. **Chart recent history in the UI, for Gen2 meters.** `shelly_history()` already exists and
+   is tested; needs a new route (thin wrapper picking a sensible default window, e.g. "today")
+   plus a chart in the template. No DB work — the meter answers on demand. Gen1 meters aren't
+   covered by this yet — see `shelly_history()`'s docstring/section above for what's confirmed
+   and what isn't about its history endpoint.
+4. **Gen1 history support**, if a Gen1 meter's history turns out to matter. Same shape of work
+   as `_shelly_get_status`'s Gen1/Gen2 split, but for `shelly_history()` — needs its own
+   investigation of the confirmed-but-unmapped `/emeter/<channel>/em_data.csv` endpoint (per
+   channel, ~10-minute samples, energy already in Wh) before writing code against it.
+5. **Alerting** (e.g. "phase C exceeded 3kW"). Shelly's own webhook system can push to a Flask
    endpoint on threshold crossings without polling at all — cheaper than watching history for
-   this specific case. Currently unconfigured (`Webhook.List` returns empty on the installed
-   meter).
-5. **Per-machine monitoring once wiring changes.** If clamps are ever rewired to one machine
-   per circuit: reprofile the meter to `monophase` (`Shelly.SetProfile`, resets the energy
-   counters — plan around that), add a `Machine.shelly_host` column via a
+   this specific case. Currently unconfigured on both installed meters (`Webhook.List`/
+   equivalent returns empty).
+6. **Per-machine monitoring once wiring changes.** If a Gen2 meter's clamps are ever rewired to
+   one machine per circuit: reprofile it to `monophase` (`Shelly.SetProfile`, resets the
+   energy counters — plan around that), add a `Machine.shelly_host` column via a
    `migration/migrate_*.py`, and join it in wherever machines are already queried.
-6. **Long-term energy history / cost-per-order attribution.** Needs a real Postgres table plus
-   a periodic job copying `shelly_history()` output into it before the 45-day window rolls off
-   — the meter alone cannot serve this.
-7. **Device auth.** If `Shelly.SetAuth` is ever used to password-protect the meters (currently
-   `auth_en: false`, meaning anyone on the LAN can factory-reset or reflash one) — add HTTP
-   digest auth inside `shelly_rpc()` and `shelly_history()`'s CSV fetch, or every read here
-   starts failing with 401.
+7. **Long-term energy history / cost-per-order attribution.** Needs a real Postgres table plus
+   a periodic job copying history output into it before each meter's own retention window
+   rolls off — the meters alone cannot serve this.
+8. **Device auth.** If `Shelly.SetAuth` (Gen2) or the equivalent Gen1 mechanism is ever used to
+   password-protect a meter (currently `auth_en: false` on both installed meters, meaning
+   anyone on the LAN can factory-reset or reflash one) — add HTTP digest auth inside
+   `shelly_rpc()`, `_shelly_get_status_gen1()`, and `shelly_history()`'s CSV fetch, or every
+   read against that meter starts failing with 401.
 
 ## Upstream reference
 
@@ -341,4 +423,6 @@ a regression test).
 - [Shelly Gen2 EM component docs](https://shelly-api-docs.shelly.cloud/gen2/ComponentsAndServices/EM)
 - [Shelly Pro 3EM product docs](https://www.shelly.com/blogs/documentation/shelly-pro-3em)
 - [Shelly Pro 3EM Switch Add-on](https://kb.shelly.cloud/knowledge-base/shelly-pro-3em-switch-add-on) (the
-  hardware that would be needed for any future control feature — not installed)
+  hardware that would be needed for any future control feature on the Pro 3EM — not installed)
+- [Shelly Gen1 API reference](https://shelly-api-docs.shelly.cloud/gen1/) — the older `/status`-based
+  API the second, Gen1 meter speaks; no `/rpc/` namespace exists on this generation at all

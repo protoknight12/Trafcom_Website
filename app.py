@@ -10,6 +10,7 @@ import webbrowser
 import threading
 import urllib.request
 import urllib.parse
+import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
@@ -4148,13 +4149,19 @@ def admin_delete_material(key):
 
 
 # ----------------- SHELLY ENERGY MONITORING -----------------
-# Live power monitoring off Shelly Pro 3EM energy meters on the shop LAN.
+# Live power monitoring off Shelly energy meters on the shop LAN. Two device
+# generations are in use and their APIs don't overlap at all:
+#   Gen2 (Shelly Pro 3EM)       GET /rpc/Shelly.GetStatus, em:0/em1:N components
+#   Gen1 (older Shelly EM/3EM)  GET /status, an `emeters` list, no /rpc/ at all
+# _shelly_get_status() below hides this split behind one call.
 #
-# READ-ONLY BY CONSTRUCTION: the Pro 3EM has no relay, so nothing in here can
-# switch a machine on or off - it only reads measurements. Turning loads on/off
-# would need the separate Shelly Pro 3EM Switch Add-on (a dry contact driving a
-# contactor) and a deliberate decision about machine safety; don't add a
-# Switch.Set call here without that conversation.
+# READ-ONLY BY POLICY, not always by hardware: the Pro 3EM has no relay at all,
+# so it physically cannot switch anything. The older Gen1 Shelly 3EM installed
+# at 192.168.18.78 DOES have one onboard relay (`relays` in its /status) - but
+# nothing in this app calls it. Turning a machine's power on/off remotely is a
+# regulated safety question (EN 60204-1 / EN ISO 12100), not just a spare
+# feature sitting on a device we happen to already own - don't wire up a
+# Relay.Set/Switch.Set call without that conversation happening first.
 #
 # Meters are configured out-of-band via the SHELLY_DEVICES env var rather than
 # a DB table, because there is no per-machine mapping worth storing yet: the
@@ -4219,6 +4226,43 @@ def shelly_rpc(host, method, params=None, timeout=SHELLY_TIMEOUT):
         url += '?' + urllib.parse.urlencode(params)
     with urllib.request.urlopen(url, timeout=timeout) as resp:
         return json.loads(resp.read().decode('utf-8'))
+
+
+# host -> 'gen1' | 'gen2'. In-memory only (resets on app restart) - a device's
+# generation never changes at runtime, so once a host answers we don't need to
+# ask again. Without this, every poll of a Gen1 device would cost two requests
+# (a Gen2 attempt that always 404s, then the real Gen1 one).
+_shelly_gen_cache = {}
+
+
+def _shelly_get_status_gen1(host, timeout):
+    """Gen1 devices (older Shelly EM/3EM/1PM...) have no /rpc/ namespace at
+    all - the equivalent of Shelly.GetStatus is a plain GET /status, with a
+    completely different JSON shape (an `emeters` list, not em:0/em1:N)."""
+    with urllib.request.urlopen(f'http://{host}/status', timeout=timeout) as resp:
+        return json.loads(resp.read().decode('utf-8'))
+
+
+def _shelly_get_status(host, timeout=SHELLY_TIMEOUT):
+    """
+    Full status for either generation of Shelly device. A host seen for the
+    first time this run (or since the last restart) tries Gen2 first and
+    falls back to Gen1 on the 404 a Gen1 device gives for an unknown /rpc/
+    path; the result is cached in _shelly_gen_cache so steady-state polling
+    of a known Gen1 device costs one request, not two.
+    """
+    if _shelly_gen_cache.get(host) == 'gen1':
+        return _shelly_get_status_gen1(host, timeout)
+    try:
+        status = shelly_rpc(host, 'Shelly.GetStatus', timeout=timeout)
+        _shelly_gen_cache[host] = 'gen2'
+        return status
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+        status = _shelly_get_status_gen1(host, timeout)
+        _shelly_gen_cache[host] = 'gen1'
+        return status
 
 
 # The meter serialises stored records from flash at roughly 55-60 records/sec,
@@ -4288,11 +4332,12 @@ def shelly_history(host, start_ts, end_ts, em_id=0):
 
 def _shelly_readings(status):
     """
-    Flatten a Shelly.GetStatus payload into channels the dashboard can render,
-    handling either device profile so switching the profile on the meter
-    doesn't break this page:
-      'triphase'  -> one `em:0` component = three phases of ONE 3-phase feed
-      'monophase' -> up to three independent `em1:N` meters = one per circuit
+    Flatten a full-status payload into channels the dashboard can render,
+    handling three shapes so neither a profile switch on a Gen2 meter nor a
+    mixed Gen1/Gen2 fleet breaks this page:
+      Gen2 'triphase'  -> one `em:0` component = three phases of ONE 3-phase feed
+      Gen2 'monophase' -> up to three independent `em1:N` meters = one per circuit
+      Gen1 (EM/3EM)    -> an `emeters` list, one dict per channel, no /rpc/ at all
     Returns (channels, total_act_power_W, total_energy_kWh). Missing keys read
     as None/0 rather than raising - a meter mid-reboot returns partial payloads.
     """
@@ -4303,7 +4348,7 @@ def _shelly_readings(status):
     # Key presence, not truthiness: a meter mid-reboot sends "em:0": {} (or
     # null), which is still a triphase device and must not fall through to the
     # monophase branch and silently render zero channels.
-    if 'em:0' in status:  # triphase profile
+    if 'em:0' in status:  # Gen2 triphase profile
         em = status.get('em:0') or {}
         for phase in ('a', 'b', 'c'):
             channels.append({
@@ -4317,7 +4362,33 @@ def _shelly_readings(status):
             })
         total_power = em.get('total_act_power') or 0.0
         total_energy = ((status.get('emdata:0') or {}).get('total_act') or 0.0) / 1000.0
-    else:  # monophase profile
+    elif 'emeters' in status:  # Gen1 (Shelly EM / 3EM)
+        emeters = status.get('emeters') or []
+        # A 3-channel Gen1 device is always a 3EM measuring one 3-phase feed
+        # (unlike Gen2, Gen1 has no separate monophase/triphase profile switch);
+        # anything else (the 2-channel Shelly EM) is independent circuits.
+        labels = [f'Фаза {c}' for c in 'ABC'] if len(emeters) == 3 else \
+                 [f'Вход {i + 1}' for i in range(len(emeters))]
+        for label, m in zip(labels, emeters):
+            voltage, current = m.get('voltage'), m.get('current')
+            channels.append({
+                'label': label,
+                'voltage': voltage,
+                'current': current,
+                'act_power': m.get('power'),
+                # Gen1 doesn't report apparent power directly - S = V*I is its
+                # definition, so derive it rather than leave it blank.
+                'aprt_power': voltage * current if voltage is not None and current is not None else None,
+                'pf': m.get('pf'),
+                'freq': None,  # not exposed per-channel in Gen1's /status
+            })
+            total_power += m.get('power') or 0.0
+            # Gen1 energy counters are Watt-minutes, not Wh - /60000 for kWh
+            # (Gen2's total_act above is already Wh, hence /1000 there instead).
+            total_energy += (m.get('total') or 0.0) / 60000.0
+        # Prefer the device's own aggregate over our re-summed one when present.
+        total_power = status.get('total_power', total_power)
+    else:  # Gen2 monophase profile
         for i in range(3):
             meter = status.get(f'em1:{i}')
             if not meter:
@@ -4340,27 +4411,42 @@ def _shelly_readings(status):
 
 def shelly_device_snapshot(name, host):
     """
-    Poll one meter and return a render-ready dict. Never raises: an unreachable
-    meter is a normal state on a shop floor (Wi-Fi drop, panel powered down),
-    and one dead device must not blank out the whole dashboard.
+    Poll one meter (either generation - see _shelly_get_status) and return a
+    render-ready dict. Never raises: an unreachable meter is a normal state on
+    a shop floor (Wi-Fi drop, panel powered down), and one dead device must
+    not blank out the whole dashboard.
     """
     try:
-        status = shelly_rpc(host, 'Shelly.GetStatus')
+        status = _shelly_get_status(host)
     except Exception as e:
+        # Include the exception type, not just str(e): a flaky/weak-signal
+        # meter (common once mounted inside a metal DIN panel, which
+        # attenuates Wi-Fi badly) can drop the connection mid-response and
+        # raise something like http.client.BadStatusLine whose str() is just
+        # the raw malformed bytes it choked on (e.g. "1D") - unreadable
+        # without knowing what kind of failure that was.
         return {
-            'name': name, 'host': host, 'online': False, 'error': str(e),
+            'name': name, 'host': host, 'online': False,
+            'error': f'{type(e).__name__}: {e}',
             'channels': [], 'total_power': 0.0, 'total_energy': 0.0,
             'temperature': None, 'rssi': None,
         }
 
     channels, total_power, total_energy = _shelly_readings(status)
+    if 'emeters' in status:  # Gen1: different key paths, no onboard temp sensor exposed
+        temperature = None
+        rssi = (status.get('wifi_sta') or {}).get('rssi')
+    else:  # Gen2
+        temperature = (status.get('temperature:0') or {}).get('tC')
+        rssi = (status.get('wifi') or {}).get('rssi')
+
     return {
         'name': name, 'host': host, 'online': True, 'error': None,
         'channels': channels,
         'total_power': total_power,
         'total_energy': total_energy,
-        'temperature': (status.get('temperature:0') or {}).get('tC'),
-        'rssi': (status.get('wifi') or {}).get('rssi'),
+        'temperature': temperature,
+        'rssi': rssi,
     }
 
 
