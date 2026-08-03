@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Консумация на машините - TRAFCOM</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .meter-header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+        .meter-state { padding: 4px 12px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; }
+        .state-online { background-color: var(--success-bg); color: var(--success-text); border: 1px solid var(--success-border); }
+        .state-offline { background-color: var(--danger-bg); color: var(--danger-text); border: 1px solid var(--danger-border); }
+
+        .total-row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+        .total-power { font-size: 2.4rem; font-weight: 700; color: var(--accent-secondary); line-height: 1; }
+        .total-unit { font-size: 1rem; color: var(--text-muted); }
+
+        .channel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-top: 16px; }
+        .channel-card { background: var(--bg-input); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); padding: 14px 16px; }
+        .channel-name { font-weight: 700; font-size: 0.9rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px; }
+        .channel-power { font-size: 1.5rem; font-weight: 700; color: var(--text-main); }
+        .channel-rows { margin-top: 10px; font-size: 0.85rem; color: var(--text-muted); }
+        .channel-rows div { display: flex; justify-content: space-between; padding: 2px 0; }
+        .channel-rows span { color: var(--text-main); }
+
+        .spark { width: 100%; height: 90px; display: block; background: var(--bg-input); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); }
+        .spark-caption { font-size: 0.78rem; color: var(--text-muted); margin-top: 6px; }
+        .meter-foot { margin-top: 14px; font-size: 0.8rem; color: var(--text-muted); }
+
+        .summary-card { border-color: var(--accent-primary); }
+        .summary-power { font-size: 3rem; }
+        .summary-spark { height: 110px; }
+        .summary-breakdown { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+        .summary-chip { background: var(--bg-input); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); padding: 8px 14px; font-size: 0.85rem; }
+        .summary-chip strong { color: var(--text-main); }
+        .summary-chip.offline { opacity: 0.6; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container" style="max-width: 1100px; margin: 30px auto; padding: 0 15px;">
+
+    {% if focus_host %}
+    <p><a href="{{ url_for('admin_power') }}">&larr; Всички машини</a></p>
+    <h2 style="margin-bottom: 6px;">{{ focus_name }}</h2>
+    {% else %}
+    <h2 style="margin-bottom: 6px;">Консумация на машините</h2>
+    {% endif %}
+    <p class="section-subtitle" style="margin-top: 0;">
+        Данни на живо от електромерите Shelly в цеха. Само отчитане &mdash; от тази страница не може да
+        се включва или изключва машина. <span id="lastUpdate" class="text-muted"></span>
+    </p>
+
+    {% if not devices %}
+    <section class="admin-card">
+        <p class="no-data text-center">
+            Няма конфигуриран електромер.<br>
+            Задайте променливата на средата <code>SHELLY_DEVICES</code> (напр.
+            <code>SHELLY_DEVICES=Главно табло=192.168.18.72</code>) и рестартирайте приложението.
+        </p>
+    </section>
+    {% else %}
+    <section class="admin-card summary-card" id="summaryCard" style="display: none;">
+        <div class="meter-header">
+            <strong style="font-size: 1.1rem;">Обща консумация в момента</strong>
+            <span id="summaryCount" class="text-muted text-small"></span>
+        </div>
+        <div class="total-row">
+            <span class="total-power summary-power" id="summaryPower">—</span>
+            <span class="total-unit">W всички машини общо</span>
+            <span class="total-unit" id="summaryEnergy"></span>
+        </div>
+        <canvas class="spark summary-spark" id="summarySpark"></canvas>
+        <div class="spark-caption">Обща мощност на цеха, последните ~3 минути</div>
+        <div class="summary-breakdown" id="summaryBreakdown"></div>
+    </section>
+    <div id="meters"></div>
+    {% endif %}
+
+</main>
+
+{% if devices %}
+<script>
+    // Poll the server-side feed; the meters themselves are never contacted
+    // from the browser (they're LAN-only and have no auth).
+    const POLL_MS = 2000;
+    const HISTORY = 90;            // ~3 minutes of samples at POLL_MS
+    const history = {};            // host -> array of total_act_power readings
+    const totalHistory = [];       // sum across all online machines, same window
+    const container = document.getElementById('meters');
+    const lastUpdate = document.getElementById('lastUpdate');
+    const summaryCard = document.getElementById('summaryCard');
+    const POWER_URL = '{{ url_for("admin_power") }}';
+    const DATA_URL = '{{ url_for("admin_power_data") }}';
+    const FOCUS_HOST = {{ focus_host|tojson }};
+
+    const fmt = (v, digits) => (v === null || v === undefined) ? '—' : Number(v).toFixed(digits);
+
+    function drawSpark(canvas, points) {
+        // Rolling line of total power. Kept as a plain canvas on purpose -
+        // same approach as static/js/dxf_viewer.js, no charting library.
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width = canvas.clientWidth;
+        const h = canvas.height = canvas.clientHeight;
+        ctx.clearRect(0, 0, w, h);
+        if (points.length < 2) return;
+
+        const max = Math.max(...points, 1) * 1.15;
+        const x = i => (i / (points.length - 1)) * w;
+        const y = v => h - (v / max) * (h - 8) - 4;
+
+        ctx.beginPath();
+        points.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)));
+        ctx.strokeStyle = '#a855f7';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        ctx.lineTo(w, h);
+        ctx.lineTo(0, h);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(168, 85, 247, 0.15)';
+        ctx.fill();
+    }
+
+    function renderChannel(ch) {
+        return `
+        <div class="channel-card">
+            <div class="channel-name">${ch.label}</div>
+            <div class="channel-power">${fmt(ch.act_power, 0)} <span class="total-unit">W</span></div>
+            <div class="channel-rows">
+                <div>Напрежение <span>${fmt(ch.voltage, 1)} V</span></div>
+                <div>Ток <span>${fmt(ch.current, 2)} A</span></div>
+                <div>Пълна мощност <span>${fmt(ch.aprt_power, 0)} VA</span></div>
+                <div>cos φ <span>${fmt(ch.pf, 2)}</span></div>
+                <div>Честота <span>${fmt(ch.freq, 1)} Hz</span></div>
+            </div>
+        </div>`;
+    }
+
+    function renderMeter(d) {
+        const state = d.online
+            ? '<span class="meter-state state-online">НА ЛИНИЯ</span>'
+            : '<span class="meter-state state-offline">НЯМА ВРЪЗКА</span>';
+
+        const body = d.online ? `
+            <div class="total-row">
+                <span class="total-power">${fmt(d.total_power, 0)}</span>
+                <span class="total-unit">W обща активна мощност</span>
+                <span class="total-unit">&middot; ${fmt(d.total_energy, 1)} kWh общо изразходвани</span>
+            </div>
+            <canvas class="spark" id="spark-${d.host}"></canvas>
+            <div class="spark-caption">Обща мощност, последните ~3 минути</div>
+            <div class="channel-grid">${d.channels.map(renderChannel).join('')}</div>
+            <div class="meter-foot">
+                Температура на уреда: ${fmt(d.temperature, 1)} °C &middot;
+                Wi-Fi сигнал: ${d.rssi === null ? '—' : d.rssi + ' dBm'}
+            </div>`
+            : `<p class="no-data">Електромерът не отговаря: ${d.error}</p>`;
+
+        // Name links into the single-machine view (?host=) - a no-op link
+        // when a page is already focused on this machine.
+        return `<section class="admin-card">
+            <div class="meter-header">
+                <div>
+                    <a href="${POWER_URL}?host=${encodeURIComponent(d.host)}" style="font-size: 1.1rem; font-weight: 700;">${d.name}</a>
+                    <div class="text-muted text-small">${d.host}</div>
+                </div>
+                ${state}
+            </div>
+            ${body}
+        </section>`;
+    }
+
+    async function poll() {
+        let payload;
+        try {
+            const url = FOCUS_HOST ? `${DATA_URL}?host=${encodeURIComponent(FOCUS_HOST)}` : DATA_URL;
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error(resp.status);
+            payload = await resp.json();
+        } catch (e) {
+            lastUpdate.textContent = '· връзката със сървъра е прекъсната';
+            return;
+        }
+
+        container.innerHTML = payload.devices.map(renderMeter).join('');
+        lastUpdate.textContent = '· обновено в ' + payload.ts;
+
+        payload.devices.forEach(d => {
+            if (!d.online) return;
+            const points = history[d.host] || (history[d.host] = []);
+            points.push(d.total_power);
+            if (points.length > HISTORY) points.shift();
+            const canvas = document.getElementById('spark-' + d.host);
+            if (canvas) drawSpark(canvas, points);
+        });
+
+        renderSummary(payload.devices);
+    }
+
+    function renderSummary(devices) {
+        // Only meaningful with 2+ machines reporting - with exactly one
+        // meter the number would just repeat that meter's own card.
+        if (devices.length < 2) {
+            summaryCard.style.display = 'none';
+            return;
+        }
+        summaryCard.style.display = '';
+
+        const online = devices.filter(d => d.online);
+        const totalPower = online.reduce((sum, d) => sum + d.total_power, 0);
+        const totalEnergy = online.reduce((sum, d) => sum + d.total_energy, 0);
+
+        document.getElementById('summaryPower').textContent = fmt(totalPower, 0);
+        document.getElementById('summaryEnergy').textContent =
+            `· ${fmt(totalEnergy, 1)} kWh общо изразходвани`;
+        document.getElementById('summaryCount').textContent =
+            `${online.length} от ${devices.length} машини на линия`;
+        document.getElementById('summaryBreakdown').innerHTML = devices.map(d => `
+            <span class="summary-chip ${d.online ? '' : 'offline'}">
+                ${d.name}: <strong>${d.online ? fmt(d.total_power, 0) + ' W' : 'няма връзка'}</strong>
+            </span>`).join('');
+
+        totalHistory.push(totalPower);
+        if (totalHistory.length > HISTORY) totalHistory.shift();
+        drawSpark(document.getElementById('summarySpark'), totalHistory);
+    }
+
+    poll();
+    // Don't keep hammering the meters while nobody is looking at the tab.
+    let timer = setInterval(poll, POLL_MS);
+    document.addEventListener('visibilitychange', () => {
+        clearInterval(timer);
+        if (!document.hidden) {
+            poll();
+            timer = setInterval(poll, POLL_MS);
+        }
+    });
+</script>
+{% endif %}
+</body>
+</html>

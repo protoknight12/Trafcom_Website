@@ -5,8 +5,12 @@ import math
 import re
 import uuid
 import io
+import csv
 import webbrowser
 import threading
+import urllib.request
+import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
@@ -4141,6 +4145,278 @@ def admin_delete_material(key):
         db.session.rollback()
         flash(f'Грешка при изтриване: {str(e)}', 'danger')
     return redirect(url_for('admin_materials'))
+
+
+# ----------------- SHELLY ENERGY MONITORING -----------------
+# Live power monitoring off Shelly Pro 3EM energy meters on the shop LAN.
+#
+# READ-ONLY BY CONSTRUCTION: the Pro 3EM has no relay, so nothing in here can
+# switch a machine on or off - it only reads measurements. Turning loads on/off
+# would need the separate Shelly Pro 3EM Switch Add-on (a dry contact driving a
+# contactor) and a deliberate decision about machine safety; don't add a
+# Switch.Set call here without that conversation.
+#
+# Meters are configured out-of-band via the SHELLY_DEVICES env var rather than
+# a DB table, because there is no per-machine mapping worth storing yet: the
+# one installed meter runs the 'triphase' profile, i.e. it measures a single
+# 3-phase feed as a whole, not one machine per clamp. If the meters are ever
+# rewired/reprofiled so one channel == one machine, that's the point to add a
+# Machine.shelly_host column (plus a migration/migrate_*.py - see the schema
+# note at the bottom of this file).
+#
+# Format: "Име=host, Друго=host2". A bare "host" with no "Име=" is allowed and
+# labels itself. Unset/blank disables the feature and admin_power() renders a
+# "not configured" notice instead of erroring.
+
+def _parse_shelly_devices(raw):
+    """'Табло 1=192.168.18.72,10.0.0.5' -> [('Табло 1', '192.168.18.72'), ('10.0.0.5', '10.0.0.5')]."""
+    devices = []
+    for chunk in (raw or '').split(','):
+        name, _, host = chunk.partition('=')
+        name, host = name.strip(), host.strip()
+        if not host:  # bare host, no label
+            name, host = '', name
+        if host:
+            devices.append((name or host, host))
+    return devices
+
+
+SHELLY_DEVICES = _parse_shelly_devices(os.environ.get('SHELLY_DEVICES'))
+SHELLY_TIMEOUT = 3.0
+
+
+def shelly_rpc(host, method, params=None, timeout=SHELLY_TIMEOUT):
+    """
+    Call any Gen2 Shelly RPC method: GET http://<host>/rpc/<Method>?<params>.
+    Returns the parsed JSON; raises on any network/HTTP/parse failure (callers
+    that must survive an offline meter catch it - see shelly_device_snapshot).
+
+    One generic caller instead of a wrapper per method, because every Gen2
+    method is the same shape. The ones that matter here:
+
+        Shelly.GetStatus                every component at once (em/emdata,
+                                        temperature, wifi) - one call, which is
+                                        why the dashboard uses this and not
+                                        EM.GetStatus + Temperature.GetStatus + ...
+        Shelly.GetDeviceInfo            model, gen, fw, profile, auth_en
+        EM.GetStatus       {'id': 0}    live measurements only, smaller payload
+        EMData.GetStatus   {'id': 0}    cumulative kWh counters
+        EMData.GetRecords  {'id': 0}    which time ranges have stored history;
+                                        cheap, call before shelly_history()
+
+    Params go on the query string, so scalars only - that covers every read
+    method. Full method list: http://<host>/rpc/Shelly.ListMethods
+
+    NOTE: read methods only, deliberately. The Pro 3EM has no relay and nothing
+    in this app should ever call a Set*/switching method - see the header
+    comment on this section.
+    """
+    # ponytail: no auth handling. The meters currently run with auth_en=false.
+    # If a device password is set (Shelly.SetAuth - recommended), this needs
+    # HTTP digest auth added here or every read starts coming back 401.
+    url = f'http://{host}/rpc/{method}'
+    if params:
+        url += '?' + urllib.parse.urlencode(params)
+    with urllib.request.urlopen(url, timeout=timeout) as resp:
+        return json.loads(resp.read().decode('utf-8'))
+
+
+# The meter serialises stored records from flash at roughly 55-60 records/sec,
+# measured on the installed unit: 1h window = 1.5s, 8h = 9s, 24h = 25s,
+# 3 days = 75s, and a 14-day window never completes. Hence: fetch a day at a
+# time with a timeout sized for a day, not for a live status read.
+SHELLY_HISTORY_CHUNK = 86400
+SHELLY_HISTORY_TIMEOUT = 60.0
+
+
+def _shelly_time_chunks(start_ts, end_ts, step=SHELLY_HISTORY_CHUNK):
+    """[(start, end), ...] tiling start_ts..end_ts in step-sized pieces."""
+    return [(t, min(t + step, end_ts)) for t in range(start_ts, end_ts, step)]
+
+
+def _parse_shelly_csv(text):
+    """
+    CSV body from /emdata/<id>/data.csv -> list of dicts with numbers parsed.
+    Rows with blank/unparseable cells keep their remaining fields rather than
+    being dropped: a record written while the meter was rebooting is still
+    worth its valid columns.
+    """
+    rows = []
+    for raw in csv.DictReader(io.StringIO(text)):
+        row = {}
+        for key, value in raw.items():
+            if not key or value in (None, ''):
+                continue
+            try:
+                row[key] = int(value) if key == 'timestamp' else float(value)
+            except (TypeError, ValueError):
+                continue
+        if 'timestamp' in row:
+            rows.append(row)
+    return rows
+
+
+def shelly_history(host, start_ts, end_ts, em_id=0):
+    """
+    Minute-resolution history straight off the meter - the device is the
+    archive, so there's no local table to keep in sync.
+
+    Each record holds ~50 fields: per phase the total/fundamental active
+    energy, returned energy, lagging/leading reactive energy, and the
+    max/min/avg of voltage, current, active power and apparent power over that
+    minute, plus neutral current. The min/max spread within a minute is what
+    lets you separate a cycling load (chiller, compressor) from a steady one.
+
+    Two limits worth knowing before building on this:
+      - retention is ~45-48 days rolling; older data is gone for good, so
+        anything longer-term has to be copied off the meter into Postgres.
+      - it is slow (see SHELLY_HISTORY_CHUNK above). Don't call this from a
+        request handler on a wide window without a loading state.
+
+    Uses the CSV endpoint rather than EMData.GetData because GetData paginates
+    (returns next_record_ts and needs a loop), while the CSV route returns the
+    whole window in one response.
+    """
+    rows = []
+    for chunk_start, chunk_end in _shelly_time_chunks(start_ts, end_ts):
+        url = (f'http://{host}/emdata/{em_id}/data.csv'
+               f'?ts={chunk_start}&end_ts={chunk_end}&add_keys=true')
+        with urllib.request.urlopen(url, timeout=SHELLY_HISTORY_TIMEOUT) as resp:
+            rows.extend(_parse_shelly_csv(resp.read().decode('utf-8')))
+    return rows
+
+
+def _shelly_readings(status):
+    """
+    Flatten a Shelly.GetStatus payload into channels the dashboard can render,
+    handling either device profile so switching the profile on the meter
+    doesn't break this page:
+      'triphase'  -> one `em:0` component = three phases of ONE 3-phase feed
+      'monophase' -> up to three independent `em1:N` meters = one per circuit
+    Returns (channels, total_act_power_W, total_energy_kWh). Missing keys read
+    as None/0 rather than raising - a meter mid-reboot returns partial payloads.
+    """
+    channels = []
+    total_power = 0.0
+    total_energy = 0.0
+
+    # Key presence, not truthiness: a meter mid-reboot sends "em:0": {} (or
+    # null), which is still a triphase device and must not fall through to the
+    # monophase branch and silently render zero channels.
+    if 'em:0' in status:  # triphase profile
+        em = status.get('em:0') or {}
+        for phase in ('a', 'b', 'c'):
+            channels.append({
+                'label': f'Фаза {phase.upper()}',
+                'voltage': em.get(f'{phase}_voltage'),
+                'current': em.get(f'{phase}_current'),
+                'act_power': em.get(f'{phase}_act_power'),
+                'aprt_power': em.get(f'{phase}_aprt_power'),
+                'pf': em.get(f'{phase}_pf'),
+                'freq': em.get(f'{phase}_freq'),
+            })
+        total_power = em.get('total_act_power') or 0.0
+        total_energy = ((status.get('emdata:0') or {}).get('total_act') or 0.0) / 1000.0
+    else:  # monophase profile
+        for i in range(3):
+            meter = status.get(f'em1:{i}')
+            if not meter:
+                continue
+            channels.append({
+                'label': f'Вход {i + 1}',
+                'voltage': meter.get('voltage'),
+                'current': meter.get('current'),
+                'act_power': meter.get('act_power'),
+                'aprt_power': meter.get('aprt_power'),
+                'pf': meter.get('pf'),
+                'freq': meter.get('freq'),
+            })
+            total_power += meter.get('act_power') or 0.0
+            energy = (status.get(f'em1data:{i}') or {}).get('total_act_energy') or 0.0
+            total_energy += energy / 1000.0
+
+    return channels, round(total_power, 1), round(total_energy, 2)
+
+
+def shelly_device_snapshot(name, host):
+    """
+    Poll one meter and return a render-ready dict. Never raises: an unreachable
+    meter is a normal state on a shop floor (Wi-Fi drop, panel powered down),
+    and one dead device must not blank out the whole dashboard.
+    """
+    try:
+        status = shelly_rpc(host, 'Shelly.GetStatus')
+    except Exception as e:
+        return {
+            'name': name, 'host': host, 'online': False, 'error': str(e),
+            'channels': [], 'total_power': 0.0, 'total_energy': 0.0,
+            'temperature': None, 'rssi': None,
+        }
+
+    channels, total_power, total_energy = _shelly_readings(status)
+    return {
+        'name': name, 'host': host, 'online': True, 'error': None,
+        'channels': channels,
+        'total_power': total_power,
+        'total_energy': total_energy,
+        'temperature': (status.get('temperature:0') or {}).get('tC'),
+        'rssi': (status.get('wifi') or {}).get('rssi'),
+    }
+
+
+def shelly_fleet_snapshot(devices):
+    """
+    Poll every configured meter at once rather than one-by-one, so one
+    unreachable meter's SHELLY_TIMEOUT doesn't serialize onto every other
+    meter's read - without this, N meters cost up to N * SHELLY_TIMEOUT per
+    page refresh; with it, the wall time is whichever single read is slowest.
+    Order of the returned list always matches `devices`, regardless of which
+    thread finishes first. Plain ThreadPoolExecutor: these are blocking network
+    reads, not CPU work, so the GIL is a non-issue here.
+    """
+    if not devices:
+        return []
+    with ThreadPoolExecutor(max_workers=len(devices)) as pool:
+        return list(pool.map(lambda pair: shelly_device_snapshot(*pair), devices))
+
+
+@app.route('/admin/power')
+@role_required('admin')
+def admin_power():
+    """
+    Live power-consumption dashboard for the shop's Shelly energy meters. The
+    page is static chrome - admin_power_data() below feeds it on an interval.
+
+    ?host=<ip> scopes the page to one machine (clicking a machine's name in the
+    all-machines view links here with it set) - same template, same JS, just a
+    single-device payload instead of the whole fleet. Not validated against
+    SHELLY_DEVICES: an unknown host simply matches nothing and renders an
+    empty page, same as a fleet with zero configured meters.
+    """
+    focus_host = request.args.get('host') or None
+    focus_name = next((name for name, host in SHELLY_DEVICES if host == focus_host), focus_host)
+    return render_template('admin_power.html', devices=SHELLY_DEVICES, active_page='admin_power',
+                           focus_host=focus_host, focus_name=focus_name)
+
+
+@app.route('/admin/power/data')
+@role_required('admin')
+def admin_power_data():
+    """
+    JSON feed polled by admin_power.html. Polling happens server-side so the
+    meters only ever have to be reachable from the app host, not from every
+    admin's browser.
+
+    ?host=<ip> limits the poll to that one meter - the single-machine view
+    has no use for the other meters' readings, so there's no reason to poll
+    them every 2s just to throw the result away client-side.
+    """
+    host = request.args.get('host')
+    devices = [d for d in SHELLY_DEVICES if d[1] == host] if host else SHELLY_DEVICES
+    return jsonify({
+        'ts': datetime.now().strftime('%H:%M:%S'),
+        'devices': shelly_fleet_snapshot(devices),
+    })
 
 
 if __name__ == '__main__':
