@@ -4691,11 +4691,86 @@ def admin_power_data():
     by_host = {d.host: d for d in rows}
     for snap in snapshots:
         device = by_host.get(snap['host'])
-        snap['machines'] = [{'name': m.name, 'status': m.status} for m in device.machines] if device else []
+        snap['machines'] = [{
+            'name': m.name, 'status': m.status,
+            'last_maintenance': m.last_maintenance.strftime('%d.%m.%Y %H:%M') if m.last_maintenance else None,
+        } for m in device.machines] if device else []
     return jsonify({
         'ts': datetime.now().strftime('%H:%M:%S'),
         'devices': snapshots,
     })
+
+
+def _aggregate_shelly_history(rows):
+    """
+    Collapse shelly_history() rows into one summary: arithmetic mean for every
+    field, except *_total_act_energy fields, which are summed into one kWh
+    figure instead. Those fields are each record's energy consumed during
+    that one minute (not a running counter) - see shelly_history()'s
+    docstring - so summing them across the window gives exactly the same
+    number as (ending cumulative reading - starting cumulative reading)
+    would, without needing to know the counter's value at two exact instants.
+
+    Per-channel fields (e.g. 'a_avg_voltage') are additionally grouped by
+    their prefix so the caller can render one card per phase, same shape as
+    the live dashboard's channel cards.
+    """
+    if not rows:
+        return {'count': 0, 'energy_kwh': 0.0, 'channels': {}}
+
+    energy_wh = 0.0
+    sums, counts = {}, {}
+    for row in rows:
+        for key, value in row.items():
+            if key == 'timestamp':
+                continue
+            if key.endswith('_total_act_energy'):
+                energy_wh += value
+                continue
+            sums[key] = sums.get(key, 0.0) + value
+            counts[key] = counts.get(key, 0) + 1
+
+    channels = {}
+    for key, total in sums.items():
+        mean = total / counts[key]
+        prefix, sep, rest = key.partition('_')
+        if sep:
+            channels.setdefault(prefix, {})[rest] = mean
+
+    return {
+        'count': len(rows),
+        'energy_kwh': round(energy_wh / 1000.0, 2),
+        'channels': channels,
+    }
+
+
+@app.route('/admin/power/history')
+@role_required('admin')
+def admin_power_history():
+    """
+    On-demand historical aggregation for one meter over [start_ts, end_ts)
+    (Unix seconds) - see _aggregate_shelly_history() for the mean-vs-sum
+    split. Gen2 only: shelly_history() has no Gen1 equivalent (see
+    docs/SHELLY_API.md), so a Gen1 host's request 404s and is reported as an
+    error rather than silently returning nothing.
+    """
+    host = request.args.get('host', '')
+    try:
+        start_ts = int(request.args.get('start_ts'))
+        end_ts = int(request.args.get('end_ts'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Невалиден период.'}), 400
+    if end_ts <= start_ts:
+        return jsonify({'error': 'Крайната дата трябва да е след началната.'}), 400
+    if not ShellyDevice.query.filter_by(host=host).first():
+        return jsonify({'error': 'Няма такава машина.'}), 404
+
+    try:
+        rows = shelly_history(host, start_ts, end_ts)
+    except Exception as e:
+        return jsonify({'error': f'Историята не е налична за това устройство ({type(e).__name__}: {e}).'}), 502
+
+    return jsonify(_aggregate_shelly_history(rows))
 
 
 if __name__ == '__main__':

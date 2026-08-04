@@ -45,6 +45,23 @@
         .machine-checklist-item { display: block; font-size: 0.85rem; padding: 3px 0; font-weight: normal; }
         .machine-checklist-item input { margin-right: 6px; }
         .rename-input { padding: 4px 8px; background-color: #1a1f30; color: #fff; border: 1px solid #333; border-radius: 6px; font-size: 0.85rem; }
+
+        .detail-layout { display: flex; gap: 20px; align-items: flex-start; }
+        .detail-main { flex: 1 1 auto; min-width: 0; }
+        .detail-sidebar { flex: 0 0 260px; position: sticky; top: 20px; }
+        .sidebar-machine { border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); padding: 10px 12px; margin-bottom: 10px; }
+        .sidebar-machine:last-child { margin-bottom: 0; }
+        .sidebar-machine-name { font-weight: 700; margin-bottom: 6px; }
+        .sidebar-machine-maint { font-size: 0.78rem; color: var(--text-muted); margin-top: 6px; }
+        @media (max-width: 820px) {
+            .detail-layout { flex-direction: column; }
+            .detail-sidebar { position: static; width: 100%; }
+        }
+
+        .history-form { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
+        .history-form .form-group { margin-bottom: 0; }
+        .history-result { margin-top: 18px; }
+        .history-error { color: var(--danger-text); }
     </style>
 </head>
 <body>
@@ -163,21 +180,55 @@
         <p class="no-data text-center">Няма добавени машини. Добавете първата от формата по-горе.</p>
     </section>
     {% else %}
-    <section class="admin-card summary-card" id="summaryCard" style="display: none;">
-        <div class="meter-header">
-            <strong style="font-size: 1.1rem;">Обща консумация в момента</strong>
-            <span id="summaryCount" class="text-muted text-small"></span>
+    <div class="detail-layout">
+        <div class="detail-main">
+            <section class="admin-card summary-card" id="summaryCard" style="display: none;">
+                <div class="meter-header">
+                    <strong style="font-size: 1.1rem;">Обща консумация в момента</strong>
+                    <span id="summaryCount" class="text-muted text-small"></span>
+                </div>
+                <div class="total-row">
+                    <span class="total-power summary-power" id="summaryPower">—</span>
+                    <span class="total-unit">W всички машини общо</span>
+                    <span class="total-unit" id="summaryEnergy"></span>
+                </div>
+                <canvas class="spark summary-spark" id="summarySpark"></canvas>
+                <div class="spark-caption">Обща мощност на цеха, последните ~3 минути</div>
+                <div class="summary-breakdown" id="summaryBreakdown"></div>
+            </section>
+            <div id="meters"></div>
+
+            {% if focus_host %}
+            <section class="admin-card" id="historySection">
+                <h3 style="margin-top: 0;">История за период</h3>
+                <p class="section-subtitle" style="margin-top: 0;">
+                    Изберете начало и край на период. За всеки параметър се показва средната
+                    аритметична стойност за периода, а за консумацията &mdash; разликата между
+                    крайните и началните kWh.
+                </p>
+                <form class="history-form" id="historyForm">
+                    <div class="form-group">
+                        <label for="historyStart">От</label>
+                        <input type="datetime-local" id="historyStart" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="historyEnd">До</label>
+                        <input type="datetime-local" id="historyEnd" required>
+                    </div>
+                    <button type="submit" class="btn-submit" id="historyAccept">Приложи</button>
+                </form>
+                <div class="history-result" id="historyResult"></div>
+            </section>
+            {% endif %}
         </div>
-        <div class="total-row">
-            <span class="total-power summary-power" id="summaryPower">—</span>
-            <span class="total-unit">W всички машини общо</span>
-            <span class="total-unit" id="summaryEnergy"></span>
-        </div>
-        <canvas class="spark summary-spark" id="summarySpark"></canvas>
-        <div class="spark-caption">Обща мощност на цеха, последните ~3 минути</div>
-        <div class="summary-breakdown" id="summaryBreakdown"></div>
-    </section>
-    <div id="meters"></div>
+
+        {% if focus_host %}
+        <aside class="admin-card detail-sidebar">
+            <h3 style="margin-top: 0;">Свързани машини</h3>
+            <div id="machineSidebar"><p class="text-muted text-small">Зареждане&hellip;</p></div>
+        </aside>
+        {% endif %}
+    </div>
     {% endif %}
 
 </main>
@@ -195,6 +246,7 @@
     const summaryCard = document.getElementById('summaryCard');
     const POWER_URL = '{{ url_for("admin_power") }}';
     const DATA_URL = '{{ url_for("admin_power_data") }}';
+    const HISTORY_URL = '{{ url_for("admin_power_history") }}';
     const FOCUS_HOST = {{ focus_host|tojson }};
 
     const fmt = (v, digits) => (v === null || v === undefined) ? '—' : Number(v).toFixed(digits);
@@ -211,6 +263,25 @@
             return `<span>${m.name} <span class="machine-status-badge ${cls}">${label}</span></span>`;
         }).join('');
         return `<div class="machine-link-row">Машина(и):${chips}</div>`;
+    }
+
+    const machineSidebar = document.getElementById('machineSidebar');
+    function renderSidebar(device) {
+        if (!machineSidebar) return;
+        const machines = device && device.machines || [];
+        if (!machines.length) {
+            machineSidebar.innerHTML = '<p class="text-muted text-small">Няма свързани машини с този електромер.</p>';
+            return;
+        }
+        machineSidebar.innerHTML = machines.map(m => {
+            const cls = 'status-' + (MACHINE_STATUS_LABELS[m.status] ? m.status : 'maintenance');
+            const label = MACHINE_STATUS_LABELS[m.status] || m.status;
+            return `<div class="sidebar-machine">
+                <div class="sidebar-machine-name">${m.name}</div>
+                <span class="machine-status-badge ${cls}">${label}</span>
+                <div class="sidebar-machine-maint">Последна поддръжка: ${m.last_maintenance || 'Неизвестно'}</div>
+            </div>`;
+        }).join('');
     }
 
     function drawSpark(canvas, points) {
@@ -304,6 +375,8 @@
         container.innerHTML = payload.devices.map(renderMeter).join('');
         lastUpdate.textContent = '· обновено в ' + payload.ts;
 
+        if (FOCUS_HOST) renderSidebar(payload.devices[0]);
+
         payload.devices.forEach(d => {
             if (!d.online) return;
             const points = history[d.host] || (history[d.host] = []);
@@ -342,6 +415,74 @@
         totalHistory.push(totalPower);
         if (totalHistory.length > HISTORY) totalHistory.shift();
         drawSpark(document.getElementById('summarySpark'), totalHistory);
+    }
+
+    if (FOCUS_HOST) {
+        const historyForm = document.getElementById('historyForm');
+        const historyStart = document.getElementById('historyStart');
+        const historyEnd = document.getElementById('historyEnd');
+        const historyResult = document.getElementById('historyResult');
+
+        // Default the pickers to the last hour, in the browser's local time.
+        const toLocalInput = d => {
+            const pad = n => String(n).padStart(2, '0');
+            return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        };
+        const now = new Date();
+        historyEnd.value = toLocalInput(now);
+        historyStart.value = toLocalInput(new Date(now.getTime() - 3600 * 1000));
+
+        const CHANNEL_LABELS = { a: 'Фаза A', b: 'Фаза B', c: 'Фаза C', n: 'Неутрала' };
+        // The meter's own history rows don't carry an "avg active power" field
+        // (verified against the real device) - only avg voltage/current, plus
+        // each minute's max/min active power. So the headline number here is
+        // the arithmetic mean of those per-minute peaks, not a made-up value.
+        function renderHistoryChannel(key, ch) {
+            return `
+            <div class="channel-card">
+                <div class="channel-name">${CHANNEL_LABELS[key] || key}</div>
+                <div class="channel-power">${fmt(ch.max_act_power, 0)} <span class="total-unit">W (ср. пикова)</span></div>
+                <div class="channel-rows">
+                    <div>Напрежение (средно) <span>${fmt(ch.avg_voltage, 1)} V</span></div>
+                    <div>Ток (средно) <span>${fmt(ch.avg_current, 2)} A</span></div>
+                    <div>Мин. мощност (средно) <span>${fmt(ch.min_act_power, 0)} W</span></div>
+                    <div>Макс. пълна мощност (средно) <span>${fmt(ch.max_aprt_power, 0)} VA</span></div>
+                </div>
+            </div>`;
+        }
+
+        historyForm.addEventListener('submit', async e => {
+            e.preventDefault();
+            const startTs = Math.floor(new Date(historyStart.value).getTime() / 1000);
+            const endTs = Math.floor(new Date(historyEnd.value).getTime() / 1000);
+            if (!Number.isFinite(startTs) || !Number.isFinite(endTs) || endTs <= startTs) {
+                historyResult.innerHTML = '<p class="history-error">Крайната дата трябва да е след началната.</p>';
+                return;
+            }
+            historyResult.innerHTML = '<p class="text-muted">Зареждане на историята&hellip; може да отнеме известно време за по-дълги периоди.</p>';
+            let payload;
+            try {
+                const url = `${HISTORY_URL}?host=${encodeURIComponent(FOCUS_HOST)}&start_ts=${startTs}&end_ts=${endTs}`;
+                const resp = await fetch(url);
+                payload = await resp.json();
+                if (!resp.ok) throw new Error(payload.error || resp.status);
+            } catch (err) {
+                historyResult.innerHTML = `<p class="history-error">${err.message || err}</p>`;
+                return;
+            }
+            if (!payload.count) {
+                historyResult.innerHTML = '<p class="no-data">Няма записана история за избрания период.</p>';
+                return;
+            }
+            const channelKeys = Object.keys(payload.channels).sort();
+            historyResult.innerHTML = `
+                <div class="total-row">
+                    <span class="total-power">${fmt(payload.energy_kwh, 2)}</span>
+                    <span class="total-unit">kWh за периода (край &minus; начало)</span>
+                </div>
+                <div class="text-muted text-small">${payload.count} минутни записа</div>
+                <div class="channel-grid">${channelKeys.map(k => renderHistoryChannel(k, payload.channels[k])).join('')}</div>`;
+        });
     }
 
     poll();
