@@ -44,6 +44,16 @@ orders through production tracking. The UI is in Bulgarian.
   with a scoped-down content editor for non-pricing public-page text.
 - **Offer / protocol / certificate documents** — browser-print pages
   (Ctrl+P to PDF), no server-side PDF library.
+- **Missing-stock dashboard** — every open order that doesn't currently have
+  enough Detail/Product stock to fulfill it, recomputed live rather than
+  stored.
+- **DXF revision history per Detail** — the original uploaded `.dxf` files
+  behind a catalog Detail are kept and downloadable (admins only), not just
+  the geometry extracted from them.
+- **Live power monitoring** — a real-time dashboard (`/admin/power`)
+  polling Shelly energy meters on the shop LAN (both Gen1 and Gen2 devices
+  supported) with historical charts; see
+  [`docs/SHELLY_API.md`](https://github.com/protoknight12/Trafcom_Website/blob/main/docs/SHELLY_API.md).
 
 ## Requirements
 
@@ -113,12 +123,14 @@ set up the database).
   - [`admin_details.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_details.html)
   - [`admin_materials.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_materials.html)
   - [`admin_missing_stock.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_missing_stock.html)
+  - [`admin_power.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_power.html)
   - [`admin_products.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_products.html)
   - [`admin_users.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_users.html)
   - [`certificate.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/certificate.html)
   - [`contact.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/contact.html)
   - [`content_editor.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/content_editor.html)
   - [`dashboard.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/dashboard.html)
+  - [`detail_dxf_dashboard.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/detail_dxf_dashboard.html) — per-Detail DXF revision history
   - [`edit_window.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/edit_window.html)
   - [`generator.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/generator.html)
   - [`index.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/index.html)
@@ -167,7 +179,9 @@ set up the database).
   - [`backfill_service_machine_cards.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/migration/backfill_service_machine_cards.py)
   - [`seed_real_machines.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/migration/seed_real_machines.py)
   - [`seed_test_data.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/migration/seed_test_data.py)
-  - ...plus the `migrate_add_*.py` / `migrate_erp_number_unique_int.py` schema-change scripts — [browse the full folder](https://github.com/protoknight12/Trafcom_Website/tree/main/migration)
+  - ...plus the various `migrate_*.py` schema-change scripts (including the
+    Shelly `shelly_device_machine` many-to-many tables) —
+    [browse the full folder](https://github.com/protoknight12/Trafcom_Website/tree/main/migration)
 
 </details>
 
@@ -186,6 +200,17 @@ set up the database).
   - [`test_security_fixes.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_security_fixes.py)
   - [`test_quick_create_material.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_quick_create_material.py)
   - [`test_quick_create_product_components.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_quick_create_product_components.py)
+  - [`test_shelly_status.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_shelly_status.py)
+  - [`test_shelly_history_aggregation.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_shelly_history_aggregation.py)
+  - [`test_shelly_device_routes.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_shelly_device_routes.py)
+
+</details>
+
+<details>
+<summary><a href="https://github.com/protoknight12/Trafcom_Website/tree/main/docs"><code>docs/</code></a> — reference docs</summary>
+
+  - [`SHELLY_API.md`](https://github.com/protoknight12/Trafcom_Website/blob/main/docs/SHELLY_API.md) — function-by-function reference for the Shelly power-monitoring integration
+  - [`shelly_dobavyane_masina_BG.md`](https://github.com/protoknight12/Trafcom_Website/blob/main/docs/shelly_dobavyane_masina_BG.md) — Bulgarian how-to for adding a machine on `/admin/power`
 
 </details>
 
@@ -229,3 +254,9 @@ pytest testing/test_security_fixes.py -v
   switch to a shared store (e.g. Redis) or limits won't be enforced
   correctly across workers.
 - All state-changing requests require a CSRF token (`flask-wtf`).
+- Shelly energy meters are managed from the `/admin/power` dashboard itself
+  (add/rename/delete/relink a machine there, no restart needed). The
+  `SHELLY_DEVICES` env var in `.env.example` is legacy, one-time-use only —
+  it's read once on first startup after upgrading, to migrate whatever was
+  configured there into the database; leave it blank on a fresh install. See
+  [`docs/SHELLY_API.md`](https://github.com/protoknight12/Trafcom_Website/blob/main/docs/SHELLY_API.md).
