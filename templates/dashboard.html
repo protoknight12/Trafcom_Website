@@ -105,6 +105,33 @@
     {% endif %}
     {% endwith %}
 
+    {% if services %}
+    <section class="admin-card">
+        <h3>Услуги и цени на час</h3>
+        <p class="section-subtitle">Часовите ставки, използвани при изчисляване на цената на чертежите по-долу.</p>
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                <tr>
+                    <th>Услуга</th>
+                    <th>Тип машина</th>
+                    <th>Цена на час</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for service in services %}
+                <tr>
+                    <td>{{ service.name }}</td>
+                    <td>{{ service.machine_type or '-' }}</td>
+                    <td>{{ "%.2f"|format(service.price_per_hour_eur) }} €</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    {% endif %}
+
     <section class="admin-card">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px;">
             <div>
@@ -131,6 +158,7 @@
                     <th>ID</th>
                     <th>Име на файл</th>
                     <th>Материал</th>
+                    <th>Услуга</th>
                     <th>Размери (Габарити)</th>
                     <th>Дължина на рязане</th>
                     <th>Изчислена цена</th>
@@ -159,6 +187,7 @@
         {{ ns.display_name }}
     </span>
                     </td>
+                    <td>{{ upload.service.name if upload.service else '-' }}</td>
                     <td>{{ format_cut_dimensions(upload.width, upload.height, ns.type) }}</td>
                     <td>{{ "%.2f"|format(upload.total_length) }} мм</td>
                     <td><span style="   color: var(--success-text); font-weight: 600;">{{ "%.2f"|format(upload.calculated_price) }} €</span>
@@ -173,7 +202,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="7" class="text-center no-data">
+                    <td colspan="8" class="text-center no-data">
                         Вашата библиотека е празна. <a href="{{ url_for('upload') }}">Качете първия си чертеж</a>.
                     </td>
                 </tr>

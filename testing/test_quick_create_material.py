@@ -68,7 +68,7 @@ def worker_client(app):
 def test_quick_create_material_full_fields(admin_client):
     res = admin_client.post('/api/quick-create-material', data={
         'display_name': 'QA Титан', 'type': 'sheets', 'brand': 'QA-Brand',
-        'cost_per_m2': '100', 'cost_per_meter_cut': '5', 'cost_per_pierce': '0.5',
+        'cost_per_m2': '100', 'cutting_speed_mm_per_min': '5', 'pierce_rate_per_min': '0.5',
         'sheet_length_mm': '2000', 'sheet_width_mm': '1000', 'thickness_mm': '2',
     })
     assert res.status_code == 200
@@ -90,7 +90,7 @@ def test_quick_create_material_requires_prices(admin_client):
 
 
 def test_quick_create_material_rejects_duplicate_name(admin_client):
-    data = {'display_name': 'QA Dup', 'cost_per_m2': '1', 'cost_per_meter_cut': '1', 'cost_per_pierce': '0.1'}
+    data = {'display_name': 'QA Dup', 'cost_per_m2': '1', 'cutting_speed_mm_per_min': '1', 'pierce_rate_per_min': '0.1'}
     first = admin_client.post('/api/quick-create-material', data=data)
     assert first.get_json()['status'] == 'success'
     second = admin_client.post('/api/quick-create-material', data=data)
@@ -100,6 +100,6 @@ def test_quick_create_material_rejects_duplicate_name(admin_client):
 
 def test_quick_create_material_forbidden_for_worker(worker_client):
     res = worker_client.post('/api/quick-create-material', data={
-        'display_name': 'QA Worker Material', 'cost_per_m2': '1', 'cost_per_meter_cut': '1', 'cost_per_pierce': '0.1',
+        'display_name': 'QA Worker Material', 'cost_per_m2': '1', 'cutting_speed_mm_per_min': '1', 'pierce_rate_per_min': '0.1',
     })
     assert res.status_code == 403

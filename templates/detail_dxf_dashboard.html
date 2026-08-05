@@ -151,6 +151,164 @@
         </div>
     </section>
 
+    {% if current_user.is_admin %}
+    <section class="admin-card">
+        <h3>Операции</h3>
+        <p class="section-subtitle">
+            Базовата цена на рязане ({{ "%.2f"|format(detail.calculated_price) }} €{% if detail.cutting_service
+            %}, услуга: {{ detail.cutting_service.name }}{% endif %}) плюс всяка допълнителна операция по-долу
+            (фрезоване, зачистване...) дава общата цена на детайла:
+            <strong id="opCurrentTotal">{{ "%.2f"|format(detail.total_price) }} €</strong>.
+            Изберете няколко операции по-долу преди да ги запазите - общата цена се обновява веднага.
+        </p>
+
+        <form id="addOperationsForm" action="{{ url_for('admin_add_operation', detail_id=detail.id) }}" method="POST" class="admin-form" style="margin-bottom: 1rem;">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="op_service_id">Услуга</label>
+                <select id="op_service_id">
+                    <option value="">-- Изберете услуга --</option>
+                    {% for s in services %}
+                    <option value="{{ s.id }}">{{ s.name }} ({{ "%.2f"|format(s.price_per_hour_eur) }} €/час)</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="op_duration_minutes">Продължителност (мин)</label>
+                <input type="number" id="op_duration_minutes" step="0.01" min="0.01" placeholder="напр. 12">
+            </div>
+            <div class="form-group" style="flex: 0 0 auto;">
+                <button type="button" class="btn-secondary" onclick="addPendingOperation()" style="padding: 12px 20px;">+ Добави в списъка</button>
+            </div>
+        </form>
+
+        <div class="table-responsive" style="margin-bottom: 1rem;">
+            <table class="users-table" id="pendingOpsTable">
+                <thead>
+                <tr>
+                    <th>Услуга (за запазване)</th>
+                    <th>Продължителност (мин)</th>
+                    <th>Цена</th>
+                    <th class="text-right">Действие</th>
+                </tr>
+                </thead>
+                <tbody id="pendingOpsBody">
+                    <tr id="pendingOpsEmptyRow"><td colspan="4" class="text-center no-data">Няма избрани операции за добавяне.</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <input type="hidden" name="operations_json" id="operationsJsonInput" form="addOperationsForm">
+        <button type="submit" class="btn-submit" form="addOperationsForm" id="saveOperationsBtn" disabled>Запази избраните операции</button>
+
+        <div class="table-responsive" style="margin-top: 1.5rem;">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Услуга</th>
+                    <th>Продължителност (мин)</th>
+                    <th>Цена</th>
+                    <th class="text-right">Действие</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for op in detail.operations %}
+                <tr>
+                    <td>{{ op.service.name }}</td>
+                    <td>{{ op.duration_minutes }}</td>
+                    <td>{{ "%.2f"|format(op.cost) }} €</td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_delete_operation', operation_id=op.id) }}" method="POST" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" class="text-center no-data">Няма добавени операции.</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <script>
+        const OP_SERVICES = {{ services_data|tojson }};
+        const OP_BASE_TOTAL = {{ detail.total_price }};
+        let pendingOps = [];
+
+        function opServiceById(id) {
+            return OP_SERVICES.find(function (s) { return s.id === id; });
+        }
+
+        function opCost(serviceId, durationMinutes) {
+            const service = opServiceById(serviceId);
+            return service ? durationMinutes * (service.price_per_hour_eur / 60) : 0;
+        }
+
+        function addPendingOperation() {
+            const serviceSelect = document.getElementById('op_service_id');
+            const durationInput = document.getElementById('op_duration_minutes');
+            const serviceId = parseInt(serviceSelect.value, 10);
+            const duration = parseFloat(durationInput.value);
+
+            if (!serviceId) { alert('Моля изберете услуга.'); return; }
+            if (!duration || duration <= 0) { alert('Моля въведете валидна продължителност в минути.'); return; }
+
+            pendingOps.push({
+                serviceId: serviceId,
+                serviceName: serviceSelect.options[serviceSelect.selectedIndex].text,
+                durationMinutes: duration,
+            });
+            durationInput.value = '';
+            renderPendingOps();
+        }
+
+        function removePendingOperation(index) {
+            pendingOps.splice(index, 1);
+            renderPendingOps();
+        }
+
+        function renderPendingOps() {
+            const body = document.getElementById('pendingOpsBody');
+            body.innerHTML = '';
+            let pendingTotal = 0;
+
+            if (pendingOps.length === 0) {
+                body.innerHTML = '<tr id="pendingOpsEmptyRow"><td colspan="4" class="text-center no-data">Няма избрани операции за добавяне.</td></tr>';
+            } else {
+                pendingOps.forEach(function (op, idx) {
+                    const cost = opCost(op.serviceId, op.durationMinutes);
+                    pendingTotal += cost;
+                    const tr = document.createElement('tr');
+                    tr.innerHTML =
+                        '<td></td><td></td><td></td><td class="text-right"></td>';
+                    tr.children[0].textContent = op.serviceName;
+                    tr.children[1].textContent = op.durationMinutes;
+                    tr.children[2].textContent = cost.toFixed(2) + ' €';
+                    const removeBtn = document.createElement('button');
+                    removeBtn.type = 'button';
+                    removeBtn.className = 'btn-delete';
+                    removeBtn.textContent = 'Премахни';
+                    removeBtn.addEventListener('click', function () { removePendingOperation(idx); });
+                    tr.children[3].appendChild(removeBtn);
+                    body.appendChild(tr);
+                });
+            }
+
+            document.getElementById('saveOperationsBtn').disabled = pendingOps.length === 0;
+            document.getElementById('opCurrentTotal').textContent = (OP_BASE_TOTAL + pendingTotal).toFixed(2) + ' €';
+        }
+
+        document.getElementById('addOperationsForm').addEventListener('submit', function () {
+            document.getElementById('operationsJsonInput').value = JSON.stringify(
+                pendingOps.map(function (op) { return { service_id: op.serviceId, duration_minutes: op.durationMinutes }; })
+            );
+        });
+    </script>
+    {% endif %}
+
 </main>
 
 <div class="viewer-overlay" id="viewerOverlay">

@@ -115,8 +115,8 @@
                     </div>
                     <div id="dn_material_new_pricing" style="display: none; margin-top: 8px; gap: 8px; flex-wrap: wrap;">
                         <input type="number" id="dn_material_cost_per_m2" step="0.01" min="0" placeholder="Цена/м² (€) *" style="flex: 1; min-width: 120px;">
-                        <input type="number" id="dn_material_cost_per_meter_cut" step="0.01" min="0" placeholder="Цена/м рязане (€) *" style="flex: 1; min-width: 120px;">
-                        <input type="number" id="dn_material_cost_per_pierce" step="0.01" min="0" placeholder="Цена/пробиване (€) *" style="flex: 1; min-width: 120px;">
+                        <input type="number" id="dn_material_cutting_speed_mm_per_min" step="0.01" min="0.01" placeholder="Скорост рязане (мм/мин) *" style="flex: 1; min-width: 120px;">
+                        <input type="number" id="dn_material_pierce_rate_per_min" step="0.01" min="0.01" placeholder="Скорост пробиване (проб./мин) *" style="flex: 1; min-width: 120px;">
                     </div>
                 </div>
                 <div class="form-group" id="detail_selector" style="display: none;">
@@ -267,6 +267,15 @@
                     </select>
                 </div>
                 <div class="form-group" style="margin-bottom: 15px;">
+                    <label for="qd_service">Услуга (рязане)</label>
+                    <select id="qd_service" name="service_id" required>
+                        <option value="">-- Изберете услуга --</option>
+                        {% for s in services %}
+                        <option value="{{ s.id }}">{{ s.name }} ({{ "%.2f"|format(s.price_per_hour_eur) }} €/час)</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group" style="margin-bottom: 15px;">
                     <label for="qd_file">DXF файл</label>
                     <input type="file" id="qd_file" name="file" accept=".dxf" required style="color: #fff;">
                 </div>
@@ -311,12 +320,12 @@
                     <input type="number" id="qm_cost_per_m2" step="0.01" min="0" name="cost_per_m2" required>
                 </div>
                 <div class="form-group" style="margin-bottom: 15px;">
-                    <label for="qm_cost_per_meter_cut">Цена на метър рязане (€)</label>
-                    <input type="number" id="qm_cost_per_meter_cut" step="0.01" min="0" name="cost_per_meter_cut" required>
+                    <label for="qm_cutting_speed_mm_per_min">Скорост на рязане (мм/мин)</label>
+                    <input type="number" id="qm_cutting_speed_mm_per_min" step="0.01" min="0.01" name="cutting_speed_mm_per_min" required>
                 </div>
                 <div class="form-group" style="margin-bottom: 15px;">
-                    <label for="qm_cost_per_pierce">Цена на пробиване (€)</label>
-                    <input type="number" id="qm_cost_per_pierce" step="0.01" min="0" name="cost_per_pierce" required>
+                    <label for="qm_pierce_rate_per_min">Скорост на пробиване (проб./мин)</label>
+                    <input type="number" id="qm_pierce_rate_per_min" step="0.01" min="0.01" name="pierce_rate_per_min" required>
                 </div>
                 <div class="form-group" style="margin-bottom: 15px;" id="qm_sheet_length_mm_group">
                     <label for="qm_sheet_length_mm">Дължина на плочата (мм)</label>
@@ -655,7 +664,7 @@
         materialPricing.style.display = showMaterialPricing ? 'flex' : 'none';
         document.getElementById('dn_material_type_group').style.display = showMaterialPricing ? 'block' : 'none';
         if (!showMaterialPricing) {
-            ['dn_material_cost_per_m2', 'dn_material_cost_per_meter_cut', 'dn_material_cost_per_pierce'].forEach(function (id) {
+            ['dn_material_cost_per_m2', 'dn_material_cutting_speed_mm_per_min', 'dn_material_pierce_rate_per_min'].forEach(function (id) {
                 document.getElementById(id).value = '';
             });
         }
@@ -724,13 +733,13 @@
             return raw === '' ? null : parseFloat(raw);
         }
 
-        let costPerM2 = null, costPerMeterCut = null, costPerPierce = null, materialType = null;
+        let costPerM2 = null, cuttingSpeed = null, pierceRate = null, materialType = null;
         if (type === 'material' && isNewItem) {
             costPerM2 = numOrNull('dn_material_cost_per_m2');
-            costPerMeterCut = numOrNull('dn_material_cost_per_meter_cut');
-            costPerPierce = numOrNull('dn_material_cost_per_pierce');
-            if (costPerM2 === null || costPerMeterCut === null || costPerPierce === null) {
-                alert('Моля въведете цена/м², цена/м рязане и цена/пробиване за новия материал.');
+            cuttingSpeed = numOrNull('dn_material_cutting_speed_mm_per_min');
+            pierceRate = numOrNull('dn_material_pierce_rate_per_min');
+            if (costPerM2 === null || cuttingSpeed === null || pierceRate === null) {
+                alert('Моля въведете цена/м², скорост на рязане и скорост на пробиване за новия материал.');
                 return;
             }
             materialType = document.getElementById('dn_material_type').value;
@@ -745,7 +754,7 @@
             width: numOrNull('dn_width'), height: numOrNull('dn_height'), thickness: numOrNull('dn_thickness'),
             brand: document.getElementById('dn_brand').value.trim() || null,
             notes: document.getElementById('dn_notes').value.trim() || null,
-            cost_per_m2: costPerM2, cost_per_meter_cut: costPerMeterCut, cost_per_pierce: costPerPierce,
+            cost_per_m2: costPerM2, cutting_speed_mm_per_min: cuttingSpeed, pierce_rate_per_min: pierceRate,
             material_type: materialType,
             components: components,
         });
@@ -813,7 +822,7 @@
                 return {
                     type: c.type, name: c.name, material_key: c.material_key, qty: c.qty, unit_price: c.unit_price,
                     width: c.width, height: c.height, thickness: c.thickness, brand: c.brand, notes: c.notes,
-                    cost_per_m2: c.cost_per_m2, cost_per_meter_cut: c.cost_per_meter_cut, cost_per_pierce: c.cost_per_pierce,
+                    cost_per_m2: c.cost_per_m2, cutting_speed_mm_per_min: c.cutting_speed_mm_per_min, pierce_rate_per_min: c.pierce_rate_per_min,
                     material_type: c.material_type, components: c.components,
                 };
             })

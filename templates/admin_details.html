@@ -40,6 +40,15 @@
                 </select>
             </div>
             <div class="form-group">
+                <label for="detail_service">Услуга (рязане)</label>
+                <select id="detail_service" name="service_id" required>
+                    <option value="">-- Изберете услуга --</option>
+                    {% for s in services %}
+                    <option value="{{ s.id }}">{{ s.name }} ({{ "%.2f"|format(s.price_per_hour_eur) }} €/час)</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
                 <label for="detail_file">DXF файл</label>
                 <input type="file" id="detail_file" name="file" accept=".dxf" required>
             </div>
@@ -62,6 +71,7 @@
                     <th>Материал</th>
                     <th>Размери</th>
                     <th>Цена на рязане (€)</th>
+                    <th>Обща цена с операции (€)</th>
                     <th>На склад</th>
                     <th>ERP № / КД №</th>
                     <th class="text-right">Етикет</th>
@@ -75,6 +85,7 @@
                     <td><span class="badge badge-user">{{ detail.material.display_name if detail.material else 'Неизвестен' }}</span></td>
                     <td>{{ format_cut_dimensions(detail.width, detail.height, detail.material.type if detail.material else 'sheets') }}</td>
                     <td>{{ "%.2f"|format(detail.calculated_price) }} €</td>
+                    <td>{{ "%.2f"|format(detail.total_price) }} €</td>
                     <td>{{ detail.stock_quantity|round(2) }}</td>
                     <td class="text-small text-muted">{{ detail.erp_number or '-' }} / {{ detail.code_number or '-' }}</td>
                     <td class="text-right">
@@ -92,7 +103,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="8" class="text-center no-data">Няма добавени детайли.</td>
+                    <td colspan="9" class="text-center no-data">Няма добавени детайли.</td>
                 </tr>
                 {% endfor %}
                 </tbody>

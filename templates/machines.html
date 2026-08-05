@@ -69,6 +69,15 @@
                 <label for="machine_name">Име на машина</label>
                 <input type="text" id="machine_name" name="name" placeholder="напр. Trumpf Fiber Laser 3030" required>
             </div>
+            <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                <label for="machine_type">Тип машина (незадължително)</label>
+                <input type="text" id="machine_type" name="machine_type" placeholder="напр. laser" list="machine_type_options" autocomplete="off">
+                <datalist id="machine_type_options">
+                    {% for t in known_machine_types %}
+                    <option value="{{ t }}"></option>
+                    {% endfor %}
+                </datalist>
+            </div>
             <button type="submit" class="btn-submit" style="margin-top: 0; padding: 12px 24px;">Добави Машина</button>
         </form>
     </section>
@@ -83,6 +92,7 @@
                 <thead>
                 <tr>
                     <th>Име</th>
+                    <th>Тип</th>
                     <th>Статус</th>
                     <th>Последна поддръжка</th>
                     {% if current_user.is_staff %}
@@ -102,6 +112,7 @@
                         <button type="button" class="edit-pencil-btn" title="Редактирай" onclick="openEditWindow('{{ url_for('edit_machine_window', id=m.id) }}')">✎</button>
                         {% endif %}
                     </td>
+                    <td>{{ m.machine_type or '-' }}</td>
                     <td>
                         {% if m.status == 'idle' %}
                         <span class="machine-status-badge status-idle">Свободна</span>
@@ -139,7 +150,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="{{ 3 + (1 if current_user.is_staff else 0) + (1 if current_user.is_admin else 0) }}" class="text-center no-data">Няма добавени машини.</td>
+                    <td colspan="{{ 4 + (1 if current_user.is_staff else 0) + (1 if current_user.is_admin else 0) }}" class="text-center no-data">Няма добавени машини.</td>
                 </tr>
                 {% endfor %}
                 </tbody>

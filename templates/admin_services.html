@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Услуги - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .service-price-input {
+            width: 100px;
+            padding: 0.6rem 0.75rem;
+            background-color: var(--bg-input);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-sm);
+            font-size: 0.9rem;
+        }
+        .service-row-form {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .btn-save-price {
+            background-color: var(--accent-primary);
+            color: var(--text-main);
+            border: none;
+            border-radius: var(--border-radius-sm);
+            padding: 0.5rem 0.9rem;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.85rem;
+            transition: background-color 0.2s ease;
+        }
+        .btn-save-price:hover {
+            background-color: var(--accent-secondary);
+        }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Добавяне на нова услуга</h3>
+        <p class="section-subtitle">Услуги (напр. "Лазерно рязане", "Фрезоване - 3 оси") с цена на час, използвана от ценовия
+            калкулатор (DXF рязане и допълнителни операции върху детайли).</p>
+        <form action="{{ url_for('admin_add_service') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="new_service_name">Име на услугата</label>
+                <input type="text" id="new_service_name" name="name" placeholder="напр. Фрезоване - 3 оси" required autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="new_service_machine_type">Тип машина (незадължително)</label>
+                <select id="new_service_machine_type" name="machine_type">
+                    <option value="">-- Без тип --</option>
+                    {% for t in known_machine_types %}
+                    <option value="{{ t }}">{{ t }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="new_service_price">Цена на час (€/60 мин)</label>
+                <input type="number" id="new_service_price" step="0.01" min="0.01" name="price_per_hour_eur" placeholder="напр. 50.00" required>
+            </div>
+            <div class="form-group">
+                <label for="new_service_description">Описание (незадължително)</label>
+                <input type="text" id="new_service_description" name="description" placeholder="показва се на страница Услуги">
+            </div>
+            <button type="submit" class="btn-submit">Добави услуга</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Списък с услуги</h3>
+        <p class="section-subtitle">Редактирайте цената на час и типа машина. Промените влизат в сила незабавно за всички нови изчисления.</p>
+
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Услуга</th>
+                    <th>Тип машина</th>
+                    <th>Цена на час (€)</th>
+                    <th>Описание</th>
+                    <th class="text-right">Действие</th>
+                    <th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for service in services %}
+                <tr>
+                    <td colspan="5">
+                        <form action="{{ url_for('admin_update_service', service_id=service.id) }}" method="POST" class="service-row-form">
+                            {% include 'partials/csrf_field.html' %}
+                            <input type="text" name="name" value="{{ service.name }}" class="service-price-input" style="width: 180px;" required>
+                            <select name="machine_type" class="service-price-input">
+                                <option value="" {% if not service.machine_type %}selected{% endif %}>-- Без тип --</option>
+                                {% for t in known_machine_types %}
+                                <option value="{{ t }}" {% if t == service.machine_type %}selected{% endif %}>{{ t }}</option>
+                                {% endfor %}
+                            </select>
+                            <input type="number" step="0.01" min="0.01" name="price_per_hour_eur"
+                                   value="{{ '%.2f'|format(service.price_per_hour_eur) }}" class="service-price-input" required>
+                            <input type="text" name="description" value="{{ service.description or '' }}"
+                                   class="service-price-input" style="width: 220px;" placeholder="Описание">
+                            <button type="submit" class="btn-save-price">Запази</button>
+                        </form>
+                    </td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_delete_service', service_id=service.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на услуга &quot;{{ service.name|e }}&quot;? Това е възможно само ако не се използва.');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="text-center no-data">Няма добавени услуги.</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+</main>
+
+</body>
+</html>

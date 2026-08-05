@@ -150,6 +150,36 @@
         </div>
     </section>
 
+    {% if billable_services %}
+    <section class="dmg-showcase-section">
+        <div class="section-header-dmg">
+            <div>
+                <div class="hero-tag"><span>{{ '%02d'|format(machine_sections|length + 3) }}</span> // ЦЕНИ НА УСЛУГИ</div>
+                <h2 class="dmg-section-title">ЦЕНИ НА УСЛУГИ</h2>
+            </div>
+            <span class="dmg-line-decorative"></span>
+        </div>
+        <p class="dmg-card-desc">Часова ставка за изработка по услуга - използвана при изчисляване на цената на всеки чертеж/детайл.</p>
+
+        <div class="dmg-grid">
+            {% for service in billable_services %}
+            <div class="dmg-card">
+                <h3 class="dmg-card-title">{{ service.name }}</h3>
+                <div class="dmg-card-specs">
+                    {% if service.machine_type %}
+                    <div class="spec-row"><span class="spec-name">Тип машина</span><span class="spec-val">{{ service.machine_type }}</span></div>
+                    {% endif %}
+                    <div class="spec-row"><span class="spec-name">Цена на час</span><span class="spec-val">{{ "%.2f"|format(service.price_per_hour_eur) }} €</span></div>
+                </div>
+                {% if service.description %}
+                <p class="dmg-card-desc">{{ service.description }}</p>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
 </main>
 
 {% include 'partials/footer.html' %}

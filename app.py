@@ -146,6 +146,12 @@ class DxfFile(db.Model):
     geometry_json = db.Column(db.Text, nullable=True)
     machine_id = db.Column(db.Integer, db.ForeignKey('machine.id'), nullable=True)
     machine = db.relationship('Machine', backref='dxf_files')
+    # Which billable Service (hourly rate + machine type) priced the cut -
+    # see calculate_cnc_price(). Nullable so pre-refactor rows (priced under
+    # the old flat cost_per_meter_cut/cost_per_pierce scheme) don't need a
+    # backfill; their calculated_price stays a frozen historical value either way.
+    service_id = db.Column(db.Integer, db.ForeignKey('service.id'), nullable=True)
+    service = db.relationship('Service')
 
 
 class MaterialPrice(db.Model):
@@ -155,20 +161,21 @@ class MaterialPrice(db.Model):
     DxfFile.material and the dashboard's material <select> - it's
     auto-generated when a material is created, not edited through the UI.
 
-    Prices are stored in human-friendly units (EUR per square meter, EUR per
-    meter of cut) rather than per mm2/per mm - the raw per-mm values needed
-    for typical prices are tiny (e.g. 0.00001), which is awkward to enter and
-    read for non-technical staff. calculate_cnc_price() converts the
-    drawing's mm-based measurements into m2/m before applying these rates, so
-    the actual calculated price is unaffected by this unit choice - only
-    what admins type/see changes.
+    cost_per_m2 is still a human-friendly EUR/m2 rate (see calculate_cnc_price()).
+    cutting_speed_mm_per_min and pierce_rate_per_min replace the old flat
+    cost_per_meter_cut/cost_per_pierce EUR rates - cutting/piercing are no
+    longer priced directly off the material, they're priced off *time*
+    (length/speed and pierce_count/rate minutes) at whichever Service's
+    EUR/hour rate is selected for the job. Same material can be cut on a
+    cheap or expensive machine; the material only determines how fast that
+    machine can process it.
     """
     id = db.Column(db.Integer, primary_key=True)
     key = db.Column(db.String(50), unique=True, nullable=False)
     display_name = db.Column(db.String(100), nullable=False)
     cost_per_m2 = db.Column(db.Float, nullable=False)
-    cost_per_meter_cut = db.Column(db.Float, nullable=False)
-    cost_per_pierce = db.Column(db.Float, nullable=False)
+    cutting_speed_mm_per_min = db.Column(db.Float, nullable=False)
+    pierce_rate_per_min = db.Column(db.Float, nullable=False)
     # Standard stock sheet size this material entry represents (mm). Purely
     # informational catalog data - pricing still runs off the cut part's own
     # geometry (calculate_cnc_price), not off these. Optional/nullable since
@@ -328,6 +335,12 @@ class Detail(db.Model):
     pierce_count = db.Column(db.Integer, nullable=False)
     calculated_price = db.Column(db.Float, nullable=False)
     geometry_json = db.Column(db.Text, nullable=True)
+    # Which Service (hourly rate) priced this detail's cut - see
+    # calculate_cnc_price(). Nullable for the same reason as DxfFile.service_id
+    # (pre-refactor rows, and delivery-note-created bare-bones details that
+    # skip DXF geometry entirely - see _find_or_create_delivery_target).
+    cutting_service_id = db.Column(db.Integer, db.ForeignKey('service.id'), nullable=True)
+    cutting_service = db.relationship('Service')
     # ERP code (shown as text + Code128 barcode) and internal part code (КД №)
     # printed on production labels - see print_label(). Optional/nullable
     # since older catalog parts won't have these set.
@@ -338,6 +351,15 @@ class Detail(db.Model):
     stock_quantity = db.Column(db.Float, nullable=False, default=0.0)
 
     material = db.relationship('MaterialPrice')
+
+    @property
+    def total_price(self):
+        """calculated_price (the DXF cut) plus every extra Operation (milling,
+        deburring, ...) attached to this detail - see Operation. What Product
+        pricing (calculate_product_pricing) and the catalog listing actually
+        charge for a detail, as opposed to calculated_price which is frozen
+        to just the original cut."""
+        return round(self.calculated_price + sum(op.cost for op in self.operations), 2)
 
 
 class DetailDxfFile(db.Model):
@@ -359,6 +381,32 @@ class DetailDxfFile(db.Model):
 
     detail = db.relationship('Detail', backref=db.backref('dxf_files', cascade='all, delete-orphan', lazy=True))
     uploaded_by = db.relationship('User')
+
+
+class Operation(db.Model):
+    """
+    An extra processing step attached to a Detail beyond its base laser cut
+    (e.g. milling, deburring, welding) - see Detail.total_price. Unlike the
+    cut itself, these have no DXF geometry to derive a duration from, so
+    duration_minutes is entered directly by an admin rather than computed
+    from length/pierce_count. `sequence` orders multiple operations on the
+    same detail (e.g. mill before deburr).
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=False)
+    service_id = db.Column(db.Integer, db.ForeignKey('service.id'), nullable=False)
+    sequence = db.Column(db.Integer, nullable=False, default=0)
+    duration_minutes = db.Column(db.Float, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    detail = db.relationship('Detail', backref=db.backref('operations', cascade='all, delete-orphan', lazy=True,
+                                                            order_by='Operation.sequence'))
+    service = db.relationship('Service')
+
+    @property
+    def cost(self):
+        """duration_minutes priced at the linked Service's EUR/hour rate."""
+        return round(self.duration_minutes * (self.service.price_per_hour_eur / 60.0), 2)
 
 
 class ProductImage(db.Model):
@@ -585,7 +633,7 @@ def calculate_product_pricing(product):
     final sell price. Centralized here so the products list, edit page, and
     offer view can never disagree with each other.
     """
-    details_subtotal = sum(pd.detail.calculated_price * pd.quantity for pd in product.product_details)
+    details_subtotal = sum(pd.detail.total_price * pd.quantity for pd in product.product_details)
     extra_costs_subtotal = sum(ec.amount for ec in product.extra_costs)
     total_cost = details_subtotal + extra_costs_subtotal
     markup_amount = total_cost * (product.markup_percent / 100.0)
@@ -664,6 +712,33 @@ class Machine(db.Model):
     name = db.Column(db.String(100), nullable=False)
     status = db.Column(db.String(50), default='idle')  # idle, running, maintenance
     last_maintenance = db.Column(db.DateTime, default=datetime.utcnow)
+    # Free-text category (e.g. 'laser', 'mill_3axis', 'plasma') matched against
+    # Service.machine_type - see Service. Informational grouping only, not a
+    # separate lookup table (same reasoning as MaterialPrice.type): a small,
+    # shop-specific, open-ended set that admins type rather than pick from a
+    # fixed enum. Nullable since existing machines predate this field.
+    machine_type = db.Column(db.String(50), nullable=True)
+
+
+class Service(db.Model):
+    """
+    A billable operation type (e.g. "Лазерно рязане", "Фрезоване - 3 оси")
+    admins manage on /admin/services - see admin_services(). Carries the
+    EUR/hour rate the new time-based pricing engine (calculate_cnc_price())
+    uses for the base DXF cut, and/or the rate an Operation bills its
+    duration_minutes at for extra post-processing steps on a Detail.
+    machine_type is a free-text category (matched against Machine.machine_type)
+    identifying which kind of machine performs this service - not a FK to one
+    specific Machine, since a shop can have more than one machine of the same
+    type and actual per-job machine assignment already happens separately via
+    DxfFile.machine_id/Order.machine_id.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(150), nullable=False)
+    machine_type = db.Column(db.String(50), nullable=True)
+    price_per_hour_eur = db.Column(db.Float, nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
 #  One meter can legitimately feed more than one machine (a shared sub-panel
@@ -801,19 +876,22 @@ def load_user(user_id):
 # run (see seed_material_prices() below). After that, prices are read from
 # and edited through the database - NOT from this dict - so admins can
 # change them at runtime via the admin panel without a code change/redeploy.
-# These are the same real prices as before, just re-expressed in EUR/m2 and
-# EUR/meter-of-cut instead of EUR/mm2 and EUR/mm - mathematically identical,
-# just friendlier numbers (e.g. 0.00001 EUR/mm2 = 10.00 EUR/m2).
+# cost_per_m2 keeps the old real EUR/m2 rates. cutting_speed_mm_per_min
+# (mm/min) and pierce_rate_per_min (pierces/min) are placeholder ballpark
+# speeds, not measured real-machine numbers - unlike the old flat EUR rates
+# they replace, there's no way to back-derive a real speed from what the
+# shop used to charge per meter/pierce. Admins should tune these to their
+# actual machine/material combos via /admin/materials.
 DEFAULT_MATERIAL_SEED = {
-    "wood": {"cost_per_m2": 10.00, "cost_per_meter_cut": 0.80, "cost_per_pierce": 0.05,
+    "wood": {"cost_per_m2": 10.00, "cutting_speed_mm_per_min": 3000.0, "pierce_rate_per_min": 60.0,
              "name": "Дървесен материал / МДФ"},
-    "steel": {"cost_per_m2": 20.00, "cost_per_meter_cut": 1.50, "cost_per_pierce": 0.15, "name": "Въглеродна стомана"},
-    "stainless_steel": {"cost_per_m2": 50.00, "cost_per_meter_cut": 2.50, "cost_per_pierce": 0.25,
+    "steel": {"cost_per_m2": 20.00, "cutting_speed_mm_per_min": 1500.0, "pierce_rate_per_min": 40.0, "name": "Въглеродна стомана"},
+    "stainless_steel": {"cost_per_m2": 50.00, "cutting_speed_mm_per_min": 800.0, "pierce_rate_per_min": 25.0,
                         "name": "Неръждаема стомана"},
-    "aluminum": {"cost_per_m2": 40.00, "cost_per_meter_cut": 2.00, "cost_per_pierce": 0.20, "name": "Алуминий"},
-    "copper": {"cost_per_m2": 120.00, "cost_per_meter_cut": 4.00, "cost_per_pierce": 0.40, "name": "Мед"},
-    "brass": {"cost_per_m2": 90.00, "cost_per_meter_cut": 3.50, "cost_per_pierce": 0.35, "name": "Месинг"},
-    "galvanized": {"cost_per_m2": 30.00, "cost_per_meter_cut": 1.80, "cost_per_pierce": 0.18,
+    "aluminum": {"cost_per_m2": 40.00, "cutting_speed_mm_per_min": 1200.0, "pierce_rate_per_min": 35.0, "name": "Алуминий"},
+    "copper": {"cost_per_m2": 120.00, "cutting_speed_mm_per_min": 400.0, "pierce_rate_per_min": 15.0, "name": "Мед"},
+    "brass": {"cost_per_m2": 90.00, "cutting_speed_mm_per_min": 500.0, "pierce_rate_per_min": 18.0, "name": "Месинг"},
+    "galvanized": {"cost_per_m2": 30.00, "cutting_speed_mm_per_min": 1400.0, "pierce_rate_per_min": 38.0,
                    "name": "Поцинкована ламарина"}
 }
 
@@ -831,10 +909,22 @@ def seed_material_prices():
                 key=key,
                 display_name=cfg['name'],
                 cost_per_m2=cfg['cost_per_m2'],
-                cost_per_meter_cut=cfg['cost_per_meter_cut'],
-                cost_per_pierce=cfg['cost_per_pierce']
+                cutting_speed_mm_per_min=cfg['cutting_speed_mm_per_min'],
+                pierce_rate_per_min=cfg['pierce_rate_per_min']
             ))
     db.session.commit()
+
+
+def seed_billable_services():
+    """
+    Seeds one default Service ('Лазерно рязане', 50 EUR/h) so the DXF
+    calculator has something to price cuts against out of the box - same
+    no-op-if-not-empty pattern as seed_material_prices(). Admins add/edit the
+    rest from /admin/services.
+    """
+    if not Service.query.first():
+        db.session.add(Service(name='Лазерно рязане', machine_type='laser', price_per_hour_eur=50.0))
+        db.session.commit()
 
 
 # One-time seed for the public services page's machine-park cards - was hardcoded
@@ -1232,22 +1322,35 @@ def analyze_dxf_geometry(file_path):
         return None, None, None, None, None
 
 
-def calculate_cnc_price(width, height, total_length, pierce_count, material_key):
+def calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id):
+    """
+    Time-based pricing engine. Material only supplies the raw-stock area
+    cost and how fast it cuts/pierces; the EUR/hour rate comes from the
+    selected Service (the machine actually doing the job). Standard units
+    throughout: length in mm, time in minutes, area in m2.
+
+    cutting_time_min = total_length (mm) / cutting_speed_mm_per_min
+    pierce_time_min = pierce_count / pierce_rate_per_min
+    time_cost = (cutting_time_min + pierce_time_min) * (price_per_hour_eur / 60)
+    total = material_surface_cost + time_cost + BASE_SETUP_FEE
+
+    Worked example matching the shop's own spec: 50 EUR/h service, 1.2 mm/min
+    cutting speed, 200mm cut -> cutting_time_min = 200/1.2 = 166.67 min,
+    time_cost = 166.67 * (50/60) = 138.89 EUR (plus pierce time and material).
+    """
     material = MaterialPrice.query.filter_by(key=material_key).first()
-    if not material:
+    service = db.session.get(Service, service_id) if service_id else None
+    if not material or not service:
         return 0.0
 
-    # Prices are stored per square meter / per meter of cut (human-friendly),
-    # so convert the drawing's mm-based measurements accordingly before
-    # applying them. 1 m2 = 1,000,000 mm2; 1 m = 1,000 mm.
     area_m2 = (width * height) / 1_000_000
-    length_m = total_length / 1_000
-
     material_surface_cost = area_m2 * material.cost_per_m2
-    cutting_lineal_cost = length_m * material.cost_per_meter_cut
-    piercing_total_cost = pierce_count * material.cost_per_pierce
 
-    total_calculated_euro = material_surface_cost + cutting_lineal_cost + piercing_total_cost + BASE_SETUP_FEE
+    cutting_time_min = total_length / material.cutting_speed_mm_per_min if material.cutting_speed_mm_per_min else 0.0
+    pierce_time_min = pierce_count / material.pierce_rate_per_min if material.pierce_rate_per_min else 0.0
+    time_cost = (cutting_time_min + pierce_time_min) * (service.price_per_hour_eur / 60.0)
+
+    total_calculated_euro = material_surface_cost + time_cost + BASE_SETUP_FEE
     return round(total_calculated_euro, 2)
 
 
@@ -1420,7 +1523,9 @@ def services():
     # Products are a flat grid (like the index page's machine cards), not
     # sectioned by section_title - see ServiceMachineCard.kind.
     product_cards = ServiceMachineCard.query.filter_by(page='services', kind='product').order_by(ServiceMachineCard.id).all()
-    return render_template('services.html', active_page='services', machine_sections=sections, product_cards=product_cards)
+    billable_services = Service.query.order_by(Service.name).all()
+    return render_template('services.html', active_page='services', machine_sections=sections,
+                            product_cards=product_cards, billable_services=billable_services)
 
 
 @app.route('/about')
@@ -1520,13 +1625,14 @@ def sanitize_display_filename(filename):
 
 
 # Окончателно възстановен маршут за потребителското табло
-def process_dxf_upload(file, material_key, machine_id=None):
+def process_dxf_upload(file, material_key, service_id, machine_id=None):
     """
     Shared DXF-upload pipeline used by both /dashboard and /upload: saves
-    the file to a temp path, extracts geometry, validates the material, and
-    builds a (not-yet-committed) DxfFile record with its calculated price.
-    Keeping this logic in one place means a future fix to it automatically
-    applies to both routes, instead of having to be made twice.
+    the file to a temp path, extracts geometry, validates the material +
+    service, and builds a (not-yet-committed) DxfFile record with its
+    calculated price. Keeping this logic in one place means a future fix to
+    it automatically applies to both routes, instead of having to be made
+    twice.
 
     Returns a (dxf_file, pierce_count, error_message) tuple - on failure
     dxf_file/pierce_count are None and error_message is a user-facing
@@ -1550,7 +1656,10 @@ def process_dxf_upload(file, material_key, machine_id=None):
         if not material_row:
             return None, None, 'Невалиден избор на материал.'
 
-        price = calculate_cnc_price(width, height, total_length, pierce_count, material_key)
+        if not service_id or not db.session.get(Service, service_id):
+            return None, None, 'Невалиден избор на услуга.'
+
+        price = calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id)
 
         dxf_file = DxfFile(
             filename=sanitize_display_filename(file.filename),
@@ -1561,7 +1670,8 @@ def process_dxf_upload(file, material_key, machine_id=None):
             calculated_price=price,
             user_id=current_user.id,
             geometry_json=json.dumps(shapes),
-            machine_id=machine_id
+            machine_id=machine_id,
+            service_id=service_id
         )
         return dxf_file, pierce_count, None
     finally:
@@ -1577,7 +1687,8 @@ def dashboard():
     # own page (see upload()) so the two don't get conflated in the nav.
     user_uploads = DxfFile.query.filter_by(user_id=current_user.id).order_by(DxfFile.id.desc()).all()
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
-    return render_template('dashboard.html', uploads=user_uploads, materials=materials, active_page='dashboard')
+    services = Service.query.order_by(Service.name).all()
+    return render_template('dashboard.html', uploads=user_uploads, materials=materials, services=services, active_page='dashboard')
 
 
 @app.route('/geometry/<int:file_id>')
@@ -1632,10 +1743,14 @@ def upload():
 
         try:
             chosen_material = request.form.get('material', 'steel')
+            service_id_raw = request.form.get('service_id', '')
+            chosen_service = int(service_id_raw) if service_id_raw and service_id_raw.isdigit() else None
             machine_id_raw = request.form.get('machine_id', '')
             selected_machine = int(machine_id_raw) if machine_id_raw and machine_id_raw.isdigit() else None
 
-            dxf_file, _pierce_count, error = process_dxf_upload(file, chosen_material, machine_id=selected_machine)
+            dxf_file, _pierce_count, error = process_dxf_upload(
+                file, chosen_material, chosen_service, machine_id=selected_machine
+            )
             if error:
                 flash(error, 'danger')
                 return redirect(request.url)
@@ -1652,7 +1767,8 @@ def upload():
 
     machines = Machine.query.all()
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
-    return render_template('upload.html', machines=machines, materials=materials, active_page='upload')
+    services = Service.query.order_by(Service.name).all()
+    return render_template('upload.html', machines=machines, materials=materials, services=services, active_page='upload')
 
 # ----------------- АДМИНИСТРАТОРСКИ МАРШРУТИ -----------------
 
@@ -1708,7 +1824,8 @@ def admin_details():
         return redirect(url_for('dashboard'))
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     details = Detail.query.order_by(Detail.name).all()
-    return render_template('admin_details.html', materials=materials, details=details, active_page='admin_details')
+    services = Service.query.order_by(Service.name).all()
+    return render_template('admin_details.html', materials=materials, details=details, services=services, active_page='admin_details')
 
 
 @app.route('/admin/products')
@@ -1944,7 +2061,7 @@ DELIVERY_NOTE_TARGET_MODELS = {'material': MaterialPrice, 'detail': Detail, 'pro
 
 
 def _find_or_create_delivery_target(item_type, name, brand, width, height, thickness, unit_price, material_key,
-                                     cost_per_m2=None, cost_per_meter_cut=None, cost_per_pierce=None, components=None,
+                                     cost_per_m2=None, cutting_speed_mm_per_min=None, pierce_rate_per_min=None, components=None,
                                      material_type='sheets'):
     """
     Resolves one delivery-note line to a catalog row: reuses an existing
@@ -1966,8 +2083,8 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
     a normal, pre-existing state here (same as api_quick_create_product with
     no components attached).
 
-    A *new* material must come with real cost_per_m2/cost_per_meter_cut/
-    cost_per_pierce (mirrors admin_add_material's required fields) - without
+    A *new* material must come with real cost_per_m2/cutting_speed_mm_per_min/
+    pierce_rate_per_min (mirrors admin_add_material's required fields) - without
     them we'd otherwise silently create a zero-priced row that produces
     €0.00 CNC prices everywhere it's later picked. Returns None (skip the
     line) rather than defaulting to 0.0. Matching an *existing* material is
@@ -1984,11 +2101,11 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
         ).first()
         if existing:
             return existing
-        if cost_per_m2 is None or cost_per_meter_cut is None or cost_per_pierce is None:
+        if cost_per_m2 is None or cutting_speed_mm_per_min is None or pierce_rate_per_min is None:
             return None
         new_row = MaterialPrice(
-            key='pending', display_name=name, cost_per_m2=cost_per_m2, cost_per_meter_cut=cost_per_meter_cut,
-            cost_per_pierce=cost_per_pierce, sheet_width_mm=width, sheet_length_mm=height,
+            key='pending', display_name=name, cost_per_m2=cost_per_m2, cutting_speed_mm_per_min=cutting_speed_mm_per_min,
+            pierce_rate_per_min=pierce_rate_per_min, sheet_width_mm=width, sheet_length_mm=height,
             thickness_mm=thickness, brand=brand, type=material_type, erp_number=_next_erp_number(),
         )
         db.session.add(new_row)
@@ -2059,9 +2176,10 @@ def admin_delivery_notes():
                       'brand': d.material.brand if d.material else None,
                       'material_key': d.material_key, 'price': d.calculated_price} for d in details]
     products_data = [{'name': p.name, 'width': None, 'height': None, 'thickness': None, 'brand': None, 'price': None} for p in products]
+    services = Service.query.order_by(Service.name).all()
     return render_template(
         'admin_delivery_notes.html', suppliers=suppliers, notes=notes,
-        materials=materials, details=details, products=products,
+        materials=materials, details=details, products=products, services=services,
         materials_data=materials_data, details_data=details_data, products_data=products_data,
         active_page='admin_delivery_notes'
     )
@@ -2100,7 +2218,7 @@ def create_delivery_note():
     line doesn't exactly match an existing one (see
     _find_or_create_delivery_target). items_json follows
     [{type, name, material_key, qty, unit_price, width, height, thickness,
-    brand, notes, cost_per_m2, cost_per_meter_cut, cost_per_pierce,
+    brand, notes, cost_per_m2, cutting_speed_mm_per_min, pierce_rate_per_min,
     material_type, components}] - material_type (sheets/rods/profiles/pipes/
     other) only matters for a brand-new material line; defaults to 'sheets'
     if missing, same as _parse_material_type(). No id, since the row to
@@ -2166,8 +2284,8 @@ def create_delivery_note():
         brand = (row.get('brand') or '').strip() or None
         material_key = (row.get('material_key') or '').strip() or None
         cost_per_m2 = _optional_float('cost_per_m2')
-        cost_per_meter_cut = _optional_float('cost_per_meter_cut')
-        cost_per_pierce = _optional_float('cost_per_pierce')
+        cutting_speed_mm_per_min = _optional_float('cutting_speed_mm_per_min')
+        pierce_rate_per_min = _optional_float('pierce_rate_per_min')
         material_type = (row.get('material_type') or 'sheets').strip()
 
         components = {}  # detail_id -> quantity, merging duplicates; malformed/unknown entries are just skipped
@@ -2185,7 +2303,7 @@ def create_delivery_note():
 
         target = _find_or_create_delivery_target(
             item_type, name, brand, width, height, thickness, unit_price, material_key,
-            cost_per_m2=cost_per_m2, cost_per_meter_cut=cost_per_meter_cut, cost_per_pierce=cost_per_pierce,
+            cost_per_m2=cost_per_m2, cutting_speed_mm_per_min=cutting_speed_mm_per_min, pierce_rate_per_min=pierce_rate_per_min,
             components=components, material_type=material_type
         )
         if not target:
@@ -2605,16 +2723,16 @@ def admin_update_material(key):
 
     try:
         cost_per_m2 = float(request.form.get('cost_per_m2', ''))
-        cost_per_meter_cut = float(request.form.get('cost_per_meter_cut', ''))
-        cost_per_pierce = float(request.form.get('cost_per_pierce', ''))
+        cutting_speed_mm_per_min = float(request.form.get('cutting_speed_mm_per_min', ''))
+        pierce_rate_per_min = float(request.form.get('pierce_rate_per_min', ''))
         sheet_length_mm, sheet_width_mm, thickness_mm = _parse_sheet_dimensions(request.form)
         erp_number = _parse_erp_number(request.form)
     except ValueError:
         flash('Всички цени, размери и ERP № трябва да бъдат валидни числа.', 'danger')
         return redirect(url_for('admin_materials'))
 
-    if cost_per_m2 < 0 or cost_per_meter_cut < 0 or cost_per_pierce < 0:
-        flash('Цените не могат да бъдат отрицателни числа.', 'danger')
+    if cost_per_m2 < 0 or cutting_speed_mm_per_min <= 0 or pierce_rate_per_min <= 0:
+        flash('Цената не може да бъде отрицателна, а скоростите на рязане/пробиване трябва да бъдат положителни числа.', 'danger')
         return redirect(url_for('admin_materials'))
 
     conflict = _erp_number_conflict(erp_number, exclude_type='material', exclude_id=material.id)
@@ -2625,8 +2743,8 @@ def admin_update_material(key):
     # Round to 2 decimals - keeps prices in a simple, everyday currency
     # format rather than accumulating long float tails over repeated edits.
     material.cost_per_m2 = round(cost_per_m2, 2)
-    material.cost_per_meter_cut = round(cost_per_meter_cut, 2)
-    material.cost_per_pierce = round(cost_per_pierce, 2)
+    material.cutting_speed_mm_per_min = round(cutting_speed_mm_per_min, 2)
+    material.pierce_rate_per_min = round(pierce_rate_per_min, 2)
     material.sheet_length_mm = sheet_length_mm
     material.sheet_width_mm = sheet_width_mm
     material.thickness_mm = thickness_mm
@@ -2661,16 +2779,16 @@ def admin_add_material():
 
     try:
         cost_per_m2 = float(request.form.get('cost_per_m2', ''))
-        cost_per_meter_cut = float(request.form.get('cost_per_meter_cut', ''))
-        cost_per_pierce = float(request.form.get('cost_per_pierce', ''))
+        cutting_speed_mm_per_min = float(request.form.get('cutting_speed_mm_per_min', ''))
+        pierce_rate_per_min = float(request.form.get('pierce_rate_per_min', ''))
         sheet_length_mm, sheet_width_mm, thickness_mm = _parse_sheet_dimensions(request.form)
         erp_number = _parse_erp_number(request.form)
     except ValueError:
         flash('Всички цени, размери и ERP № трябва да бъдат валидни числа.', 'danger')
         return redirect(url_for('admin_materials'))
 
-    if cost_per_m2 < 0 or cost_per_meter_cut < 0 or cost_per_pierce < 0:
-        flash('Цените не могат да бъдат отрицателни числа.', 'danger')
+    if cost_per_m2 < 0 or cutting_speed_mm_per_min <= 0 or pierce_rate_per_min <= 0:
+        flash('Цената не може да бъде отрицателна, а скоростите на рязане/пробиване трябва да бъдат положителни числа.', 'danger')
         return redirect(url_for('admin_materials'))
 
     conflict = _erp_number_conflict(erp_number)
@@ -2686,8 +2804,8 @@ def admin_add_material():
         key='pending',  # placeholder, replaced with a real unique key below
         display_name=display_name,
         cost_per_m2=round(cost_per_m2, 2),
-        cost_per_meter_cut=round(cost_per_meter_cut, 2),
-        cost_per_pierce=round(cost_per_pierce, 2),
+        cutting_speed_mm_per_min=round(cutting_speed_mm_per_min, 2),
+        pierce_rate_per_min=round(pierce_rate_per_min, 2),
         sheet_length_mm=sheet_length_mm,
         sheet_width_mm=sheet_width_mm,
         thickness_mm=thickness_mm,
@@ -2757,11 +2875,19 @@ def add_machine():
         flash('Моля въведете име на машината.', 'danger')
         return redirect(url_for('list_machines'))
 
-    new_machine = Machine(name=name)
+    new_machine = Machine(name=name, machine_type=request.form.get('machine_type', '').strip() or None)
     db.session.add(new_machine)
     db.session.commit()
     flash('Машината е добавена успешно!', 'success')
     return redirect(url_for('list_machines'))
+
+
+def _known_machine_types():
+    """Distinct non-blank Machine.machine_type values already in use, offered as
+    datalist suggestions so admins reuse the same category string instead of
+    accidentally typing a near-duplicate (e.g. 'laser' vs 'Laser')."""
+    rows = db.session.query(Machine.machine_type).filter(Machine.machine_type.isnot(None)).distinct().all()
+    return sorted({r[0] for r in rows if r[0]})
 
 
 @app.route('/machines/<int:id>/edit')
@@ -2775,7 +2901,11 @@ def edit_machine_window(id):
     return render_template(
         'edit_window.html', item_label='машина', saved=request.args.get('saved') == '1',
         action=url_for('rename_machine', id=machine.id),
-        fields=[{'name': 'name', 'label': 'Име на машина', 'value': machine.name, 'type': 'text', 'required': True}]
+        fields=[
+            {'name': 'name', 'label': 'Име на машина', 'value': machine.name, 'type': 'text', 'required': True},
+            {'name': 'machine_type', 'label': 'Тип машина (напр. laser, mill_3axis)',
+             'value': machine.machine_type or '', 'type': 'datalist', 'options': _known_machine_types()},
+        ]
     )
 
 
@@ -2793,6 +2923,7 @@ def rename_machine(id):
 
     machine = Machine.query.get_or_404(id)
     machine.name = name
+    machine.machine_type = request.form.get('machine_type', '').strip() or None
     db.session.commit()
     flash('Машината беше преименувана успешно.', 'success')
     if request.form.get('popup') == '1':
@@ -2824,7 +2955,111 @@ def list_machines():
         flash('Нямате достъп до тази страница.', 'danger')
         return redirect(url_for('dashboard'))
     machines = Machine.query.all()
-    return render_template('machines.html', machines=machines, active_page='machines')
+    return render_template('machines.html', machines=machines, known_machine_types=_known_machine_types(), active_page='machines')
+
+
+# ----------------- УСЛУГИ (billable Services catalog) -----------------
+
+@app.route('/admin/services')
+@login_required
+def admin_services():
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+    services = Service.query.order_by(Service.name).all()
+    return render_template('admin_services.html', services=services, known_machine_types=_known_machine_types(),
+                            active_page='admin_services')
+
+
+@app.route('/admin/services/add', methods=['POST'])
+@login_required
+def admin_add_service():
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Моля въведете име на услугата.', 'danger')
+        return redirect(url_for('admin_services'))
+
+    try:
+        price_per_hour_eur = float(request.form.get('price_per_hour_eur', ''))
+    except ValueError:
+        flash('Цената на час трябва да бъде валидно число.', 'danger')
+        return redirect(url_for('admin_services'))
+    if price_per_hour_eur <= 0:
+        flash('Цената на час трябва да бъде положително число.', 'danger')
+        return redirect(url_for('admin_services'))
+
+    new_service = Service(
+        name=name,
+        machine_type=request.form.get('machine_type', '').strip() or None,
+        price_per_hour_eur=round(price_per_hour_eur, 2),
+        description=request.form.get('description', '').strip() or None,
+    )
+    db.session.add(new_service)
+    db.session.commit()
+    flash(f'Услугата "{name}" беше добавена успешно.', 'success')
+    return redirect(url_for('admin_services'))
+
+
+@app.route('/admin/services/<int:service_id>/update', methods=['POST'])
+@login_required
+def admin_update_service(service_id):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    service = Service.query.get_or_404(service_id)
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Моля въведете име на услугата.', 'danger')
+        return redirect(url_for('admin_services'))
+
+    try:
+        price_per_hour_eur = float(request.form.get('price_per_hour_eur', ''))
+    except ValueError:
+        flash('Цената на час трябва да бъде валидно число.', 'danger')
+        return redirect(url_for('admin_services'))
+    if price_per_hour_eur <= 0:
+        flash('Цената на час трябва да бъде положително число.', 'danger')
+        return redirect(url_for('admin_services'))
+
+    service.name = name
+    service.machine_type = request.form.get('machine_type', '').strip() or None
+    service.price_per_hour_eur = round(price_per_hour_eur, 2)
+    service.description = request.form.get('description', '').strip() or None
+    db.session.commit()
+    flash(f'Услугата "{name}" беше обновена успешно.', 'success')
+    return redirect(url_for('admin_services'))
+
+
+@app.route('/admin/services/<int:service_id>/delete', methods=['POST'])
+@login_required
+def admin_delete_service(service_id):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    service = Service.query.get_or_404(service_id)
+    # A service used by an existing cut/operation can't be deleted out from
+    # under it - same "resolve usages first" rule as admin_delete_detail()
+    # for a Detail still attached to a Product.
+    in_use = (
+        DxfFile.query.filter_by(service_id=service.id).first()
+        or Detail.query.filter_by(cutting_service_id=service.id).first()
+        or Operation.query.filter_by(service_id=service.id).first()
+    )
+    if in_use:
+        flash(f'Услугата "{service.name}" се използва и не може да бъде изтрита.', 'danger')
+        return redirect(url_for('admin_services'))
+
+    db.session.delete(service)
+    db.session.commit()
+    flash(f'Услугата "{service.name}" беше изтрита.', 'success')
+    return redirect(url_for('admin_services'))
+
 
 @app.route('/admin/products/<int:product_id>/delete_image/<int:image_id>', methods=['POST'])
 @login_required
@@ -2860,6 +3095,8 @@ def admin_add_detail():
 
     name = request.form.get('name', '').strip()
     material_key = request.form.get('material', '')
+    service_id_raw = request.form.get('service_id', '')
+    service_id = int(service_id_raw) if service_id_raw and service_id_raw.isdigit() else None
     try:
         erp_number = _parse_erp_number(request.form)
     except ValueError:
@@ -2878,6 +3115,10 @@ def admin_add_detail():
 
     if not MaterialPrice.query.filter_by(key=material_key).first():
         flash('Невалиден избор на материал.', 'danger')
+        return redirect(url_for('admin_details'))
+
+    if not service_id or not db.session.get(Service, service_id):
+        flash('Невалиден избор на услуга.', 'danger')
         return redirect(url_for('admin_details'))
 
     if 'file' not in request.files or request.files['file'].filename == '':
@@ -2905,13 +3146,13 @@ def admin_add_detail():
             os.remove(stored_path)
             return redirect(url_for('admin_details'))
 
-        price = calculate_cnc_price(width, height, total_length, pierce_count, material_key)
+        price = calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id)
 
         new_detail = Detail(
             name=name, material_key=material_key, width=width, height=height,
             total_length=total_length, pierce_count=pierce_count,
             calculated_price=price, geometry_json=json.dumps(shapes),
-            erp_number=erp_number, code_number=code_number
+            erp_number=erp_number, code_number=code_number, cutting_service_id=service_id
         )
         db.session.add(new_detail)
         db.session.flush()  # assigns new_detail.id for the DetailDxfFile FK below
@@ -2944,7 +3185,13 @@ def detail_dxf_dashboard(detail_id):
     """
     detail = Detail.query.get_or_404(detail_id)
     files = DetailDxfFile.query.filter_by(detail_id=detail_id).order_by(DetailDxfFile.uploaded_at.desc()).all()
-    return render_template('detail_dxf_dashboard.html', detail=detail, files=files, active_page='admin_details')
+    services = Service.query.order_by(Service.name).all()
+    # Plain dicts for the client-side pending-operations cart (see
+    # detail_dxf_dashboard.html) to compute a live running total without a
+    # round-trip per row - same convention as order_create()'s products_data.
+    services_data = [{'id': s.id, 'name': s.name, 'price_per_hour_eur': s.price_per_hour_eur} for s in services]
+    return render_template('detail_dxf_dashboard.html', detail=detail, files=files, services=services,
+                            services_data=services_data, active_page='admin_details')
 
 
 @app.route('/details/<int:detail_id>/files/upload', methods=['POST'])
@@ -3027,6 +3274,74 @@ def delete_detail_dxf(file_id):
     db.session.delete(dxf_file)
     db.session.commit()
     flash('Файлът беше премахнат успешно.', 'success')
+    return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
+
+
+@app.route('/admin/details/<int:detail_id>/operations/add', methods=['POST'])
+@login_required
+def admin_add_operation(detail_id):
+    """Attaches one or more extra processing steps (mill, deburr, ...) to a
+    Detail beyond its base laser cut, in a single request - see Operation and
+    Detail.total_price. operations_json follows [{service_id, duration_minutes},
+    ...] - build-a-list-then-submit-once, same convention as
+    create_delivery_note's items_json. Invalid rows (bad service/duration) are
+    skipped rather than failing the whole batch, same as create_delivery_note."""
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    detail = Detail.query.get_or_404(detail_id)
+    try:
+        rows = json.loads(request.form.get('operations_json', ''))
+        if not isinstance(rows, list):
+            rows = []
+    except (TypeError, ValueError):
+        rows = []
+
+    if not rows:
+        flash('Моля добавете поне една операция.', 'danger')
+        return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
+
+    next_sequence = (max((op.sequence for op in detail.operations), default=-1)) + 1
+    added = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            service_id = int(row.get('service_id'))
+            duration_minutes = float(row.get('duration_minutes'))
+        except (TypeError, ValueError):
+            continue
+        if duration_minutes <= 0 or not db.session.get(Service, service_id):
+            continue
+        db.session.add(Operation(
+            detail_id=detail.id, service_id=service_id, sequence=next_sequence,
+            duration_minutes=round(duration_minutes, 2)
+        ))
+        next_sequence += 1
+        added += 1
+
+    if not added:
+        flash('Няма валидни операции за добавяне.', 'danger')
+        return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
+
+    db.session.commit()
+    flash('Добавена е 1 операция.' if added == 1 else f'Добавени са {added} операции.', 'success')
+    return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
+
+
+@app.route('/admin/operations/<int:operation_id>/delete', methods=['POST'])
+@login_required
+def admin_delete_operation(operation_id):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    operation = Operation.query.get_or_404(operation_id)
+    detail_id = operation.detail_id
+    db.session.delete(operation)
+    db.session.commit()
+    flash('Операцията беше премахната.', 'success')
     return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
 
@@ -3134,8 +3449,10 @@ def admin_product_edit(product_id):
     product = Product.query.get_or_404(product_id)
     all_details = Detail.query.order_by(Detail.name).all()
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    services = Service.query.order_by(Service.name).all()
     pricing = calculate_product_pricing(product)
-    return render_template('product_edit.html', product=product, all_details=all_details, pricing=pricing, materials=materials, active_page='admin')
+    return render_template('product_edit.html', product=product, all_details=all_details, pricing=pricing,
+                            materials=materials, services=services, active_page='admin')
 
 
 @app.route('/admin/products/<int:product_id>/edit-content')
@@ -3517,6 +3834,7 @@ def create_order():
     details = Detail.query.order_by(Detail.name).all()
     machines = Machine.query.order_by(Machine.name).all()
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    services = Service.query.order_by(Service.name).all()
     clients = Client.query.order_by(Client.name).all()
     deliverers = Deliverer.query.order_by(Deliverer.name).all()
     # Pre-computed, JSON-friendly catalogs so the cart UI can add items and
@@ -3529,12 +3847,12 @@ def create_order():
         {
             'id': d.id,
             'name': f"{d.name} ({d.material.display_name})" if d.material else d.name,
-            'price': d.calculated_price
+            'price': d.total_price
         }
         for d in details
     ]
     return render_template('order_create.html', products=products_data, details=details_data,
-                           machines=machines, materials=materials, clients=clients, deliverers=deliverers,
+                           machines=machines, materials=materials, services=services, clients=clients, deliverers=deliverers,
                            active_page='create_order')
 
 
@@ -3833,6 +4151,8 @@ def api_quick_create_detail():
 
     name = request.form.get('name', '').strip()
     material_key = request.form.get('material', '')
+    service_id_raw = request.form.get('service_id', '')
+    service_id = int(service_id_raw) if service_id_raw and service_id_raw.isdigit() else None
 
     if not name:
         return jsonify({'status': 'error', 'message': 'Моля въведете име на детайла.'}), 400
@@ -3849,6 +4169,9 @@ def api_quick_create_detail():
 
     if not MaterialPrice.query.filter_by(key=material_key).first():
         return jsonify({'status': 'error', 'message': 'Невалиден избор на материал.'}), 400
+
+    if not service_id or not db.session.get(Service, service_id):
+        return jsonify({'status': 'error', 'message': 'Невалиден избор на услуга.'}), 400
 
     if 'file' not in request.files or request.files['file'].filename == '':
         return jsonify({'status': 'error', 'message': 'Моля качете .dxf файл.'}), 400
@@ -3867,14 +4190,14 @@ def api_quick_create_detail():
         if width is None:
             return jsonify({'status': 'error', 'message': 'Грешка при обработката на DXF файла.'}), 400
 
-        price = calculate_cnc_price(width, height, total_length, pierce_count, material_key)
+        price = calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id)
         mat = MaterialPrice.query.filter_by(key=material_key).first()
 
         new_detail = Detail(
             name=name, material_key=material_key, width=width, height=height,
             total_length=total_length, pierce_count=pierce_count,
             calculated_price=price, geometry_json=json.dumps(shapes),
-            erp_number=erp_number, code_number=code_number
+            erp_number=erp_number, code_number=code_number, cutting_service_id=service_id
         )
         db.session.add(new_detail)
         db.session.commit()
@@ -3987,15 +4310,15 @@ def api_quick_create_material():
 
     try:
         cost_per_m2 = float(request.form.get('cost_per_m2', ''))
-        cost_per_meter_cut = float(request.form.get('cost_per_meter_cut', ''))
-        cost_per_pierce = float(request.form.get('cost_per_pierce', ''))
+        cutting_speed_mm_per_min = float(request.form.get('cutting_speed_mm_per_min', ''))
+        pierce_rate_per_min = float(request.form.get('pierce_rate_per_min', ''))
         sheet_length_mm, sheet_width_mm, thickness_mm = _parse_sheet_dimensions(request.form)
         erp_number = _parse_erp_number(request.form)
     except ValueError:
         return jsonify({'status': 'error', 'message': 'Всички цени, размери и ERP № трябва да бъдат валидни числа.'}), 400
 
-    if cost_per_m2 < 0 or cost_per_meter_cut < 0 or cost_per_pierce < 0:
-        return jsonify({'status': 'error', 'message': 'Цените не могат да бъдат отрицателни числа.'}), 400
+    if cost_per_m2 < 0 or cutting_speed_mm_per_min <= 0 or pierce_rate_per_min <= 0:
+        return jsonify({'status': 'error', 'message': 'Цената не може да бъде отрицателна, а скоростите на рязане/пробиване трябва да бъдат положителни числа.'}), 400
 
     conflict = _erp_number_conflict(erp_number)
     if conflict:
@@ -4005,8 +4328,8 @@ def api_quick_create_material():
         key='pending',
         display_name=display_name,
         cost_per_m2=round(cost_per_m2, 2),
-        cost_per_meter_cut=round(cost_per_meter_cut, 2),
-        cost_per_pierce=round(cost_per_pierce, 2),
+        cutting_speed_mm_per_min=round(cutting_speed_mm_per_min, 2),
+        pierce_rate_per_min=round(pierce_rate_per_min, 2),
         sheet_length_mm=sheet_length_mm,
         sheet_width_mm=sheet_width_mm,
         thickness_mm=thickness_mm,
@@ -4998,6 +5321,9 @@ if __name__ == '__main__':
         # Populate the MaterialPrice table with defaults on first run only -
         # existing rows (including any admin-edited prices) are never touched.
         seed_material_prices()
+        # Same pattern for the billable Services catalog (hourly rates the
+        # pricing engine needs - see calculate_cnc_price()).
+        seed_billable_services()
         # Same pattern for the services page's machine-park cards - only runs
         # if ServiceMachineCard is completely empty (see seed_service_machine_cards).
         seed_service_machine_cards()

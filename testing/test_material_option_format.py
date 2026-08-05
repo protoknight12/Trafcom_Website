@@ -17,7 +17,7 @@ from app import format_material_option, MaterialPrice
 
 def _material(**kwargs):
     defaults = dict(
-        key='k', display_name='Алуминий', cost_per_m2=0, cost_per_meter_cut=0, cost_per_pierce=0,
+        key='k', display_name='Алуминий', cost_per_m2=0, cutting_speed_mm_per_min=0, pierce_rate_per_min=0,
         sheet_length_mm=None, sheet_width_mm=None, thickness_mm=None, brand=None,
     )
     defaults.update(kwargs)

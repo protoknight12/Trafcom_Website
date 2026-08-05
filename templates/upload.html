@@ -36,6 +36,16 @@
             </div>
 
             <div class="form-group" style="margin-bottom: 20px;">
+                <label for="service_id">Услуга (рязане) *</label>
+                <select name="service_id" id="service_id" required>
+                    <option value="">-- Изберете услуга --</option>
+                    {% for s in services %}
+                    <option value="{{ s.id }}">{{ s.name }} ({{ "%.2f"|format(s.price_per_hour_eur) }} €/час)</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 20px;">
                 <label for="dxf_file">DXF файл *</label>
                 <input type="file" id="dxf_file" name="file" accept=".dxf" required style="color: #fff;">
             </div>

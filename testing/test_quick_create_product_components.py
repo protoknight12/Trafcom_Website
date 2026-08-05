@@ -44,7 +44,7 @@ def app():
         db.create_all()
         admin = User(username='qa_admin', password=generate_password_hash('irrelevant123'), role='admin')
         db.session.add(admin)
-        material = MaterialPrice(key='qa_mat', display_name='QA Material', cost_per_m2=10, cost_per_meter_cut=1, cost_per_pierce=0.1)
+        material = MaterialPrice(key='qa_mat', display_name='QA Material', cost_per_m2=10, cutting_speed_mm_per_min=1, pierce_rate_per_min=0.1)
         db.session.add(material)
         db.session.flush()
         detail_a = Detail(name='Detail A', material_key=material.key, width=10, height=10,
