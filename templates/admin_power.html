@@ -438,6 +438,20 @@
         // each minute's max/min active power. So the headline number here is
         // the arithmetic mean of those per-minute peaks, not a made-up value.
         function renderHistoryChannel(key, ch) {
+            // The neutral conductor only ever has a meaningful current
+            // reading - voltage/power are phase-to-neutral or V*I figures
+            // that don't apply to the return path itself, so the meter
+            // reports them as undefined rather than a real number.
+            if (key === 'n') {
+                return `
+                <div class="channel-card">
+                    <div class="channel-name">${CHANNEL_LABELS[key] || key}</div>
+                    <div class="channel-power">${fmt(ch.avg_current, 2)} <span class="total-unit">A (средно)</span></div>
+                    <div class="channel-rows">
+                        <div class="text-muted text-small">Напрежение и мощност не се отнасят за неутралата</div>
+                    </div>
+                </div>`;
+            }
             return `
             <div class="channel-card">
                 <div class="channel-name">${CHANNEL_LABELS[key] || key}</div>
