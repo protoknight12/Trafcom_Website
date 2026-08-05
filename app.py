@@ -4368,9 +4368,17 @@ def _parse_shelly_csv(text):
             if not key or value in (None, ''):
                 continue
             try:
-                row[key] = int(value) if key == 'timestamp' else float(value)
+                parsed = int(value) if key == 'timestamp' else float(value)
             except (TypeError, ValueError):
                 continue
+            # The meter writes "nan"/"inf" for undefined fields (e.g. power
+            # factor at 0 A) - float() parses those without raising, but
+            # json.dumps then emits bare NaN/Infinity tokens, which aren't
+            # valid JSON and make JSON.parse() in the browser throw. Treat
+            # them as unparseable, same as a blank cell.
+            if isinstance(parsed, float) and not math.isfinite(parsed):
+                continue
+            row[key] = parsed
         if 'timestamp' in row:
             rows.append(row)
     return rows
@@ -4390,20 +4398,38 @@ def shelly_history(host, start_ts, end_ts, em_id=0):
     Two limits worth knowing before building on this:
       - retention is ~45-48 days rolling; older data is gone for good, so
         anything longer-term has to be copied off the meter into Postgres.
-      - it is slow (see SHELLY_HISTORY_CHUNK above). Don't call this from a
-        request handler on a wide window without a loading state.
+      - each day-chunk itself is slow (see SHELLY_HISTORY_CHUNK above) - the
+        meter serialises its own flash at a fixed ~55-60 records/sec no
+        matter how the request arrives, so this can't make one chunk faster.
+        What it does fix is walls-of-chunks: fetching a multi-day window
+        used to pay N * ~25s by doing chunks one after another; now every
+        chunk is requested at once, so wall time is whichever single chunk
+        is slowest. Don't call this from a request handler on a wide window
+        without a loading state regardless.
 
     Uses the CSV endpoint rather than EMData.GetData because GetData paginates
     (returns next_record_ts and needs a loop), while the CSV route returns the
     whole window in one response.
     """
-    rows = []
-    for chunk_start, chunk_end in _shelly_time_chunks(start_ts, end_ts):
-        url = (f'http://{host}/emdata/{em_id}/data.csv'
-               f'?ts={chunk_start}&end_ts={chunk_end}&add_keys=true')
-        with urllib.request.urlopen(url, timeout=SHELLY_HISTORY_TIMEOUT) as resp:
-            rows.extend(_parse_shelly_csv(resp.read().decode('utf-8')))
+    chunks = _shelly_time_chunks(start_ts, end_ts)
+    # ponytail: capped at 4 concurrent connections - a Shelly's HTTP server is
+    # a small embedded stack, not sized for a big fan-out. Raise this (or drop
+    # the cap) once it's confirmed the real device handles more without
+    # errors/slowdown.
+    with ThreadPoolExecutor(max_workers=min(len(chunks), 4)) as pool:
+        results = pool.map(lambda chunk: _shelly_history_chunk(host, em_id, chunk), chunks)
+        rows = []
+        for chunk_rows in results:
+            rows.extend(chunk_rows)
     return rows
+
+
+def _shelly_history_chunk(host, em_id, chunk):
+    chunk_start, chunk_end = chunk
+    url = (f'http://{host}/emdata/{em_id}/data.csv'
+           f'?ts={chunk_start}&end_ts={chunk_end}&add_keys=true')
+    with urllib.request.urlopen(url, timeout=SHELLY_HISTORY_TIMEOUT) as resp:
+        return _parse_shelly_csv(resp.read().decode('utf-8'))
 
 
 def _shelly_readings(status):
@@ -4767,10 +4793,11 @@ def admin_power_history():
 
     try:
         rows = shelly_history(host, start_ts, end_ts)
+        result = _aggregate_shelly_history(rows)
     except Exception as e:
         return jsonify({'error': f'Историята не е налична за това устройство ({type(e).__name__}: {e}).'}), 502
 
-    return jsonify(_aggregate_shelly_history(rows))
+    return jsonify(result)
 
 
 if __name__ == '__main__':

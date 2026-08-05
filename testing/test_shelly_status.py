@@ -187,6 +187,17 @@ assert _parse_shelly_csv('timestamp,a_avg_voltage\nabc,237.0\n') == []
 assert _parse_shelly_csv('timestamp,a_avg_voltage\n') == []
 assert _parse_shelly_csv('') == []
 
+# "nan"/"inf" cells (meter writes these for undefined fields, e.g. power
+# factor at 0 A) parse without raising via float() but must still be dropped -
+# jsonify would otherwise emit a bare NaN/Infinity token, which breaks
+# JSON.parse() on the frontend
+nan_row = _parse_shelly_csv('timestamp,a_avg_voltage,a_pf\n1785486960,237.676,nan\n')
+assert len(nan_row) == 1
+assert 'a_pf' not in nan_row[0]
+assert nan_row[0]['a_avg_voltage'] == 237.676
+inf_row = _parse_shelly_csv('timestamp,a_max_act_power\n1785486960,inf\n')
+assert 'a_max_act_power' not in inf_row[0]
+
 # ---- fleet polling is concurrent, not sequential ----
 # Fake shelly_rpc: sleeps SLEEP_S then returns a per-host power reading, so a
 # poll of N devices takes N * SLEEP_S if run sequentially but ~SLEEP_S if
