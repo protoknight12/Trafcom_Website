@@ -8,6 +8,7 @@ import io
 import csv
 import webbrowser
 import threading
+import time
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -710,14 +711,13 @@ class ShellyDevice(db.Model):
 
 class ShellyReadingLog(db.Model):
     """
-    Local trail of live poll ticks, timestamped as unix seconds (int) rather
-    than a DateTime column - written by admin_power_data() on every 2s poll
-    tick, piggybacking on that existing route rather than standing up a
-    dedicated background scheduler for it.
-    ponytail: only accumulates while someone has /admin/power open (no
-    always-on poller) - upgrade to a real background job (APScheduler / cron
-    hitting admin_power_data-equivalent logic) if 24/7 coverage matters, e.g.
-    to log through nights/weekends nobody's watching the dashboard.
+    Local trail of periodic readings, timestamped as unix seconds (int)
+    rather than a DateTime column. Written by the background poller thread
+    (see start_shelly_history_poller()) once a minute for every online
+    device, regardless of whether the dashboard is open - unlike the meters' own
+    history (Gen2 only, ~45-48 day retention), this runs 24/7 as long as the
+    app process is up and has no generation split, since it's built from the
+    same normalized shelly_fleet_snapshot() the live dashboard already uses.
     """
     id = db.Column(db.Integer, primary_key=True)
     host = db.Column(db.String(100), nullable=False, index=True)
@@ -4586,6 +4586,73 @@ def shelly_fleet_snapshot(devices):
         return list(pool.map(lambda pair: shelly_device_snapshot(*pair), devices))
 
 
+SHELLY_POLLER_INTERVAL = 60  # seconds - matches Gen2's own minute-resolution history
+_shelly_poller_started = False
+
+
+def _shelly_history_poll_tick():
+    """
+    One poll-and-log cycle: snapshot every configured meter, write a
+    ShellyReadingLog row for each one online. Split out from
+    start_shelly_history_poller() as a standalone function so a test can
+    call it directly (inside an app context) without spinning up the real
+    background thread/sleep loop.
+    """
+    devices = ShellyDevice.query.order_by(ShellyDevice.id).all()
+    if not devices:
+        return
+    snapshots = shelly_fleet_snapshot([(d.name, d.host) for d in devices])
+    now_ts = int(datetime.now().timestamp())
+    for snap in snapshots:
+        if snap['online']:
+            db.session.add(ShellyReadingLog(
+                host=snap['host'], ts=now_ts,
+                total_power=snap['total_power'], total_energy=snap['total_energy'],
+            ))
+    db.session.commit()
+
+
+def start_shelly_history_poller(interval=SHELLY_POLLER_INTERVAL):
+    """
+    Real always-on replacement for logging readings only while someone had
+    /admin/power open: a daemon thread that runs _shelly_history_poll_tick()
+    on a fixed interval for as long as the app process runs. Reuses
+    shelly_fleet_snapshot() - the same Gen1/Gen2-normalized poll the live
+    dashboard already does - so this needs no per-generation history API and
+    works identically for both.
+
+    Call once, from a real entrypoint (app.py's __main__ block, wsgi.py) -
+    deliberately not at module import time, so `import app` in tests never
+    spins up a thread that hits real device hosts. Idempotent: a second call
+    in the same process is a no-op.
+
+    ponytail: single global thread, no cross-process dedup - if this is ever
+    run behind more than one gunicorn/waitress worker, each worker starts
+    its own thread and every reading gets logged once per worker (same
+    caveat this codebase already accepts for flask-limiter's in-memory
+    storage - see requirements.txt notes). Fine for one worker; add a lock
+    (e.g. a Postgres advisory lock keyed by host) if that changes.
+    """
+    global _shelly_poller_started
+    if _shelly_poller_started:
+        return
+    _shelly_poller_started = True
+
+    def _loop():
+        while True:
+            try:
+                with app.app_context():
+                    try:
+                        _shelly_history_poll_tick()
+                    finally:
+                        db.session.remove()
+            except Exception:
+                pass  # one bad tick (meter/DB hiccup) shouldn't kill the poller
+            time.sleep(interval)
+
+    threading.Thread(target=_loop, daemon=True, name='shelly-history-poller').start()
+
+
 @app.route('/admin/power')
 @role_required('admin')
 def admin_power():
@@ -4608,14 +4675,12 @@ def admin_power():
     machines = Machine.query.order_by(Machine.name).all()
     focus_host = request.args.get('host') or None
     focus_name = next((d.name for d in devices if d.host == focus_host), focus_host)
-    # Gen1 meters don't really support history (shelly_history() 404s on
-    # them; _aggregate_local_shelly_log()'s local-log fallback is a thin
-    # echo, not real device history) - don't offer the option at all rather
-    # than have it work in a lesser, confusing way.
-    focus_history_available = _shelly_gen_cache.get(focus_host) != 'gen1' if focus_host else True
+    # Every device has a working "История за период" now: Gen2 goes through
+    # shelly_history() as before, Gen1 through _aggregate_local_shelly_log()
+    # (our own ShellyReadingLog, fed by the always-on poller - see
+    # start_shelly_history_poller()) instead of the meter's own history API.
     return render_template('admin_power.html', devices=devices, machines=machines,
-                           active_page='admin_power', focus_host=focus_host, focus_name=focus_name,
-                           focus_history_available=focus_history_available)
+                           active_page='admin_power', focus_host=focus_host, focus_name=focus_name)
 
 
 def _parse_machine_ids(form):
@@ -4745,15 +4810,6 @@ def admin_power_data():
             'name': m.name, 'status': m.status,
             'last_maintenance': m.last_maintenance.strftime('%d.%m.%Y %H:%M') if m.last_maintenance else None,
         } for m in device.machines] if device else []
-
-    now_ts = int(datetime.now().timestamp())
-    for snap in snapshots:
-        if snap['online']:
-            db.session.add(ShellyReadingLog(
-                host=snap['host'], ts=now_ts,
-                total_power=snap['total_power'], total_energy=snap['total_energy'],
-            ))
-    db.session.commit()
 
     return jsonify({
         'ts': datetime.now().strftime('%H:%M:%S'),
@@ -4909,5 +4965,9 @@ if __name__ == '__main__':
     # no reloader/subprocess at all, so we open immediately instead.
     if not debug_mode or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
         threading.Timer(1.0, lambda: webbrowser.open('http://127.0.0.1:5000/')).start()
+        # Same reloader guard as the browser-open above: debug mode re-runs
+        # this whole script in a subprocess, and without the guard both the
+        # watcher and the reloaded process would start their own poller.
+        start_shelly_history_poller()
 
     app.run(debug=debug_mode)
