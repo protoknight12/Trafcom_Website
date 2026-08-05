@@ -4608,16 +4608,11 @@ def admin_power():
     machines = Machine.query.order_by(Machine.name).all()
     focus_host = request.args.get('host') or None
     focus_name = next((d.name for d in devices if d.host == focus_host), focus_host)
-    # A Gen2 meter can always be asked for history (even an empty window is
-    # a legitimate answer). A Gen1 meter can't - shelly_history() 404s on it
-    # - so its "История за период" section is only worth showing once
-    # ShellyReadingLog actually has something logged for it (see
-    # _aggregate_local_shelly_log()); otherwise it's just a form that always
-    # comes back empty, so skip rendering it at all.
-    focus_history_available = True
-    if focus_host and _shelly_gen_cache.get(focus_host) == 'gen1':
-        focus_history_available = db.session.query(ShellyReadingLog.id) \
-            .filter_by(host=focus_host).first() is not None
+    # Gen1 meters don't really support history (shelly_history() 404s on
+    # them; _aggregate_local_shelly_log()'s local-log fallback is a thin
+    # echo, not real device history) - don't offer the option at all rather
+    # than have it work in a lesser, confusing way.
+    focus_history_available = _shelly_gen_cache.get(focus_host) != 'gen1' if focus_host else True
     return render_template('admin_power.html', devices=devices, machines=machines,
                            active_page='admin_power', focus_host=focus_host, focus_name=focus_name,
                            focus_history_available=focus_history_available)

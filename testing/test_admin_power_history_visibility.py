@@ -1,11 +1,10 @@
 """
 pytest regression test: admin_power()'s "История за период" section should
-only render when there's actually a chance of getting something back -
-always for a Gen2 host (shelly_history() can always be asked, even if the
-answer is empty), and for a Gen1 host only once ShellyReadingLog has at
-least one row logged for it (see _aggregate_local_shelly_log()). A Gen1 host
-with nothing logged yet would just be a form that always comes back empty,
-so admin_power() skips rendering it via the focus_history_available flag.
+only render for hosts that actually support it - Gen2 always (shelly_history()
+works against it), Gen1 never (shelly_history() 404s on it; the local-log
+fallback in _aggregate_local_shelly_log() is a thin echo, not real device
+history, so the option is hidden rather than offered in a lesser form - even
+once ShellyReadingLog has rows logged for that host).
 
 Run with:
     pytest testing/test_admin_power_history_visibility.py -v
@@ -76,7 +75,7 @@ def test_gen1_host_with_no_logged_rows_hides_the_history_section(app, admin_clie
     assert b'id="historySection"' not in resp.data
 
 
-def test_gen1_host_with_logged_rows_shows_the_history_section(app, admin_client):
+def test_gen1_host_hides_the_history_section_even_with_logged_rows(app, admin_client):
     appmod._shelly_gen_cache['10.0.0.3'] = 'gen1'
     resp = admin_client.get('/admin/power?host=10.0.0.3')
-    assert b'id="historySection"' in resp.data
+    assert b'id="historySection"' not in resp.data
