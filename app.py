@@ -4798,15 +4798,43 @@ def _aggregate_shelly_history(rows):
     }
 
 
+def _aggregate_local_shelly_log(host, start_ts, end_ts):
+    """
+    Fallback history source for Gen1 meters, which have no working
+    shelly_history() (see its docstring - the Gen2-only /emdata/ API 404s on
+    Gen1 firmware, and the real Gen1 endpoint is unmapped). Reads
+    ShellyReadingLog instead: same shape of answer (record count + period
+    kWh), just sourced from our own poll-tick log rather than the meter's
+    own history.
+
+    Coarser than the Gen2 path: no per-phase channel breakdown (the log only
+    keeps the same total_power/total_energy the live dashboard shows), and
+    only covers time since logging started AND while a dashboard tab was
+    open to drive the poll (see ShellyReadingLog's docstring) - not a full
+    replacement for real device-side history, just what's actually on hand.
+    """
+    rows = (ShellyReadingLog.query
+            .filter(ShellyReadingLog.host == host,
+                    ShellyReadingLog.ts >= start_ts,
+                    ShellyReadingLog.ts < end_ts)
+            .order_by(ShellyReadingLog.ts)
+            .all())
+    if not rows:
+        return {'count': 0, 'energy_kwh': 0.0, 'channels': {}}
+    first_energy, last_energy = rows[0].total_energy, rows[-1].total_energy
+    energy_kwh = round(last_energy - first_energy, 2) if None not in (first_energy, last_energy) else 0.0
+    return {'count': len(rows), 'energy_kwh': max(energy_kwh, 0.0), 'channels': {}}
+
+
 @app.route('/admin/power/history')
 @role_required('admin')
 def admin_power_history():
     """
     On-demand historical aggregation for one meter over [start_ts, end_ts)
     (Unix seconds) - see _aggregate_shelly_history() for the mean-vs-sum
-    split. Gen2 only: shelly_history() has no Gen1 equivalent (see
-    docs/SHELLY_API.md), so a Gen1 host's request 404s and is reported as an
-    error rather than silently returning nothing.
+    split. shelly_history() only works against Gen2 (see docs/SHELLY_API.md),
+    so a known-Gen1 host is routed to _aggregate_local_shelly_log() instead -
+    our own poll-tick log - rather than 404ing against the meter directly.
     """
     host = request.args.get('host', '')
     try:
@@ -4818,6 +4846,12 @@ def admin_power_history():
         return jsonify({'error': 'Крайната дата трябва да е след началната.'}), 400
     if not ShellyDevice.query.filter_by(host=host).first():
         return jsonify({'error': 'Няма такава машина.'}), 404
+    if _shelly_gen_cache.get(host) == 'gen1':
+        # shelly_history() only speaks Gen2's /emdata/ API - a Gen1 device
+        # (older Shelly EM/3EM) 404s on it, and the real Gen1 endpoint is
+        # unmapped (see _aggregate_local_shelly_log()'s docstring). Serve
+        # from our own poll-tick log instead of erroring out.
+        return jsonify(_aggregate_local_shelly_log(host, start_ts, end_ts))
 
     try:
         rows = shelly_history(host, start_ts, end_ts)
