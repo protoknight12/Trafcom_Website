@@ -708,6 +708,24 @@ class ShellyDevice(db.Model):
     machines = db.relationship('Machine', secondary=shelly_device_machines, backref='shelly_devices')
 
 
+class ShellyReadingLog(db.Model):
+    """
+    Local trail of live poll ticks, timestamped as unix seconds (int) rather
+    than a DateTime column - written by admin_power_data() on every 2s poll
+    tick, piggybacking on that existing route rather than standing up a
+    dedicated background scheduler for it.
+    ponytail: only accumulates while someone has /admin/power open (no
+    always-on poller) - upgrade to a real background job (APScheduler / cron
+    hitting admin_power_data-equivalent logic) if 24/7 coverage matters, e.g.
+    to log through nights/weekends nobody's watching the dashboard.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    host = db.Column(db.String(100), nullable=False, index=True)
+    ts = db.Column(db.Integer, nullable=False, index=True)
+    total_power = db.Column(db.Float)
+    total_energy = db.Column(db.Float)
+
+
 class ServiceMachineCard(db.Model):
     """
     A machine card shown on the public services page or homepage (see services(),
@@ -4430,7 +4448,7 @@ def _shelly_history_chunk(host, em_id, chunk):
            f'?ts={chunk_start}&end_ts={chunk_end}&add_keys=true')
     with urllib.request.urlopen(url, timeout=SHELLY_HISTORY_TIMEOUT) as resp:
         return _parse_shelly_csv(resp.read().decode('utf-8'))
-
+#daad
 
 def _shelly_readings(status):
     """
@@ -4721,6 +4739,16 @@ def admin_power_data():
             'name': m.name, 'status': m.status,
             'last_maintenance': m.last_maintenance.strftime('%d.%m.%Y %H:%M') if m.last_maintenance else None,
         } for m in device.machines] if device else []
+
+    now_ts = int(datetime.now().timestamp())
+    for snap in snapshots:
+        if snap['online']:
+            db.session.add(ShellyReadingLog(
+                host=snap['host'], ts=now_ts,
+                total_power=snap['total_power'], total_energy=snap['total_energy'],
+            ))
+    db.session.commit()
+
     return jsonify({
         'ts': datetime.now().strftime('%H:%M:%S'),
         'devices': snapshots,
