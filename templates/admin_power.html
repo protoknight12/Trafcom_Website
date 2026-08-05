@@ -198,7 +198,7 @@
             </section>
             <div id="meters"></div>
 
-            {% if focus_host %}
+            {% if focus_host and focus_history_available %}
             <section class="admin-card" id="historySection">
                 <h3 style="margin-top: 0;">История за период</h3>
                 <p class="section-subtitle" style="margin-top: 0;">
@@ -417,7 +417,7 @@
         drawSpark(document.getElementById('summarySpark'), totalHistory);
     }
 
-    if (FOCUS_HOST) {
+    if (FOCUS_HOST && document.getElementById('historyForm')) {
         const historyForm = document.getElementById('historyForm');
         const historyStart = document.getElementById('historyStart');
         const historyEnd = document.getElementById('historyEnd');
