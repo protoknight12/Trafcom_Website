@@ -187,7 +187,7 @@
         {{ ns.display_name }}
     </span>
                     </td>
-                    <td>{{ upload.service.name if upload.service else '-' }}</td>
+                    <td>{{ upload.services|map(attribute='name')|join(', ') if upload.services else '-' }}</td>
                     <td>{{ format_cut_dimensions(upload.width, upload.height, ns.type) }}</td>
                     <td>{{ "%.2f"|format(upload.total_length) }} мм</td>
                     <td><span style="   color: var(--success-text); font-weight: 600;">{{ "%.2f"|format(upload.calculated_price) }} €</span>

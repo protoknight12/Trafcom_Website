@@ -25,7 +25,7 @@ atexit.register(_cleanup_db_file)
 os.environ['SECRET_KEY'] = 'test-secret-key-not-for-production'
 os.environ['DATABASE_URL'] = f'sqlite:///{_db_path}'
 
-from app import app, db, MaterialPrice, Service, Detail, Operation, calculate_cnc_price
+from app import app, db, MaterialPrice, Service, Detail, Operation, calculate_cnc_price, calculate_cnc_price_multi_service
 
 with app.app_context():
     db.create_all()
@@ -80,5 +80,22 @@ with app.app_context():
     db.session.add(bare_detail)
     db.session.commit()
     assert bare_detail.total_price == 12.34
+
+    # -- calculate_cnc_price_multi_service (DXF calculator's checkbox picker):
+    #    material cost + BASE_SETUP_FEE charged once, but cutting+pierce time
+    #    priced at EVERY selected service's rate and summed -------------------
+    multi_price = calculate_cnc_price_multi_service(
+        width=100, height=50, total_length=200, pierce_count=5,
+        material_key=material.key, service_ids=[service.id, fast_service.id]
+    )
+    time_cost_service = (cutting_time_min + pierce_time_min) * (50.0 / 60.0)
+    time_cost_fast = (cutting_time_min + pierce_time_min) * (60.0 / 60.0)
+    expected_multi = round(material_cost + time_cost_service + time_cost_fast + 5.00, 2)
+    assert abs(multi_price - expected_multi) < 0.01, f"expected {expected_multi}, got {multi_price}"
+    # A single service in the list must match the single-service function exactly.
+    assert calculate_cnc_price_multi_service(100, 50, 200, 5, material.key, [service.id]) == price
+    # No services / unknown material must fall back to 0.0, not raise.
+    assert calculate_cnc_price_multi_service(100, 50, 200, 5, material.key, []) == 0.0
+    assert calculate_cnc_price_multi_service(100, 50, 200, 5, 'no-such-material', [service.id]) == 0.0
 
 print("ok")

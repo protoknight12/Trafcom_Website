@@ -35,6 +35,29 @@
         .btn-save-price:hover {
             background-color: var(--accent-secondary);
         }
+        .machine-checkbox-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+            min-width: 240px;
+            max-height: 140px;
+            overflow-y: auto;
+            padding: 0.6rem 0.75rem;
+            background-color: var(--bg-input);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-sm);
+        }
+        .machine-checkbox-group label {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.85rem;
+            font-weight: 400;
+            cursor: pointer;
+        }
+        .machine-checkbox-group label input {
+            margin: 0;
+        }
     </style>
 </head>
 <body>
@@ -72,6 +95,16 @@
                 </select>
             </div>
             <div class="form-group">
+                <label>Машини (незадължително)</label>
+                <div class="machine-checkbox-group">
+                    {% for m in all_machines %}
+                    <label><input type="checkbox" name="machine_ids" value="{{ m.id }}">{{ m.name }}{% if m.machine_type %} ({{ m.machine_type }}){% endif %}</label>
+                    {% else %}
+                    <span class="text-muted text-small">Няма добавени машини.</span>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="form-group">
                 <label for="new_service_price">Цена на час (€/60 мин)</label>
                 <input type="number" id="new_service_price" step="0.01" min="0.01" name="price_per_hour_eur" placeholder="напр. 50.00" required>
             </div>
@@ -93,6 +126,7 @@
                 <tr>
                     <th>Услуга</th>
                     <th>Тип машина</th>
+                    <th>Машини</th>
                     <th>Цена на час (€)</th>
                     <th>Описание</th>
                     <th class="text-right">Действие</th>
@@ -102,7 +136,7 @@
                 <tbody>
                 {% for service in services %}
                 <tr>
-                    <td colspan="5">
+                    <td colspan="6">
                         <form action="{{ url_for('admin_update_service', service_id=service.id) }}" method="POST" class="service-row-form">
                             {% include 'partials/csrf_field.html' %}
                             <input type="text" name="name" value="{{ service.name }}" class="service-price-input" style="width: 180px;" required>
@@ -112,6 +146,14 @@
                                 <option value="{{ t }}" {% if t == service.machine_type %}selected{% endif %}>{{ t }}</option>
                                 {% endfor %}
                             </select>
+                            <div class="machine-checkbox-group">
+                                {% set linked_ids = service.machines|map(attribute='id')|list %}
+                                {% for m in all_machines %}
+                                <label><input type="checkbox" name="machine_ids" value="{{ m.id }}" {% if m.id in linked_ids %}checked{% endif %}>{{ m.name }}{% if m.machine_type %} ({{ m.machine_type }}){% endif %}</label>
+                                {% else %}
+                                <span class="text-muted text-small">Няма добавени машини.</span>
+                                {% endfor %}
+                            </div>
                             <input type="number" step="0.01" min="0.01" name="price_per_hour_eur"
                                    value="{{ '%.2f'|format(service.price_per_hour_eur) }}" class="service-price-input" required>
                             <input type="text" name="description" value="{{ service.description or '' }}"
@@ -129,7 +171,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="6" class="text-center no-data">Няма добавени услуги.</td>
+                    <td colspan="7" class="text-center no-data">Няма добавени услуги.</td>
                 </tr>
                 {% endfor %}
                 </tbody>

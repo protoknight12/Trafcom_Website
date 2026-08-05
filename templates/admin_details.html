@@ -60,6 +60,28 @@
                 <label for="detail_code_number">КД № (за етикет, незадължително)</label>
                 <input type="text" id="detail_code_number" name="code_number" placeholder="напр. Bulspike 01.01.01.00.02">
             </div>
+
+            <div class="form-group" style="flex-basis: 100%;">
+                <label>Допълнителни операции (незадължително - фрезоване, зачистване...)</label>
+                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: flex-end;">
+                    <select id="nd_op_service_id" style="flex: 1; min-width: 200px;">
+                        <option value="">-- Изберете услуга --</option>
+                        {% for s in services %}
+                        <option value="{{ s.id }}">{{ s.name }} ({{ "%.2f"|format(s.price_per_hour_eur) }} €/час)</option>
+                        {% endfor %}
+                    </select>
+                    <input type="number" id="nd_op_duration_minutes" step="0.01" min="0.01" placeholder="Продължителност (мин)" style="width: 180px;">
+                    <button type="button" class="btn-secondary" onclick="addPendingDetailOperation()">+ Добави в списъка</button>
+                </div>
+                <table class="data-table" id="ndPendingOpsTable" style="margin-top: 10px;">
+                    <tbody id="ndPendingOpsBody">
+                        <tr id="ndPendingOpsEmptyRow"><td class="text-center no-data">Няма избрани допълнителни операции.</td></tr>
+                    </tbody>
+                </table>
+                <p class="text-small text-muted" id="ndPendingOpsTotal" style="margin-top: 6px;"></p>
+            </div>
+
+            <input type="hidden" name="operations_json" id="ndOperationsJsonInput">
             <button type="submit" class="btn-submit">Добави детайл</button>
         </form>
 
@@ -112,6 +134,75 @@
     </section>
 
 </main>
+
+<script>
+    const ND_SERVICES = {{ services_data|tojson }};
+    let ndPendingOps = [];
+
+    function ndOpCost(serviceId, durationMinutes) {
+        const service = ND_SERVICES.find(function (s) { return s.id === serviceId; });
+        return service ? durationMinutes * (service.price_per_hour_eur / 60) : 0;
+    }
+
+    function addPendingDetailOperation() {
+        const serviceSelect = document.getElementById('nd_op_service_id');
+        const durationInput = document.getElementById('nd_op_duration_minutes');
+        const serviceId = parseInt(serviceSelect.value, 10);
+        const duration = parseFloat(durationInput.value);
+
+        if (!serviceId) { alert('Моля изберете услуга.'); return; }
+        if (!duration || duration <= 0) { alert('Моля въведете валидна продължителност в минути.'); return; }
+
+        ndPendingOps.push({
+            serviceId: serviceId,
+            serviceName: serviceSelect.options[serviceSelect.selectedIndex].text,
+            durationMinutes: duration,
+        });
+        durationInput.value = '';
+        renderPendingDetailOperations();
+    }
+
+    function removePendingDetailOperation(index) {
+        ndPendingOps.splice(index, 1);
+        renderPendingDetailOperations();
+    }
+
+    function renderPendingDetailOperations() {
+        const body = document.getElementById('ndPendingOpsBody');
+        body.innerHTML = '';
+        let total = 0;
+
+        if (ndPendingOps.length === 0) {
+            body.innerHTML = '<tr id="ndPendingOpsEmptyRow"><td class="text-center no-data">Няма избрани допълнителни операции.</td></tr>';
+        } else {
+            ndPendingOps.forEach(function (op, idx) {
+                const cost = ndOpCost(op.serviceId, op.durationMinutes);
+                total += cost;
+                const tr = document.createElement('tr');
+                const removeBtn = document.createElement('button');
+                removeBtn.type = 'button';
+                removeBtn.className = 'btn-delete';
+                removeBtn.textContent = 'Премахни';
+                removeBtn.addEventListener('click', function () { removePendingDetailOperation(idx); });
+                const td = document.createElement('td');
+                td.textContent = op.serviceName + ' — ' + op.durationMinutes + ' мин — ' + cost.toFixed(2) + ' €';
+                td.appendChild(document.createElement('br'));
+                td.appendChild(removeBtn);
+                tr.appendChild(td);
+                body.appendChild(tr);
+            });
+        }
+
+        document.getElementById('ndPendingOpsTotal').textContent =
+            ndPendingOps.length ? ('Допълнителни операции общо: ' + total.toFixed(2) + ' € (плюс базовата цена на рязане)') : '';
+    }
+
+    document.querySelector('form[action="{{ url_for("admin_add_detail") }}"]').addEventListener('submit', function () {
+        document.getElementById('ndOperationsJsonInput').value = JSON.stringify(
+            ndPendingOps.map(function (op) { return { service_id: op.serviceId, duration_minutes: op.durationMinutes }; })
+        );
+    });
+</script>
 
 </body>
 </html>

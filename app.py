@@ -146,12 +146,24 @@ class DxfFile(db.Model):
     geometry_json = db.Column(db.Text, nullable=True)
     machine_id = db.Column(db.Integer, db.ForeignKey('machine.id'), nullable=True)
     machine = db.relationship('Machine', backref='dxf_files')
-    # Which billable Service (hourly rate + machine type) priced the cut -
-    # see calculate_cnc_price(). Nullable so pre-refactor rows (priced under
-    # the old flat cost_per_meter_cut/cost_per_pierce scheme) don't need a
-    # backfill; their calculated_price stays a frozen historical value either way.
-    service_id = db.Column(db.Integer, db.ForeignKey('service.id'), nullable=True)
-    service = db.relationship('Service')
+    # Which billable Service(s) (hourly rate + machine type) priced the cut -
+    # see calculate_cnc_price_multi_service(). Plain many-to-many, not a
+    # single FK: the DXF calculator lets a job be priced against more than
+    # one service at once (e.g. a combined cut+engrave pass), each billed at
+    # its own rate for the same cut/pierce time - see upload.html's checkbox
+    # picker. Can be empty for pre-refactor rows (priced under the old flat
+    # cost_per_meter_cut/cost_per_pierce scheme); their calculated_price
+    # stays a frozen historical value either way.
+    services = db.relationship('Service', secondary='dxf_file_service', backref='dxf_files')
+
+
+# See DxfFile.services above - one upload can be priced against several
+# services at once, and one service obviously prices many uploads.
+dxf_file_service = db.Table(
+    'dxf_file_service',
+    db.Column('dxf_file_id', db.Integer, db.ForeignKey('dxf_file.id'), primary_key=True),
+    db.Column('service_id', db.Integer, db.ForeignKey('service.id'), primary_key=True),
+)
 
 
 class MaterialPrice(db.Model):
@@ -728,10 +740,8 @@ class Service(db.Model):
     uses for the base DXF cut, and/or the rate an Operation bills its
     duration_minutes at for extra post-processing steps on a Detail.
     machine_type is a free-text category (matched against Machine.machine_type)
-    identifying which kind of machine performs this service - not a FK to one
-    specific Machine, since a shop can have more than one machine of the same
-    type and actual per-job machine assignment already happens separately via
-    DxfFile.machine_id/Order.machine_id.
+    - kept as a quick display label/grouping hint even now that `machines`
+    below gives the real, specific link.
     """
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(150), nullable=False)
@@ -739,6 +749,19 @@ class Service(db.Model):
     price_per_hour_eur = db.Column(db.Float, nullable=False)
     description = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    machines = db.relationship('Machine', secondary='service_machine', backref='services')
+
+
+#  Which physical Machine(s) can actually perform a given Service - plain
+#  many-to-many for the same reason as shelly_device_machines below: a
+#  service (e.g. "Фрезоване - 3 оси") can run on more than one machine of
+#  that type, and one machine can offer more than one service (e.g. a
+#  multi-axis lathe doing both turning and milling operations).
+service_machine = db.Table(
+    'service_machine',
+    db.Column('service_id', db.Integer, db.ForeignKey('service.id'), primary_key=True),
+    db.Column('machine_id', db.Integer, db.ForeignKey('machine.id'), primary_key=True),
+)
 
 
 #  One meter can legitimately feed more than one machine (a shared sub-panel
@@ -1322,21 +1345,34 @@ def analyze_dxf_geometry(file_path):
         return None, None, None, None, None
 
 
-def calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id):
+def _service_time_cost(total_length, pierce_count, material, service):
     """
-    Time-based pricing engine. Material only supplies the raw-stock area
-    cost and how fast it cuts/pierces; the EUR/hour rate comes from the
-    selected Service (the machine actually doing the job). Standard units
-    throughout: length in mm, time in minutes, area in m2.
+    One service's share of the time-based cutting+pierce cost - the term
+    calculate_cnc_price() applies once (single service) and
+    calculate_cnc_price_multi_service() sums across every selected service
+    (see the DXF calculator's checkbox picker on upload.html). Standard
+    units throughout: length in mm, time in minutes.
 
     cutting_time_min = total_length (mm) / cutting_speed_mm_per_min
     pierce_time_min = pierce_count / pierce_rate_per_min
     time_cost = (cutting_time_min + pierce_time_min) * (price_per_hour_eur / 60)
-    total = material_surface_cost + time_cost + BASE_SETUP_FEE
 
     Worked example matching the shop's own spec: 50 EUR/h service, 1.2 mm/min
     cutting speed, 200mm cut -> cutting_time_min = 200/1.2 = 166.67 min,
-    time_cost = 166.67 * (50/60) = 138.89 EUR (plus pierce time and material).
+    time_cost = 166.67 * (50/60) = 138.89 EUR (plus pierce time).
+    """
+    cutting_time_min = total_length / material.cutting_speed_mm_per_min if material.cutting_speed_mm_per_min else 0.0
+    pierce_time_min = pierce_count / material.pierce_rate_per_min if material.pierce_rate_per_min else 0.0
+    return (cutting_time_min + pierce_time_min) * (service.price_per_hour_eur / 60.0)
+
+
+def calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id):
+    """
+    Time-based pricing engine for a single service (the Detail/quick-create
+    flows, which always price a cut against exactly one cutting_service_id -
+    see Detail.cutting_service_id). Material supplies the raw-stock area
+    cost and how fast it cuts/pierces; the EUR/hour rate comes from the
+    selected Service. total = material_surface_cost + time_cost + BASE_SETUP_FEE.
     """
     material = MaterialPrice.query.filter_by(key=material_key).first()
     service = db.session.get(Service, service_id) if service_id else None
@@ -1345,10 +1381,30 @@ def calculate_cnc_price(width, height, total_length, pierce_count, material_key,
 
     area_m2 = (width * height) / 1_000_000
     material_surface_cost = area_m2 * material.cost_per_m2
+    time_cost = _service_time_cost(total_length, pierce_count, material, service)
 
-    cutting_time_min = total_length / material.cutting_speed_mm_per_min if material.cutting_speed_mm_per_min else 0.0
-    pierce_time_min = pierce_count / material.pierce_rate_per_min if material.pierce_rate_per_min else 0.0
-    time_cost = (cutting_time_min + pierce_time_min) * (service.price_per_hour_eur / 60.0)
+    total_calculated_euro = material_surface_cost + time_cost + BASE_SETUP_FEE
+    return round(total_calculated_euro, 2)
+
+
+def calculate_cnc_price_multi_service(width, height, total_length, pierce_count, material_key, service_ids):
+    """
+    Same engine as calculate_cnc_price(), but for the DXF calculator's
+    multi-service checkbox selection (see upload.html / process_dxf_upload()
+    and DxfFile.services) - the material area cost and BASE_SETUP_FEE are
+    still charged once, but the cutting+pierce time is priced at EVERY
+    selected service's rate and summed, not just one. Lets a job that
+    genuinely spans multiple billable processes (e.g. a combined cut+engrave
+    pass) get one upload/price instead of forcing an artificial single pick.
+    """
+    material = MaterialPrice.query.filter_by(key=material_key).first()
+    services = Service.query.filter(Service.id.in_(service_ids)).all() if service_ids else []
+    if not material or not services:
+        return 0.0
+
+    area_m2 = (width * height) / 1_000_000
+    material_surface_cost = area_m2 * material.cost_per_m2
+    time_cost = sum(_service_time_cost(total_length, pierce_count, material, s) for s in services)
 
     total_calculated_euro = material_surface_cost + time_cost + BASE_SETUP_FEE
     return round(total_calculated_euro, 2)
@@ -1625,14 +1681,17 @@ def sanitize_display_filename(filename):
 
 
 # Окончателно възстановен маршут за потребителското табло
-def process_dxf_upload(file, material_key, service_id, machine_id=None):
+def process_dxf_upload(file, material_key, service_ids, machine_id=None):
     """
     Shared DXF-upload pipeline used by both /dashboard and /upload: saves
     the file to a temp path, extracts geometry, validates the material +
-    service, and builds a (not-yet-committed) DxfFile record with its
+    service(s), and builds a (not-yet-committed) DxfFile record with its
     calculated price. Keeping this logic in one place means a future fix to
     it automatically applies to both routes, instead of having to be made
     twice.
+
+    service_ids is a list - see calculate_cnc_price_multi_service()/
+    DxfFile.services. At least one valid service is required.
 
     Returns a (dxf_file, pierce_count, error_message) tuple - on failure
     dxf_file/pierce_count are None and error_message is a user-facing
@@ -1656,10 +1715,11 @@ def process_dxf_upload(file, material_key, service_id, machine_id=None):
         if not material_row:
             return None, None, 'Невалиден избор на материал.'
 
-        if not service_id or not db.session.get(Service, service_id):
-            return None, None, 'Невалиден избор на услуга.'
+        services = Service.query.filter(Service.id.in_(service_ids)).all() if service_ids else []
+        if not services:
+            return None, None, 'Моля изберете поне една услуга.'
 
-        price = calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id)
+        price = calculate_cnc_price_multi_service(width, height, total_length, pierce_count, material_key, service_ids)
 
         dxf_file = DxfFile(
             filename=sanitize_display_filename(file.filename),
@@ -1671,7 +1731,7 @@ def process_dxf_upload(file, material_key, service_id, machine_id=None):
             user_id=current_user.id,
             geometry_json=json.dumps(shapes),
             machine_id=machine_id,
-            service_id=service_id
+            services=services
         )
         return dxf_file, pierce_count, None
     finally:
@@ -1743,13 +1803,12 @@ def upload():
 
         try:
             chosen_material = request.form.get('material', 'steel')
-            service_id_raw = request.form.get('service_id', '')
-            chosen_service = int(service_id_raw) if service_id_raw and service_id_raw.isdigit() else None
+            chosen_services = [int(v) for v in request.form.getlist('service_ids') if v.isdigit()]
             machine_id_raw = request.form.get('machine_id', '')
             selected_machine = int(machine_id_raw) if machine_id_raw and machine_id_raw.isdigit() else None
 
             dxf_file, _pierce_count, error = process_dxf_upload(
-                file, chosen_material, chosen_service, machine_id=selected_machine
+                file, chosen_material, chosen_services, machine_id=selected_machine
             )
             if error:
                 flash(error, 'danger')
@@ -1825,7 +1884,9 @@ def admin_details():
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     details = Detail.query.order_by(Detail.name).all()
     services = Service.query.order_by(Service.name).all()
-    return render_template('admin_details.html', materials=materials, details=details, services=services, active_page='admin_details')
+    services_data = [{'id': s.id, 'name': s.name, 'price_per_hour_eur': s.price_per_hour_eur} for s in services]
+    return render_template('admin_details.html', materials=materials, details=details, services=services,
+                            services_data=services_data, active_page='admin_details')
 
 
 @app.route('/admin/products')
@@ -2967,8 +3028,17 @@ def admin_services():
         flash('Нямате достъп до тази страница.', 'danger')
         return redirect(url_for('dashboard'))
     services = Service.query.order_by(Service.name).all()
+    all_machines = Machine.query.order_by(Machine.name).all()
     return render_template('admin_services.html', services=services, known_machine_types=_known_machine_types(),
-                            active_page='admin_services')
+                            all_machines=all_machines, active_page='admin_services')
+
+
+def _selected_machines(form):
+    """Machine rows picked in a <select multiple name="machine_ids">, ignoring
+    any non-numeric/unknown ids rather than raising - see admin_add_service()/
+    admin_update_service()."""
+    ids = [int(v) for v in form.getlist('machine_ids') if v.isdigit()]
+    return Machine.query.filter(Machine.id.in_(ids)).all() if ids else []
 
 
 @app.route('/admin/services/add', methods=['POST'])
@@ -2997,6 +3067,7 @@ def admin_add_service():
         machine_type=request.form.get('machine_type', '').strip() or None,
         price_per_hour_eur=round(price_per_hour_eur, 2),
         description=request.form.get('description', '').strip() or None,
+        machines=_selected_machines(request.form),
     )
     db.session.add(new_service)
     db.session.commit()
@@ -3030,6 +3101,7 @@ def admin_update_service(service_id):
     service.machine_type = request.form.get('machine_type', '').strip() or None
     service.price_per_hour_eur = round(price_per_hour_eur, 2)
     service.description = request.form.get('description', '').strip() or None
+    service.machines = _selected_machines(request.form)
     db.session.commit()
     flash(f'Услугата "{name}" беше обновена успешно.', 'success')
     return redirect(url_for('admin_services'))
@@ -3155,13 +3227,20 @@ def admin_add_detail():
             erp_number=erp_number, code_number=code_number, cutting_service_id=service_id
         )
         db.session.add(new_detail)
-        db.session.flush()  # assigns new_detail.id for the DetailDxfFile FK below
+        db.session.flush()  # assigns new_detail.id for the DetailDxfFile/Operation FKs below
         db.session.add(DetailDxfFile(
             detail_id=new_detail.id, filename=stored_filename, original_filename=original_filename,
             uploaded_by_id=current_user.id
         ))
+        # Optional extra services (mill, deburr, ...) staged alongside the
+        # base cut on the same form - see admin_details.html's operations
+        # cart and _add_operations_from_rows().
+        extra_ops = _add_operations_from_rows(new_detail, _parse_operations_json(request.form.get('operations_json')))
         db.session.commit()
-        flash(f'Детайлът "{name}" беше добавен успешно.', 'success')
+        if extra_ops:
+            flash(f'Детайлът "{name}" беше добавен успешно, с {extra_ops} допълнителна операция(и).', 'success')
+        else:
+            flash(f'Детайлът "{name}" беше добавен успешно.', 'success')
         return redirect(url_for('admin_details'))
 
     except Exception as e:
@@ -3277,31 +3356,24 @@ def delete_detail_dxf(file_id):
     return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
 
-@app.route('/admin/details/<int:detail_id>/operations/add', methods=['POST'])
-@login_required
-def admin_add_operation(detail_id):
-    """Attaches one or more extra processing steps (mill, deburr, ...) to a
-    Detail beyond its base laser cut, in a single request - see Operation and
-    Detail.total_price. operations_json follows [{service_id, duration_minutes},
-    ...] - build-a-list-then-submit-once, same convention as
-    create_delivery_note's items_json. Invalid rows (bad service/duration) are
-    skipped rather than failing the whole batch, same as create_delivery_note."""
-    if not current_user.is_admin:
-        flash('Нямате достъп до тази страница.', 'danger')
-        return redirect(url_for('dashboard'))
-
-    detail = Detail.query.get_or_404(detail_id)
+def _parse_operations_json(raw):
+    """Parses an operations_json string (see admin_add_operation/
+    admin_add_detail) into a list of dicts, or [] on any malformed input."""
     try:
-        rows = json.loads(request.form.get('operations_json', ''))
-        if not isinstance(rows, list):
-            rows = []
+        rows = json.loads(raw or '')
+        return rows if isinstance(rows, list) else []
     except (TypeError, ValueError):
-        rows = []
+        return []
 
-    if not rows:
-        flash('Моля добавете поне една операция.', 'danger')
-        return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
+def _add_operations_from_rows(detail, rows):
+    """Creates one Operation per valid {service_id, duration_minutes} row,
+    appended after whatever sequence the detail already has - shared by
+    admin_add_operation (existing detail) and admin_add_detail (brand-new
+    detail, so detail.operations is empty and this just starts at 0). Invalid
+    rows (bad service/duration) are skipped rather than failing the whole
+    batch, same as create_delivery_note's items_json. Returns how many were
+    actually added; caller is responsible for committing."""
     next_sequence = (max((op.sequence for op in detail.operations), default=-1)) + 1
     added = 0
     for row in rows:
@@ -3320,6 +3392,29 @@ def admin_add_operation(detail_id):
         ))
         next_sequence += 1
         added += 1
+    return added
+
+
+@app.route('/admin/details/<int:detail_id>/operations/add', methods=['POST'])
+@login_required
+def admin_add_operation(detail_id):
+    """Attaches one or more extra processing steps (mill, deburr, ...) to a
+    Detail beyond its base laser cut, in a single request - see Operation and
+    Detail.total_price. operations_json follows [{service_id, duration_minutes},
+    ...] - build-a-list-then-submit-once, same convention as
+    create_delivery_note's items_json."""
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    detail = Detail.query.get_or_404(detail_id)
+    rows = _parse_operations_json(request.form.get('operations_json'))
+
+    if not rows:
+        flash('Моля добавете поне една операция.', 'danger')
+        return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
+
+    added = _add_operations_from_rows(detail, rows)
 
     if not added:
         flash('Няма валидни операции за добавяне.', 'danger')
@@ -4498,6 +4593,8 @@ def delete_machine(id):
     down with it. Any ShellyDevice meters linked to it (many-to-many, see
     shelly_device_machines) simply lose that one link and keep monitoring -
     removing a machine record was never a reason to stop watching a meter.
+    Same treatment for any Service linked to it (service_machine) - the
+    service just loses that one machine, other links/services are untouched.
     """
     machine = Machine.query.get_or_404(id)
     try:
@@ -4505,6 +4602,9 @@ def delete_machine(id):
         DxfFile.query.filter_by(machine_id=machine.id).update({'machine_id': None})
         db.session.execute(
             shelly_device_machines.delete().where(shelly_device_machines.c.machine_id == machine.id)
+        )
+        db.session.execute(
+            service_machine.delete().where(service_machine.c.machine_id == machine.id)
         )
         db.session.delete(machine)
         db.session.commit()
