@@ -53,7 +53,9 @@ def app():
 def test_poll_tick_logs_a_row_with_unix_ts(app, monkeypatch):
     monkeypatch.setattr(appmod, 'shelly_fleet_snapshot', lambda devices: [{
         'name': 'QA meter', 'host': '10.0.0.9', 'online': True, 'error': None,
-        'channels': [], 'total_power': 123.4, 'total_energy': 5.6,
+        'channels': [{'label': 'Фаза A', 'voltage': 230.0, 'current': 1.0,
+                      'act_power': 200.0, 'aprt_power': 230.0, 'pf': 0.9, 'freq': 50.0}],
+        'total_power': 123.4, 'total_energy': 5.6,
         'temperature': 30.0, 'rssi': -50,
     }])
 
@@ -70,6 +72,9 @@ def test_poll_tick_logs_a_row_with_unix_ts(app, monkeypatch):
         assert before <= row.ts <= after
         assert row.total_power == 123.4
         assert row.total_energy == 5.6
+        import json as json_mod
+        stored_channels = json_mod.loads(row.channels_json)
+        assert stored_channels[0]['voltage'] == 230.0
 
 
 def test_offline_device_is_not_logged(app, monkeypatch):

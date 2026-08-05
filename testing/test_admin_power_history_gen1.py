@@ -7,6 +7,13 @@ only speaks Gen2's /emdata/ API and 404s against Gen1 firmware. Also asserts
 shelly_history() is never even called for a known-Gen1 host, i.e. the check
 happens before the network round trip, not just around it.
 
+Also covers channels_json: rows written before that column existed (or with
+no channel data for some other reason) must not break aggregation - and rows
+that do have it must produce the same per-phase shape
+(avg_voltage/avg_current/min_act_power/max_act_power/max_aprt_power per a/b/c
+key) _aggregate_shelly_history() produces for Gen2, since the frontend's
+renderHistoryChannel() renders both the same way.
+
 Run with:
     pytest testing/test_admin_power_history_gen1.py -v
 """
@@ -91,6 +98,40 @@ def test_gen1_host_with_no_logged_rows_returns_empty_not_an_error(app, admin_cli
     resp = admin_client.get('/admin/power/history?host=10.0.0.9&start_ts=1000&end_ts=2000')
     assert resp.status_code == 200
     assert resp.get_json() == {'count': 0, 'energy_kwh': 0.0, 'channels': {}}
+
+
+def test_gen1_local_log_channels_are_aggregated_per_phase(app, admin_client, monkeypatch):
+    import json as json_mod
+    appmod._shelly_gen_cache['10.0.0.9'] = 'gen1'
+    monkeypatch.setattr(appmod, 'shelly_history', lambda *a, **kw: (_ for _ in ()).throw(AssertionError('unused')))
+
+    ch1 = [
+        {'label': 'Фаза A', 'voltage': 230.0, 'current': 1.0, 'act_power': 200.0, 'aprt_power': 230.0, 'pf': 0.9, 'freq': 50.0},
+        {'label': 'Фаза B', 'voltage': 231.0, 'current': 2.0, 'act_power': 400.0, 'aprt_power': 462.0, 'pf': 0.9, 'freq': 50.0},
+    ]
+    ch2 = [
+        {'label': 'Фаза A', 'voltage': 232.0, 'current': 1.5, 'act_power': 300.0, 'aprt_power': 348.0, 'pf': 0.9, 'freq': 50.0},
+        {'label': 'Фаза B', 'voltage': 229.0, 'current': 1.8, 'act_power': 350.0, 'aprt_power': 412.0, 'pf': 0.9, 'freq': 50.0},
+    ]
+    with app.app_context():
+        db.session.add_all([
+            ShellyReadingLog(host='10.0.0.9', ts=1000, total_power=600.0, total_energy=5.0,
+                              channels_json=json_mod.dumps(ch1)),
+            ShellyReadingLog(host='10.0.0.9', ts=1500, total_power=650.0, total_energy=5.2,
+                              channels_json=json_mod.dumps(ch2)),
+        ])
+        db.session.commit()
+
+    resp = admin_client.get('/admin/power/history?host=10.0.0.9&start_ts=1000&end_ts=2000')
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert set(payload['channels'].keys()) == {'a', 'b'}
+    a = payload['channels']['a']
+    assert a['avg_voltage'] == pytest.approx((230.0 + 232.0) / 2)
+    assert a['avg_current'] == pytest.approx((1.0 + 1.5) / 2)
+    assert a['min_act_power'] == 200.0
+    assert a['max_act_power'] == 300.0
+    assert a['max_aprt_power'] == 348.0
 
 
 def test_unknown_generation_host_still_attempts_the_live_fetch(app, admin_client, monkeypatch):

@@ -724,6 +724,14 @@ class ShellyReadingLog(db.Model):
     ts = db.Column(db.Integer, nullable=False, index=True)
     total_power = db.Column(db.Float)
     total_energy = db.Column(db.Float)
+    # Raw per-phase snapshot.channels list (json.dumps'd) - voltage/current/
+    # act_power/aprt_power/pf/freq per channel, same shape shelly_device_
+    # snapshot() already returns for the live dashboard. Kept as JSON rather
+    # than one column per phase/field: channel count and labels vary by
+    # device (3-phase 3EM vs 2-input Gen1 EM vs Gen2 monophase), same reason
+    # Detail.geometry_json etc. use JSON elsewhere in this file. Nullable for
+    # rows written before this column existed.
+    channels_json = db.Column(db.Text)
 
 
 class ServiceMachineCard(db.Model):
@@ -4608,6 +4616,7 @@ def _shelly_history_poll_tick():
             db.session.add(ShellyReadingLog(
                 host=snap['host'], ts=now_ts,
                 total_power=snap['total_power'], total_energy=snap['total_energy'],
+                channels_json=json.dumps(snap['channels']),
             ))
     db.session.commit()
 
@@ -4860,20 +4869,30 @@ def _aggregate_shelly_history(rows):
     }
 
 
+# Position in a device's channels[] -> the a/b/c/n keys renderHistoryChannel()
+# on the frontend already knows how to label (CHANNEL_LABELS in
+# admin_power.html). Matches how _shelly_readings() orders a Gen1 3EM's
+# phases (labels = Фаза A/B/C in that order); a device with more than 3
+# channels (e.g. a 2-input Gen1 EM has only 2, never more) just has its
+# extra ones dropped from the local-log history view.
+_LOCAL_LOG_CHANNEL_KEYS = ('a', 'b', 'c')
+
+
 def _aggregate_local_shelly_log(host, start_ts, end_ts):
     """
     Fallback history source for Gen1 meters, which have no working
     shelly_history() (see its docstring - the Gen2-only /emdata/ API 404s on
     Gen1 firmware, and the real Gen1 endpoint is unmapped). Reads
-    ShellyReadingLog instead: same shape of answer (record count + period
-    kWh), just sourced from our own poll-tick log rather than the meter's
-    own history.
+    ShellyReadingLog instead: same shape of answer (record count, period kWh,
+    per-phase avg voltage/current + min/max power) as _aggregate_shelly_history()
+    produces for Gen2, just built from our own poll-tick log's channels_json
+    instead of the meter's own history - renderHistoryChannel() on the
+    frontend doesn't need to know or care which source it came from.
 
-    Coarser than the Gen2 path: no per-phase channel breakdown (the log only
-    keeps the same total_power/total_energy the live dashboard shows), and
-    only covers time since logging started AND while a dashboard tab was
-    open to drive the poll (see ShellyReadingLog's docstring) - not a full
-    replacement for real device-side history, just what's actually on hand.
+    Coarser than the Gen2 path in one way: only covers time since the
+    background poller started running (see ShellyReadingLog's docstring),
+    not a full replacement for real device-side history - just what's
+    actually on hand.
     """
     rows = (ShellyReadingLog.query
             .filter(ShellyReadingLog.host == host,
@@ -4885,7 +4904,41 @@ def _aggregate_local_shelly_log(host, start_ts, end_ts):
         return {'count': 0, 'energy_kwh': 0.0, 'channels': {}}
     first_energy, last_energy = rows[0].total_energy, rows[-1].total_energy
     energy_kwh = round(last_energy - first_energy, 2) if None not in (first_energy, last_energy) else 0.0
-    return {'count': len(rows), 'energy_kwh': max(energy_kwh, 0.0), 'channels': {}}
+
+    sums, counts, mins, maxs = {}, {}, {}, {}
+    for row in rows:
+        if not row.channels_json:
+            continue  # rows logged before channels_json existed
+        for i, ch in enumerate(json.loads(row.channels_json)):
+            if i >= len(_LOCAL_LOG_CHANNEL_KEYS):
+                break
+            key = _LOCAL_LOG_CHANNEL_KEYS[i]
+            for field in ('voltage', 'current'):
+                v = ch.get(field)
+                if v is not None:
+                    sums[(key, field)] = sums.get((key, field), 0.0) + v
+                    counts[(key, field)] = counts.get((key, field), 0) + 1
+            p = ch.get('act_power')
+            if p is not None:
+                mins[(key, 'act_power')] = min(mins.get((key, 'act_power'), p), p)
+                maxs[(key, 'act_power')] = max(maxs.get((key, 'act_power'), p), p)
+            a = ch.get('aprt_power')
+            if a is not None:
+                maxs[(key, 'aprt_power')] = max(maxs.get((key, 'aprt_power'), a), a)
+
+    channels = {}
+    for key in _LOCAL_LOG_CHANNEL_KEYS:
+        if (key, 'voltage') not in counts and (key, 'act_power') not in mins:
+            continue
+        channels[key] = {
+            'avg_voltage': sums[(key, 'voltage')] / counts[(key, 'voltage')] if (key, 'voltage') in counts else None,
+            'avg_current': sums[(key, 'current')] / counts[(key, 'current')] if (key, 'current') in counts else None,
+            'min_act_power': mins.get((key, 'act_power')),
+            'max_act_power': maxs.get((key, 'act_power')),
+            'max_aprt_power': maxs.get((key, 'aprt_power')),
+        }
+
+    return {'count': len(rows), 'energy_kwh': max(energy_kwh, 0.0), 'channels': channels}
 
 
 @app.route('/admin/power/history')
