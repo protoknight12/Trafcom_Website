@@ -373,6 +373,13 @@ class Detail(db.Model):
     # Stock on hand, bumped by recording delivery notes (see DeliveryNoteItem
     # / admin_delivery_notes.html) - not editable by hand elsewhere.
     stock_quantity = db.Column(db.Float, nullable=False, default=0.0)
+    # Per-detail override of the material's thickness (mm) - editable from
+    # detail_dxf_dashboard.html's "Материал и размери" tab. Deliberately its
+    # own column rather than writing to MaterialPrice.thickness_mm: that
+    # column is shared by every other detail/product using the same material
+    # row, and editing it here must only affect this one detail. Falls back
+    # to material.thickness_mm when unset (see detail_dxf_dashboard.html).
+    thickness_mm = db.Column(db.Float, nullable=True)
 
     material = db.relationship('MaterialPrice')
 
@@ -3442,15 +3449,10 @@ def admin_update_detail_material(detail_id):
         flash('Размерите не могат да бъдат отрицателни.', 'danger')
         return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
-    # Thickness lives on the material catalog row, not the detail - editing it
-    # here changes it for every other detail/product using this same material
-    # (same field admin_materials.html edits), so the boss can fix it without
-    # a trip to the materials page while re-picking the material for a detail.
-    material.thickness_mm = thickness
-
     detail.material_key = material_key
     detail.width = width
     detail.height = height
+    detail.thickness_mm = thickness
     detail.calculated_price = calculate_cnc_price(
         width, height, detail.total_length, detail.pierce_count, material_key, detail.cutting_service_id
     )
