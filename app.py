@@ -421,6 +421,10 @@ class Operation(db.Model):
     service_id = db.Column(db.Integer, db.ForeignKey('service.id'), nullable=False)
     sequence = db.Column(db.Integer, nullable=False, default=0)
     duration_minutes = db.Column(db.Float, nullable=False)
+    # Free-text note distinguishing operations that share a Service but mean
+    # different things in practice (e.g. "лазерно рязане" in-house vs.
+    # "външно лазерно рязане" outsourced) - optional, purely descriptive.
+    description = db.Column(db.String(255), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     detail = db.relationship('Detail', backref=db.backref('operations', cascade='all, delete-orphan', lazy=True,
@@ -3512,8 +3516,10 @@ def _add_operations_from_rows(detail, rows):
     admin_add_operation (existing detail) and admin_add_detail (brand-new
     detail, so detail.operations is empty and this just starts at 0). Invalid
     rows (bad service/duration) are skipped rather than failing the whole
-    batch, same as create_delivery_note's items_json. Returns how many were
-    actually added; caller is responsible for committing."""
+    batch, same as create_delivery_note's items_json. An optional 'description'
+    per row (e.g. "външно лазерно рязане" vs. in-house) is stored as-is,
+    trimmed, blank -> None. Returns how many were actually added; caller is
+    responsible for committing."""
     next_sequence = (max((op.sequence for op in detail.operations), default=-1)) + 1
     added = 0
     for row in rows:
@@ -3526,9 +3532,10 @@ def _add_operations_from_rows(detail, rows):
             continue
         if duration_minutes <= 0 or not db.session.get(Service, service_id):
             continue
+        description = (row.get('description') or '').strip() or None
         db.session.add(Operation(
             detail_id=detail.id, service_id=service_id, sequence=next_sequence,
-            duration_minutes=round(duration_minutes, 2)
+            duration_minutes=round(duration_minutes, 2), description=description
         ))
         next_sequence += 1
         added += 1

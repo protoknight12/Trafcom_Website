@@ -174,6 +174,10 @@
                 </select>
             </div>
             <div class="form-group">
+                <label for="op_description">Описание (незадължително)</label>
+                <input type="text" id="op_description" placeholder="напр. външно лазерно рязане">
+            </div>
+            <div class="form-group">
                 <label for="op_duration_minutes">Продължителност (мин)</label>
                 <input type="number" id="op_duration_minutes" step="0.01" min="0.01" placeholder="напр. 12">
             </div>
@@ -187,13 +191,14 @@
                 <thead>
                 <tr>
                     <th>Услуга (за запазване)</th>
+                    <th>Описание</th>
                     <th>Продължителност (мин)</th>
                     <th>Цена</th>
                     <th class="text-right">Действие</th>
                 </tr>
                 </thead>
                 <tbody id="pendingOpsBody">
-                    <tr id="pendingOpsEmptyRow"><td colspan="4" class="text-center no-data">Няма избрани операции за добавяне.</td></tr>
+                    <tr id="pendingOpsEmptyRow"><td colspan="5" class="text-center no-data">Няма избрани операции за добавяне.</td></tr>
                 </tbody>
             </table>
         </div>
@@ -205,6 +210,7 @@
                 <thead>
                 <tr>
                     <th>Услуга</th>
+                    <th>Описание</th>
                     <th>Продължителност (мин)</th>
                     <th>Цена</th>
                     <th class="text-right">Действие</th>
@@ -214,6 +220,7 @@
                 {% for op in detail.operations %}
                 <tr>
                     <td>{{ op.service.name }}</td>
+                    <td>{{ op.description or '-' }}</td>
                     <td>{{ op.duration_minutes }}</td>
                     <td>{{ "%.2f"|format(op.cost) }} €</td>
                     <td class="text-right">
@@ -225,10 +232,26 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="4" class="text-center no-data">Няма добавени операции.</td>
+                    <td colspan="5" class="text-center no-data">Няма добавени операции.</td>
                 </tr>
                 {% endfor %}
                 </tbody>
+                {% if detail.operations %}
+                <tfoot>
+                <tr>
+                    <td colspan="3" class="text-right"><strong>Обща цена на операциите:</strong></td>
+                    <td colspan="2">
+                        <strong>{{ "%.2f"|format(detail.operations|sum(attribute='cost')) }} €</strong>
+                    </td>
+                </tr>
+                <tr>
+                    <td colspan="3" class="text-right"><strong>Обща цена (материал + операции):</strong></td>
+                    <td colspan="2">
+                        <strong>{{ "%.2f"|format(detail.total_price) }} €</strong>
+                    </td>
+                </tr>
+                </tfoot>
+                {% endif %}
             </table>
         </div>
     </section>
@@ -249,6 +272,7 @@
 
         function addPendingOperation() {
             const serviceSelect = document.getElementById('op_service_id');
+            const descriptionInput = document.getElementById('op_description');
             const durationInput = document.getElementById('op_duration_minutes');
             const serviceId = parseInt(serviceSelect.value, 10);
             const duration = parseFloat(durationInput.value);
@@ -259,8 +283,10 @@
             pendingOps.push({
                 serviceId: serviceId,
                 serviceName: serviceSelect.options[serviceSelect.selectedIndex].text,
+                description: descriptionInput.value.trim(),
                 durationMinutes: duration,
             });
+            descriptionInput.value = '';
             durationInput.value = '';
             renderPendingOps();
         }
@@ -276,23 +302,24 @@
             let pendingTotal = 0;
 
             if (pendingOps.length === 0) {
-                body.innerHTML = '<tr id="pendingOpsEmptyRow"><td colspan="4" class="text-center no-data">Няма избрани операции за добавяне.</td></tr>';
+                body.innerHTML = '<tr id="pendingOpsEmptyRow"><td colspan="5" class="text-center no-data">Няма избрани операции за добавяне.</td></tr>';
             } else {
                 pendingOps.forEach(function (op, idx) {
                     const cost = opCost(op.serviceId, op.durationMinutes);
                     pendingTotal += cost;
                     const tr = document.createElement('tr');
                     tr.innerHTML =
-                        '<td></td><td></td><td></td><td class="text-right"></td>';
+                        '<td></td><td></td><td></td><td></td><td class="text-right"></td>';
                     tr.children[0].textContent = op.serviceName;
-                    tr.children[1].textContent = op.durationMinutes;
-                    tr.children[2].textContent = cost.toFixed(2) + ' €';
+                    tr.children[1].textContent = op.description || '-';
+                    tr.children[2].textContent = op.durationMinutes;
+                    tr.children[3].textContent = cost.toFixed(2) + ' €';
                     const removeBtn = document.createElement('button');
                     removeBtn.type = 'button';
                     removeBtn.className = 'btn-delete';
                     removeBtn.textContent = 'Премахни';
                     removeBtn.addEventListener('click', function () { removePendingOperation(idx); });
-                    tr.children[3].appendChild(removeBtn);
+                    tr.children[4].appendChild(removeBtn);
                     body.appendChild(tr);
                 });
             }
@@ -303,7 +330,9 @@
 
         document.getElementById('addOperationsForm').addEventListener('submit', function () {
             document.getElementById('operationsJsonInput').value = JSON.stringify(
-                pendingOps.map(function (op) { return { service_id: op.serviceId, duration_minutes: op.durationMinutes }; })
+                pendingOps.map(function (op) {
+                    return { service_id: op.serviceId, duration_minutes: op.durationMinutes, description: op.description };
+                })
             );
         });
     </script>
