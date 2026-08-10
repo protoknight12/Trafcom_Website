@@ -3400,12 +3400,54 @@ def detail_dxf_dashboard(detail_id):
     detail = Detail.query.get_or_404(detail_id)
     files = DetailDxfFile.query.filter_by(detail_id=detail_id).order_by(DetailDxfFile.uploaded_at.desc()).all()
     services = Service.query.order_by(Service.name).all()
+    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     # Plain dicts for the client-side pending-operations cart (see
     # detail_dxf_dashboard.html) to compute a live running total without a
     # round-trip per row - same convention as order_create()'s products_data.
     services_data = [{'id': s.id, 'name': s.name, 'price_per_hour_eur': s.price_per_hour_eur} for s in services]
     return render_template('detail_dxf_dashboard.html', detail=detail, files=files, services=services,
-                            services_data=services_data, active_page='admin_details')
+                            materials=materials, services_data=services_data, active_page='admin_details')
+
+
+@app.route('/details/<int:detail_id>/update-material', methods=['POST'])
+@login_required
+def admin_update_detail_material(detail_id):
+    """
+    Lets an admin fix a detail's material or cut dimensions (width/height, mm)
+    without re-uploading a new DXF - e.g. correcting a wrong material pick.
+    total_length/pierce_count stay whatever the original DXF produced; only
+    the price inputs that come from material/width/height are recomputed via
+    the same calculate_cnc_price() used everywhere else.
+    """
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    detail = Detail.query.get_or_404(detail_id)
+    material_key = request.form.get('material', '')
+    if not MaterialPrice.query.filter_by(key=material_key).first():
+        flash('Невалиден избор на материал.', 'danger')
+        return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
+
+    try:
+        width = float(request.form.get('width', ''))
+        height = float(request.form.get('height', ''))
+    except ValueError:
+        flash('Моля въведете валидни размери.', 'danger')
+        return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
+    if width < 0 or height < 0:
+        flash('Размерите не могат да бъдат отрицателни.', 'danger')
+        return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
+
+    detail.material_key = material_key
+    detail.width = width
+    detail.height = height
+    detail.calculated_price = calculate_cnc_price(
+        width, height, detail.total_length, detail.pierce_count, material_key, detail.cutting_service_id
+    )
+    db.session.commit()
+    flash('Материалът и размерите бяха обновени успешно.', 'success')
+    return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
 
 @app.route('/details/<int:detail_id>/files/upload', methods=['POST'])

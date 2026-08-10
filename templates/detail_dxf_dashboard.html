@@ -71,6 +71,16 @@
             color: var(--text-muted, #999);
             font-size: 0.95rem;
         }
+        .tabs-nav {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+        }
+        .tab-btn.active {
+            background-color: var(--accent, #4a90e2);
+            color: #fff;
+        }
     </style>
 </head>
 <body>
@@ -90,6 +100,15 @@
     {% endif %}
     {% endwith %}
 
+    {% if current_user.is_admin %}
+    <div class="tabs-nav">
+        <button type="button" class="btn-secondary tab-btn active" data-tab="files">Файлове</button>
+        <button type="button" class="btn-secondary tab-btn" data-tab="material">Материал и размери</button>
+        <button type="button" class="btn-secondary tab-btn" data-tab="operations">Операции</button>
+    </div>
+    {% endif %}
+
+    <div data-tab-panel="files">
     <section class="admin-card">
         <h3>Файлове: {{ detail.name }}</h3>
         <p class="section-subtitle">
@@ -150,8 +169,43 @@
             </table>
         </div>
     </section>
+    </div>
 
     {% if current_user.is_admin %}
+    <div data-tab-panel="material" style="display: none;">
+    <section class="admin-card">
+        <h3>Материал и размери</h3>
+        <p class="section-subtitle">
+            Смяна на материала или ръчна корекция на размерите (мм) на детайла - без да се качва нов DXF файл.
+            Дължината на рязане и броят пробождания остават както са изчислени от оригиналния DXF; цената се
+            преизчислява само спрямо новия материал/размери.
+        </p>
+        <form action="{{ url_for('admin_update_detail_material', detail_id=detail.id) }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="material_material">Материал</label>
+                <select id="material_material" name="material">
+                    {% for material in materials %}
+                    <option value="{{ material.key }}" {% if material.key == detail.material_key %}selected{% endif %}>{{ format_material_option(material) }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="material_width">Ширина (мм)</label>
+                <input type="number" id="material_width" name="width" step="0.01" min="0" value="{{ detail.width }}" required>
+            </div>
+            <div class="form-group">
+                <label for="material_height">Височина (мм)</label>
+                <input type="number" id="material_height" name="height" step="0.01" min="0" value="{{ detail.height }}" required>
+            </div>
+            <button type="submit" class="btn-submit">Запази</button>
+        </form>
+    </section>
+    </div>
+    {% endif %}
+
+    {% if current_user.is_admin %}
+    <div data-tab-panel="operations" style="display: none;">
     <section class="admin-card">
         <h3>Операции</h3>
         <p class="section-subtitle">
@@ -334,6 +388,20 @@
                     return { service_id: op.serviceId, duration_minutes: op.durationMinutes, description: op.description };
                 })
             );
+        });
+    </script>
+    </div>
+    {% endif %}
+
+    {% if current_user.is_admin %}
+    <script>
+        document.querySelectorAll('.tab-btn').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                document.querySelectorAll('.tab-btn').forEach(function (b) { b.classList.remove('active'); });
+                document.querySelectorAll('[data-tab-panel]').forEach(function (p) { p.style.display = 'none'; });
+                btn.classList.add('active');
+                document.querySelector('[data-tab-panel="' + btn.dataset.tab + '"]').style.display = '';
+            });
         });
     </script>
     {% endif %}
