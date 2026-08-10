@@ -184,9 +184,10 @@
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="material_material">Материал</label>
-                <select id="material_material" name="material">
+                <select id="material_material" name="material" onchange="updateDetailMaterialThickness()">
                     {% for material in materials %}
-                    <option value="{{ material.key }}" {% if material.key == detail.material_key %}selected{% endif %}>{{ format_material_option(material) }}</option>
+                    <option value="{{ material.key }}" data-thickness="{{ material.thickness_mm if material.thickness_mm is not none else '' }}"
+                            {% if material.key == detail.material_key %}selected{% endif %}>{{ format_material_option(material) }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -198,10 +199,22 @@
                 <label for="material_height">Височина (мм)</label>
                 <input type="number" id="material_height" name="height" step="0.01" min="0" value="{{ detail.height }}" required>
             </div>
+            <div class="form-group">
+                <label for="material_thickness">Дебелина на материала (мм)</label>
+                <input type="text" id="material_thickness" disabled>
+            </div>
             <button type="submit" class="btn-submit">Запази</button>
         </form>
     </section>
     </div>
+    <script>
+        function updateDetailMaterialThickness() {
+            const select = document.getElementById('material_material');
+            const thickness = select.options[select.selectedIndex].dataset.thickness;
+            document.getElementById('material_thickness').value = thickness || '-';
+        }
+        updateDetailMaterialThickness();
+    </script>
     {% endif %}
 
     {% if current_user.is_admin %}
