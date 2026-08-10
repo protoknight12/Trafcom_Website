@@ -141,46 +141,49 @@
                 </thead>
                 <tbody>
                 {% for material in group %}
+                {% set form_id = 'mat-form-' ~ material.id %}
                 <tr>
-                    <td><strong>{{ material.display_name }}</strong></td>
-                    <td>{{ material.stock_quantity|round(2) }}</td>
-                    <td colspan="11">
-                        <form action="{{ url_for('admin_update_material', key=material.key) }}" method="POST" class="material-row-form">
+                    <td>
+                        <form id="{{ form_id }}" action="{{ url_for('admin_update_material', key=material.key) }}" method="POST">
                             {% include 'partials/csrf_field.html' %}
-                            <input type="text" name="brand" value="{{ material.brand or '' }}"
-                                   class="material-price-input" placeholder="Марка">
-                            <select name="type" class="material-price-input">
-                                {% for type_key2, type_label in MATERIAL_TYPE_LABELS.items() %}
-                                <option value="{{ type_key2 }}" {% if type_key2 == material.type %}selected{% endif %}>{{ type_label }}</option>
-                                {% endfor %}
-                            </select>
-                            <input type="number" step="0.01" min="0" name="cost_per_m2"
-                                   value="{{ '%.2f'|format(material.cost_per_m2) }}" class="material-price-input" required>
-                            <input type="number" step="0.01" min="0.01" name="cutting_speed_mm_per_min"
-                                   value="{{ '%.2f'|format(material.cutting_speed_mm_per_min) if material.cutting_speed_mm_per_min is not none else '' }}"
-                                   class="material-price-input" {{ 'required' if material.type != 'rods' else '' }}
-                                   style="{{ 'display:none;' if material.type == 'rods' else '' }}">
-                            <input type="number" step="0.01" min="0.01" name="pierce_rate_per_min"
-                                   value="{{ '%.2f'|format(material.pierce_rate_per_min) if material.pierce_rate_per_min is not none else '' }}"
-                                   class="material-price-input" {{ 'required' if material.type != 'rods' else '' }}
-                                   style="{{ 'display:none;' if material.type == 'rods' else '' }}">
-                            <input type="number" step="1" min="0" name="sheet_length_mm"
-                                   value="{{ material.sheet_length_mm|int if material.sheet_length_mm is not none else '' }}"
-                                   class="material-price-input" placeholder="{{ material_dimension_labels(material.type)[0] or 'мм' }}">
-                            <input type="number" step="1" min="0" name="sheet_width_mm"
-                                   value="{{ material.sheet_width_mm|int if material.sheet_width_mm is not none else '' }}"
-                                   class="material-price-input" placeholder="{{ material_dimension_labels(material.type)[1] or 'мм' }}">
-                            <input type="number" step="0.1" min="0" name="thickness_mm"
-                                   value="{{ material.thickness_mm if material.thickness_mm is not none else '' }}"
-                                   class="material-price-input" placeholder="{{ material_dimension_labels(material.type)[2] or 'мм' }}"
-                                   style="{{ 'display:none;' if material_dimension_labels(material.type)[2] is none else '' }}">
-                            <input type="number" name="erp_number" value="{{ material.erp_number or '' }}"
-                                   class="material-price-input" placeholder="автоматично">
-                            <input type="text" name="code_number" value="{{ material.code_number or '' }}"
-                                   class="material-price-input" placeholder="КД №">
-                            <button type="submit" class="btn-save-price">Запази</button>
                         </form>
+                        <strong>{{ material.display_name }}</strong>
                     </td>
+                    <td><input type="text" name="brand" form="{{ form_id }}" value="{{ material.brand or '' }}"
+                               class="material-price-input" placeholder="Марка"></td>
+                    <td>
+                        <select name="type" form="{{ form_id }}" class="material-price-input">
+                            {% for type_key2, type_label in MATERIAL_TYPE_LABELS.items() %}
+                            <option value="{{ type_key2 }}" {% if type_key2 == material.type %}selected{% endif %}>{{ type_label }}</option>
+                            {% endfor %}
+                        </select>
+                    </td>
+                    <td><input type="number" step="0.01" min="0" name="cost_per_m2" form="{{ form_id }}"
+                               value="{{ '%.2f'|format(material.cost_per_m2) }}" class="material-price-input" required></td>
+                    <td><input type="number" step="0.01" min="0.01" name="cutting_speed_mm_per_min" form="{{ form_id }}"
+                               value="{{ '%.2f'|format(material.cutting_speed_mm_per_min) if material.cutting_speed_mm_per_min is not none else '' }}"
+                               class="material-price-input" {{ 'required' if material.type != 'rods' else '' }}
+                               style="{{ 'display:none;' if material.type == 'rods' else '' }}"></td>
+                    <td><input type="number" step="0.01" min="0.01" name="pierce_rate_per_min" form="{{ form_id }}"
+                               value="{{ '%.2f'|format(material.pierce_rate_per_min) if material.pierce_rate_per_min is not none else '' }}"
+                               class="material-price-input" {{ 'required' if material.type != 'rods' else '' }}
+                               style="{{ 'display:none;' if material.type == 'rods' else '' }}"></td>
+                    <td><input type="number" step="1" min="0" name="sheet_length_mm" form="{{ form_id }}"
+                               value="{{ material.sheet_length_mm|int if material.sheet_length_mm is not none else '' }}"
+                               class="material-price-input" placeholder="{{ material_dimension_labels(material.type)[0] or 'мм' }}"></td>
+                    <td><input type="number" step="1" min="0" name="sheet_width_mm" form="{{ form_id }}"
+                               value="{{ material.sheet_width_mm|int if material.sheet_width_mm is not none else '' }}"
+                               class="material-price-input" placeholder="{{ material_dimension_labels(material.type)[1] or 'мм' }}"></td>
+                    <td><input type="number" step="0.1" min="0" name="thickness_mm" form="{{ form_id }}"
+                               value="{{ material.thickness_mm if material.thickness_mm is not none else '' }}"
+                               class="material-price-input" placeholder="{{ material_dimension_labels(material.type)[2] or 'мм' }}"
+                               style="{{ 'display:none;' if material_dimension_labels(material.type)[2] is none else '' }}"></td>
+                    <td>{{ material.stock_quantity|round(2) }}</td>
+                    <td><input type="number" name="erp_number" form="{{ form_id }}" value="{{ material.erp_number or '' }}"
+                               class="material-price-input" placeholder="автоматично"></td>
+                    <td><input type="text" name="code_number" form="{{ form_id }}" value="{{ material.code_number or '' }}"
+                               class="material-price-input" placeholder="КД №"></td>
+                    <td class="text-right"><button type="submit" form="{{ form_id }}" class="btn-save-price">Запази</button></td>
                     <td class="text-right">
                         <form action="{{ url_for('print_label', target_type='material', target_id=material.id) }}" method="GET" style="display:flex; gap:4px; align-items:center; justify-content:flex-end;">
                             <input type="number" name="quantity" min="1" value="1" class="material-price-input" style="width: 55px;">
@@ -269,10 +272,13 @@
     const ROW_DIMENSION_FIELD_NAMES = ['sheet_length_mm', 'sheet_width_mm', 'thickness_mm'];
 
     function applyRowSpeedVisibility(selectEl) {
-        const form = selectEl.closest('form');
+        // Each field now lives in its own <td> (one per table column) instead
+        // of a shared <form>, linked to the row's form only via the `form=`
+        // attribute - so siblings are found via the <tr>, not closest('form').
+        const row = selectEl.closest('tr');
         const isRod = selectEl.value === 'rods';
         ['cutting_speed_mm_per_min', 'pierce_rate_per_min'].forEach(function (name) {
-            const input = form.querySelector('input[name="' + name + '"]');
+            const input = row.querySelector('input[name="' + name + '"]');
             if (!input) return;
             input.style.display = isRod ? 'none' : '';
             input.required = !isRod;
@@ -280,7 +286,7 @@
 
         const labels = MATERIAL_DIMENSION_FIELD_LABELS[selectEl.value] || MATERIAL_DIMENSION_FIELD_LABELS.sheets;
         ROW_DIMENSION_FIELD_NAMES.forEach(function (name, i) {
-            const input = form.querySelector('input[name="' + name + '"]');
+            const input = row.querySelector('input[name="' + name + '"]');
             if (!input) return;
             if (labels[i]) {
                 input.style.display = '';
@@ -290,7 +296,7 @@
             }
         });
     }
-    document.querySelectorAll('.material-row-form select[name="type"]').forEach(function (sel) {
+    document.querySelectorAll('table.users-table select[name="type"]').forEach(function (sel) {
         sel.addEventListener('change', function () { applyRowSpeedVisibility(sel); });
     });
 </script>

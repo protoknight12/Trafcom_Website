@@ -99,7 +99,7 @@
                         {% for type_key, group in materials|groupby('type') %}
                         <optgroup label="{{ material_type_label(type_key) }}">
                             {% for m in group %}
-                            <option value="{{ m.display_name }}">{{ format_material_option(m) }}</option>
+                            <option value="{{ m.key }}">{{ format_material_option(m) }}</option>
                             {% endfor %}
                         </optgroup>
                         {% endfor %}
@@ -584,12 +584,15 @@
     // The shared dn_width/dn_height/dn_thickness fields double as a new
     // material's own catalog dimensions (see _find_or_create_delivery_target)
     // when adding a brand-new material row - relabel them the same way as
-    // the quick-create-material modal above whenever that's the case;
-    // otherwise (existing material, or a detail/product row) they're just
-    // generic per-line dimensions, so keep the original wording.
+    // the quick-create-material modal above whenever that's the case. When an
+    // EXISTING material is picked instead, its own MaterialPrice.type (from
+    // materials_data) drives the same relabeling - a rod material must show
+    // Диаметър/no thickness here too, not just on creation. Detail/product
+    // rows have no material type of their own, so they keep the generic wording.
     function applyDnMaterialDimensionLabels() {
         const type = document.querySelector('input[name="dn_item_type"]:checked').value;
-        const isNew = document.getElementById('dn_material_select').value === '__new__';
+        const materialSelect = document.getElementById('dn_material_select');
+        const isNew = materialSelect.value === '__new__';
         const widthLabel = document.querySelector('label[for=dn_width]');
         const heightLabel = document.querySelector('label[for=dn_height]');
         const thicknessGroup = document.getElementById('dn_thickness_group');
@@ -597,8 +600,15 @@
         const pierceInput = document.getElementById('dn_material_pierce_rate_per_min');
         const cuttingSpeedInput = document.getElementById('dn_material_cutting_speed_mm_per_min');
 
+        let materialType = null;
         if (type === 'material' && isNew) {
-            const materialType = document.getElementById('dn_material_type').value;
+            materialType = document.getElementById('dn_material_type').value;
+        } else if (type === 'material') {
+            const existing = MATERIALS.find(function (x) { return x.key === materialSelect.value; });
+            materialType = existing ? existing.type : null;
+        }
+
+        if (materialType) {
             const labels = QM_DIMENSION_FIELD_LABELS[materialType] || QM_DIMENSION_FIELD_LABELS.sheets;
             heightLabel.textContent = labels[0];
             widthLabel.textContent = labels[1];
@@ -609,22 +619,25 @@
                 thicknessGroup.style.display = 'none';
                 document.getElementById('dn_thickness').value = '';
             }
-            // Rods are cut to length on a saw, never pierced or DXF-cut - no
-            // cutting/drill speed for them.
-            if (materialType === 'rods') {
-                pierceInput.style.display = 'none';
-                pierceInput.value = '';
-                cuttingSpeedInput.style.display = 'none';
-                cuttingSpeedInput.value = '';
-            } else {
-                pierceInput.style.display = '';
-                cuttingSpeedInput.style.display = '';
-            }
         } else {
             widthLabel.textContent = DN_DIMENSION_DEFAULT_LABELS.width;
             heightLabel.textContent = DN_DIMENSION_DEFAULT_LABELS.height;
             thicknessGroup.style.display = '';
             thicknessLabel.textContent = DN_DIMENSION_DEFAULT_LABELS.thickness;
+        }
+
+        // Rods are cut to length on a saw, never pierced or DXF-cut - no
+        // cutting/drill speed inputs for them. Those inputs only exist for
+        // brand-new materials, so this only matters in the isNew branch.
+        if (type === 'material' && isNew) {
+            const isRod = materialType === 'rods';
+            pierceInput.style.display = isRod ? 'none' : '';
+            cuttingSpeedInput.style.display = isRod ? 'none' : '';
+            if (isRod) {
+                pierceInput.value = '';
+                cuttingSpeedInput.value = '';
+            }
+        } else {
             pierceInput.style.display = '';
             cuttingSpeedInput.style.display = '';
         }
@@ -686,13 +699,20 @@
         return type === 'material' ? 'dn_material_name_new' : (type === 'detail' ? 'dn_detail_name_new' : 'dn_product_name_new');
     }
 
-    // The select's chosen option is the item's name directly (matches the
-    // catalog exactly by construction); "+ Нов ..." switches to the free-text
-    // fallback field for a name that isn't in the catalog yet.
+    // Detail/product options are keyed by name directly (matches the catalog
+    // exactly by construction). Material options are keyed by the unique
+    // MaterialPrice.key instead - display_name alone isn't unique (e.g. an
+    // "Алуминий" sheet and an "Алуминий" rod), so resolving the backend name
+    // needs a lookup, not the raw select value. "+ Нов ..." switches to the
+    // free-text fallback field for a name that isn't in the catalog yet.
     function effectiveName(type) {
         const sel = document.getElementById(currentSelectField(type));
         if (sel.value === '__new__') {
             return document.getElementById(currentNewNameField(type)).value.trim();
+        }
+        if (type === 'material') {
+            const m = MATERIALS.find(function (x) { return x.key === sel.value; });
+            return m ? m.name : '';
         }
         return sel.value;
     }
@@ -728,7 +748,14 @@
             renderDnProductComponentsTable();
         }
 
-        const item = !isNew ? list.find(function (x) { return x.name === sel.value; }) : null;
+        // Materials are looked up by their unique key (see effectiveName) -
+        // display_name can collide (e.g. an "Алуминий" sheet and an
+        // "Алуминий" rod), which used to pull the wrong material's saved
+        // dimensions into these fields. Detail/product options are still
+        // keyed by name directly.
+        const item = !isNew ? (type === 'material'
+            ? MATERIALS.find(function (x) { return x.key === sel.value; })
+            : list.find(function (x) { return x.name === sel.value; })) : null;
         document.getElementById('dn_width').value = item && item.width != null ? item.width : '';
         document.getElementById('dn_height').value = item && item.height != null ? item.height : '';
         document.getElementById('dn_thickness').value = item && item.thickness != null ? item.thickness : '';
@@ -770,6 +797,14 @@
         const isNewItem = document.getElementById(currentSelectField(type)).value === '__new__';
 
         let materialKey = null;
+        if (type === 'material' && !isNewItem) {
+            // Identifies which catalog material this line started from, so
+            // the backend can inherit its pricing if the line's own
+            // dims/brand were edited away from the catalog default and a
+            // new variant row has to be created (see
+            // _find_or_create_delivery_target's material_key fallback).
+            materialKey = document.getElementById('dn_material_select').value;
+        }
         if (type === 'detail') {
             materialKey = document.getElementById('dn_detail_material_id').value;
             if (!materialKey) { alert('Моля изберете материал за детайла.'); return; }
@@ -797,6 +832,15 @@
                 alert('Моля въведете цена/м², скорост на рязане и скорост на пробиване за новия материал.');
                 return;
             }
+        } else if (type === 'material') {
+            // Existing material - the backend matches the catalog row by
+            // every field including type (_find_or_create_delivery_target),
+            // and defaults a missing type to 'sheets'. Without sending the
+            // real type here, picking an existing rod/pipe/profile material
+            // would silently fail that match and skip the line (no stock
+            // bump at all) - see MATERIALS lookup in effectiveName above.
+            const existingMaterial = MATERIALS.find(function (x) { return x.key === document.getElementById('dn_material_select').value; });
+            materialType = existingMaterial ? existingMaterial.type : 'sheets';
         }
 
         const components = (type === 'product' && isNewItem)

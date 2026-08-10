@@ -2261,6 +2261,21 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
         ).first()
         if existing:
             return existing
+        # A line for an EXISTING catalog material whose dims/brand were
+        # edited on the delivery note (the real delivered batch differs
+        # slightly from the catalog default - see DeliveryNoteItem docstring)
+        # carries no pricing of its own from the form; the pricing inputs
+        # only ever appear for the explicit "+ Нов материал..." flow. Without
+        # this fallback the line would be silently dropped instead of
+        # creating the distinct variant row the "keep separate items
+        # separate" rule above calls for. material_key here identifies the
+        # material the admin actually picked before editing its dimensions.
+        if cost_per_m2 is None and material_key:
+            source = MaterialPrice.query.filter_by(key=material_key).first()
+            if source:
+                cost_per_m2 = source.cost_per_m2
+                cutting_speed_mm_per_min = source.cutting_speed_mm_per_min
+                pierce_rate_per_min = source.pierce_rate_per_min
         # Rods are cut to length on a saw, never pierced or DXF-cut - no
         # cutting/drill speed required for them.
         if cost_per_m2 is None or (material_type != 'rods' and (cutting_speed_mm_per_min is None or pierce_rate_per_min is None)):
@@ -2334,8 +2349,8 @@ def admin_delivery_notes():
     # same convention as create_order()'s products_data/details_data. width/
     # height/thickness/brand pre-fill the (editable) line-item fields on the
     # delivery note form from each catalog row's own parameters.
-    materials_data = [{'name': m.display_name, 'width': m.sheet_width_mm, 'height': m.sheet_length_mm,
-                        'thickness': m.thickness_mm, 'brand': m.brand, 'price': None} for m in materials]
+    materials_data = [{'key': m.key, 'name': m.display_name, 'width': m.sheet_width_mm, 'height': m.sheet_length_mm,
+                        'thickness': m.thickness_mm, 'brand': m.brand, 'price': None, 'type': m.type} for m in materials]
     details_data = [{'name': d.name, 'width': d.width, 'height': d.height,
                       'thickness': d.material.thickness_mm if d.material else None,
                       'brand': d.material.brand if d.material else None,
