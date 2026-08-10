@@ -201,7 +201,10 @@
             </div>
             <div class="form-group">
                 <label for="material_thickness">Дебелина на материала (мм)</label>
-                <input type="text" id="material_thickness" disabled>
+                <input type="number" id="material_thickness" name="thickness" step="0.01" min="0">
+                <p class="text-small text-muted" style="margin-top: 4px;">
+                    Важи за избрания по-горе материал - засяга и всички други детайли/продукти, които го ползват.
+                </p>
             </div>
             <button type="submit" class="btn-submit">Запази</button>
         </form>
@@ -211,7 +214,7 @@
         function updateDetailMaterialThickness() {
             const select = document.getElementById('material_material');
             const thickness = select.options[select.selectedIndex].dataset.thickness;
-            document.getElementById('material_thickness').value = thickness || '-';
+            document.getElementById('material_thickness').value = thickness || '';
         }
         updateDetailMaterialThickness();
     </script>

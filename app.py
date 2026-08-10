@@ -3425,19 +3425,28 @@ def admin_update_detail_material(detail_id):
 
     detail = Detail.query.get_or_404(detail_id)
     material_key = request.form.get('material', '')
-    if not MaterialPrice.query.filter_by(key=material_key).first():
+    material = MaterialPrice.query.filter_by(key=material_key).first()
+    if not material:
         flash('Невалиден избор на материал.', 'danger')
         return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
     try:
         width = float(request.form.get('width', ''))
         height = float(request.form.get('height', ''))
+        thickness_raw = request.form.get('thickness', '').strip()
+        thickness = float(thickness_raw) if thickness_raw else None
     except ValueError:
         flash('Моля въведете валидни размери.', 'danger')
         return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
-    if width < 0 or height < 0:
+    if width < 0 or height < 0 or (thickness is not None and thickness < 0):
         flash('Размерите не могат да бъдат отрицателни.', 'danger')
         return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
+
+    # Thickness lives on the material catalog row, not the detail - editing it
+    # here changes it for every other detail/product using this same material
+    # (same field admin_materials.html edits), so the boss can fix it without
+    # a trip to the materials page while re-picking the material for a detail.
+    material.thickness_mm = thickness
 
     detail.material_key = material_key
     detail.width = width
