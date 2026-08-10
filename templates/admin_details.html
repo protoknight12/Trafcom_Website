@@ -41,7 +41,7 @@
             </div>
             <div class="form-group">
                 <label for="detail_service">Услуга (рязане)</label>
-                <select id="detail_service" name="service_id" required>
+                <select id="detail_service" name="service_id">
                     <option value="">-- Изберете услуга --</option>
                     {% for s in services %}
                     <option value="{{ s.id }}">{{ s.name }} ({{ "%.2f"|format(s.price_per_hour_eur) }} €/час)</option>
@@ -49,8 +49,12 @@
                 </select>
             </div>
             <div class="form-group">
-                <label for="detail_file">DXF файл</label>
-                <input type="file" id="detail_file" name="file" accept=".dxf" required>
+                <label for="detail_file">DXF файл (по избор)</label>
+                <input type="file" id="detail_file" name="file" accept=".dxf">
+            </div>
+            <div class="form-group" id="detail_manual_price_group">
+                <label for="detail_manual_price">Цена на детайла (€) - ако не качвате DXF файл</label>
+                <input type="number" id="detail_manual_price" step="0.01" min="0" name="manual_price" placeholder="напр. 25.00">
             </div>
             <div class="form-group">
                 <label for="detail_pdf_file">Референтен PDF (по избор)</label>
@@ -206,6 +210,16 @@
             ndPendingOps.map(function (op) { return { service_id: op.serviceId, duration_minutes: op.durationMinutes }; })
         );
     });
+
+    // The manual price only matters when no DXF is uploaded (see
+    // admin_add_detail()'s bare-bones fallback) - hide it otherwise so it
+    // doesn't look like a second, competing price field.
+    function applyDetailManualPriceVisibility() {
+        const hasFile = document.getElementById('detail_file').files.length > 0;
+        document.getElementById('detail_manual_price_group').style.display = hasFile ? 'none' : '';
+    }
+    document.getElementById('detail_file').addEventListener('change', applyDetailManualPriceVisibility);
+    applyDetailManualPriceVisibility();
 </script>
 
 </body>

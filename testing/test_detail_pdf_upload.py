@@ -1,8 +1,10 @@
 """
-pytest regression test for api_quick_create_detail() accepting an optional
-reference PDF (pdf_file) at creation time, stored as a DetailDxfFile row
-alongside the required DXF - see admin_details.html / the quick-create-detail
-modals. Uses the Flask test client (same pattern as
+pytest regression test for api_quick_create_detail()'s optional-file
+handling: an optional reference PDF (pdf_file) attached alongside the DXF,
+and the DXF itself being optional - a bare-bones detail can be created with
+a manually-entered price instead (see admin_details.html / the
+quick-create-detail modals, and _find_or_create_delivery_target's matching
+"new detail, no DXF" fallback). Uses the Flask test client (same pattern as
 test_quick_create_product_components.py) since this needs real multipart
 file-upload behavior.
 
@@ -109,3 +111,34 @@ def test_quick_create_detail_rejects_non_pdf_reference_file(client):
     assert res.get_json()['status'] == 'error'
     with flask_app.app_context():
         assert Detail.query.filter_by(name='QA Detail Bad PDF').first() is None
+
+
+def test_quick_create_detail_without_dxf_uses_manual_price(client):
+    # No DXF at all - a bare-bones detail priced by hand, same shape
+    # _find_or_create_delivery_target already creates for a delivery-note
+    # "new detail" line with no DXF.
+    c, _service_id = client
+    res = c.post('/api/quick-create-detail', data={
+        'name': 'QA Manual Detail', 'material': 'qa_mat', 'manual_price': '25.50',
+    }, content_type='multipart/form-data')
+    assert res.status_code == 200, res.get_json()
+    body = res.get_json()
+    assert body['status'] == 'success'
+    assert body['detail']['price'] == 25.5
+    with flask_app.app_context():
+        d = Detail.query.filter_by(name='QA Manual Detail').first()
+        assert d is not None
+        assert d.width == 0.0 and d.height == 0.0 and d.total_length == 0.0 and d.pierce_count == 0
+        assert d.cutting_service_id is None
+        assert d.geometry_json is None
+
+
+def test_quick_create_detail_without_dxf_requires_manual_price(client):
+    c, _service_id = client
+    res = c.post('/api/quick-create-detail', data={
+        'name': 'QA No Price Detail', 'material': 'qa_mat',
+    }, content_type='multipart/form-data')
+    assert res.status_code == 400
+    assert res.get_json()['status'] == 'error'
+    with flask_app.app_context():
+        assert Detail.query.filter_by(name='QA No Price Detail').first() is None

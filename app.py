@@ -3284,18 +3284,31 @@ def admin_add_detail():
         flash('Невалиден избор на материал.', 'danger')
         return redirect(url_for('admin_details'))
 
-    if not service_id or not db.session.get(Service, service_id):
+    # A DXF is optional - a detail can be catalogued with a manually-entered
+    # price up front and have its DXF/geometry added later via
+    # detail_dxf_dashboard(), same bare-bones shape _find_or_create_delivery_target
+    # already creates for a delivery-note "new detail" line with no DXF.
+    file = request.files.get('file')
+    has_dxf = bool(file and file.filename)
+
+    if has_dxf and not file.filename.lower().endswith('.dxf'):
+        flash('Невалиден формат! Приемат се само .dxf файлове.', 'danger')
+        return redirect(url_for('admin_details'))
+
+    if has_dxf and (not service_id or not db.session.get(Service, service_id)):
         flash('Невалиден избор на услуга.', 'danger')
         return redirect(url_for('admin_details'))
 
-    if 'file' not in request.files or request.files['file'].filename == '':
-        flash('Моля качете .dxf файл за детайла.', 'danger')
-        return redirect(url_for('admin_details'))
-
-    file = request.files['file']
-    if not file.filename.lower().endswith('.dxf'):
-        flash('Невалиден формат! Приемат се само .dxf файлове.', 'danger')
-        return redirect(url_for('admin_details'))
+    manual_price = None
+    if not has_dxf:
+        try:
+            manual_price = float(request.form.get('manual_price', ''))
+        except ValueError:
+            flash('Моля качете .dxf файл или въведете цена на детайла ръчно.', 'danger')
+            return redirect(url_for('admin_details'))
+        if manual_price < 0:
+            flash('Цената не може да бъде отрицателна.', 'danger')
+            return redirect(url_for('admin_details'))
 
     pdf_file = request.files.get('pdf_file')
     if pdf_file and pdf_file.filename and not pdf_file.filename.lower().endswith('.pdf'):
@@ -3307,31 +3320,39 @@ def admin_add_detail():
     # DetailDxfFile. Only removed again below if something fails.
     stored_path = None
     try:
-        original_filename = secure_filename(file.filename)
-        stored_filename = f"{uuid.uuid4().hex}_{original_filename}"
-        stored_path = os.path.join(app.config['DETAIL_DXF_FOLDER'], stored_filename)
-        file.save(stored_path)
+        if has_dxf:
+            original_filename = secure_filename(file.filename)
+            stored_filename = f"{uuid.uuid4().hex}_{original_filename}"
+            stored_path = os.path.join(app.config['DETAIL_DXF_FOLDER'], stored_filename)
+            file.save(stored_path)
 
-        width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(stored_path)
-        if width is None:
-            flash('Грешка при обработката на DXF структурата.', 'danger')
-            os.remove(stored_path)
-            return redirect(url_for('admin_details'))
+            width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(stored_path)
+            if width is None:
+                flash('Грешка при обработката на DXF структурата.', 'danger')
+                os.remove(stored_path)
+                return redirect(url_for('admin_details'))
 
-        price = calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id)
-
-        new_detail = Detail(
-            name=name, material_key=material_key, width=width, height=height,
-            total_length=total_length, pierce_count=pierce_count,
-            calculated_price=price, geometry_json=json.dumps(shapes),
-            erp_number=erp_number, code_number=code_number, cutting_service_id=service_id
-        )
+            price = calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id)
+            new_detail = Detail(
+                name=name, material_key=material_key, width=width, height=height,
+                total_length=total_length, pierce_count=pierce_count,
+                calculated_price=price, geometry_json=json.dumps(shapes),
+                erp_number=erp_number, code_number=code_number, cutting_service_id=service_id
+            )
+        else:
+            new_detail = Detail(
+                name=name, material_key=material_key, width=0.0, height=0.0,
+                total_length=0.0, pierce_count=0,
+                calculated_price=manual_price, geometry_json=None,
+                erp_number=erp_number, code_number=code_number, cutting_service_id=service_id
+            )
         db.session.add(new_detail)
         db.session.flush()  # assigns new_detail.id for the DetailDxfFile/Operation FKs below
-        db.session.add(DetailDxfFile(
-            detail_id=new_detail.id, filename=stored_filename, original_filename=original_filename,
-            uploaded_by_id=current_user.id
-        ))
+        if has_dxf:
+            db.session.add(DetailDxfFile(
+                detail_id=new_detail.id, filename=stored_filename, original_filename=original_filename,
+                uploaded_by_id=current_user.id
+            ))
         if pdf_file and pdf_file.filename:
             pdf_stored_filename = _save_upload(pdf_file, app.config['DETAIL_DXF_FOLDER'], allowed_extensions={'pdf'})
             db.session.add(DetailDxfFile(
@@ -4467,18 +4488,31 @@ def api_quick_create_detail():
     if conflict:
         return jsonify({'status': 'error', 'message': f'ERP № {erp_number} вече се използва от {conflict}.'}), 400
 
-    if not MaterialPrice.query.filter_by(key=material_key).first():
+    mat = MaterialPrice.query.filter_by(key=material_key).first()
+    if not mat:
         return jsonify({'status': 'error', 'message': 'Невалиден избор на материал.'}), 400
 
-    if not service_id or not db.session.get(Service, service_id):
+    # A DXF is optional - mirrors admin_add_detail()'s bare-bones fallback
+    # (manual price, width/height/total_length/pierce_count left at 0), same
+    # shape _find_or_create_delivery_target already creates for a
+    # delivery-note "new detail" line with no DXF.
+    file = request.files.get('file')
+    has_dxf = bool(file and file.filename)
+
+    if has_dxf and not file.filename.lower().endswith('.dxf'):
+        return jsonify({'status': 'error', 'message': 'Невалиден формат! Приемат се само .dxf файлове.'}), 400
+
+    if has_dxf and (not service_id or not db.session.get(Service, service_id)):
         return jsonify({'status': 'error', 'message': 'Невалиден избор на услуга.'}), 400
 
-    if 'file' not in request.files or request.files['file'].filename == '':
-        return jsonify({'status': 'error', 'message': 'Моля качете .dxf файл.'}), 400
-
-    file = request.files['file']
-    if not file.filename.lower().endswith('.dxf'):
-        return jsonify({'status': 'error', 'message': 'Невалиден формат! Приемат се само .dxf файлове.'}), 400
+    manual_price = None
+    if not has_dxf:
+        try:
+            manual_price = float(request.form.get('manual_price', ''))
+        except ValueError:
+            return jsonify({'status': 'error', 'message': 'Моля качете .dxf файл или въведете цена на детайла ръчно.'}), 400
+        if manual_price < 0:
+            return jsonify({'status': 'error', 'message': 'Цената не може да бъде отрицателна.'}), 400
 
     pdf_file = request.files.get('pdf_file')
     if pdf_file and pdf_file.filename and not pdf_file.filename.lower().endswith('.pdf'):
@@ -4486,23 +4520,29 @@ def api_quick_create_detail():
 
     temp_path = None
     try:
-        filename = secure_filename(file.filename)
-        temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{uuid.uuid4().hex}_{filename}")
-        file.save(temp_path)
+        if has_dxf:
+            filename = secure_filename(file.filename)
+            temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{uuid.uuid4().hex}_{filename}")
+            file.save(temp_path)
 
-        width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(temp_path)
-        if width is None:
-            return jsonify({'status': 'error', 'message': 'Грешка при обработката на DXF файла.'}), 400
+            width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(temp_path)
+            if width is None:
+                return jsonify({'status': 'error', 'message': 'Грешка при обработката на DXF файла.'}), 400
 
-        price = calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id)
-        mat = MaterialPrice.query.filter_by(key=material_key).first()
-
-        new_detail = Detail(
-            name=name, material_key=material_key, width=width, height=height,
-            total_length=total_length, pierce_count=pierce_count,
-            calculated_price=price, geometry_json=json.dumps(shapes),
-            erp_number=erp_number, code_number=code_number, cutting_service_id=service_id
-        )
+            price = calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id)
+            new_detail = Detail(
+                name=name, material_key=material_key, width=width, height=height,
+                total_length=total_length, pierce_count=pierce_count,
+                calculated_price=price, geometry_json=json.dumps(shapes),
+                erp_number=erp_number, code_number=code_number, cutting_service_id=service_id
+            )
+        else:
+            new_detail = Detail(
+                name=name, material_key=material_key, width=0.0, height=0.0,
+                total_length=0.0, pierce_count=0,
+                calculated_price=manual_price, geometry_json=None,
+                erp_number=erp_number, code_number=code_number, cutting_service_id=service_id
+            )
         db.session.add(new_detail)
         db.session.flush()  # assigns new_detail.id for the optional DetailDxfFile below
         if pdf_file and pdf_file.filename:

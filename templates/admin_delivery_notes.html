@@ -268,7 +268,7 @@
                 </div>
                 <div class="form-group" style="margin-bottom: 15px;">
                     <label for="qd_service">Услуга (рязане)</label>
-                    <select id="qd_service" name="service_id" required>
+                    <select id="qd_service" name="service_id">
                         <option value="">-- Изберете услуга --</option>
                         {% for s in services %}
                         <option value="{{ s.id }}">{{ s.name }} ({{ "%.2f"|format(s.price_per_hour_eur) }} €/час)</option>
@@ -276,8 +276,12 @@
                     </select>
                 </div>
                 <div class="form-group" style="margin-bottom: 15px;">
-                    <label for="qd_file">DXF файл</label>
-                    <input type="file" id="qd_file" name="file" accept=".dxf" required style="color: #fff;">
+                    <label for="qd_file">DXF файл (по избор)</label>
+                    <input type="file" id="qd_file" name="file" accept=".dxf" style="color: #fff;">
+                </div>
+                <div class="form-group" style="margin-bottom: 15px;" id="qd_manual_price_group">
+                    <label for="qd_manual_price">Цена на детайла (€) - ако не качвате DXF файл</label>
+                    <input type="number" id="qd_manual_price" step="0.01" min="0" name="manual_price" placeholder="напр. 25.00">
                 </div>
                 <div class="form-group" style="margin-bottom: 15px;">
                     <label for="qd_pdf_file">Референтен PDF (по избор)</label>
@@ -465,7 +469,17 @@
     function closeQuickDetailModal() {
         document.getElementById('quickDetailModal').style.display = 'none';
         document.getElementById('quickDetailForm').reset();
+        applyQdManualPriceVisibility();
     }
+
+    // The manual price only matters when no DXF is uploaded (see
+    // api_quick_create_detail()'s bare-bones fallback).
+    function applyQdManualPriceVisibility() {
+        const hasFile = document.getElementById('qd_file').files.length > 0;
+        document.getElementById('qd_manual_price_group').style.display = hasFile ? 'none' : '';
+    }
+    document.getElementById('qd_file').addEventListener('change', applyQdManualPriceVisibility);
+    applyQdManualPriceVisibility();
     document.getElementById('quickDetailForm').addEventListener('submit', function (e) {
         e.preventDefault();
         const submitBtn = this.querySelector('button[type="submit"]');
