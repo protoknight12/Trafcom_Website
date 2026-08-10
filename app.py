@@ -266,12 +266,17 @@ def material_dimension_labels(type_key):
 
 def material_price_m2_label(type_key):
     """
-    cost_per_m2 is still literally area-based for every type (calculate_cnc_price()
-    always prices off the DXF bounding-box area, regardless of stock form), so the
-    field itself doesn't change - only 'plate' in the label is sheet-specific and
-    reads oddly for rods/pipes/profiles.
+    cost_per_m2 is area-based for sheets/pipes/profiles (calculate_cnc_price()
+    prices those off the DXF bounding-box area) - only 'plate' in the label is
+    sheet-specific and reads oddly for pipes/profiles. Rods are priced off
+    length alone (see _material_cost), so the same column is really a €/m
+    linear rate for them, not an area rate.
     """
-    return 'Цена на м² плоча (€)' if type_key == 'sheets' else 'Цена на м² материал (€)'
+    if type_key == 'sheets':
+        return 'Цена на м² плоча (€)'
+    if type_key == 'rods':
+        return 'Цена на линеен метър (€)'
+    return 'Цена на м² материал (€)'
 
 
 def format_cut_dimensions(width, height, material_type):
@@ -1444,24 +1449,39 @@ def _service_time_cost(total_length, pierce_count, material, service):
     return (cutting_time_min + pierce_time_min) * (service.price_per_hour_eur / 60.0)
 
 
+def _material_cost(width, height, material):
+    """
+    Raw-stock cost for one cut, shared by calculate_cnc_price() and
+    calculate_cnc_price_multi_service(). Rods are priced off length alone
+    (height, by the Материал и размери tab's Диаметър/Дължина convention -
+    see DETAIL_DIMENSION_LABELS in detail_dxf_dashboard.html) - a rod's cost
+    scales with how much of it you cut off, not its diameter, unlike a
+    sheet/pipe/profile where cost_per_m2 is genuinely an area rate.
+    """
+    if material.type == 'rods':
+        return (height / 1000) * material.cost_per_m2
+    area_m2 = (width * height) / 1_000_000
+    return area_m2 * material.cost_per_m2
+
+
 def calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id):
     """
     Time-based pricing engine for a single service (the Detail/quick-create
     flows, which always price a cut against exactly one cutting_service_id -
-    see Detail.cutting_service_id). Material supplies the raw-stock area
-    cost and how fast it cuts/pierces; the EUR/hour rate comes from the
-    selected Service. total = material_surface_cost + time_cost + BASE_SETUP_FEE.
+    see Detail.cutting_service_id). Material supplies the raw-stock cost
+    (area for sheets/pipes/profiles, length alone for rods - see
+    _material_cost) and how fast it cuts/pierces; the EUR/hour rate comes
+    from the selected Service. total = material_cost + time_cost + BASE_SETUP_FEE.
     """
     material = MaterialPrice.query.filter_by(key=material_key).first()
     service = db.session.get(Service, service_id) if service_id else None
     if not material or not service:
         return 0.0
 
-    area_m2 = (width * height) / 1_000_000
-    material_surface_cost = area_m2 * material.cost_per_m2
+    material_cost = _material_cost(width, height, material)
     time_cost = _service_time_cost(total_length, pierce_count, material, service)
 
-    total_calculated_euro = material_surface_cost + time_cost + BASE_SETUP_FEE
+    total_calculated_euro = material_cost + time_cost + BASE_SETUP_FEE
     return round(total_calculated_euro, 2)
 
 
@@ -1469,22 +1489,21 @@ def calculate_cnc_price_multi_service(width, height, total_length, pierce_count,
     """
     Same engine as calculate_cnc_price(), but for the DXF calculator's
     multi-service checkbox selection (see upload.html / process_dxf_upload()
-    and DxfFile.services) - the material area cost and BASE_SETUP_FEE are
-    still charged once, but the cutting+pierce time is priced at EVERY
-    selected service's rate and summed, not just one. Lets a job that
-    genuinely spans multiple billable processes (e.g. a combined cut+engrave
-    pass) get one upload/price instead of forcing an artificial single pick.
+    and DxfFile.services) - the material cost and BASE_SETUP_FEE are still
+    charged once, but the cutting+pierce time is priced at EVERY selected
+    service's rate and summed, not just one. Lets a job that genuinely spans
+    multiple billable processes (e.g. a combined cut+engrave pass) get one
+    upload/price instead of forcing an artificial single pick.
     """
     material = MaterialPrice.query.filter_by(key=material_key).first()
     services = Service.query.filter(Service.id.in_(service_ids)).all() if service_ids else []
     if not material or not services:
         return 0.0
 
-    area_m2 = (width * height) / 1_000_000
-    material_surface_cost = area_m2 * material.cost_per_m2
+    material_cost = _material_cost(width, height, material)
     time_cost = sum(_service_time_cost(total_length, pierce_count, material, s) for s in services)
 
-    total_calculated_euro = material_surface_cost + time_cost + BASE_SETUP_FEE
+    total_calculated_euro = material_cost + time_cost + BASE_SETUP_FEE
     return round(total_calculated_euro, 2)
 
 

@@ -403,7 +403,8 @@
             }
         });
         document.getElementById('qm_cost_per_m2_label').textContent =
-            typeSelect.value === 'sheets' ? 'Цена на м² плоча (€)' : 'Цена на м² материал (€)';
+            typeSelect.value === 'sheets' ? 'Цена на м² плоча (€)' :
+            typeSelect.value === 'rods' ? 'Цена на линеен метър (€)' : 'Цена на м² материал (€)';
 
         // Rods are cut to length on a saw, never pierced or DXF-cut - no
         // cutting/drill speed for them.

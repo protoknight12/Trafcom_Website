@@ -234,11 +234,12 @@
             }
         });
 
-        // cost_per_m2 is still area-based pricing for every type (see
-        // material_price_m2_label() in app.py) - only "plate" in the label
-        // is sheet-specific wording.
+        // cost_per_m2 is area-based for sheets/pipes/profiles but a €/m
+        // linear rate for rods (see material_price_m2_label()/_material_cost
+        // in app.py) - rods are priced off length alone, not diameter.
         document.getElementById('new_cost_per_m2_label').textContent =
-            typeSelect.value === 'sheets' ? 'Цена на м² плоча (€)' : 'Цена на м² материал (€)';
+            typeSelect.value === 'sheets' ? 'Цена на м² плоча (€)' :
+            typeSelect.value === 'rods' ? 'Цена на линеен метър (€)' : 'Цена на м² материал (€)';
 
         // Rods are cut to length on a saw, never pierced or DXF-cut - no
         // cutting/drill speed for them.
