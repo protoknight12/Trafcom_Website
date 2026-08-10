@@ -84,6 +84,27 @@
                 <button type="button" class="btn-secondary" onclick="addToCart()" style="padding: 12px 20px;">+ Добави</button>
             </div>
         </div>
+
+        <div class="form-group" id="detail_ops_section" style="display: none; margin-top: 16px;">
+            <label>Операции за този детайл (незадължително - рязане, огъване, пробиване...)</label>
+            <p class="text-small text-muted" style="margin-top: -4px;">Приложени само към детайла, който ще бъде добавен към количката по-долу.</p>
+            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: flex-end;">
+                <select id="pending_op_service_id" style="flex: 1; min-width: 200px;">
+                    <option value="">-- Изберете услуга --</option>
+                    {% for s in services %}
+                    <option value="{{ s.id }}">{{ s.name }} ({{ "%.2f"|format(s.price_per_hour_eur) }} €/час)</option>
+                    {% endfor %}
+                </select>
+                <input type="number" id="pending_op_duration_minutes" step="0.01" min="0.01" placeholder="Продължителност (мин)" style="width: 180px;">
+                <button type="button" class="btn-secondary" onclick="addPendingOperation()">+ Добави операция</button>
+            </div>
+            <table class="data-table" id="pendingOpsTable" style="margin-top: 10px;">
+                <tbody id="pendingOpsBody">
+                    <tr id="pendingOpsEmptyRow"><td class="text-center no-data">Няма избрани операции за този детайл.</td></tr>
+                </tbody>
+            </table>
+            <p class="text-small text-muted" id="pendingOpsTotal" style="margin-top: 6px;"></p>
+        </div>
     </section>
 
     <section class="admin-card">
@@ -407,7 +428,67 @@
 <script>
     const PRODUCTS = {{ products|tojson }};
     const DETAILS = {{ details|tojson }};
+    const SERVICES_DATA = {{ services_data|tojson }};
     let cart = [];
+    let pendingDetailOps = [];
+
+    function pendingOpCost(serviceId, durationMinutes) {
+        const service = SERVICES_DATA.find(function (s) { return s.id === serviceId; });
+        return service ? durationMinutes * (service.price_per_hour_eur / 60) : 0;
+    }
+
+    function addPendingOperation() {
+        const serviceSelect = document.getElementById('pending_op_service_id');
+        const durationInput = document.getElementById('pending_op_duration_minutes');
+        const serviceId = parseInt(serviceSelect.value, 10);
+        const duration = parseFloat(durationInput.value);
+
+        if (!serviceId) { alert('Моля изберете услуга.'); return; }
+        if (!duration || duration <= 0) { alert('Моля въведете валидна продължителност в минути.'); return; }
+
+        pendingDetailOps.push({
+            serviceId: serviceId,
+            serviceName: serviceSelect.options[serviceSelect.selectedIndex].text,
+            durationMinutes: duration,
+        });
+        durationInput.value = '';
+        renderPendingOperations();
+    }
+
+    function removePendingOperation(index) {
+        pendingDetailOps.splice(index, 1);
+        renderPendingOperations();
+    }
+
+    function renderPendingOperations() {
+        const body = document.getElementById('pendingOpsBody');
+        body.innerHTML = '';
+        let total = 0;
+
+        if (pendingDetailOps.length === 0) {
+            body.innerHTML = '<tr id="pendingOpsEmptyRow"><td class="text-center no-data">Няма избрани операции за този детайл.</td></tr>';
+        } else {
+            pendingDetailOps.forEach(function (op, idx) {
+                const cost = pendingOpCost(op.serviceId, op.durationMinutes);
+                total += cost;
+                const tr = document.createElement('tr');
+                const removeBtn = document.createElement('button');
+                removeBtn.type = 'button';
+                removeBtn.className = 'btn-delete';
+                removeBtn.textContent = 'Премахни';
+                removeBtn.addEventListener('click', function () { removePendingOperation(idx); });
+                const td = document.createElement('td');
+                td.textContent = op.serviceName + ' — ' + op.durationMinutes + ' мин — ' + cost.toFixed(2) + ' €';
+                td.appendChild(document.createElement('br'));
+                td.appendChild(removeBtn);
+                tr.appendChild(td);
+                body.appendChild(tr);
+            });
+        }
+
+        document.getElementById('pendingOpsTotal').textContent =
+            pendingDetailOps.length ? ('Операции общо: ' + total.toFixed(2) + ' € на брой (плюс базовата цена на детайла)') : '';
+    }
 
     function cell(text, opts) {
         const td = document.createElement('td');
@@ -420,6 +501,7 @@
         radio.addEventListener('change', function () {
             document.getElementById('product_selector').style.display = this.value === 'product' ? 'block' : 'none';
             document.getElementById('detail_selector').style.display = this.value === 'detail' ? 'block' : 'none';
+            document.getElementById('detail_ops_section').style.display = this.value === 'detail' ? 'block' : 'none';
         });
     });
 
@@ -432,30 +514,48 @@
             return;
         }
 
-        let id, name, unitPrice;
         if (type === 'product') {
             const sel = document.getElementById('cart_product_id');
             if (!sel.value) { alert('Няма избран продукт.'); return; }
-            id = parseInt(sel.value, 10);
+            const id = parseInt(sel.value, 10);
             const p = PRODUCTS.find(function (x) { return x.id === id; });
             if (!p) return;
-            name = p.name;
-            unitPrice = p.price;
+
+            const existing = cart.find(function (c) { return c.type === type && c.id === id; });
+            if (existing) {
+                existing.qty += qty;
+            } else {
+                cart.push({ type: type, id: id, name: p.name, unitPrice: p.price, qty: qty });
+            }
         } else {
             const sel = document.getElementById('cart_detail_id');
             if (!sel.value) { alert('Няма избран детайл.'); return; }
-            id = parseInt(sel.value, 10);
+            const id = parseInt(sel.value, 10);
             const d = DETAILS.find(function (x) { return x.id === id; });
             if (!d) return;
-            name = d.name;
-            unitPrice = d.price;
-        }
 
-        const existing = cart.find(function (c) { return c.type === type && c.id === id; });
-        if (existing) {
-            existing.qty += qty;
-        } else {
-            cart.push({ type: type, id: id, name: name, unitPrice: unitPrice, qty: qty });
+            const opsCost = pendingDetailOps.reduce(function (sum, op) { return sum + pendingOpCost(op.serviceId, op.durationMinutes); }, 0);
+            const operations = pendingDetailOps.map(function (op) {
+                return { serviceId: op.serviceId, serviceName: op.serviceName, durationMinutes: op.durationMinutes };
+            });
+            const unitPrice = d.price + opsCost;
+
+            if (operations.length > 0) {
+                // A detail with operations attached is always its own cart
+                // line - merging it into a plain (or differently-configured)
+                // line for the same detail would lose which operations go
+                // with which piece count.
+                cart.push({ type: type, id: id, name: d.name, unitPrice: unitPrice, qty: qty, operations: operations });
+            } else {
+                const existing = cart.find(function (c) { return c.type === type && c.id === id && (!c.operations || c.operations.length === 0); });
+                if (existing) {
+                    existing.qty += qty;
+                } else {
+                    cart.push({ type: type, id: id, name: d.name, unitPrice: unitPrice, qty: qty });
+                }
+            }
+            pendingDetailOps = [];
+            renderPendingOperations();
         }
         renderCart();
     }
@@ -476,7 +576,17 @@
                 const lineTotal = (item.unitPrice * item.qty).toFixed(2);
                 const tr = document.createElement('tr');
 
-                tr.appendChild(cell(item.name));
+                const nameTd = document.createElement('td');
+                nameTd.textContent = item.name;
+                if (item.operations && item.operations.length > 0) {
+                    const opsLine = document.createElement('div');
+                    opsLine.className = 'text-small text-muted';
+                    opsLine.textContent = item.operations.map(function (op) {
+                        return op.serviceName + ' (' + op.durationMinutes + ' мин)';
+                    }).join(', ');
+                    nameTd.appendChild(opsLine);
+                }
+                tr.appendChild(nameTd);
                 tr.appendChild(cell(item.type === 'product' ? 'Продукт' : 'Детайл'));
                 tr.appendChild(cell(item.qty, { className: 'text-center' }));
                 tr.appendChild(cell(item.unitPrice.toFixed(2) + ' €', { className: 'text-right' }));
@@ -516,7 +626,15 @@
         }
         document.getElementById('customer_name').value = clientOpt.dataset.name || clientOpt.textContent;
         document.getElementById('cartJsonInput').value = JSON.stringify(
-            cart.map(function (c) { return { type: c.type, id: c.id, qty: c.qty }; })
+            cart.map(function (c) {
+                const row = { type: c.type, id: c.id, qty: c.qty };
+                if (c.operations && c.operations.length > 0) {
+                    row.operations = c.operations.map(function (op) {
+                        return { service_id: op.serviceId, duration_minutes: op.durationMinutes };
+                    });
+                }
+                return row;
+            })
         );
     });
 

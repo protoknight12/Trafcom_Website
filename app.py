@@ -626,6 +626,36 @@ class OrderItemComponent(db.Model):
         return round(min(self.quantity_produced, self.quantity_needed) / self.quantity_needed * 100, 1)
 
 
+class OrderItemOperation(db.Model):
+    """
+    An ad-hoc processing step (cutting, bending, drilling...) picked at
+    order-creation time for one standalone-detail OrderItem line - see
+    order_create.html's per-detail operations picker, which mirrors the
+    Detail catalog's own Operation/admin_details.html cart. Order-scoped
+    rather than catalog-scoped: the same Detail can carry a different set of
+    operations on different orders (e.g. a hinge that only needs drilling on
+    one order but cutting+bending+drilling on another).
+
+    Frozen like OrderItemComponent: its cost is folded into OrderItem's
+    unit_price once, up front, in create_order() - this table only keeps the
+    breakdown for display, it is never re-summed for pricing after that.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    order_item_id = db.Column(db.Integer, db.ForeignKey('order_item.id'), nullable=False)
+    service_id = db.Column(db.Integer, db.ForeignKey('service.id'), nullable=False)
+    sequence = db.Column(db.Integer, nullable=False, default=0)
+    duration_minutes = db.Column(db.Float, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    order_item = db.relationship('OrderItem', backref=db.backref(
+        'operations', cascade='all, delete-orphan', lazy=True, order_by='OrderItemOperation.sequence'))
+    service = db.relationship('Service')
+
+    @property
+    def cost(self):
+        return round(self.duration_minutes * (self.service.price_per_hour_eur / 60.0), 2)
+
+
 class ProductExtraCost(db.Model):
     """
     A flexible named cost line item on a Product (e.g. "Боядисване" -> 50.00,
@@ -3387,6 +3417,35 @@ def _add_operations_from_rows(detail, rows):
     return added
 
 
+def _order_item_operations_cost(order_item, rows):
+    """Creates one OrderItemOperation per valid {service_id, duration_minutes}
+    row for a freshly-flushed order_item (always starts sequence at 0, unlike
+    _add_operations_from_rows - a new OrderItem never already has operations).
+    Invalid rows (bad service/duration) are skipped rather than failing the
+    whole cart line. Returns the summed per-unit cost so the caller can fold
+    it into OrderItem.unit_price; caller is responsible for committing."""
+    total_cost = 0.0
+    sequence = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            service_id = int(row.get('service_id'))
+            duration_minutes = float(row.get('duration_minutes'))
+        except (TypeError, ValueError):
+            continue
+        service = db.session.get(Service, service_id)
+        if duration_minutes <= 0 or not service:
+            continue
+        db.session.add(OrderItemOperation(
+            order_item_id=order_item.id, service_id=service_id, sequence=sequence,
+            duration_minutes=round(duration_minutes, 2)
+        ))
+        total_cost += duration_minutes * (service.price_per_hour_eur / 60.0)
+        sequence += 1
+    return round(total_cost, 2)
+
+
 @app.route('/admin/details/<int:detail_id>/operations/add', methods=['POST'])
 @login_required
 def admin_add_operation(detail_id):
@@ -3895,6 +3954,12 @@ def create_order():
                     quantity_ordered=qty, unit_price=detail.calculated_price
                 )
                 db.session.add(order_item)
+                db.session.flush()  # need order_item.id for its operations
+
+                op_rows = row.get('operations')
+                if isinstance(op_rows, list) and op_rows:
+                    ops_cost_per_unit = _order_item_operations_cost(order_item, op_rows)
+                    order_item.unit_price = round(order_item.unit_price + ops_cost_per_unit, 2)
                 added_any = True
 
         if not added_any:
@@ -3938,8 +4003,13 @@ def create_order():
         }
         for d in details
     ]
+    # JSON-friendly service list so the per-detail operations picker can
+    # preview an operation's cost client-side, same convention as
+    # admin_details.html's ND_SERVICES.
+    services_data = [{'id': s.id, 'name': s.name, 'price_per_hour_eur': s.price_per_hour_eur} for s in services]
     return render_template('order_create.html', products=products_data, details=details_data,
-                           machines=machines, materials=materials, services=services, clients=clients, deliverers=deliverers,
+                           machines=machines, materials=materials, services=services, services_data=services_data,
+                           clients=clients, deliverers=deliverers,
                            active_page='create_order')
 
 

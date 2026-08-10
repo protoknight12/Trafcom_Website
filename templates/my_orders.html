@@ -68,6 +68,9 @@
                         {% else %}
                         <span class="badge badge-user">Детайл</span>
                         {% endif %}
+                        {% if item.operations %}
+                        <div class="text-small text-muted">{{ item.operations|map(attribute='service.name')|join(', ') }}</div>
+                        {% endif %}
                     </td>
                     <td class="text-center">{{ item.quantity_ordered }} бр.</td>
                     <td class="text-right">{{ "%.2f"|format(item.unit_price) }} €</td>
