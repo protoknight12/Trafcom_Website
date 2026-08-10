@@ -185,10 +185,15 @@
             <div class="form-group">
                 <label for="material_material">Материал</label>
                 <select id="material_material" name="material" onchange="updateDetailMaterialDimensionField()">
-                    {% for material in materials %}
-                    <option value="{{ material.key }}" data-type="{{ material.type }}"
-                            data-thickness="{{ material.thickness_mm if material.thickness_mm is not none else '' }}"
-                            {% if material.key == detail.material_key %}selected{% endif %}>{{ format_material_option(material) }}</option>
+                    {% for type_key, group in materials|groupby('type') %}
+                    <optgroup label="{{ material_type_label(type_key) }}">
+                        {% for material in group %}
+                        <option value="{{ material.key }}" data-type="{{ material.type }}"
+                                data-thickness="{{ material.thickness_mm if material.thickness_mm is not none else '' }}"
+                                data-diameter="{{ material.sheet_width_mm if material.sheet_width_mm is not none else '' }}"
+                                {% if material.key == detail.material_key %}selected{% endif %}>{{ format_material_option(material) }}</option>
+                        {% endfor %}
+                    </optgroup>
                     {% endfor %}
                 </select>
             </div>
@@ -215,16 +220,23 @@
     <script>
         // Same per-type "3rd dimension" labels as admin_materials.html's
         // MATERIAL_DIMENSION_FIELD_LABELS (mirrors MATERIAL_DIMENSION_LABELS
-        // in app.py) - a rod has a diameter, not a thickness, and a rod/other
-        // material has no 3rd dimension at all, so the field hides instead of
-        // showing a meaningless label.
+        // in app.py) - a rod's extra dimension is its diameter, not a wall
+        // thickness, and "other" has no meaningful 3rd dimension at all, so
+        // the field hides instead of showing a meaningless label.
         const DETAIL_THICKNESS_LABELS = {
             sheets: 'Дебелина (мм)',
-            rods: null,
+            rods: 'Диаметър (мм)',
             pipes: 'Дебелина на стената (мм)',
             profiles: 'Дебелина на стената (мм)',
             other: null,
         };
+
+        // Rods store their catalog diameter in MaterialPrice.sheet_width_mm,
+        // not thickness_mm (see MATERIAL_DIMENSION_LABELS in app.py) - this
+        // picks the right source attribute for the convenience-default value.
+        function detailDimensionDefault(option) {
+            return option.dataset.type === 'rods' ? option.dataset.diameter : option.dataset.thickness;
+        }
 
         // Shows/hides + relabels the field for whichever material is
         // currently selected, without touching its value - used on initial
@@ -243,13 +255,13 @@
         }
 
         // Called when the admin actually switches material - also resets the
-        // value to that material's own thickness as a convenience default.
+        // value to that material's own diameter/thickness as a convenience default.
         function updateDetailMaterialDimensionField() {
             applyDetailThicknessVisibility();
             const select = document.getElementById('material_material');
             const option = select.options[select.selectedIndex];
             document.getElementById('material_thickness').value =
-                DETAIL_THICKNESS_LABELS[option.dataset.type] ? (option.dataset.thickness || '') : '';
+                DETAIL_THICKNESS_LABELS[option.dataset.type] ? (detailDimensionDefault(option) || '') : '';
         }
 
         applyDetailThicknessVisibility();
