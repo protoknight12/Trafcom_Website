@@ -193,7 +193,10 @@ class MaterialPrice(db.Model):
     key = db.Column(db.String(50), unique=True, nullable=False)
     display_name = db.Column(db.String(100), nullable=False)
     cost_per_m2 = db.Column(db.Float, nullable=False)
-    cutting_speed_mm_per_min = db.Column(db.Float, nullable=False)
+    # Nullable, same reason as pierce_rate_per_min below: 'rods' stock is cut
+    # to length on a saw, not through the DXF-length/cutting-speed pricing
+    # model, so rod materials carry no cutting speed either.
+    cutting_speed_mm_per_min = db.Column(db.Float, nullable=True)
     # Nullable: 'rods' stock is cut to length, never pierced, so rod
     # materials carry no pierce rate at all (see _parse_material_type callers).
     pierce_rate_per_min = db.Column(db.Float, nullable=True)
@@ -2224,10 +2227,12 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
         ).first()
         if existing:
             return existing
-        # Rods are cut to length, never pierced - no drill/pierce speed required for them.
-        if cost_per_m2 is None or cutting_speed_mm_per_min is None or (material_type != 'rods' and pierce_rate_per_min is None):
+        # Rods are cut to length on a saw, never pierced or DXF-cut - no
+        # cutting/drill speed required for them.
+        if cost_per_m2 is None or (material_type != 'rods' and (cutting_speed_mm_per_min is None or pierce_rate_per_min is None)):
             return None
         if material_type == 'rods':
+            cutting_speed_mm_per_min = None
             pierce_rate_per_min = None
         new_row = MaterialPrice(
             key='pending', display_name=name, cost_per_m2=cost_per_m2, cutting_speed_mm_per_min=cutting_speed_mm_per_min,
@@ -2865,16 +2870,19 @@ def admin_update_material(key):
 
     try:
         cost_per_m2 = float(request.form.get('cost_per_m2', ''))
-        cutting_speed_mm_per_min = float(request.form.get('cutting_speed_mm_per_min', ''))
-        # Rods are cut to length, never pierced - no drill/pierce speed for them.
-        pierce_rate_per_min = None if material_type == 'rods' else float(request.form.get('pierce_rate_per_min', ''))
+        # Rods are cut to length on a saw, never pierced or DXF-cut - no
+        # cutting/drill speed for them.
+        is_rod = material_type == 'rods'
+        cutting_speed_mm_per_min = None if is_rod else float(request.form.get('cutting_speed_mm_per_min', ''))
+        pierce_rate_per_min = None if is_rod else float(request.form.get('pierce_rate_per_min', ''))
         sheet_length_mm, sheet_width_mm, thickness_mm = _parse_sheet_dimensions(request.form)
         erp_number = _parse_erp_number(request.form)
     except ValueError:
         flash('Всички цени, размери и ERP № трябва да бъдат валидни числа.', 'danger')
         return redirect(url_for('admin_materials'))
 
-    if cost_per_m2 < 0 or cutting_speed_mm_per_min <= 0 or (pierce_rate_per_min is not None and pierce_rate_per_min <= 0):
+    if cost_per_m2 < 0 or (cutting_speed_mm_per_min is not None and cutting_speed_mm_per_min <= 0) \
+            or (pierce_rate_per_min is not None and pierce_rate_per_min <= 0):
         flash('Цената не може да бъде отрицателна, а скоростите на рязане/пробиване трябва да бъдат положителни числа.', 'danger')
         return redirect(url_for('admin_materials'))
 
@@ -2886,7 +2894,7 @@ def admin_update_material(key):
     # Round to 2 decimals - keeps prices in a simple, everyday currency
     # format rather than accumulating long float tails over repeated edits.
     material.cost_per_m2 = round(cost_per_m2, 2)
-    material.cutting_speed_mm_per_min = round(cutting_speed_mm_per_min, 2)
+    material.cutting_speed_mm_per_min = round(cutting_speed_mm_per_min, 2) if cutting_speed_mm_per_min is not None else None
     material.pierce_rate_per_min = round(pierce_rate_per_min, 2) if pierce_rate_per_min is not None else None
     material.sheet_length_mm = sheet_length_mm
     material.sheet_width_mm = sheet_width_mm
@@ -2916,25 +2924,30 @@ def admin_add_material():
     material_type = _parse_material_type(request.form)
     brand = request.form.get('brand', '').strip() or None
 
+    # Rods are cut to length on a saw, never pierced or DXF-cut - no
+    # cutting/drill speed for them.
+    is_rod = material_type == 'rods'
+
     try:
         cost_per_m2 = float(request.form.get('cost_per_m2', ''))
-        cutting_speed_mm_per_min = float(request.form.get('cutting_speed_mm_per_min', ''))
-        # Rods are cut to length, never pierced - no drill/pierce speed for them.
-        pierce_rate_per_min = None if material_type == 'rods' else float(request.form.get('pierce_rate_per_min', ''))
+        cutting_speed_mm_per_min = None if is_rod else float(request.form.get('cutting_speed_mm_per_min', ''))
+        pierce_rate_per_min = None if is_rod else float(request.form.get('pierce_rate_per_min', ''))
         sheet_length_mm, sheet_width_mm, thickness_mm = _parse_sheet_dimensions(request.form)
         erp_number = _parse_erp_number(request.form)
     except ValueError:
         flash('Всички цени, размери и ERP № трябва да бъдат валидни числа.', 'danger')
         return redirect(url_for('admin_materials'))
 
-    if cost_per_m2 < 0 or cutting_speed_mm_per_min <= 0 or (pierce_rate_per_min is not None and pierce_rate_per_min <= 0):
+    if cost_per_m2 < 0 or (cutting_speed_mm_per_min is not None and cutting_speed_mm_per_min <= 0) \
+            or (pierce_rate_per_min is not None and pierce_rate_per_min <= 0):
         flash('Цената не може да бъде отрицателна, а скоростите на рязане/пробиване трябва да бъдат положителни числа.', 'danger')
         return redirect(url_for('admin_materials'))
 
     # Only a byte-for-byte resubmit (double click) is rejected - a difference
     # in any property (e.g. thickness) always makes a distinct catalog row,
     # even under the same name/brand.
-    if _material_variant_exists(display_name, material_type, brand, round(cost_per_m2, 2), round(cutting_speed_mm_per_min, 2),
+    if _material_variant_exists(display_name, material_type, brand, round(cost_per_m2, 2),
+                                 round(cutting_speed_mm_per_min, 2) if cutting_speed_mm_per_min is not None else None,
                                  round(pierce_rate_per_min, 2) if pierce_rate_per_min is not None else None,
                                  sheet_length_mm, sheet_width_mm, thickness_mm):
         flash(f'Вече съществува идентичен материал с име "{display_name}".', 'danger')
@@ -2953,7 +2966,7 @@ def admin_add_material():
         key='pending',  # placeholder, replaced with a real unique key below
         display_name=display_name,
         cost_per_m2=round(cost_per_m2, 2),
-        cutting_speed_mm_per_min=round(cutting_speed_mm_per_min, 2),
+        cutting_speed_mm_per_min=round(cutting_speed_mm_per_min, 2) if cutting_speed_mm_per_min is not None else None,
         pierce_rate_per_min=round(pierce_rate_per_min, 2) if pierce_rate_per_min is not None else None,
         sheet_length_mm=sheet_length_mm,
         sheet_width_mm=sheet_width_mm,
@@ -4605,24 +4618,28 @@ def api_quick_create_material():
 
     material_type = _parse_material_type(request.form)
     brand = request.form.get('brand', '').strip() or None
+    # Rods are cut to length on a saw, never pierced or DXF-cut - no
+    # cutting/drill speed for them.
+    is_rod = material_type == 'rods'
 
     try:
         cost_per_m2 = float(request.form.get('cost_per_m2', ''))
-        cutting_speed_mm_per_min = float(request.form.get('cutting_speed_mm_per_min', ''))
-        # Rods are cut to length, never pierced - no drill/pierce speed for them.
-        pierce_rate_per_min = None if material_type == 'rods' else float(request.form.get('pierce_rate_per_min', ''))
+        cutting_speed_mm_per_min = None if is_rod else float(request.form.get('cutting_speed_mm_per_min', ''))
+        pierce_rate_per_min = None if is_rod else float(request.form.get('pierce_rate_per_min', ''))
         sheet_length_mm, sheet_width_mm, thickness_mm = _parse_sheet_dimensions(request.form)
         erp_number = _parse_erp_number(request.form)
     except ValueError:
         return jsonify({'status': 'error', 'message': 'Всички цени, размери и ERP № трябва да бъдат валидни числа.'}), 400
 
-    if cost_per_m2 < 0 or cutting_speed_mm_per_min <= 0 or (pierce_rate_per_min is not None and pierce_rate_per_min <= 0):
+    if cost_per_m2 < 0 or (cutting_speed_mm_per_min is not None and cutting_speed_mm_per_min <= 0) \
+            or (pierce_rate_per_min is not None and pierce_rate_per_min <= 0):
         return jsonify({'status': 'error', 'message': 'Цената не може да бъде отрицателна, а скоростите на рязане/пробиване трябва да бъдат положителни числа.'}), 400
 
     # Only a byte-for-byte resubmit (double click) is rejected - a difference
     # in any property (e.g. thickness) always makes a distinct catalog row,
     # even under the same name/brand.
-    if _material_variant_exists(display_name, material_type, brand, round(cost_per_m2, 2), round(cutting_speed_mm_per_min, 2),
+    if _material_variant_exists(display_name, material_type, brand, round(cost_per_m2, 2),
+                                 round(cutting_speed_mm_per_min, 2) if cutting_speed_mm_per_min is not None else None,
                                  round(pierce_rate_per_min, 2) if pierce_rate_per_min is not None else None,
                                  sheet_length_mm, sheet_width_mm, thickness_mm):
         return jsonify({'status': 'error', 'message': f'Вече съществува идентичен материал с име "{display_name}".'}), 400
@@ -4635,7 +4652,7 @@ def api_quick_create_material():
         key='pending',
         display_name=display_name,
         cost_per_m2=round(cost_per_m2, 2),
-        cutting_speed_mm_per_min=round(cutting_speed_mm_per_min, 2),
+        cutting_speed_mm_per_min=round(cutting_speed_mm_per_min, 2) if cutting_speed_mm_per_min is not None else None,
         pierce_rate_per_min=round(pierce_rate_per_min, 2) if pierce_rate_per_min is not None else None,
         sheet_length_mm=sheet_length_mm,
         sheet_width_mm=sheet_width_mm,

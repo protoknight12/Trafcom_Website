@@ -326,7 +326,7 @@
                 <label for="qm_cost_per_m2" id="qm_cost_per_m2_label">Цена на м² плоча (€)</label>
                 <input type="number" id="qm_cost_per_m2" step="0.01" min="0" name="cost_per_m2" required>
             </div>
-            <div class="form-group" style="margin-bottom: 15px;">
+            <div class="form-group" style="margin-bottom: 15px;" id="qm_cutting_speed_mm_per_min_group">
                 <label for="qm_cutting_speed_mm_per_min">Скорост на рязане (мм/мин)</label>
                 <input type="number" id="qm_cutting_speed_mm_per_min" step="0.01" min="0.01" name="cutting_speed_mm_per_min" required>
             </div>
@@ -401,17 +401,21 @@
         document.getElementById('qm_cost_per_m2_label').textContent =
             typeSelect.value === 'sheets' ? 'Цена на м² плоча (€)' : 'Цена на м² материал (€)';
 
-        // Rods are cut to length, never pierced - no drill/pierce speed for them.
-        const pierceGroup = document.getElementById('qm_pierce_rate_per_min_group');
-        const pierceInput = document.getElementById('qm_pierce_rate_per_min');
-        if (typeSelect.value === 'rods') {
-            pierceGroup.style.display = 'none';
-            pierceInput.required = false;
-            pierceInput.value = '';
-        } else {
-            pierceGroup.style.display = '';
-            pierceInput.required = true;
-        }
+        // Rods are cut to length on a saw, never pierced or DXF-cut - no
+        // cutting/drill speed for them.
+        const isRod = typeSelect.value === 'rods';
+        ['qm_cutting_speed_mm_per_min', 'qm_pierce_rate_per_min'].forEach(function (fieldId) {
+            const group = document.getElementById(fieldId + '_group');
+            const input = document.getElementById(fieldId);
+            if (isRod) {
+                group.style.display = 'none';
+                input.required = false;
+                input.value = '';
+            } else {
+                group.style.display = '';
+                input.required = true;
+            }
+        });
     }
 
     document.getElementById('qm_type').addEventListener('change', applyQuickMaterialDimensionLabels);

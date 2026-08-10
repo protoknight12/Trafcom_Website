@@ -112,10 +112,11 @@ def test_quick_create_material_same_name_different_thickness_both_created(admin_
         assert {r.thickness_mm for r in rows} == {2.0, 3.0}
 
 
-def test_quick_create_material_rods_no_pierce_rate_required(admin_client):
-    # Rods are cut to length, never pierced - no pierce_rate_per_min needed/stored.
+def test_quick_create_material_rods_no_speed_params_required(admin_client):
+    # Rods are cut to length on a saw, never pierced or DXF-cut - neither
+    # cutting_speed_mm_per_min nor pierce_rate_per_min is needed/stored.
     res = admin_client.post('/api/quick-create-material', data={
-        'display_name': 'QA Прът', 'type': 'rods', 'cost_per_m2': '10', 'cutting_speed_mm_per_min': '5',
+        'display_name': 'QA Прът', 'type': 'rods', 'cost_per_m2': '10',
     })
     assert res.status_code == 200, res.get_json()
     assert res.get_json()['status'] == 'success'
@@ -123,6 +124,7 @@ def test_quick_create_material_rods_no_pierce_rate_required(admin_client):
         m = MaterialPrice.query.filter_by(display_name='QA Прът').first()
         assert m is not None
         assert m.pierce_rate_per_min is None
+        assert m.cutting_speed_mm_per_min is None
 
 
 def test_quick_create_material_forbidden_for_worker(worker_client):

@@ -323,7 +323,7 @@
                     <label for="qm_cost_per_m2" id="qm_cost_per_m2_label">Цена на м² плоча (€)</label>
                     <input type="number" id="qm_cost_per_m2" step="0.01" min="0" name="cost_per_m2" required>
                 </div>
-                <div class="form-group" style="margin-bottom: 15px;">
+                <div class="form-group" style="margin-bottom: 15px;" id="qm_cutting_speed_mm_per_min_group">
                     <label for="qm_cutting_speed_mm_per_min">Скорост на рязане (мм/мин)</label>
                     <input type="number" id="qm_cutting_speed_mm_per_min" step="0.01" min="0.01" name="cutting_speed_mm_per_min" required>
                 </div>
@@ -544,17 +544,21 @@
         document.getElementById('qm_cost_per_m2_label').textContent =
             typeSelect.value === 'sheets' ? 'Цена на м² плоча (€)' : 'Цена на м² материал (€)';
 
-        // Rods are cut to length, never pierced - no drill/pierce speed for them.
-        const pierceGroup = document.getElementById('qm_pierce_rate_per_min_group');
-        const pierceInput = document.getElementById('qm_pierce_rate_per_min');
-        if (typeSelect.value === 'rods') {
-            pierceGroup.style.display = 'none';
-            pierceInput.required = false;
-            pierceInput.value = '';
-        } else {
-            pierceGroup.style.display = '';
-            pierceInput.required = true;
-        }
+        // Rods are cut to length on a saw, never pierced or DXF-cut - no
+        // cutting/drill speed for them.
+        const isRod = typeSelect.value === 'rods';
+        ['qm_cutting_speed_mm_per_min', 'qm_pierce_rate_per_min'].forEach(function (fieldId) {
+            const group = document.getElementById(fieldId + '_group');
+            const input = document.getElementById(fieldId);
+            if (isRod) {
+                group.style.display = 'none';
+                input.required = false;
+                input.value = '';
+            } else {
+                group.style.display = '';
+                input.required = true;
+            }
+        });
     }
 
     document.getElementById('qm_type').addEventListener('change', applyQuickMaterialDimensionLabels);
@@ -576,6 +580,7 @@
         const thicknessGroup = document.getElementById('dn_thickness_group');
         const thicknessLabel = document.querySelector('label[for=dn_thickness]');
         const pierceInput = document.getElementById('dn_material_pierce_rate_per_min');
+        const cuttingSpeedInput = document.getElementById('dn_material_cutting_speed_mm_per_min');
 
         if (type === 'material' && isNew) {
             const materialType = document.getElementById('dn_material_type').value;
@@ -589,12 +594,16 @@
                 thicknessGroup.style.display = 'none';
                 document.getElementById('dn_thickness').value = '';
             }
-            // Rods are cut to length, never pierced - no drill/pierce speed for them.
+            // Rods are cut to length on a saw, never pierced or DXF-cut - no
+            // cutting/drill speed for them.
             if (materialType === 'rods') {
                 pierceInput.style.display = 'none';
                 pierceInput.value = '';
+                cuttingSpeedInput.style.display = 'none';
+                cuttingSpeedInput.value = '';
             } else {
                 pierceInput.style.display = '';
+                cuttingSpeedInput.style.display = '';
             }
         } else {
             widthLabel.textContent = DN_DIMENSION_DEFAULT_LABELS.width;
@@ -602,6 +611,7 @@
             thicknessGroup.style.display = '';
             thicknessLabel.textContent = DN_DIMENSION_DEFAULT_LABELS.thickness;
             pierceInput.style.display = '';
+            cuttingSpeedInput.style.display = '';
         }
     }
 
@@ -762,11 +772,13 @@
         let costPerM2 = null, cuttingSpeed = null, pierceRate = null, materialType = null;
         if (type === 'material' && isNewItem) {
             costPerM2 = numOrNull('dn_material_cost_per_m2');
-            cuttingSpeed = numOrNull('dn_material_cutting_speed_mm_per_min');
             materialType = document.getElementById('dn_material_type').value;
-            // Rods are cut to length, never pierced - no drill/pierce speed for them.
-            pierceRate = materialType === 'rods' ? null : numOrNull('dn_material_pierce_rate_per_min');
-            if (costPerM2 === null || cuttingSpeed === null || (materialType !== 'rods' && pierceRate === null)) {
+            // Rods are cut to length on a saw, never pierced or DXF-cut - no
+            // cutting/drill speed required for them.
+            const isRod = materialType === 'rods';
+            cuttingSpeed = isRod ? null : numOrNull('dn_material_cutting_speed_mm_per_min');
+            pierceRate = isRod ? null : numOrNull('dn_material_pierce_rate_per_min');
+            if (costPerM2 === null || (!isRod && (cuttingSpeed === null || pierceRate === null))) {
                 alert('Моля въведете цена/м², скорост на рязане и скорост на пробиване за новия материал.');
                 return;
             }
