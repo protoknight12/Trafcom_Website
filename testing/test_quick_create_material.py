@@ -98,6 +98,33 @@ def test_quick_create_material_rejects_duplicate_name(admin_client):
     assert second.get_json()['status'] == 'error'
 
 
+def test_quick_create_material_same_name_different_thickness_both_created(admin_client):
+    # Same name/brand, different thickness - must NOT be treated as a duplicate
+    # (see _material_variant_exists: only a byte-for-byte resubmit is rejected).
+    base = {'display_name': 'QA Алуминий', 'brand': 'QA-Brand', 'cost_per_m2': '40', 'cutting_speed_mm_per_min': '5', 'pierce_rate_per_min': '0.5'}
+    res1 = admin_client.post('/api/quick-create-material', data={**base, 'thickness_mm': '2'})
+    res2 = admin_client.post('/api/quick-create-material', data={**base, 'thickness_mm': '3'})
+    assert res1.get_json()['status'] == 'success'
+    assert res2.get_json()['status'] == 'success', res2.get_json()
+    with flask_app.app_context():
+        rows = MaterialPrice.query.filter_by(display_name='QA Алуминий').all()
+        assert len(rows) == 2
+        assert {r.thickness_mm for r in rows} == {2.0, 3.0}
+
+
+def test_quick_create_material_rods_no_pierce_rate_required(admin_client):
+    # Rods are cut to length, never pierced - no pierce_rate_per_min needed/stored.
+    res = admin_client.post('/api/quick-create-material', data={
+        'display_name': 'QA Прът', 'type': 'rods', 'cost_per_m2': '10', 'cutting_speed_mm_per_min': '5',
+    })
+    assert res.status_code == 200, res.get_json()
+    assert res.get_json()['status'] == 'success'
+    with flask_app.app_context():
+        m = MaterialPrice.query.filter_by(display_name='QA Прът').first()
+        assert m is not None
+        assert m.pierce_rate_per_min is None
+
+
 def test_quick_create_material_forbidden_for_worker(worker_client):
     res = worker_client.post('/api/quick-create-material', data={
         'display_name': 'QA Worker Material', 'cost_per_m2': '1', 'cutting_speed_mm_per_min': '1', 'pierce_rate_per_min': '0.1',

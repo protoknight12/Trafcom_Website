@@ -194,7 +194,9 @@ class MaterialPrice(db.Model):
     display_name = db.Column(db.String(100), nullable=False)
     cost_per_m2 = db.Column(db.Float, nullable=False)
     cutting_speed_mm_per_min = db.Column(db.Float, nullable=False)
-    pierce_rate_per_min = db.Column(db.Float, nullable=False)
+    # Nullable: 'rods' stock is cut to length, never pierced, so rod
+    # materials carry no pierce rate at all (see _parse_material_type callers).
+    pierce_rate_per_min = db.Column(db.Float, nullable=True)
     # Standard stock sheet size this material entry represents (mm). Purely
     # informational catalog data - pricing still runs off the cut part's own
     # geometry (calculate_cnc_price), not off these. Optional/nullable since
@@ -2222,8 +2224,11 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
         ).first()
         if existing:
             return existing
-        if cost_per_m2 is None or cutting_speed_mm_per_min is None or pierce_rate_per_min is None:
+        # Rods are cut to length, never pierced - no drill/pierce speed required for them.
+        if cost_per_m2 is None or cutting_speed_mm_per_min is None or (material_type != 'rods' and pierce_rate_per_min is None):
             return None
+        if material_type == 'rods':
+            pierce_rate_per_min = None
         new_row = MaterialPrice(
             key='pending', display_name=name, cost_per_m2=cost_per_m2, cutting_speed_mm_per_min=cutting_speed_mm_per_min,
             pierce_rate_per_min=pierce_rate_per_min, sheet_width_mm=width, sheet_length_mm=height,
@@ -2798,6 +2803,22 @@ def _parse_material_type(form):
     return raw if raw in MATERIAL_TYPE_LABELS else 'sheets'
 
 
+def _material_variant_exists(display_name, material_type, brand, cost_per_m2, cutting_speed_mm_per_min,
+                              pierce_rate_per_min, sheet_length_mm, sheet_width_mm, thickness_mm):
+    """
+    Two materials only count as the same catalog row if every property
+    matches - name/brand alone are not enough. This lets e.g. a 2mm and a
+    3mm sheet of the same aluminum (same name, same brand) both get created
+    as distinct MaterialPrice rows; only a byte-for-byte resubmit (double
+    click) is rejected as a duplicate.
+    """
+    return MaterialPrice.query.filter_by(
+        display_name=display_name, type=material_type, brand=brand, cost_per_m2=cost_per_m2,
+        cutting_speed_mm_per_min=cutting_speed_mm_per_min, pierce_rate_per_min=pierce_rate_per_min,
+        sheet_length_mm=sheet_length_mm, sheet_width_mm=sheet_width_mm, thickness_mm=thickness_mm
+    ).first() is not None
+
+
 def _erp_number_conflict(erp_number, exclude_type=None, exclude_id=None):
     """
     ERP № must be unique across Detail/Product/MaterialPrice combined, not
@@ -2840,18 +2861,20 @@ def admin_update_material(key):
         return redirect(url_for('dashboard'))
 
     material = MaterialPrice.query.filter_by(key=key).first_or_404()
+    material_type = _parse_material_type(request.form)
 
     try:
         cost_per_m2 = float(request.form.get('cost_per_m2', ''))
         cutting_speed_mm_per_min = float(request.form.get('cutting_speed_mm_per_min', ''))
-        pierce_rate_per_min = float(request.form.get('pierce_rate_per_min', ''))
+        # Rods are cut to length, never pierced - no drill/pierce speed for them.
+        pierce_rate_per_min = None if material_type == 'rods' else float(request.form.get('pierce_rate_per_min', ''))
         sheet_length_mm, sheet_width_mm, thickness_mm = _parse_sheet_dimensions(request.form)
         erp_number = _parse_erp_number(request.form)
     except ValueError:
         flash('Всички цени, размери и ERP № трябва да бъдат валидни числа.', 'danger')
         return redirect(url_for('admin_materials'))
 
-    if cost_per_m2 < 0 or cutting_speed_mm_per_min <= 0 or pierce_rate_per_min <= 0:
+    if cost_per_m2 < 0 or cutting_speed_mm_per_min <= 0 or (pierce_rate_per_min is not None and pierce_rate_per_min <= 0):
         flash('Цената не може да бъде отрицателна, а скоростите на рязане/пробиване трябва да бъдат положителни числа.', 'danger')
         return redirect(url_for('admin_materials'))
 
@@ -2864,7 +2887,7 @@ def admin_update_material(key):
     # format rather than accumulating long float tails over repeated edits.
     material.cost_per_m2 = round(cost_per_m2, 2)
     material.cutting_speed_mm_per_min = round(cutting_speed_mm_per_min, 2)
-    material.pierce_rate_per_min = round(pierce_rate_per_min, 2)
+    material.pierce_rate_per_min = round(pierce_rate_per_min, 2) if pierce_rate_per_min is not None else None
     material.sheet_length_mm = sheet_length_mm
     material.sheet_width_mm = sheet_width_mm
     material.thickness_mm = thickness_mm
@@ -2890,25 +2913,31 @@ def admin_add_material():
         flash('Моля въведете име на материала.', 'danger')
         return redirect(url_for('admin_materials'))
 
-    if MaterialPrice.query.filter_by(display_name=display_name).first():
-        # Lets your boss add e.g. "Алуминий 2мм" and "Алуминий 10мм" as
-        # distinct priced entries, while still catching accidental exact
-        # duplicates of the same name.
-        flash(f'Вече съществува материал с име "{display_name}".', 'danger')
-        return redirect(url_for('admin_materials'))
+    material_type = _parse_material_type(request.form)
+    brand = request.form.get('brand', '').strip() or None
 
     try:
         cost_per_m2 = float(request.form.get('cost_per_m2', ''))
         cutting_speed_mm_per_min = float(request.form.get('cutting_speed_mm_per_min', ''))
-        pierce_rate_per_min = float(request.form.get('pierce_rate_per_min', ''))
+        # Rods are cut to length, never pierced - no drill/pierce speed for them.
+        pierce_rate_per_min = None if material_type == 'rods' else float(request.form.get('pierce_rate_per_min', ''))
         sheet_length_mm, sheet_width_mm, thickness_mm = _parse_sheet_dimensions(request.form)
         erp_number = _parse_erp_number(request.form)
     except ValueError:
         flash('Всички цени, размери и ERP № трябва да бъдат валидни числа.', 'danger')
         return redirect(url_for('admin_materials'))
 
-    if cost_per_m2 < 0 or cutting_speed_mm_per_min <= 0 or pierce_rate_per_min <= 0:
+    if cost_per_m2 < 0 or cutting_speed_mm_per_min <= 0 or (pierce_rate_per_min is not None and pierce_rate_per_min <= 0):
         flash('Цената не може да бъде отрицателна, а скоростите на рязане/пробиване трябва да бъдат положителни числа.', 'danger')
+        return redirect(url_for('admin_materials'))
+
+    # Only a byte-for-byte resubmit (double click) is rejected - a difference
+    # in any property (e.g. thickness) always makes a distinct catalog row,
+    # even under the same name/brand.
+    if _material_variant_exists(display_name, material_type, brand, round(cost_per_m2, 2), round(cutting_speed_mm_per_min, 2),
+                                 round(pierce_rate_per_min, 2) if pierce_rate_per_min is not None else None,
+                                 sheet_length_mm, sheet_width_mm, thickness_mm):
+        flash(f'Вече съществува идентичен материал с име "{display_name}".', 'danger')
         return redirect(url_for('admin_materials'))
 
     conflict = _erp_number_conflict(erp_number)
@@ -2925,14 +2954,14 @@ def admin_add_material():
         display_name=display_name,
         cost_per_m2=round(cost_per_m2, 2),
         cutting_speed_mm_per_min=round(cutting_speed_mm_per_min, 2),
-        pierce_rate_per_min=round(pierce_rate_per_min, 2),
+        pierce_rate_per_min=round(pierce_rate_per_min, 2) if pierce_rate_per_min is not None else None,
         sheet_length_mm=sheet_length_mm,
         sheet_width_mm=sheet_width_mm,
         thickness_mm=thickness_mm,
         erp_number=erp_number,
         code_number=request.form.get('code_number', '').strip() or None,
-        type=_parse_material_type(request.form),
-        brand=request.form.get('brand', '').strip() or None
+        type=material_type,
+        brand=brand
     )
     db.session.add(new_material)
     db.session.flush()  # assigns new_material.id without a full commit yet
@@ -3255,6 +3284,11 @@ def admin_add_detail():
         flash('Невалиден формат! Приемат се само .dxf файлове.', 'danger')
         return redirect(url_for('admin_details'))
 
+    pdf_file = request.files.get('pdf_file')
+    if pdf_file and pdf_file.filename and not pdf_file.filename.lower().endswith('.pdf'):
+        flash('Невалиден формат за референтен файл! Приемат се само .pdf файлове.', 'danger')
+        return redirect(url_for('admin_details'))
+
     # Saved straight into DETAIL_DXF_FOLDER (not the scratch UPLOAD_FOLDER) so
     # the file survives past this request - see detail_dxf_dashboard() /
     # DetailDxfFile. Only removed again below if something fails.
@@ -3285,6 +3319,12 @@ def admin_add_detail():
             detail_id=new_detail.id, filename=stored_filename, original_filename=original_filename,
             uploaded_by_id=current_user.id
         ))
+        if pdf_file and pdf_file.filename:
+            pdf_stored_filename = _save_upload(pdf_file, app.config['DETAIL_DXF_FOLDER'], allowed_extensions={'pdf'})
+            db.session.add(DetailDxfFile(
+                detail_id=new_detail.id, filename=pdf_stored_filename,
+                original_filename=secure_filename(pdf_file.filename), uploaded_by_id=current_user.id
+            ))
         # Optional extra services (mill, deburr, ...) staged alongside the
         # base cut on the same form - see admin_details.html's operations
         # cart and _add_operations_from_rows().
@@ -4427,6 +4467,10 @@ def api_quick_create_detail():
     if not file.filename.lower().endswith('.dxf'):
         return jsonify({'status': 'error', 'message': 'Невалиден формат! Приемат се само .dxf файлове.'}), 400
 
+    pdf_file = request.files.get('pdf_file')
+    if pdf_file and pdf_file.filename and not pdf_file.filename.lower().endswith('.pdf'):
+        return jsonify({'status': 'error', 'message': 'Невалиден формат за референтен файл! Приемат се само .pdf файлове.'}), 400
+
     temp_path = None
     try:
         filename = secure_filename(file.filename)
@@ -4447,6 +4491,13 @@ def api_quick_create_detail():
             erp_number=erp_number, code_number=code_number, cutting_service_id=service_id
         )
         db.session.add(new_detail)
+        db.session.flush()  # assigns new_detail.id for the optional DetailDxfFile below
+        if pdf_file and pdf_file.filename:
+            pdf_stored_filename = _save_upload(pdf_file, app.config['DETAIL_DXF_FOLDER'], allowed_extensions={'pdf'})
+            db.session.add(DetailDxfFile(
+                detail_id=new_detail.id, filename=pdf_stored_filename,
+                original_filename=secure_filename(pdf_file.filename), uploaded_by_id=current_user.id
+            ))
         db.session.commit()
 
         return jsonify({
@@ -4552,20 +4603,29 @@ def api_quick_create_material():
     if not display_name:
         return jsonify({'status': 'error', 'message': 'Моля въведете име на материала.'}), 400
 
-    if MaterialPrice.query.filter_by(display_name=display_name).first():
-        return jsonify({'status': 'error', 'message': f'Вече съществува материал с име "{display_name}".'}), 400
+    material_type = _parse_material_type(request.form)
+    brand = request.form.get('brand', '').strip() or None
 
     try:
         cost_per_m2 = float(request.form.get('cost_per_m2', ''))
         cutting_speed_mm_per_min = float(request.form.get('cutting_speed_mm_per_min', ''))
-        pierce_rate_per_min = float(request.form.get('pierce_rate_per_min', ''))
+        # Rods are cut to length, never pierced - no drill/pierce speed for them.
+        pierce_rate_per_min = None if material_type == 'rods' else float(request.form.get('pierce_rate_per_min', ''))
         sheet_length_mm, sheet_width_mm, thickness_mm = _parse_sheet_dimensions(request.form)
         erp_number = _parse_erp_number(request.form)
     except ValueError:
         return jsonify({'status': 'error', 'message': 'Всички цени, размери и ERP № трябва да бъдат валидни числа.'}), 400
 
-    if cost_per_m2 < 0 or cutting_speed_mm_per_min <= 0 or pierce_rate_per_min <= 0:
+    if cost_per_m2 < 0 or cutting_speed_mm_per_min <= 0 or (pierce_rate_per_min is not None and pierce_rate_per_min <= 0):
         return jsonify({'status': 'error', 'message': 'Цената не може да бъде отрицателна, а скоростите на рязане/пробиване трябва да бъдат положителни числа.'}), 400
+
+    # Only a byte-for-byte resubmit (double click) is rejected - a difference
+    # in any property (e.g. thickness) always makes a distinct catalog row,
+    # even under the same name/brand.
+    if _material_variant_exists(display_name, material_type, brand, round(cost_per_m2, 2), round(cutting_speed_mm_per_min, 2),
+                                 round(pierce_rate_per_min, 2) if pierce_rate_per_min is not None else None,
+                                 sheet_length_mm, sheet_width_mm, thickness_mm):
+        return jsonify({'status': 'error', 'message': f'Вече съществува идентичен материал с име "{display_name}".'}), 400
 
     conflict = _erp_number_conflict(erp_number)
     if conflict:
@@ -4576,14 +4636,14 @@ def api_quick_create_material():
         display_name=display_name,
         cost_per_m2=round(cost_per_m2, 2),
         cutting_speed_mm_per_min=round(cutting_speed_mm_per_min, 2),
-        pierce_rate_per_min=round(pierce_rate_per_min, 2),
+        pierce_rate_per_min=round(pierce_rate_per_min, 2) if pierce_rate_per_min is not None else None,
         sheet_length_mm=sheet_length_mm,
         sheet_width_mm=sheet_width_mm,
         thickness_mm=thickness_mm,
         erp_number=erp_number,
         code_number=request.form.get('code_number', '').strip() or None,
-        type=_parse_material_type(request.form),
-        brand=request.form.get('brand', '').strip() or None
+        type=material_type,
+        brand=brand
     )
     db.session.add(new_material)
     db.session.flush()

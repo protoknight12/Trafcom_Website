@@ -83,7 +83,7 @@
                 <label for="new_cutting_speed_mm_per_min">Скорост на рязане (мм/мин)</label>
                 <input type="number" id="new_cutting_speed_mm_per_min" step="0.01" min="0.01" name="cutting_speed_mm_per_min" placeholder="напр. 1500" required>
             </div>
-            <div class="form-group">
+            <div class="form-group" id="new_pierce_rate_per_min_group">
                 <label for="new_pierce_rate_per_min">Скорост на пробиване (пробождания/мин)</label>
                 <input type="number" id="new_pierce_rate_per_min" step="0.01" min="0.01" name="pierce_rate_per_min" placeholder="напр. 40" required>
             </div>
@@ -159,7 +159,9 @@
                             <input type="number" step="0.01" min="0.01" name="cutting_speed_mm_per_min"
                                    value="{{ '%.2f'|format(material.cutting_speed_mm_per_min) }}" class="material-price-input" required>
                             <input type="number" step="0.01" min="0.01" name="pierce_rate_per_min"
-                                   value="{{ '%.2f'|format(material.pierce_rate_per_min) }}" class="material-price-input" required>
+                                   value="{{ '%.2f'|format(material.pierce_rate_per_min) if material.pierce_rate_per_min is not none else '' }}"
+                                   class="material-price-input" {{ 'required' if material.type != 'rods' else '' }}
+                                   style="{{ 'display:none;' if material.type == 'rods' else '' }}">
                             <input type="number" step="1" min="0" name="sheet_length_mm"
                                    value="{{ material.sheet_length_mm|int if material.sheet_length_mm is not none else '' }}"
                                    class="material-price-input" placeholder="мм">
@@ -234,10 +236,39 @@
         // is sheet-specific wording.
         document.getElementById('new_cost_per_m2_label').textContent =
             typeSelect.value === 'sheets' ? 'Цена на м² плоча (€)' : 'Цена на м² материал (€)';
+
+        // Rods are cut to length, never pierced - no drill/pierce speed for them.
+        const pierceGroup = document.getElementById('new_pierce_rate_per_min_group');
+        const pierceInput = document.getElementById('new_pierce_rate_per_min');
+        if (typeSelect.value === 'rods') {
+            pierceGroup.style.display = 'none';
+            pierceInput.required = false;
+            pierceInput.value = '';
+        } else {
+            pierceGroup.style.display = '';
+            pierceInput.required = true;
+        }
     }
 
     document.getElementById('new_type').addEventListener('change', applyMaterialDimensionLabels);
     applyMaterialDimensionLabels();
+
+    // Same rod/pierce-speed rule for the existing-materials edit rows below,
+    // whose "type" <select> can be changed away from the group it's shown under.
+    function applyRowPierceVisibility(selectEl) {
+        const pierceInput = selectEl.closest('form').querySelector('input[name="pierce_rate_per_min"]');
+        if (!pierceInput) return;
+        if (selectEl.value === 'rods') {
+            pierceInput.style.display = 'none';
+            pierceInput.required = false;
+        } else {
+            pierceInput.style.display = '';
+            pierceInput.required = true;
+        }
+    }
+    document.querySelectorAll('.material-row-form select[name="type"]').forEach(function (sel) {
+        sel.addEventListener('change', function () { applyRowPierceVisibility(sel); });
+    });
 </script>
 
 </body>
