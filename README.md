@@ -25,8 +25,16 @@ orders through production tracking. The UI is in Bulgarian.
 ## Features
 
 - **DXF pricing** — upload a DXF file, get area/cut-length/pierce-count
-  extracted from the geometry and priced against per-material rates plus a
-  flat setup fee.
+  extracted from the geometry and run through a time-based pricing engine:
+  material supplies the raw-stock area cost plus its cutting/pierce speed,
+  and one or more billable `Service`s (see below) supply the EUR/hour
+  rate — a job can be priced against several services at once (e.g. a
+  combined cut+engrave pass), plus a flat setup fee.
+- **Services & Operations** — admins define billable `Service` types (e.g.
+  laser cutting, 3-axis milling) with an EUR/hour rate and the machines
+  that can run them; extra post-processing steps on a catalog `Detail`
+  (`Operation` — milling, deburring, welding, ...) are costed by
+  duration × the linked service's rate.
 - **Catalog** — admin-curated `Detail` (single part) and `Product`
   (assembled from multiple Details + extra costs like paint/assembly, with
   markup) records, each with stock tracking and a printable barcode label.
@@ -52,7 +60,10 @@ orders through production tracking. The UI is in Bulgarian.
   the geometry extracted from them.
 - **Live power monitoring** — a real-time dashboard (`/admin/power`)
   polling Shelly energy meters on the shop LAN (both Gen1 and Gen2 devices
-  supported) with historical charts; see
+  supported), plus a background poller that logs readings locally every
+  minute so historical charts are available for both generations — not
+  just the roughly 45-day on-device retention Gen2 meters offer natively;
+  see
   [`docs/SHELLY_API.md`](https://github.com/protoknight12/Trafcom_Website/blob/main/docs/SHELLY_API.md).
 
 ## Requirements
@@ -109,6 +120,7 @@ set up the database).
 
 - [`app.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/app.py) — models, DXF geometry/pricing logic, and all routes (single file)
 - [`wsgi.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/wsgi.py) — production entrypoint (gunicorn/waitress)
+- [`gunicorn.conf.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/gunicorn.conf.py) — bumps the worker timeout to 120s (`/admin/power/history` can take ~25s per day-chunk fetched, close to gunicorn's 30s default)
 - [`requirements.txt`](https://github.com/protoknight12/Trafcom_Website/blob/main/requirements.txt)
 - [`.env.example`](https://github.com/protoknight12/Trafcom_Website/blob/main/.env.example)
 - `uploads/` — private scratch folder for in-flight DXF uploads (not on GitHub — gitignored)
@@ -125,6 +137,7 @@ set up the database).
   - [`admin_missing_stock.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_missing_stock.html)
   - [`admin_power.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_power.html)
   - [`admin_products.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_products.html)
+  - [`admin_services.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_services.html) — manage billable `Service` types (EUR/hour rate, linked machines)
   - [`admin_users.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_users.html)
   - [`certificate.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/certificate.html)
   - [`contact.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/contact.html)
@@ -179,8 +192,9 @@ set up the database).
   - [`backfill_service_machine_cards.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/migration/backfill_service_machine_cards.py)
   - [`seed_real_machines.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/migration/seed_real_machines.py)
   - [`seed_test_data.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/migration/seed_test_data.py)
-  - ...plus the various `migrate_*.py` schema-change scripts (including the
-    Shelly `shelly_device_machine` many-to-many tables) —
+  - ...plus the various `migrate_*.py` schema-change and `backfill_*.py`
+    data-backfill scripts (Shelly device/reading tables, the services
+    pricing refactor, ...) —
     [browse the full folder](https://github.com/protoknight12/Trafcom_Website/tree/main/migration)
 
 </details>
@@ -189,6 +203,7 @@ set up the database).
 <summary><a href="https://github.com/protoknight12/Trafcom_Website/tree/main/testing"><code>testing/</code></a> — test scripts (see below)</summary>
 
   - [`test_label_barcode.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_label_barcode.py)
+  - [`test_cnc_pricing_engine.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_cnc_pricing_engine.py)
   - [`test_sheet_dimensions.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_sheet_dimensions.py)
   - [`test_rate_limiting.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_rate_limiting.py)
   - [`test_delivery_note_stock.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_delivery_note_stock.py)
@@ -203,6 +218,8 @@ set up the database).
   - [`test_shelly_status.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_shelly_status.py)
   - [`test_shelly_history_aggregation.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_shelly_history_aggregation.py)
   - [`test_shelly_device_routes.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_shelly_device_routes.py)
+  - [`test_shelly_reading_log.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_shelly_reading_log.py)
+  - [`test_admin_power_history_gen1.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_admin_power_history_gen1.py)
 
 </details>
 

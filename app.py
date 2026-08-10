@@ -2420,7 +2420,7 @@ def _service_section_titles():
     return [r[0] for r in rows]
 
 
-MACHINE_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp', 'gif'}
+IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp', 'gif'}
 # Only filenames our own upload code produces look like this - the seeded
 # cards' images (e.g. "dmg-mori-dmu75.jpg") never do, and several seeded
 # cards on different pages deliberately share the same committed image file,
@@ -2428,18 +2428,17 @@ MACHINE_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp', 'gif'}
 _UPLOADED_IMAGE_PREFIX_RE = re.compile(r'^[0-9a-f]{32}_')
 
 
-def _save_machine_card_image(file):
-    """Saves an uploaded machine-card image into MACHINE_IMAGES_FOLDER with a
-    collision-safe filename; returns the saved filename, or None if no valid
-    image file was submitted."""
+def _save_upload(file, folder, allowed_extensions=None):
+    """Saves an uploaded file into folder with a collision-safe uuid-prefixed
+    filename; returns the saved filename, or None if no file was submitted
+    (or, when allowed_extensions is given, its extension isn't in it)."""
     if not file or file.filename == '':
         return None
     ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else ''
-    if ext not in MACHINE_IMAGE_EXTENSIONS:
+    if allowed_extensions is not None and ext not in allowed_extensions:
         return None
-    filename = secure_filename(file.filename)
-    unique_filename = f"{uuid.uuid4().hex}_{filename}"
-    file.save(os.path.join(app.config['MACHINE_IMAGES_FOLDER'], unique_filename))
+    unique_filename = f"{uuid.uuid4().hex}_{secure_filename(file.filename)}"
+    file.save(os.path.join(folder, unique_filename))
     return unique_filename
 
 
@@ -2499,7 +2498,7 @@ def create_machine_card():
         section_title=request.form.get('section_title', '').strip() or None if page == 'services' and kind == 'machine' else None,
         specs_text=request.form.get('specs_text', '').strip() or None,
         description=request.form.get('description', '').strip() or None,
-        image_filename=_save_machine_card_image(request.files.get('image')),
+        image_filename=_save_upload(request.files.get('image'), app.config['MACHINE_IMAGES_FOLDER'], IMAGE_EXTENSIONS),
     )
     db.session.add(card)
     db.session.commit()
@@ -2558,7 +2557,7 @@ def update_machine_card(card_id):
     card.specs_text = request.form.get('specs_text', '').strip() or None
     card.description = request.form.get('description', '').strip() or None
 
-    new_image_filename = _save_machine_card_image(request.files.get('image'))
+    new_image_filename = _save_upload(request.files.get('image'), app.config['MACHINE_IMAGES_FOLDER'], IMAGE_EXTENSIONS)
     if new_image_filename:
         # Only ever delete files our own upload code produced - several
         # seeded cards deliberately share the same committed image file, so
@@ -2899,19 +2898,12 @@ def admin_product_upload_image(product_id):
 
     files = request.files.getlist('images')
     uploaded_count = 0
-    allowed_extensions = {'png', 'jpg', 'jpeg', 'webp', 'gif'}
 
     for file in files:
         if file and file.filename != '':
-            ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else ''
-            if ext in allowed_extensions:
-                filename = secure_filename(file.filename)
-                unique_filename = f"{uuid.uuid4().hex}_{filename}"
-                file_path = os.path.join(app.config['PRODUCT_IMAGES_FOLDER'], unique_filename)
-                file.save(file_path)
-
-                new_img = ProductImage(product_id=product.id, filename=unique_filename)
-                db.session.add(new_img)
+            unique_filename = _save_upload(file, app.config['PRODUCT_IMAGES_FOLDER'], IMAGE_EXTENSIONS)
+            if unique_filename:
+                db.session.add(ProductImage(product_id=product.id, filename=unique_filename))
                 uploaded_count += 1
             else:
                 flash(f'Невалиден формат на файла: {file.filename}. Разрешени са само изображения.', 'danger')
@@ -3035,9 +3027,10 @@ def admin_services():
 
 def _selected_machines(form):
     """Machine rows picked in a <select multiple name="machine_ids">, ignoring
-    any non-numeric/unknown ids rather than raising - see admin_add_service()/
-    admin_update_service()."""
-    ids = [int(v) for v in form.getlist('machine_ids') if v.isdigit()]
+    any unknown ids rather than raising - see admin_add_service()/
+    admin_update_service(). See _parse_machine_ids() for the strict variant
+    used by the power-device routes, which reject an unknown id instead."""
+    ids = _parse_machine_ids(form)
     return Machine.query.filter(Machine.id.in_(ids)).all() if ids else []
 
 
@@ -3290,8 +3283,7 @@ def upload_detail_dxf(detail_id):
         return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
     original_filename = secure_filename(file.filename)
-    stored_filename = f"{uuid.uuid4().hex}_{original_filename}"
-    file.save(os.path.join(app.config['DETAIL_DXF_FOLDER'], stored_filename))
+    stored_filename = _save_upload(file, app.config['DETAIL_DXF_FOLDER'])
     db.session.add(DetailDxfFile(
         detail_id=detail.id, filename=stored_filename, original_filename=original_filename,
         uploaded_by_id=current_user.id
@@ -5118,15 +5110,18 @@ def admin_power():
 def _parse_machine_ids(form):
     """
     Multi-select/checkbox field 'machine_ids' -> a de-duplicated list of int
-    Machine ids, in the order submitted. No entries selected is a normal,
-    valid "no machine linked yet" state, not an error - returns [].
+    Machine ids, in the order submitted, ignoring blank/non-numeric entries.
+    No entries selected is a normal, valid "no machine linked yet" state,
+    not an error - returns []. Shared by _selected_machines() (lenient - see
+    its docstring) and the power-device routes below, which pair this with
+    _resolve_machines_or_none() for strict validation instead.
     """
     ids = []
     for raw in form.getlist('machine_ids'):
         raw = (raw or '').strip()
-        if raw and raw not in ids:
-            ids.append(raw)
-    return [int(i) for i in ids]
+        if raw.isdigit() and int(raw) not in ids:
+            ids.append(int(raw))
+    return ids
 
 
 def _resolve_machines_or_none(machine_ids):
