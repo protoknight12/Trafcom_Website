@@ -166,13 +166,14 @@
                                    style="{{ 'display:none;' if material.type == 'rods' else '' }}">
                             <input type="number" step="1" min="0" name="sheet_length_mm"
                                    value="{{ material.sheet_length_mm|int if material.sheet_length_mm is not none else '' }}"
-                                   class="material-price-input" placeholder="мм">
+                                   class="material-price-input" placeholder="{{ material_dimension_labels(material.type)[0] or 'мм' }}">
                             <input type="number" step="1" min="0" name="sheet_width_mm"
                                    value="{{ material.sheet_width_mm|int if material.sheet_width_mm is not none else '' }}"
-                                   class="material-price-input" placeholder="мм">
+                                   class="material-price-input" placeholder="{{ material_dimension_labels(material.type)[1] or 'мм' }}">
                             <input type="number" step="0.1" min="0" name="thickness_mm"
                                    value="{{ material.thickness_mm if material.thickness_mm is not none else '' }}"
-                                   class="material-price-input" placeholder="мм">
+                                   class="material-price-input" placeholder="{{ material_dimension_labels(material.type)[2] or 'мм' }}"
+                                   style="{{ 'display:none;' if material_dimension_labels(material.type)[2] is none else '' }}">
                             <input type="number" name="erp_number" value="{{ material.erp_number or '' }}"
                                    class="material-price-input" placeholder="автоматично">
                             <input type="text" name="code_number" value="{{ material.code_number or '' }}"
@@ -260,7 +261,12 @@
     applyMaterialDimensionLabels();
 
     // Same rod/speed rule for the existing-materials edit rows below, whose
-    // "type" <select> can be changed away from the group it's shown under.
+    // "type" <select> can be changed away from the group it's shown under -
+    // also relabels (via placeholder, these rows have no <label>s) and hides
+    // the 3 generic dimension inputs, same MATERIAL_DIMENSION_FIELD_LABELS
+    // used above for the "add material" form.
+    const ROW_DIMENSION_FIELD_NAMES = ['sheet_length_mm', 'sheet_width_mm', 'thickness_mm'];
+
     function applyRowSpeedVisibility(selectEl) {
         const form = selectEl.closest('form');
         const isRod = selectEl.value === 'rods';
@@ -269,6 +275,18 @@
             if (!input) return;
             input.style.display = isRod ? 'none' : '';
             input.required = !isRod;
+        });
+
+        const labels = MATERIAL_DIMENSION_FIELD_LABELS[selectEl.value] || MATERIAL_DIMENSION_FIELD_LABELS.sheets;
+        ROW_DIMENSION_FIELD_NAMES.forEach(function (name, i) {
+            const input = form.querySelector('input[name="' + name + '"]');
+            if (!input) return;
+            if (labels[i]) {
+                input.style.display = '';
+                input.placeholder = labels[i];
+            } else {
+                input.style.display = 'none';
+            }
         });
     }
     document.querySelectorAll('.material-row-form select[name="type"]').forEach(function (sel) {

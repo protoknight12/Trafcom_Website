@@ -176,21 +176,22 @@
     <section class="admin-card">
         <h3>Материал и размери</h3>
         <p class="section-subtitle">
-            Смяна на материала или ръчна корекция на размерите (мм) на детайла - без да се качва нов DXF файл.
+            Смяна на материала или ръчна корекция на количеството използван материал за този детайл - без да се
+            качва нов DXF файл. Ширината/височината (или диаметър/дължина, според типа материал) са това, което
+            влиза в изчисляването на цената (площ материал), не размерите на самия материал в каталога.
             Дължината на рязане и броят пробождания остават както са изчислени от оригиналния DXF; цената се
-            преизчислява само спрямо новия материал/размери.
+            преизчислява само спрямо новия материал/количество.
         </p>
         <form action="{{ url_for('admin_update_detail_material', detail_id=detail.id) }}" method="POST" class="admin-form">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="material_material">Материал</label>
-                <select id="material_material" name="material" onchange="updateDetailMaterialDimensionField()">
+                <select id="material_material" name="material" onchange="applyDetailMaterialDimensionLabels()">
                     {% for type_key, group in materials|groupby('type') %}
                     <optgroup label="{{ material_type_label(type_key) }}">
                         {% for material in group %}
                         <option value="{{ material.key }}" data-type="{{ material.type }}"
                                 data-thickness="{{ material.thickness_mm if material.thickness_mm is not none else '' }}"
-                                data-diameter="{{ material.sheet_width_mm if material.sheet_width_mm is not none else '' }}"
                                 {% if material.key == detail.material_key %}selected{% endif %}>{{ format_material_option(material) }}</option>
                         {% endfor %}
                     </optgroup>
@@ -198,7 +199,7 @@
                 </select>
             </div>
             <div class="form-group">
-                <label for="material_width">Ширина (мм)</label>
+                <label for="material_width" id="material_width_label">Ширина (мм)</label>
                 <input type="number" id="material_width" name="width" step="0.01" min="0" value="{{ detail.width }}" required>
             </div>
             <div class="form-group">
@@ -218,57 +219,43 @@
     </section>
     </div>
     <script>
-        // Same per-type "3rd dimension" labels as admin_materials.html's
+        // Same per-type dimension labels as admin_materials.html's
         // MATERIAL_DIMENSION_FIELD_LABELS (mirrors MATERIAL_DIMENSION_LABELS
-        // in app.py) - a rod's extra dimension is its diameter, not a wall
-        // thickness, and "other" has no meaningful 3rd dimension at all, so
-        // the field hides instead of showing a meaningless label.
-        const DETAIL_THICKNESS_LABELS = {
-            sheets: 'Дебелина (мм)',
-            rods: 'Диаметър (мм)',
-            pipes: 'Дебелина на стената (мм)',
-            profiles: 'Дебелина на стената (мм)',
-            other: null,
+        // in app.py): [length_label, width_label, thickness_label]. Width/
+        // height here are the two fields that actually feed calculate_cnc_price
+        // (area = width * height), so a rod's price-driving fields are
+        // labelled Диаметър/Дължина instead of Ширина/Височина; the 3rd field
+        // is purely informational (Detail.thickness_mm, never priced) and
+        // hides when the type has no such concept (rods/other).
+        const DETAIL_DIMENSION_LABELS = {
+            sheets: ['Ширина (мм)', 'Височина (мм)', 'Дебелина (мм)'],
+            rods: ['Диаметър (мм)', 'Дължина (мм)', null],
+            pipes: ['Външен диаметър (мм)', 'Дължина (мм)', 'Дебелина на стената (мм)'],
+            profiles: ['Ширина (мм)', 'Дължина (мм)', 'Дебелина на стената (мм)'],
+            other: ['Ширина (мм)', 'Височина (мм)', null],
         };
-
-        // Rods store their catalog diameter in MaterialPrice.sheet_width_mm,
-        // not thickness_mm (see MATERIAL_DIMENSION_LABELS in app.py) - this
-        // picks the right source attribute for the convenience-default value.
-        function detailDimensionDefault(option) {
-            return option.dataset.type === 'rods' ? option.dataset.diameter : option.dataset.thickness;
-        }
 
         // Shows/hides + relabels the fields for whichever material is
         // currently selected, without touching values - used on initial page
         // load so the already-saved detail.width/height/thickness_mm aren't clobbered.
-        function applyDetailThicknessVisibility() {
+        function applyDetailMaterialDimensionLabels() {
             const select = document.getElementById('material_material');
             const option = select.options[select.selectedIndex];
+            const labels = DETAIL_DIMENSION_LABELS[option.dataset.type] || DETAIL_DIMENSION_LABELS.sheets;
+
+            document.getElementById('material_width_label').textContent = labels[0];
+            document.getElementById('material_height_label').textContent = labels[1];
+
             const group = document.getElementById('material_thickness_group');
-            const label = DETAIL_THICKNESS_LABELS[option.dataset.type];
-            if (!label) {
-                group.style.display = 'none';
-            } else {
+            if (labels[2]) {
                 group.style.display = '';
-                document.getElementById('material_thickness_label').textContent = label;
+                document.getElementById('material_thickness_label').textContent = labels[2];
+            } else {
+                group.style.display = 'none';
             }
-
-            // A rod is cut to length, not height - see MATERIAL_DIMENSION_LABELS in app.py.
-            document.getElementById('material_height_label').textContent =
-                option.dataset.type === 'rods' ? 'Дължина (мм)' : 'Височина (мм)';
         }
 
-        // Called when the admin actually switches material - also resets the
-        // value to that material's own diameter/thickness as a convenience default.
-        function updateDetailMaterialDimensionField() {
-            applyDetailThicknessVisibility();
-            const select = document.getElementById('material_material');
-            const option = select.options[select.selectedIndex];
-            document.getElementById('material_thickness').value =
-                DETAIL_THICKNESS_LABELS[option.dataset.type] ? (detailDimensionDefault(option) || '') : '';
-        }
-
-        applyDetailThicknessVisibility();
+        applyDetailMaterialDimensionLabels();
     </script>
     {% endif %}
 
