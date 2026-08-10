@@ -94,6 +94,11 @@
                 <h4>Продукти</h4>
                 <p>Продукти, изградени от детайли.</p>
             </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_services') }}">
+                <div class="hub-count">{{ counts.services }}</div>
+                <h4>Услуги (цени/час)</h4>
+                <p>Часови ставки за рязане и операции.</p>
+            </a>
             <a class="admin-hub-card" href="{{ url_for('admin_clients') }}">
                 <div class="hub-count">{{ counts.clients }} / {{ counts.deliverers }}</div>
                 <h4>Клиенти / Куриери</h4>
@@ -107,6 +112,23 @@
                 <div class="hub-count">{{ counts.suppliers }}</div>
                 <h4>Стокови Разписки</h4>
                 <p>Заприхождаване на стока от доставчици.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_production_report') }}">
+                <div class="hub-count">{{ counts.orders }}</div>
+                <h4>Справка Производство</h4>
+                <p>Статус и прогрес на всички поръчки.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_missing_stock') }}">
+                <h4>Липсваща Наличност</h4>
+                <p>Поръчки без достатъчна наличност.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_power') }}">
+                <h4>Консумация</h4>
+                <p>Live мониторинг на енергопотреблението.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_content') }}">
+                <h4>Съдържание</h4>
+                <p>Редакция на текстове по публичните страници.</p>
             </a>
         </div>
     </section>

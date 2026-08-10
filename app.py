@@ -1906,9 +1906,11 @@ def admin_dashboard():
         'materials': MaterialPrice.query.count(),
         'details': Detail.query.count(),
         'products': Product.query.count(),
+        'services': Service.query.count(),
         'clients': Client.query.count(),
         'deliverers': Deliverer.query.count(),
         'suppliers': Supplier.query.count(),
+        'orders': Order.query.count(),
     }
     return render_template('admin.html', counts=counts, active_page='admin')
 
