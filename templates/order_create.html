@@ -95,6 +95,7 @@
                     <option value="{{ s.id }}">{{ s.name }} ({{ "%.2f"|format(s.price_per_hour_eur) }} €/час)</option>
                     {% endfor %}
                 </select>
+                <input type="text" id="pending_op_description" placeholder="Описание (незадължително, напр. външно лазерно рязане)" style="flex: 1; min-width: 200px;">
                 <input type="number" id="pending_op_duration_minutes" step="0.01" min="0.01" placeholder="Продължителност (мин)" style="width: 180px;">
                 <button type="button" class="btn-secondary" onclick="addPendingOperation()">+ Добави операция</button>
             </div>
@@ -453,6 +454,7 @@
 
     function addPendingOperation() {
         const serviceSelect = document.getElementById('pending_op_service_id');
+        const descriptionInput = document.getElementById('pending_op_description');
         const durationInput = document.getElementById('pending_op_duration_minutes');
         const serviceId = parseInt(serviceSelect.value, 10);
         const duration = parseFloat(durationInput.value);
@@ -463,8 +465,10 @@
         pendingDetailOps.push({
             serviceId: serviceId,
             serviceName: serviceSelect.options[serviceSelect.selectedIndex].text,
+            description: descriptionInput.value.trim(),
             durationMinutes: duration,
         });
+        descriptionInput.value = '';
         durationInput.value = '';
         renderPendingOperations();
     }
@@ -492,7 +496,8 @@
                 removeBtn.textContent = 'Премахни';
                 removeBtn.addEventListener('click', function () { removePendingOperation(idx); });
                 const td = document.createElement('td');
-                td.textContent = op.serviceName + ' — ' + op.durationMinutes + ' мин — ' + cost.toFixed(2) + ' €';
+                td.textContent = op.serviceName + (op.description ? ' (' + op.description + ')' : '') +
+                    ' — ' + op.durationMinutes + ' мин — ' + cost.toFixed(2) + ' €';
                 td.appendChild(document.createElement('br'));
                 td.appendChild(removeBtn);
                 tr.appendChild(td);
@@ -550,7 +555,7 @@
 
             const opsCost = pendingDetailOps.reduce(function (sum, op) { return sum + pendingOpCost(op.serviceId, op.durationMinutes); }, 0);
             const operations = pendingDetailOps.map(function (op) {
-                return { serviceId: op.serviceId, serviceName: op.serviceName, durationMinutes: op.durationMinutes };
+                return { serviceId: op.serviceId, serviceName: op.serviceName, description: op.description, durationMinutes: op.durationMinutes };
             });
             const unitPrice = d.price + opsCost;
 
@@ -627,7 +632,7 @@
                     const opsLine = document.createElement('div');
                     opsLine.className = 'text-small text-muted';
                     opsLine.textContent = item.operations.map(function (op) {
-                        return op.serviceName + ' (' + op.durationMinutes + ' мин)';
+                        return op.serviceName + (op.description ? ' (' + op.description + ')' : '') + ' (' + op.durationMinutes + ' мин)';
                     }).join(', ');
                     nameTd.appendChild(opsLine);
                 }
@@ -681,7 +686,7 @@
                 const row = { type: c.type, id: c.id, qty: c.qty };
                 if (c.operations && c.operations.length > 0) {
                     row.operations = c.operations.map(function (op) {
-                        return { service_id: op.serviceId, duration_minutes: op.durationMinutes };
+                        return { service_id: op.serviceId, duration_minutes: op.durationMinutes, description: op.description };
                     });
                 }
                 if (c.attachment) {

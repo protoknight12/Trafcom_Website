@@ -661,6 +661,10 @@ class OrderItemOperation(db.Model):
     service_id = db.Column(db.Integer, db.ForeignKey('service.id'), nullable=False)
     sequence = db.Column(db.Integer, nullable=False, default=0)
     duration_minutes = db.Column(db.Float, nullable=False)
+    # Free-text note distinguishing operations that share a Service but mean
+    # different things in practice (e.g. "лазерно рязане" in-house vs.
+    # "външно лазерно рязане" outsourced) - same purpose as Operation.description.
+    description = db.Column(db.String(255), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     order_item = db.relationship('OrderItem', backref=db.backref(
@@ -3547,8 +3551,10 @@ def _order_item_operations_cost(order_item, rows):
     row for a freshly-flushed order_item (always starts sequence at 0, unlike
     _add_operations_from_rows - a new OrderItem never already has operations).
     Invalid rows (bad service/duration) are skipped rather than failing the
-    whole cart line. Returns the summed per-unit cost so the caller can fold
-    it into OrderItem.unit_price; caller is responsible for committing."""
+    whole cart line. An optional 'description' per row (e.g. "външно лазерно
+    рязане" vs. in-house) is stored as-is, trimmed, blank -> None. Returns the
+    summed per-unit cost so the caller can fold it into OrderItem.unit_price;
+    caller is responsible for committing."""
     total_cost = 0.0
     sequence = 0
     for row in rows:
@@ -3562,9 +3568,10 @@ def _order_item_operations_cost(order_item, rows):
         service = db.session.get(Service, service_id)
         if duration_minutes <= 0 or not service:
             continue
+        description = (row.get('description') or '').strip() or None
         db.session.add(OrderItemOperation(
             order_item_id=order_item.id, service_id=service_id, sequence=sequence,
-            duration_minutes=round(duration_minutes, 2)
+            duration_minutes=round(duration_minutes, 2), description=description
         ))
         total_cost += duration_minutes * (service.price_per_hour_eur / 60.0)
         sequence += 1

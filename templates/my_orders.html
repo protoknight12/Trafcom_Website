@@ -69,7 +69,9 @@
                         <span class="badge badge-user">Детайл</span>
                         {% endif %}
                         {% if item.operations %}
-                        <div class="text-small text-muted">{{ item.operations|map(attribute='service.name')|join(', ') }}</div>
+                        <div class="text-small text-muted">
+                            {% for op in item.operations %}{{ op.service.name }}{% if op.description %} ({{ op.description }}){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}
+                        </div>
                         {% endif %}
                     </td>
                     <td class="text-center">{{ item.quantity_ordered }} бр.</td>

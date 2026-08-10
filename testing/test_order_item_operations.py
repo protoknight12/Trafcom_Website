@@ -119,6 +119,26 @@ def test_invalid_operation_rows_are_skipped(client):
         assert OrderItemOperation.query.filter_by(order_item_id=item.id).count() == 1
 
 
+def test_operation_description_stored_and_blank_becomes_none(client):
+    c, hinge_id, cutting_id, bending_id = client
+    cart = [{
+        'type': 'detail', 'id': hinge_id, 'qty': 1,
+        'operations': [
+            {'service_id': cutting_id, 'duration_minutes': 10, 'description': 'външно лазерно рязане'},
+            {'service_id': bending_id, 'duration_minutes': 5, 'description': '   '},
+        ],
+    }]
+    res = c.post('/orders/new', data={'customer_name': 'QA Customer 4', 'cart_json': json.dumps(cart)})
+    assert res.status_code == 302
+
+    with flask_app.app_context():
+        order = Order.query.filter_by(customer_name='QA Customer 4').first()
+        item = OrderItem.query.filter_by(order_id=order.id).first()
+        ops = OrderItemOperation.query.filter_by(order_item_id=item.id).order_by(OrderItemOperation.sequence).all()
+        assert ops[0].description == 'външно лазерно рязане'
+        assert ops[1].description is None
+
+
 def test_detail_without_operations_keeps_base_price(client):
     c, hinge_id, _cutting_id, _bending_id = client
     cart = [{'type': 'detail', 'id': hinge_id, 'qty': 2}]

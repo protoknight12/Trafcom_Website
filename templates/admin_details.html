@@ -78,6 +78,7 @@
                         <option value="{{ s.id }}">{{ s.name }} ({{ "%.2f"|format(s.price_per_hour_eur) }} €/час)</option>
                         {% endfor %}
                     </select>
+                    <input type="text" id="nd_op_description" placeholder="Описание (незадължително, напр. външно лазерно рязане)" style="flex: 1; min-width: 200px;">
                     <input type="number" id="nd_op_duration_minutes" step="0.01" min="0.01" placeholder="Продължителност (мин)" style="width: 180px;">
                     <button type="button" class="btn-secondary" onclick="addPendingDetailOperation()">+ Добави в списъка</button>
                 </div>
@@ -154,6 +155,7 @@
 
     function addPendingDetailOperation() {
         const serviceSelect = document.getElementById('nd_op_service_id');
+        const descriptionInput = document.getElementById('nd_op_description');
         const durationInput = document.getElementById('nd_op_duration_minutes');
         const serviceId = parseInt(serviceSelect.value, 10);
         const duration = parseFloat(durationInput.value);
@@ -164,8 +166,10 @@
         ndPendingOps.push({
             serviceId: serviceId,
             serviceName: serviceSelect.options[serviceSelect.selectedIndex].text,
+            description: descriptionInput.value.trim(),
             durationMinutes: duration,
         });
+        descriptionInput.value = '';
         durationInput.value = '';
         renderPendingDetailOperations();
     }
@@ -193,7 +197,8 @@
                 removeBtn.textContent = 'Премахни';
                 removeBtn.addEventListener('click', function () { removePendingDetailOperation(idx); });
                 const td = document.createElement('td');
-                td.textContent = op.serviceName + ' — ' + op.durationMinutes + ' мин — ' + cost.toFixed(2) + ' €';
+                td.textContent = op.serviceName + (op.description ? ' (' + op.description + ')' : '') +
+                    ' — ' + op.durationMinutes + ' мин — ' + cost.toFixed(2) + ' €';
                 td.appendChild(document.createElement('br'));
                 td.appendChild(removeBtn);
                 tr.appendChild(td);
@@ -207,7 +212,9 @@
 
     document.querySelector('form[action="{{ url_for("admin_add_detail") }}"]').addEventListener('submit', function () {
         document.getElementById('ndOperationsJsonInput').value = JSON.stringify(
-            ndPendingOps.map(function (op) { return { service_id: op.serviceId, duration_minutes: op.durationMinutes }; })
+            ndPendingOps.map(function (op) {
+                return { service_id: op.serviceId, duration_minutes: op.durationMinutes, description: op.description };
+            })
         );
     });
 
