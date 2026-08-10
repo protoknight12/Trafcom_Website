@@ -100,6 +100,13 @@ os.makedirs(app.config['MACHINE_IMAGES_FOLDER'], exist_ok=True)
 # reads from it.
 app.config['DETAIL_DXF_FOLDER'] = os.path.join(os.getcwd(), 'detail_dxf_files')
 os.makedirs(app.config['DETAIL_DXF_FOLDER'], exist_ok=True)
+# Reference PDFs (drawings/specs) attached to a detail line while building an
+# order - see OrderItemAttachment and the detail+operations picker on
+# order_create.html. Same private/permanent storage convention as
+# DETAIL_DXF_FOLDER; only download_order_item_file() (admin/staff-only) reads
+# from it.
+app.config['ORDER_ITEM_FILE_FOLDER'] = os.path.join(os.getcwd(), 'order_item_files')
+os.makedirs(app.config['ORDER_ITEM_FILE_FOLDER'], exist_ok=True)
 
 
 # ----------------- МОДЕЛИ В БАЗАТА ДАННИ -----------------
@@ -654,6 +661,27 @@ class OrderItemOperation(db.Model):
     @property
     def cost(self):
         return round(self.duration_minutes * (self.service.price_per_hour_eur / 60.0), 2)
+
+
+class OrderItemAttachment(db.Model):
+    """
+    An optional reference PDF (drawing, spec sheet...) attached to one
+    standalone-detail OrderItem line, picked in the same detail+operations
+    section on order_create.html - see upload_order_item_pdf() (stages the
+    file before the OrderItem exists) and create_order() (links it once the
+    OrderItem is flushed). Admin/staff-only to download afterward, same rule
+    as DetailDxfFile/download_detail_dxf().
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    order_item_id = db.Column(db.Integer, db.ForeignKey('order_item.id'), nullable=False)
+    filename = db.Column(db.String(255), nullable=False)  # on-disk name (uuid-prefixed, collision-safe)
+    original_filename = db.Column(db.String(255), nullable=False)
+    uploaded_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    order_item = db.relationship('OrderItem', backref=db.backref(
+        'attachments', cascade='all, delete-orphan', lazy=True))
+    uploaded_by = db.relationship('User')
 
 
 class ProductExtraCost(db.Model):
@@ -3335,6 +3363,20 @@ def download_detail_dxf(file_id):
     )
 
 
+@app.route('/order-item-files/<int:file_id>/download')
+@role_required(['admin', 'worker'])
+def download_order_item_file(file_id):
+    """Admin/staff-only, same access rule as download_detail_dxf() - whoever
+    placed the order can attach a reference PDF while building it, but only
+    staff (who actually run the operations in production_report.html) can
+    pull it back out."""
+    attachment = OrderItemAttachment.query.get_or_404(file_id)
+    return send_from_directory(
+        app.config['ORDER_ITEM_FILE_FOLDER'], attachment.filename,
+        as_attachment=True, download_name=attachment.original_filename
+    )
+
+
 @app.route('/details/files/geometry/<int:file_id>')
 @role_required('admin')
 def get_detail_dxf_geometry(file_id):
@@ -3444,6 +3486,27 @@ def _order_item_operations_cost(order_item, rows):
         total_cost += duration_minutes * (service.price_per_hour_eur / 60.0)
         sequence += 1
     return round(total_cost, 2)
+
+
+def _link_order_item_attachment(order_item, attachment):
+    """Links a PDF already staged via upload_order_item_pdf() to a freshly-
+    flushed order_item. attachment is client-supplied cart data, so its
+    filename is re-sanitized and checked against ORDER_ITEM_FILE_FOLDER
+    rather than trusted outright - only a name that was actually staged
+    there gets linked. No-op on anything malformed or missing."""
+    if not isinstance(attachment, dict):
+        return
+    stored_filename = secure_filename(attachment.get('filename') or '')
+    if not stored_filename:
+        return
+    stored_path = os.path.join(app.config['ORDER_ITEM_FILE_FOLDER'], stored_filename)
+    if not os.path.isfile(stored_path):
+        return
+    original_filename = secure_filename(attachment.get('original_filename') or stored_filename) or stored_filename
+    db.session.add(OrderItemAttachment(
+        order_item_id=order_item.id, filename=stored_filename, original_filename=original_filename,
+        uploaded_by_id=current_user.id
+    ))
 
 
 @app.route('/admin/details/<int:detail_id>/operations/add', methods=['POST'])
@@ -3867,6 +3930,29 @@ def logout():
     return redirect(url_for('login'))
 
 
+@app.route('/api/upload-order-item-pdf', methods=['POST'])
+@login_required
+def upload_order_item_pdf():
+    """Stages a reference PDF for a not-yet-created OrderItem line, picked from
+    the detail+operations section on order_create.html - saved immediately so
+    the browser doesn't have to hold the raw File object until the whole cart
+    is submitted. create_order() links the staged file to its OrderItem once
+    that row is flushed and has an id; a cart line that's staged a PDF and
+    then never gets submitted just leaves an orphaned file on disk, same as
+    any other abandoned upload in this app."""
+    file = request.files.get('file')
+    if not file or file.filename == '':
+        return jsonify({'status': 'error', 'message': 'Няма избран файл.'}), 400
+    stored_filename = _save_upload(file, app.config['ORDER_ITEM_FILE_FOLDER'], allowed_extensions={'pdf'})
+    if not stored_filename:
+        return jsonify({'status': 'error', 'message': 'Приемат се само PDF файлове.'}), 400
+    return jsonify({
+        'status': 'success',
+        'filename': stored_filename,
+        'original_filename': secure_filename(file.filename),
+    })
+
+
 # МАРШРУТ ЗА ОБИКНОВЕНИ ПОТРЕБИТЕЛИ - СЪЗДАВАНЕ НА ПОРЪЧКА (кошница с няколко артикула)
 @app.route('/orders/new', methods=['GET', 'POST'])
 @login_required
@@ -3960,6 +4046,8 @@ def create_order():
                 if isinstance(op_rows, list) and op_rows:
                     ops_cost_per_unit = _order_item_operations_cost(order_item, op_rows)
                     order_item.unit_price = round(order_item.unit_price + ops_cost_per_unit, 2)
+
+                _link_order_item_attachment(order_item, row.get('attachment'))
                 added_any = True
 
         if not added_any:

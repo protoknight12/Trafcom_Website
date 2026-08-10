@@ -104,6 +104,12 @@
                 </tbody>
             </table>
             <p class="text-small text-muted" id="pendingOpsTotal" style="margin-top: 6px;"></p>
+
+            <div class="form-group" style="margin-top: 14px;">
+                <label for="pending_op_pdf">Приложен PDF (незадължително - чертеж, спецификация...)</label>
+                <input type="file" id="pending_op_pdf" accept=".pdf">
+                <p class="text-small text-muted" id="pendingPdfStatus" style="margin-top: 4px;"></p>
+            </div>
         </div>
     </section>
 
@@ -540,22 +546,53 @@
             });
             const unitPrice = d.price + opsCost;
 
-            if (operations.length > 0) {
-                // A detail with operations attached is always its own cart
-                // line - merging it into a plain (or differently-configured)
-                // line for the same detail would lose which operations go
-                // with which piece count.
-                cart.push({ type: type, id: id, name: d.name, unitPrice: unitPrice, qty: qty, operations: operations });
-            } else {
-                const existing = cart.find(function (c) { return c.type === type && c.id === id && (!c.operations || c.operations.length === 0); });
-                if (existing) {
-                    existing.qty += qty;
+            const pdfInput = document.getElementById('pending_op_pdf');
+            const pdfFile = pdfInput.files[0];
+
+            const addDetailLine = function (attachment) {
+                if (operations.length > 0 || attachment) {
+                    // A detail with operations and/or a PDF attached is
+                    // always its own cart line - merging it into a plain (or
+                    // differently-configured) line for the same detail would
+                    // lose which operations/file go with which piece count.
+                    cart.push({ type: type, id: id, name: d.name, unitPrice: unitPrice, qty: qty, operations: operations, attachment: attachment || null });
                 } else {
-                    cart.push({ type: type, id: id, name: d.name, unitPrice: unitPrice, qty: qty });
+                    const existing = cart.find(function (c) { return c.type === type && c.id === id && (!c.operations || c.operations.length === 0) && !c.attachment; });
+                    if (existing) {
+                        existing.qty += qty;
+                    } else {
+                        cart.push({ type: type, id: id, name: d.name, unitPrice: unitPrice, qty: qty });
+                    }
                 }
+                pendingDetailOps = [];
+                renderPendingOperations();
+                pdfInput.value = '';
+                document.getElementById('pendingPdfStatus').textContent = '';
+                renderCart();
+            };
+
+            if (pdfFile) {
+                const statusEl = document.getElementById('pendingPdfStatus');
+                statusEl.textContent = 'Качване на PDF файла...';
+                const formData = new FormData();
+                formData.append('csrf_token', document.querySelector('input[name="csrf_token"]').value);
+                formData.append('file', pdfFile);
+                fetch('/api/upload-order-item-pdf', { method: 'POST', body: formData })
+                    .then(function (res) { return res.json(); })
+                    .then(function (data) {
+                        if (data.status === 'success') {
+                            addDetailLine({ filename: data.filename, original_filename: data.original_filename });
+                        } else {
+                            statusEl.textContent = data.message || 'Грешка при качване на PDF файла.';
+                        }
+                    })
+                    .catch(function () {
+                        statusEl.textContent = 'Връзката със сървъра беше прекъсната при качване на PDF файла.';
+                    });
+                return;
             }
-            pendingDetailOps = [];
-            renderPendingOperations();
+            addDetailLine(null);
+            return;
         }
         renderCart();
     }
@@ -585,6 +622,12 @@
                         return op.serviceName + ' (' + op.durationMinutes + ' мин)';
                     }).join(', ');
                     nameTd.appendChild(opsLine);
+                }
+                if (item.attachment) {
+                    const pdfLine = document.createElement('div');
+                    pdfLine.className = 'text-small text-muted';
+                    pdfLine.textContent = '📎 ' + item.attachment.original_filename;
+                    nameTd.appendChild(pdfLine);
                 }
                 tr.appendChild(nameTd);
                 tr.appendChild(cell(item.type === 'product' ? 'Продукт' : 'Детайл'));
@@ -632,6 +675,9 @@
                     row.operations = c.operations.map(function (op) {
                         return { service_id: op.serviceId, duration_minutes: op.durationMinutes };
                     });
+                }
+                if (c.attachment) {
+                    row.attachment = c.attachment;
                 }
                 return row;
             })

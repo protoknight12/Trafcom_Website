@@ -90,6 +90,9 @@
                                onchange="updateProduction(this)"
                                {{ 'disabled' if order.status == 'cancelled' else '' }}>
                         <a href="{{ url_for('print_label', target_type='item', target_id=item.id) }}" class="btn-secondary" style="display: inline-block; margin-top: 6px; padding: 4px 10px; font-size: 0.78rem; border-radius: var(--border-radius-sm); text-decoration: none;">Печат на етикет</a>
+                        {% for att in item.attachments %}
+                        <a href="{{ url_for('download_order_item_file', file_id=att.id) }}" class="btn-secondary" style="display: inline-block; margin-top: 6px; margin-left: 4px; padding: 4px 10px; font-size: 0.78rem; border-radius: var(--border-radius-sm); text-decoration: none;">📎 PDF</a>
+                        {% endfor %}
                         {% else %}
                         <span class="text-muted text-small">виж компонентите отдолу</span>
                         {% endif %}
