@@ -271,7 +271,7 @@
             Изберете няколко операции по-долу преди да ги запазите - общата цена се обновява веднага.
         </p>
 
-        <form id="addOperationsForm" action="{{ url_for('admin_add_operation', detail_id=detail.id) }}" method="POST" class="admin-form" style="margin-bottom: 1rem;">
+        <form id="addOperationsForm" action="{{ url_for('admin_add_operation', detail_id=detail.id) }}" method="POST" class="admin-form" style="margin-bottom: 1rem;" novalidate>
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="op_service_id">Услуга</label>
@@ -299,7 +299,7 @@
             </div>
             <div class="form-group" id="op_length_group" style="display: none;">
                 <label for="op_length_mm">Дължина на рязане (мм)</label>
-                <input type="number" id="op_length_mm" step="0.01" min="0.01" value="{{ detail.total_length }}" placeholder="напр. 1500">
+                <input type="number" id="op_length_mm" step="0.01" min="0.01" value="{{ detail.total_length if detail.total_length else '' }}" placeholder="напр. 1500">
             </div>
             <div class="form-group" style="flex: 0 0 auto;">
                 <button type="button" class="btn-secondary" onclick="addPendingOperation()" style="padding: 12px 20px;">+ Добави в списъка</button>
@@ -403,7 +403,7 @@
     <script>
         const OP_SERVICES = {{ services_data|tojson }};
         const OP_BASE_TOTAL = {{ detail.total_price }};
-        const OP_DEFAULT_LENGTH_MM = {{ detail.total_length }};
+        const OP_DEFAULT_LENGTH_MM = {{ detail.total_length if detail.total_length else 'null' }};
         let pendingOps = [];
 
         function opServiceById(id) {
