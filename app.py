@@ -397,6 +397,19 @@ class Detail(db.Model):
         to just the original cut."""
         return round(self.calculated_price + sum(op.cost for op in self.operations), 2)
 
+    @property
+    def material_price_breakdown(self):
+        """Human-readable "quantity x rate" behind calculated_price, for
+        display next to it (see detail_dxf_dashboard.html) - mirrors
+        _material_cost()'s rods-vs-area branch exactly so this can never
+        drift from the real calculation."""
+        if not self.material:
+            return None
+        if self.material.type == 'rods':
+            return f"{self.height:.0f} мм × {self.material.cost_per_m2:.2f} €/м"
+        area_m2 = (self.width * self.height) / 1_000_000
+        return f"{area_m2:.3f} м² × {self.material.cost_per_m2:.2f} €/м²"
+
 
 class DetailDxfFile(db.Model):
     """

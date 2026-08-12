@@ -364,6 +364,9 @@
                     <td colspan="3" class="text-right"><strong>Цена на материала:</strong></td>
                     <td colspan="2">
                         <strong>{{ "%.2f"|format(detail.calculated_price) }} €</strong>
+                        {% if detail.material_price_breakdown %}
+                        <span class="text-small text-muted">({{ detail.material_price_breakdown }})</span>
+                        {% endif %}
                     </td>
                 </tr>
                 <tr>
