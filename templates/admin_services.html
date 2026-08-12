@@ -109,12 +109,35 @@
                 <input type="number" id="new_service_price" step="0.01" min="0.01" name="price_per_hour_eur" placeholder="напр. 50.00" required>
             </div>
             <div class="form-group">
+                <label for="new_service_pricing_mode">Ценообразуване</label>
+                <select id="new_service_pricing_mode" name="pricing_mode" onchange="toggleNewServicePriceMeter()">
+                    <option value="time">По време (продължителност в минути)</option>
+                    <option value="length">По дължина на рязане (мм)</option>
+                </select>
+            </div>
+            <div class="form-group" id="new_service_price_meter_group" style="display: none;">
+                <label for="new_service_price_meter">Цена на метър рязане (€/м)</label>
+                <input type="number" id="new_service_price_meter" step="0.01" min="0.01" name="price_per_meter_eur" placeholder="напр. 3.00">
+            </div>
+            <div class="form-group">
                 <label for="new_service_description">Описание (незадължително)</label>
                 <input type="text" id="new_service_description" name="description" placeholder="показва се на страница Услуги">
             </div>
             <button type="submit" class="btn-submit">Добави услуга</button>
         </form>
     </section>
+
+    <script>
+        function toggleNewServicePriceMeter() {
+            const mode = document.getElementById('new_service_pricing_mode').value;
+            document.getElementById('new_service_price_meter_group').style.display = mode === 'length' ? '' : 'none';
+        }
+
+        function toggleServicePriceMeter(formId) {
+            const mode = document.getElementById('mode-' + formId).value;
+            document.getElementById('meter-' + formId).style.display = mode === 'length' ? 'inline-block' : 'none';
+        }
+    </script>
 
     <section class="admin-card">
         <h3>Списък с услуги</h3>
@@ -128,6 +151,8 @@
                     <th>Тип машина</th>
                     <th>Машини</th>
                     <th>Цена на час (€)</th>
+                    <th>Ценообразуване</th>
+                    <th>Цена на метър (€)</th>
                     <th>Описание</th>
                     <th class="text-right">Действие</th>
                     <th class="text-right">Изтриване</th>
@@ -163,6 +188,18 @@
                     </td>
                     <td><input type="number" step="0.01" min="0.01" name="price_per_hour_eur" form="{{ form_id }}"
                                value="{{ '%.2f'|format(service.price_per_hour_eur) }}" class="service-price-input" required></td>
+                    <td>
+                        <select name="pricing_mode" form="{{ form_id }}" class="service-price-input" onchange="toggleServicePriceMeter('{{ form_id }}')" id="mode-{{ form_id }}">
+                            <option value="time" {% if service.pricing_mode != 'length' %}selected{% endif %}>По време</option>
+                            <option value="length" {% if service.pricing_mode == 'length' %}selected{% endif %}>По дължина</option>
+                        </select>
+                    </td>
+                    <td>
+                        <input type="number" step="0.01" min="0.01" name="price_per_meter_eur" form="{{ form_id }}"
+                               value="{{ '%.2f'|format(service.price_per_meter_eur) if service.price_per_meter_eur else '' }}"
+                               class="service-price-input" id="meter-{{ form_id }}"
+                               style="display: {% if service.pricing_mode == 'length' %}inline-block{% else %}none{% endif %};">
+                    </td>
                     <td><input type="text" name="description" form="{{ form_id }}" value="{{ service.description or '' }}"
                                class="service-price-input" style="width: 180px;" placeholder="Описание"></td>
                     <td class="text-right"><button type="submit" form="{{ form_id }}" class="btn-save-price">Запази</button></td>
@@ -176,7 +213,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="7" class="text-center no-data">Няма добавени услуги.</td>
+                    <td colspan="9" class="text-center no-data">Няма добавени услуги.</td>
                 </tr>
                 {% endfor %}
                 </tbody>

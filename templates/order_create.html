@@ -205,11 +205,11 @@
                 </select>
             </div>
             <div class="form-group" style="margin-bottom: 15px;">
-                <label for="qd_service">Услуга (рязане)</label>
+                <label for="qd_service">Услуга (рязане, по дължина)</label>
                 <select id="qd_service" name="service_id">
                     <option value="">-- Изберете услуга --</option>
-                    {% for s in services %}
-                    <option value="{{ s.id }}">{{ s.name }} ({{ "%.2f"|format(s.price_per_hour_eur) }} €/час)</option>
+                    {% for s in services if s.pricing_mode == 'length' %}
+                    <option value="{{ s.id }}">{{ s.name }} ({{ "%.2f"|format(s.price_per_meter_eur) }} €/м)</option>
                     {% endfor %}
                 </select>
             </div>

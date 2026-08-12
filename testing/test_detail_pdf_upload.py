@@ -55,7 +55,9 @@ def app():
         db.create_all()
         admin = User(username='qa_admin', password=generate_password_hash('irrelevant123'), role='admin')
         material = MaterialPrice(key='qa_mat', display_name='QA Material', cost_per_m2=10, cutting_speed_mm_per_min=1, pierce_rate_per_min=0.1)
-        service = Service(name='QA Service', price_per_hour_eur=60)
+        # A Detail's cutting service must be length-priced - see
+        # calculate_material_price()/_add_cutting_operation() in app.py.
+        service = Service(name='QA Service', price_per_hour_eur=60, pricing_mode='length', price_per_meter_eur=5.0)
         db.session.add_all([admin, material, service])
         db.session.commit()
         yield flask_app, service.id

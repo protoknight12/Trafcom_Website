@@ -264,8 +264,8 @@
     <section class="admin-card">
         <h3>Операции</h3>
         <p class="section-subtitle">
-            Базовата цена на рязане ({{ "%.2f"|format(detail.calculated_price) }} €{% if detail.cutting_service
-            %}, услуга: {{ detail.cutting_service.name }}{% endif %}) плюс всяка допълнителна операция по-долу
+            Цената на материала ({{ "%.2f"|format(detail.calculated_price) }} €) плюс рязането{% if detail.cutting_service
+            %} (услуга: {{ detail.cutting_service.name }}){% endif %} и всяка допълнителна операция по-долу
             (фрезоване, зачистване...) дава общата цена на детайла:
             <strong id="opCurrentTotal">{{ "%.2f"|format(detail.total_price) }} €</strong>.
             Изберете няколко операции по-долу преди да ги запазите - общата цена се обновява веднага.
@@ -275,20 +275,31 @@
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="op_service_id">Услуга</label>
-                <select id="op_service_id">
+                <select id="op_service_id" onchange="toggleOpValueInput()">
                     <option value="">-- Изберете услуга --</option>
-                    {% for s in services %}
-                    <option value="{{ s.id }}">{{ s.name }} ({{ "%.2f"|format(s.price_per_hour_eur) }} €/час)</option>
-                    {% endfor %}
+                    <optgroup label="По дължина (мм)">
+                        {% for s in services if s.pricing_mode == 'length' %}
+                        <option value="{{ s.id }}">{{ s.name }} ({{ "%.2f"|format(s.price_per_meter_eur) }} €/м)</option>
+                        {% endfor %}
+                    </optgroup>
+                    <optgroup label="По време (мин)">
+                        {% for s in services if s.pricing_mode != 'length' %}
+                        <option value="{{ s.id }}">{{ s.name }} ({{ "%.2f"|format(s.price_per_hour_eur) }} €/час)</option>
+                        {% endfor %}
+                    </optgroup>
                 </select>
             </div>
             <div class="form-group">
                 <label for="op_description">Описание (незадължително)</label>
                 <input type="text" id="op_description" placeholder="напр. външно лазерно рязане">
             </div>
-            <div class="form-group">
+            <div class="form-group" id="op_duration_group">
                 <label for="op_duration_minutes">Продължителност (мин)</label>
                 <input type="number" id="op_duration_minutes" step="0.01" min="0.01" placeholder="напр. 12">
+            </div>
+            <div class="form-group" id="op_length_group" style="display: none;">
+                <label for="op_length_mm">Дължина на рязане (мм)</label>
+                <input type="number" id="op_length_mm" step="0.01" min="0.01" value="{{ detail.total_length }}" placeholder="напр. 1500">
             </div>
             <div class="form-group" style="flex: 0 0 auto;">
                 <button type="button" class="btn-secondary" onclick="addPendingOperation()" style="padding: 12px 20px;">+ Добави в списъка</button>
@@ -301,7 +312,7 @@
                 <tr>
                     <th>Услуга (за запазване)</th>
                     <th>Описание</th>
-                    <th>Продължителност (мин)</th>
+                    <th>Продължителност / Дължина</th>
                     <th>Цена</th>
                     <th class="text-right">Действие</th>
                 </tr>
@@ -320,7 +331,7 @@
                 <tr>
                     <th>Услуга</th>
                     <th>Описание</th>
-                    <th>Продължителност (мин)</th>
+                    <th>Продължителност / Дължина</th>
                     <th>Цена</th>
                     <th class="text-right">Действие</th>
                 </tr>
@@ -330,7 +341,7 @@
                 <tr>
                     <td>{{ op.service.name }}</td>
                     <td>{{ op.description or '-' }}</td>
-                    <td>{{ op.duration_minutes }}</td>
+                    <td>{% if op.service.pricing_mode == 'length' %}{{ op.length_mm }} мм{% else %}{{ op.duration_minutes }} мин{% endif %}</td>
                     <td>{{ "%.2f"|format(op.cost) }} €</td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_operation', operation_id=op.id) }}" method="POST" style="display:inline;">
@@ -346,19 +357,29 @@
                 {% endfor %}
                 </tbody>
                 {% if detail.operations %}
+                {% set cutting_ops = detail.operations|selectattr('service.machine_type', 'equalto', 'laser')|list %}
+                {% set other_ops = detail.operations|rejectattr('service.machine_type', 'equalto', 'laser')|list %}
                 <tfoot>
                 <tr>
-                    <td colspan="3" class="text-right"><strong>Обща цена на операциите:</strong></td>
-                    <td colspan="2">
-                        <strong>{{ "%.2f"|format(detail.operations|sum(attribute='cost')) }} €</strong>
-                    </td>
-                </tr>
-                <tr>
-                    <td colspan="3" class="text-right"><strong>Цена на материала (рязане):</strong></td>
+                    <td colspan="3" class="text-right"><strong>Цена на материала:</strong></td>
                     <td colspan="2">
                         <strong>{{ "%.2f"|format(detail.calculated_price) }} €</strong>
                     </td>
                 </tr>
+                <tr>
+                    <td colspan="3" class="text-right"><strong>Обща цена на операциите:</strong></td>
+                    <td colspan="2">
+                        <strong>{{ "%.2f"|format(other_ops|sum(attribute='cost')) }} €</strong>
+                    </td>
+                </tr>
+                {% if cutting_ops %}
+                <tr>
+                    <td colspan="3" class="text-right"><strong>Рязане (лазер, отделна операция):</strong></td>
+                    <td colspan="2">
+                        <strong>{{ "%.2f"|format(cutting_ops|sum(attribute='cost')) }} €</strong>
+                    </td>
+                </tr>
+                {% endif %}
                 <tr>
                     <td colspan="3" class="text-right"><strong>Обща цена (материал + операции):</strong></td>
                     <td colspan="2">
@@ -374,35 +395,59 @@
     <script>
         const OP_SERVICES = {{ services_data|tojson }};
         const OP_BASE_TOTAL = {{ detail.total_price }};
+        const OP_DEFAULT_LENGTH_MM = {{ detail.total_length }};
         let pendingOps = [];
 
         function opServiceById(id) {
             return OP_SERVICES.find(function (s) { return s.id === id; });
         }
 
-        function opCost(serviceId, durationMinutes) {
+        function opCost(serviceId, durationMinutes, lengthMm) {
             const service = opServiceById(serviceId);
-            return service ? durationMinutes * (service.price_per_hour_eur / 60) : 0;
+            if (!service) { return 0; }
+            if (service.pricing_mode === 'length') {
+                return (lengthMm || 0) / 1000 * (service.price_per_meter_eur || 0);
+            }
+            return (durationMinutes || 0) * (service.price_per_hour_eur / 60);
+        }
+
+        function toggleOpValueInput() {
+            const service = opServiceById(parseInt(document.getElementById('op_service_id').value, 10));
+            const isLength = service && service.pricing_mode === 'length';
+            document.getElementById('op_duration_group').style.display = isLength ? 'none' : '';
+            document.getElementById('op_length_group').style.display = isLength ? '' : 'none';
         }
 
         function addPendingOperation() {
             const serviceSelect = document.getElementById('op_service_id');
             const descriptionInput = document.getElementById('op_description');
             const durationInput = document.getElementById('op_duration_minutes');
+            const lengthInput = document.getElementById('op_length_mm');
             const serviceId = parseInt(serviceSelect.value, 10);
-            const duration = parseFloat(durationInput.value);
+            const service = opServiceById(serviceId);
 
             if (!serviceId) { alert('Моля изберете услуга.'); return; }
-            if (!duration || duration <= 0) { alert('Моля въведете валидна продължителност в минути.'); return; }
+
+            let duration = null;
+            let length = null;
+            if (service.pricing_mode === 'length') {
+                length = parseFloat(lengthInput.value);
+                if (!length || length <= 0) { alert('Моля въведете валидна дължина на рязане в мм.'); return; }
+            } else {
+                duration = parseFloat(durationInput.value);
+                if (!duration || duration <= 0) { alert('Моля въведете валидна продължителност в минути.'); return; }
+            }
 
             pendingOps.push({
                 serviceId: serviceId,
                 serviceName: serviceSelect.options[serviceSelect.selectedIndex].text,
                 description: descriptionInput.value.trim(),
                 durationMinutes: duration,
+                lengthMm: length,
             });
             descriptionInput.value = '';
             durationInput.value = '';
+            lengthInput.value = OP_DEFAULT_LENGTH_MM;
             renderPendingOps();
         }
 
@@ -420,14 +465,14 @@
                 body.innerHTML = '<tr id="pendingOpsEmptyRow"><td colspan="5" class="text-center no-data">Няма избрани операции за добавяне.</td></tr>';
             } else {
                 pendingOps.forEach(function (op, idx) {
-                    const cost = opCost(op.serviceId, op.durationMinutes);
+                    const cost = opCost(op.serviceId, op.durationMinutes, op.lengthMm);
                     pendingTotal += cost;
                     const tr = document.createElement('tr');
                     tr.innerHTML =
                         '<td></td><td></td><td></td><td></td><td class="text-right"></td>';
                     tr.children[0].textContent = op.serviceName;
                     tr.children[1].textContent = op.description || '-';
-                    tr.children[2].textContent = op.durationMinutes;
+                    tr.children[2].textContent = op.lengthMm != null ? (op.lengthMm + ' мм') : (op.durationMinutes + ' мин');
                     tr.children[3].textContent = cost.toFixed(2) + ' €';
                     const removeBtn = document.createElement('button');
                     removeBtn.type = 'button';
@@ -446,10 +491,15 @@
         document.getElementById('addOperationsForm').addEventListener('submit', function () {
             document.getElementById('operationsJsonInput').value = JSON.stringify(
                 pendingOps.map(function (op) {
-                    return { service_id: op.serviceId, duration_minutes: op.durationMinutes, description: op.description };
+                    return {
+                        service_id: op.serviceId, duration_minutes: op.durationMinutes,
+                        length_mm: op.lengthMm, description: op.description
+                    };
                 })
             );
         });
+
+        toggleOpValueInput();
     </script>
     </div>
     {% endif %}

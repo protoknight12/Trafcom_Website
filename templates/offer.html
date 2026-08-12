@@ -147,8 +147,8 @@
             <td>{{ pd.detail.name }}</td>
             <td>{{ pd.detail.material.display_name }}</td>
             <td class="text-right">{{ pd.quantity }}</td>
-            <td class="text-right">{{ "%.2f"|format(pd.detail.calculated_price) }} €</td>
-            <td class="text-right">{{ "%.2f"|format(pd.detail.calculated_price * pd.quantity) }} €</td>
+            <td class="text-right">{{ "%.2f"|format(pd.detail.total_price) }} €</td>
+            <td class="text-right">{{ "%.2f"|format(pd.detail.total_price * pd.quantity) }} €</td>
         </tr>
         {% else %}
         <tr>

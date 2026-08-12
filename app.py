@@ -433,6 +433,10 @@ class Operation(db.Model):
     service_id = db.Column(db.Integer, db.ForeignKey('service.id'), nullable=False)
     sequence = db.Column(db.Integer, nullable=False, default=0)
     duration_minutes = db.Column(db.Float, nullable=False)
+    # Cut length in mm, used instead of duration_minutes when the linked
+    # Service.pricing_mode == 'length' (e.g. a length-based laser cutting
+    # operation) - see cost. Unused (0) for time-based operations.
+    length_mm = db.Column(db.Float, nullable=True)
     # Free-text note distinguishing operations that share a Service but mean
     # different things in practice (e.g. "лазерно рязане" in-house vs.
     # "външно лазерно рязане" outsourced) - optional, purely descriptive.
@@ -445,7 +449,10 @@ class Operation(db.Model):
 
     @property
     def cost(self):
-        """duration_minutes priced at the linked Service's EUR/hour rate."""
+        """duration_minutes priced at the linked Service's EUR/hour rate, or
+        length_mm priced at its EUR/meter rate when the Service is length-based."""
+        if self.service.pricing_mode == 'length':
+            return round((self.length_mm or 0) / 1000.0 * (self.service.price_per_meter_eur or 0), 2)
         return round(self.duration_minutes * (self.service.price_per_hour_eur / 60.0), 2)
 
 
@@ -830,6 +837,16 @@ class Service(db.Model):
     name = db.Column(db.String(150), nullable=False)
     machine_type = db.Column(db.String(50), nullable=True)
     price_per_hour_eur = db.Column(db.Float, nullable=False)
+    # 'time' (default) prices an attached Operation by duration_minutes *
+    # price_per_hour_eur; 'length' prices it by length_mm * price_per_meter_eur
+    # instead - e.g. a laser-cutting service billed by cut length rather than
+    # machine time (see Operation.cost). Only affects the extra-operations
+    # picker - the base DXF cut (calculate_cnc_price) always uses the hourly
+    # rate regardless of this flag, so it never changes how a Detail's own
+    # cut is priced.
+    pricing_mode = db.Column(db.String(10), nullable=False, default='time')
+    # EUR per meter (1000 mm) of cut length - only used when pricing_mode == 'length'.
+    price_per_meter_eur = db.Column(db.Float, nullable=True)
     description = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     machines = db.relationship('Machine', secondary='service_machine', backref='services')
@@ -1466,12 +1483,15 @@ def _material_cost(width, height, material):
 
 def calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id):
     """
-    Time-based pricing engine for a single service (the Detail/quick-create
-    flows, which always price a cut against exactly one cutting_service_id -
-    see Detail.cutting_service_id). Material supplies the raw-stock cost
-    (area for sheets/pipes/profiles, length alone for rods - see
-    _material_cost) and how fast it cuts/pierces; the EUR/hour rate comes
-    from the selected Service. total = material_cost + time_cost + BASE_SETUP_FEE.
+    Time-based pricing engine for a single service - used by the personal
+    DXF-upload calculator (DxfFile, process_dxf_upload()). Material supplies
+    the raw-stock cost (area for sheets/pipes/profiles, length alone for rods
+    - see _material_cost) and how fast it cuts/pierces; the EUR/hour rate
+    comes from the selected Service. total = material_cost + time_cost +
+    BASE_SETUP_FEE. NOT used for the Detail catalog - see
+    calculate_material_price(), which prices a Detail's base cut as material
+    only, with cutting cost captured separately as a length-priced Operation
+    (_add_cutting_operation) instead of baked into this total.
     """
     material = MaterialPrice.query.filter_by(key=material_key).first()
     service = db.session.get(Service, service_id) if service_id else None
@@ -1483,6 +1503,22 @@ def calculate_cnc_price(width, height, total_length, pierce_count, material_key,
 
     total_calculated_euro = material_cost + time_cost + BASE_SETUP_FEE
     return round(total_calculated_euro, 2)
+
+
+def calculate_material_price(width, height, material_key):
+    """
+    Material-only price for a Detail's base cut: raw-stock cost (see
+    _material_cost) plus the flat BASE_SETUP_FEE, deliberately excluding any
+    cutting cost - a Detail's cutting is priced as its own length-based
+    Operation instead (see _add_cutting_operation), not baked into
+    calculated_price. Detail-catalog only; the DxfFile/personal-upload
+    calculator keeps using calculate_cnc_price()/calculate_cnc_price_multi_service(),
+    which still fold cutting time into their total.
+    """
+    material = MaterialPrice.query.filter_by(key=material_key).first()
+    if not material:
+        return 0.0
+    return round(_material_cost(width, height, material) + BASE_SETUP_FEE, 2)
 
 
 def calculate_cnc_price_multi_service(width, height, total_length, pierce_count, material_key, service_ids):
@@ -3185,6 +3221,38 @@ def _selected_machines(form):
     return Machine.query.filter(Machine.id.in_(ids)).all() if ids else []
 
 
+def _parse_service_pricing(form):
+    """Validates the price_per_hour_eur/pricing_mode/price_per_meter_eur trio
+    shared by admin_add_service()/admin_update_service(). The hourly rate is
+    always required (even for a length-priced service) so the base DXF cut
+    pipeline - which only ever reads price_per_hour_eur, see
+    calculate_cnc_price() - keeps pricing correctly if this Service is ever
+    picked as a Detail's cutting service. Returns (price_per_hour_eur,
+    pricing_mode, price_per_meter_eur, error_message); error_message is None
+    on success."""
+    try:
+        price_per_hour_eur = float(form.get('price_per_hour_eur', ''))
+    except ValueError:
+        return None, None, None, 'Цената на час трябва да бъде валидно число.'
+    if price_per_hour_eur <= 0:
+        return None, None, None, 'Цената на час трябва да бъде положително число.'
+
+    pricing_mode = form.get('pricing_mode', 'time').strip()
+    if pricing_mode not in ('time', 'length'):
+        pricing_mode = 'time'
+
+    price_per_meter_eur = None
+    if pricing_mode == 'length':
+        try:
+            price_per_meter_eur = float(form.get('price_per_meter_eur', ''))
+        except ValueError:
+            return None, None, None, 'Цената на метър рязане трябва да бъде валидно число.'
+        if price_per_meter_eur <= 0:
+            return None, None, None, 'Цената на метър рязане трябва да бъде положително число.'
+
+    return round(price_per_hour_eur, 2), pricing_mode, price_per_meter_eur, None
+
+
 @app.route('/admin/services/add', methods=['POST'])
 @login_required
 def admin_add_service():
@@ -3197,19 +3265,17 @@ def admin_add_service():
         flash('Моля въведете име на услугата.', 'danger')
         return redirect(url_for('admin_services'))
 
-    try:
-        price_per_hour_eur = float(request.form.get('price_per_hour_eur', ''))
-    except ValueError:
-        flash('Цената на час трябва да бъде валидно число.', 'danger')
-        return redirect(url_for('admin_services'))
-    if price_per_hour_eur <= 0:
-        flash('Цената на час трябва да бъде положително число.', 'danger')
+    price_per_hour_eur, pricing_mode, price_per_meter_eur, error = _parse_service_pricing(request.form)
+    if error:
+        flash(error, 'danger')
         return redirect(url_for('admin_services'))
 
     new_service = Service(
         name=name,
         machine_type=request.form.get('machine_type', '').strip() or None,
-        price_per_hour_eur=round(price_per_hour_eur, 2),
+        price_per_hour_eur=price_per_hour_eur,
+        pricing_mode=pricing_mode,
+        price_per_meter_eur=price_per_meter_eur,
         description=request.form.get('description', '').strip() or None,
         machines=_selected_machines(request.form),
     )
@@ -3232,18 +3298,16 @@ def admin_update_service(service_id):
         flash('Моля въведете име на услугата.', 'danger')
         return redirect(url_for('admin_services'))
 
-    try:
-        price_per_hour_eur = float(request.form.get('price_per_hour_eur', ''))
-    except ValueError:
-        flash('Цената на час трябва да бъде валидно число.', 'danger')
-        return redirect(url_for('admin_services'))
-    if price_per_hour_eur <= 0:
-        flash('Цената на час трябва да бъде положително число.', 'danger')
+    price_per_hour_eur, pricing_mode, price_per_meter_eur, error = _parse_service_pricing(request.form)
+    if error:
+        flash(error, 'danger')
         return redirect(url_for('admin_services'))
 
     service.name = name
     service.machine_type = request.form.get('machine_type', '').strip() or None
-    service.price_per_hour_eur = round(price_per_hour_eur, 2)
+    service.price_per_hour_eur = price_per_hour_eur
+    service.pricing_mode = pricing_mode
+    service.price_per_meter_eur = price_per_meter_eur
     service.description = request.form.get('description', '').strip() or None
     service.machines = _selected_machines(request.form)
     db.session.commit()
@@ -3344,8 +3408,12 @@ def admin_add_detail():
         flash('Невалиден формат! Приемат се само .dxf файлове.', 'danger')
         return redirect(url_for('admin_details'))
 
-    if has_dxf and (not service_id or not db.session.get(Service, service_id)):
-        flash('Невалиден избор на услуга.', 'danger')
+    # The base cut is priced by length (see calculate_material_price() /
+    # _add_cutting_operation), not baked into calculated_price - so the
+    # cutting service must be length-priced, not the old hourly kind.
+    cutting_service = db.session.get(Service, service_id) if service_id else None
+    if has_dxf and (not cutting_service or cutting_service.pricing_mode != 'length'):
+        flash('Моля изберете услуга за лазерно рязане с ценообразуване по дължина.', 'danger')
         return redirect(url_for('admin_details'))
 
     manual_price = None
@@ -3381,7 +3449,7 @@ def admin_add_detail():
                 os.remove(stored_path)
                 return redirect(url_for('admin_details'))
 
-            price = calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id)
+            price = calculate_material_price(width, height, material_key)
             new_detail = Detail(
                 name=name, material_key=material_key, width=width, height=height,
                 total_length=total_length, pierce_count=pierce_count,
@@ -3398,6 +3466,7 @@ def admin_add_detail():
         db.session.add(new_detail)
         db.session.flush()  # assigns new_detail.id for the DetailDxfFile/Operation FKs below
         if has_dxf:
+            _add_cutting_operation(new_detail, service_id, total_length)
             db.session.add(DetailDxfFile(
                 detail_id=new_detail.id, filename=stored_filename, original_filename=original_filename,
                 uploaded_by_id=current_user.id
@@ -3445,7 +3514,9 @@ def detail_dxf_dashboard(detail_id):
     # Plain dicts for the client-side pending-operations cart (see
     # detail_dxf_dashboard.html) to compute a live running total without a
     # round-trip per row - same convention as order_create()'s products_data.
-    services_data = [{'id': s.id, 'name': s.name, 'price_per_hour_eur': s.price_per_hour_eur} for s in services]
+    services_data = [{'id': s.id, 'name': s.name, 'price_per_hour_eur': s.price_per_hour_eur,
+                       'pricing_mode': s.pricing_mode, 'price_per_meter_eur': s.price_per_meter_eur}
+                      for s in services]
     return render_template('detail_dxf_dashboard.html', detail=detail, files=files, services=services,
                             materials=materials, services_data=services_data, active_page='admin_details')
 
@@ -3456,9 +3527,10 @@ def admin_update_detail_material(detail_id):
     """
     Lets an admin fix a detail's material or cut dimensions (width/height, mm)
     without re-uploading a new DXF - e.g. correcting a wrong material pick.
-    total_length/pierce_count stay whatever the original DXF produced; only
-    the price inputs that come from material/width/height are recomputed via
-    the same calculate_cnc_price() used everywhere else.
+    total_length/pierce_count stay whatever the original DXF produced, so the
+    detail's cutting Operation (priced off total_length, see
+    _add_cutting_operation) is untouched; only calculated_price - material
+    cost only, see calculate_material_price() - is recomputed.
     """
     if not current_user.is_admin:
         flash('Нямате достъп до тази страница.', 'danger')
@@ -3487,9 +3559,7 @@ def admin_update_detail_material(detail_id):
     detail.width = width
     detail.height = height
     detail.thickness_mm = thickness
-    detail.calculated_price = calculate_cnc_price(
-        width, height, detail.total_length, detail.pierce_count, material_key, detail.cutting_service_id
-    )
+    detail.calculated_price = calculate_material_price(width, height, material_key)
     db.session.commit()
     flash('Материалът и размерите бяха обновени успешно.', 'success')
     return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
@@ -3602,14 +3672,16 @@ def _parse_operations_json(raw):
 
 
 def _add_operations_from_rows(detail, rows):
-    """Creates one Operation per valid {service_id, duration_minutes} row,
-    appended after whatever sequence the detail already has - shared by
-    admin_add_operation (existing detail) and admin_add_detail (brand-new
-    detail, so detail.operations is empty and this just starts at 0). Invalid
-    rows (bad service/duration) are skipped rather than failing the whole
-    batch, same as create_delivery_note's items_json. An optional 'description'
-    per row (e.g. "външно лазерно рязане" vs. in-house) is stored as-is,
-    trimmed, blank -> None. Returns how many were actually added; caller is
+    """Creates one Operation per valid {service_id, duration_minutes} (or
+    {service_id, length_mm} for a length-priced Service) row, appended after
+    whatever sequence the detail already has - shared by admin_add_operation
+    (existing detail) and admin_add_detail (brand-new detail, so
+    detail.operations is empty and this just starts at 0). Invalid rows (bad
+    service, or a missing/non-positive value for the service's pricing mode)
+    are skipped rather than failing the whole batch, same as
+    create_delivery_note's items_json. An optional 'description' per row
+    (e.g. "външно лазерно рязане" vs. in-house) is stored as-is, trimmed,
+    blank -> None. Returns how many were actually added; caller is
     responsible for committing."""
     next_sequence = (max((op.sequence for op in detail.operations), default=-1)) + 1
     added = 0
@@ -3618,19 +3690,52 @@ def _add_operations_from_rows(detail, rows):
             continue
         try:
             service_id = int(row.get('service_id'))
-            duration_minutes = float(row.get('duration_minutes'))
         except (TypeError, ValueError):
             continue
-        if duration_minutes <= 0 or not db.session.get(Service, service_id):
+        service = db.session.get(Service, service_id)
+        if not service:
             continue
+        duration_minutes = 0.0
+        length_mm = None
+        if service.pricing_mode == 'length':
+            try:
+                length_mm = float(row.get('length_mm'))
+            except (TypeError, ValueError):
+                continue
+            if length_mm <= 0:
+                continue
+            length_mm = round(length_mm, 2)
+        else:
+            try:
+                duration_minutes = float(row.get('duration_minutes'))
+            except (TypeError, ValueError):
+                continue
+            if duration_minutes <= 0:
+                continue
+            duration_minutes = round(duration_minutes, 2)
         description = (row.get('description') or '').strip() or None
         db.session.add(Operation(
             detail_id=detail.id, service_id=service_id, sequence=next_sequence,
-            duration_minutes=round(duration_minutes, 2), description=description
+            duration_minutes=duration_minutes, length_mm=length_mm, description=description
         ))
         next_sequence += 1
         added += 1
     return added
+
+
+def _add_cutting_operation(detail, service_id, total_length):
+    """Attaches the base-cut Operation for a freshly-created Detail (sequence
+    0, ahead of any extra ops from _add_operations_from_rows), priced by cut
+    length rather than baked into calculated_price - see
+    calculate_material_price(). Caller must have already validated service_id
+    resolves to a length-priced Service; no-op without a length to cut (the
+    manual-price/no-DXF fallback)."""
+    if not service_id or not total_length:
+        return
+    db.session.add(Operation(
+        detail_id=detail.id, service_id=service_id, sequence=0,
+        duration_minutes=0.0, length_mm=round(total_length, 2)
+    ))
 
 
 def _order_item_operations_cost(order_item, rows):
@@ -4603,8 +4708,12 @@ def api_quick_create_detail():
     if has_dxf and not file.filename.lower().endswith('.dxf'):
         return jsonify({'status': 'error', 'message': 'Невалиден формат! Приемат се само .dxf файлове.'}), 400
 
-    if has_dxf and (not service_id or not db.session.get(Service, service_id)):
-        return jsonify({'status': 'error', 'message': 'Невалиден избор на услуга.'}), 400
+    # The base cut is priced by length (see calculate_material_price() /
+    # _add_cutting_operation), not baked into calculated_price - so the
+    # cutting service must be length-priced, not the old hourly kind.
+    cutting_service = db.session.get(Service, service_id) if service_id else None
+    if has_dxf and (not cutting_service or cutting_service.pricing_mode != 'length'):
+        return jsonify({'status': 'error', 'message': 'Моля изберете услуга за лазерно рязане с ценообразуване по дължина.'}), 400
 
     manual_price = None
     if not has_dxf:
@@ -4630,7 +4739,7 @@ def api_quick_create_detail():
             if width is None:
                 return jsonify({'status': 'error', 'message': 'Грешка при обработката на DXF файла.'}), 400
 
-            price = calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id)
+            price = calculate_material_price(width, height, material_key)
             new_detail = Detail(
                 name=name, material_key=material_key, width=width, height=height,
                 total_length=total_length, pierce_count=pierce_count,
@@ -4645,7 +4754,9 @@ def api_quick_create_detail():
                 erp_number=erp_number, code_number=code_number, cutting_service_id=service_id
             )
         db.session.add(new_detail)
-        db.session.flush()  # assigns new_detail.id for the optional DetailDxfFile below
+        db.session.flush()  # assigns new_detail.id for the optional DetailDxfFile/Operation below
+        if has_dxf:
+            _add_cutting_operation(new_detail, service_id, total_length)
         if pdf_file and pdf_file.filename:
             pdf_stored_filename = _save_upload(pdf_file, app.config['DETAIL_DXF_FOLDER'], allowed_extensions={'pdf'})
             db.session.add(DetailDxfFile(
@@ -4659,7 +4770,7 @@ def api_quick_create_detail():
             'detail': {
                 'id': new_detail.id,
                 'name': f"{new_detail.name} ({mat.display_name})",
-                'price': new_detail.calculated_price
+                'price': new_detail.total_price
             }
         })
 
