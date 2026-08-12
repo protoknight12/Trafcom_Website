@@ -1,15 +1,16 @@
 """
 pytest regression test for the material-only Detail pricing refactor:
-Detail.calculated_price is now material cost + BASE_SETUP_FEE only (see
-calculate_material_price()); cutting cost is instead captured as an
-auto-attached length-priced Operation (_add_cutting_operation()) at
-DXF-upload time, so Detail.total_price still equals material + cutting (+ any
-other operations). Also guards that a Detail's cutting service must be
-length-priced (pricing_mode == 'length'), and that changing material via
-admin_update_detail_material() only touches calculated_price, not the
-cutting Operation. Uses the Flask test client (same pattern as
-test_detail_pdf_upload.py) since this needs real multipart file-upload
-behavior.
+Detail.calculated_price is now raw material cost only - no BASE_SETUP_FEE, no
+cutting cost (see calculate_material_price()); cutting cost is instead
+captured as an auto-attached length-priced Operation
+(_add_cutting_operation()) at DXF-upload time, so Detail.total_price still
+equals material + cutting (+ any other operations), just without the flat
+per-job setup fee the DXF-upload calculator still charges. Also guards that a
+Detail's cutting service must be length-priced (pricing_mode == 'length'),
+and that changing material via admin_update_detail_material() only touches
+calculated_price, not the cutting Operation. Uses the Flask test client (same
+pattern as test_detail_pdf_upload.py) since this needs real multipart
+file-upload behavior.
 
 Run with:
     pytest testing/test_material_only_detail_pricing.py -v
@@ -57,9 +58,8 @@ def app():
     with flask_app.app_context():
         db.create_all()
         admin = User(username='qa_admin', password=generate_password_hash('irrelevant123'), role='admin')
-        # area = 0 for a bare line (height stays 0), so material_cost is 0 and
-        # calculated_price collapses to just BASE_SETUP_FEE - keeps the math
-        # in this test independent of BASE_SETUP_FEE's actual value.
+        # area = 0 for a bare line (height stays 0), so calculated_price is 0.0 -
+        # no BASE_SETUP_FEE, no cutting cost baked in.
         material = MaterialPrice(key='qa_mat', display_name='QA Material', cost_per_m2=10,
                                   cutting_speed_mm_per_min=1, pierce_rate_per_min=0.1)
         length_service = Service(name='Лазер по дължина', price_per_hour_eur=999,
@@ -91,8 +91,7 @@ def test_calculated_price_is_material_only_and_cutting_becomes_an_operation(clie
 
     with flask_app.app_context():
         detail = db.session.get(Detail, detail_id)
-        from app import BASE_SETUP_FEE
-        assert detail.calculated_price == round(BASE_SETUP_FEE, 2)  # material_cost is 0 (zero-height line)
+        assert detail.calculated_price == 0.0  # material_cost is 0 (zero-height line), no setup fee
 
         ops = Operation.query.filter_by(detail_id=detail.id).all()
         assert len(ops) == 1
@@ -129,9 +128,8 @@ def test_update_material_recomputes_material_only_price_without_touching_cutting
     })
 
     with flask_app.app_context():
-        from app import BASE_SETUP_FEE
         detail = db.session.get(Detail, detail_id)
-        assert detail.calculated_price == round(5.0 + BASE_SETUP_FEE, 2)
+        assert detail.calculated_price == 5.0
         # The cutting Operation from creation time is untouched by the material update.
         ops = Operation.query.filter_by(detail_id=detail.id).all()
         assert len(ops) == 1

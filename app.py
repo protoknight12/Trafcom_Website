@@ -1507,18 +1507,20 @@ def calculate_cnc_price(width, height, total_length, pierce_count, material_key,
 
 def calculate_material_price(width, height, material_key):
     """
-    Material-only price for a Detail's base cut: raw-stock cost (see
-    _material_cost) plus the flat BASE_SETUP_FEE, deliberately excluding any
-    cutting cost - a Detail's cutting is priced as its own length-based
-    Operation instead (see _add_cutting_operation), not baked into
-    calculated_price. Detail-catalog only; the DxfFile/personal-upload
-    calculator keeps using calculate_cnc_price()/calculate_cnc_price_multi_service(),
-    which still fold cutting time into their total.
+    Material-only price for a Detail's base cut: just raw-stock cost (see
+    _material_cost) - no BASE_SETUP_FEE, no cutting cost. A Detail's cutting
+    is priced as its own length-based Operation instead (see
+    _add_cutting_operation), not baked into calculated_price; the flat
+    per-job setup fee doesn't apply here either - it's a one-off DXF-upload
+    charge, not something a reusable catalog part carries. Detail-catalog
+    only; the DxfFile/personal-upload calculator keeps using
+    calculate_cnc_price()/calculate_cnc_price_multi_service(), which still
+    charge BASE_SETUP_FEE + cutting time.
     """
     material = MaterialPrice.query.filter_by(key=material_key).first()
     if not material:
         return 0.0
-    return round(_material_cost(width, height, material) + BASE_SETUP_FEE, 2)
+    return round(_material_cost(width, height, material), 2)
 
 
 def calculate_cnc_price_multi_service(width, height, total_length, pierce_count, material_key, service_ids):
