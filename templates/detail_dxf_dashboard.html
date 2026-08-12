@@ -325,6 +325,9 @@
         <input type="hidden" name="operations_json" id="operationsJsonInput" form="addOperationsForm">
         <button type="submit" class="btn-submit" form="addOperationsForm" id="saveOperationsBtn" disabled>Запази избраните операции</button>
 
+        {% if detail.operations %}
+        {% set cutting_ops = detail.operations|selectattr('service.machine_type', 'equalto', 'laser')|list %}
+        {% set other_ops = detail.operations|rejectattr('service.machine_type', 'equalto', 'laser')|list %}
         <div class="table-responsive" style="margin-top: 1.5rem;">
             <table class="users-table">
                 <thead>
@@ -350,15 +353,8 @@
                         </form>
                     </td>
                 </tr>
-                {% else %}
-                <tr>
-                    <td colspan="5" class="text-center no-data">Няма добавени операции.</td>
-                </tr>
                 {% endfor %}
                 </tbody>
-                {% if detail.operations %}
-                {% set cutting_ops = detail.operations|selectattr('service.machine_type', 'equalto', 'laser')|list %}
-                {% set other_ops = detail.operations|rejectattr('service.machine_type', 'equalto', 'laser')|list %}
                 <tfoot>
                 <tr>
                     <td colspan="3" class="text-right"><strong>Цена на материала:</strong></td>
@@ -369,12 +365,14 @@
                         {% endif %}
                     </td>
                 </tr>
+                {% if other_ops %}
                 <tr>
                     <td colspan="3" class="text-right"><strong>Обща цена на операциите:</strong></td>
                     <td colspan="2">
                         <strong>{{ "%.2f"|format(other_ops|sum(attribute='cost')) }} €</strong>
                     </td>
                 </tr>
+                {% endif %}
                 {% if cutting_ops %}
                 <tr>
                     <td colspan="3" class="text-right"><strong>Рязане (лазер, отделна операция):</strong></td>
@@ -390,9 +388,16 @@
                     </td>
                 </tr>
                 </tfoot>
-                {% endif %}
             </table>
         </div>
+        {% else %}
+        <p class="section-subtitle" style="margin-top: 1.5rem;">
+            <strong>Цена на материала: {{ "%.2f"|format(detail.calculated_price) }} €</strong>
+            {% if detail.material_price_breakdown %}
+            <span class="text-small text-muted">({{ detail.material_price_breakdown }})</span>
+            {% endif %}
+        </p>
+        {% endif %}
     </section>
 
     <script>

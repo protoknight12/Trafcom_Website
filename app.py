@@ -266,15 +266,17 @@ def material_dimension_labels(type_key):
 
 def material_price_m2_label(type_key):
     """
-    cost_per_m2 is area-based for sheets/pipes/profiles (calculate_cnc_price()
+    cost_per_m2 is area-based for sheets/profiles (calculate_cnc_price()
     prices those off the DXF bounding-box area) - only 'plate' in the label is
-    sheet-specific and reads oddly for pipes/profiles. Rods are priced off
-    length alone (see _material_cost), so the same column is really a €/m
-    linear rate for them, not an area rate.
+    sheet-specific and reads oddly for profiles. Rods and pipes are both
+    round stock bought and priced by the linear meter, not by a cross-section
+    area (see _material_cost) - a pipe's "width" is its outer diameter, not a
+    literal width (see DETAIL_DIMENSION_LABELS/MATERIAL_DIMENSION_LABELS), so
+    diameter x length is not a real area.
     """
     if type_key == 'sheets':
         return 'Цена на м² плоча (€)'
-    if type_key == 'rods':
+    if type_key in ('rods', 'pipes'):
         return 'Цена на линеен метър (€)'
     return 'Цена на м² материал (€)'
 
@@ -401,11 +403,11 @@ class Detail(db.Model):
     def material_price_breakdown(self):
         """Human-readable "quantity x rate" behind calculated_price, for
         display next to it (see detail_dxf_dashboard.html) - mirrors
-        _material_cost()'s rods-vs-area branch exactly so this can never
-        drift from the real calculation."""
+        _material_cost()'s rods/pipes-vs-area branch exactly so this can
+        never drift from the real calculation."""
         if not self.material:
             return None
-        if self.material.type == 'rods':
+        if self.material.type in ('rods', 'pipes'):
             return f"{self.height:.0f} мм × {self.material.cost_per_m2:.2f} €/м"
         area_m2 = (self.width * self.height) / 1_000_000
         return f"{area_m2:.3f} м² × {self.material.cost_per_m2:.2f} €/м²"
@@ -1482,13 +1484,15 @@ def _service_time_cost(total_length, pierce_count, material, service):
 def _material_cost(width, height, material):
     """
     Raw-stock cost for one cut, shared by calculate_cnc_price() and
-    calculate_cnc_price_multi_service(). Rods are priced off length alone
-    (height, by the Материал и размери tab's Диаметър/Дължина convention -
-    see DETAIL_DIMENSION_LABELS in detail_dxf_dashboard.html) - a rod's cost
-    scales with how much of it you cut off, not its diameter, unlike a
-    sheet/pipe/profile where cost_per_m2 is genuinely an area rate.
+    calculate_cnc_price_multi_service(). Rods AND pipes are priced off length
+    alone (height, by the Материал и размери tab's Диаметър/Дължина
+    convention - see DETAIL_DIMENSION_LABELS in detail_dxf_dashboard.html) -
+    both are round stock bought and cut by the linear meter, so cost scales
+    with how much you cut off, not with width * height (which for either of
+    them is diameter * length, not a real area). Sheets/profiles are the only
+    types where cost_per_m2 is genuinely an area rate.
     """
-    if material.type == 'rods':
+    if material.type in ('rods', 'pipes'):
         return (height / 1000) * material.cost_per_m2
     area_m2 = (width * height) / 1_000_000
     return area_m2 * material.cost_per_m2
@@ -3423,12 +3427,14 @@ def admin_add_detail():
         flash('Невалиден формат! Приемат се само .dxf файлове.', 'danger')
         return redirect(url_for('admin_details'))
 
-    # The base cut is priced by length (see calculate_material_price() /
-    # _add_cutting_operation), not baked into calculated_price - so the
-    # cutting service must be length-priced, not the old hourly kind.
-    cutting_service = db.session.get(Service, service_id) if service_id else None
-    if has_dxf and (not cutting_service or cutting_service.pricing_mode != 'length'):
-        flash('Моля изберете услуга за лазерно рязане с ценообразуване по дължина.', 'danger')
+    # Picking a cutting service is optional here - unlike calculated_price
+    # (material only, see calculate_material_price()), cutting cost isn't
+    # required to price a Detail at all. If a length-priced service IS
+    # picked, _add_cutting_operation() auto-attaches a cutting Operation for
+    # it below; anything else (blank, or a time-priced service) just gets
+    # recorded as cutting_service_id without an auto-created Operation.
+    if service_id and not db.session.get(Service, service_id):
+        flash('Невалиден избор на услуга.', 'danger')
         return redirect(url_for('admin_details'))
 
     manual_price = None
@@ -3742,10 +3748,17 @@ def _add_cutting_operation(detail, service_id, total_length):
     """Attaches the base-cut Operation for a freshly-created Detail (sequence
     0, ahead of any extra ops from _add_operations_from_rows), priced by cut
     length rather than baked into calculated_price - see
-    calculate_material_price(). Caller must have already validated service_id
-    resolves to a length-priced Service; no-op without a length to cut (the
-    manual-price/no-DXF fallback)."""
+    calculate_material_price(). Picking a cutting service is optional and
+    isn't required to be length-priced (see admin_add_detail() /
+    api_quick_create_detail()) - this only actually attaches an Operation
+    when it resolves to a length-priced Service; otherwise cutting_service_id
+    is still recorded on the Detail, just without an auto-priced Operation to
+    go with it. No-op without a length to cut either (the manual-price/no-DXF
+    fallback)."""
     if not service_id or not total_length:
+        return
+    service = db.session.get(Service, service_id)
+    if not service or service.pricing_mode != 'length':
         return
     db.session.add(Operation(
         detail_id=detail.id, service_id=service_id, sequence=0,
@@ -4723,12 +4736,14 @@ def api_quick_create_detail():
     if has_dxf and not file.filename.lower().endswith('.dxf'):
         return jsonify({'status': 'error', 'message': 'Невалиден формат! Приемат се само .dxf файлове.'}), 400
 
-    # The base cut is priced by length (see calculate_material_price() /
-    # _add_cutting_operation), not baked into calculated_price - so the
-    # cutting service must be length-priced, not the old hourly kind.
-    cutting_service = db.session.get(Service, service_id) if service_id else None
-    if has_dxf and (not cutting_service or cutting_service.pricing_mode != 'length'):
-        return jsonify({'status': 'error', 'message': 'Моля изберете услуга за лазерно рязане с ценообразуване по дължина.'}), 400
+    # Picking a cutting service is optional here - unlike calculated_price
+    # (material only, see calculate_material_price()), cutting cost isn't
+    # required to price a Detail at all. If a length-priced service IS
+    # picked, _add_cutting_operation() auto-attaches a cutting Operation for
+    # it below; anything else (blank, or a time-priced service) just gets
+    # recorded as cutting_service_id without an auto-created Operation.
+    if service_id and not db.session.get(Service, service_id):
+        return jsonify({'status': 'error', 'message': 'Невалиден избор на услуга.'}), 400
 
     manual_price = None
     if not has_dxf:

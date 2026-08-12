@@ -1,16 +1,18 @@
 """
 pytest regression test for the material-only Detail pricing refactor:
 Detail.calculated_price is now raw material cost only - no BASE_SETUP_FEE, no
-cutting cost (see calculate_material_price()); cutting cost is instead
-captured as an auto-attached length-priced Operation
-(_add_cutting_operation()) at DXF-upload time, so Detail.total_price still
-equals material + cutting (+ any other operations), just without the flat
-per-job setup fee the DXF-upload calculator still charges. Also guards that a
-Detail's cutting service must be length-priced (pricing_mode == 'length'),
-and that changing material via admin_update_detail_material() only touches
-calculated_price, not the cutting Operation. Uses the Flask test client (same
-pattern as test_detail_pdf_upload.py) since this needs real multipart
-file-upload behavior.
+cutting cost (see calculate_material_price()). Picking a cutting service at
+DXF-upload time is entirely optional (see admin_add_detail()/
+api_quick_create_detail()) - when a length-priced one IS picked,
+_add_cutting_operation() auto-attaches a cutting Operation for it, so
+Detail.total_price equals material + cutting (+ any other operations); a
+blank or time-priced pick just gets recorded as cutting_service_id with no
+auto-created Operation (cutting isn't tracked/priced for that detail unless
+added by hand later). Also guards that changing material via
+admin_update_detail_material() only touches calculated_price, not the
+cutting Operation. Uses the Flask test client (same pattern as
+test_detail_pdf_upload.py) since this needs real multipart file-upload
+behavior.
 
 Run with:
     pytest testing/test_material_only_detail_pricing.py -v
@@ -103,16 +105,33 @@ def test_calculated_price_is_material_only_and_cutting_becomes_an_operation(clie
         assert detail.total_price == round(detail.calculated_price + cutting_op.cost, 2)
 
 
-def test_time_priced_service_rejected_as_cutting_service(client):
+def test_time_priced_service_recorded_but_no_cutting_op_created(client):
     c, _length_service_id, time_service_id = client
     res = c.post('/api/quick-create-detail', data={
-        'name': 'QA Bad Detail', 'material': 'qa_mat', 'service_id': str(time_service_id),
+        'name': 'QA Time Detail', 'material': 'qa_mat', 'service_id': str(time_service_id),
         'file': (io.BytesIO(_minimal_dxf_bytes(10)), 'part.dxf'),
     }, content_type='multipart/form-data')
-    assert res.status_code == 400
-    assert res.get_json()['status'] == 'error'
+    assert res.status_code == 200, res.get_json()
+    detail_id = res.get_json()['detail']['id']
     with flask_app.app_context():
-        assert Detail.query.filter_by(name='QA Bad Detail').first() is None
+        detail = db.session.get(Detail, detail_id)
+        assert detail.cutting_service_id == time_service_id
+        assert Operation.query.filter_by(detail_id=detail.id).count() == 0
+        assert detail.total_price == detail.calculated_price
+
+
+def test_no_cutting_service_at_all_still_creates_detail(client):
+    c, _length_service_id, _time_service_id = client
+    res = c.post('/api/quick-create-detail', data={
+        'name': 'QA No Service Detail', 'material': 'qa_mat',
+        'file': (io.BytesIO(_minimal_dxf_bytes(10)), 'part.dxf'),
+    }, content_type='multipart/form-data')
+    assert res.status_code == 200, res.get_json()
+    detail_id = res.get_json()['detail']['id']
+    with flask_app.app_context():
+        detail = db.session.get(Detail, detail_id)
+        assert detail.cutting_service_id is None
+        assert Operation.query.filter_by(detail_id=detail.id).count() == 0
 
 
 def test_update_material_recomputes_material_only_price_without_touching_cutting_op(client):
