@@ -58,6 +58,11 @@ orders through production tracking. The UI is in Bulgarian.
 - **DXF revision history per Detail** — the original uploaded `.dxf` files
   behind a catalog Detail are kept and downloadable (admins only), not just
   the geometry extracted from them.
+- **Order-time customization** — a standalone-detail order line can carry
+  its own ad-hoc operations (independent of any `Operation` permanently
+  attached to the Detail catalog row) and an optional reference PDF
+  (drawing/spec), both picked at order-creation time and frozen into that
+  line's price and paperwork.
 - **Live power monitoring** — a real-time dashboard (`/admin/power`)
   polling Shelly energy meters on the shop LAN (both Gen1 and Gen2 devices
   supported), plus a background poller that logs readings locally every
@@ -215,11 +220,16 @@ set up the database).
   - [`test_security_fixes.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_security_fixes.py)
   - [`test_quick_create_material.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_quick_create_material.py)
   - [`test_quick_create_product_components.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_quick_create_product_components.py)
+  - [`test_detail_pdf_upload.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_detail_pdf_upload.py)
+  - [`test_operation_description.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_operation_description.py)
+  - [`test_order_item_operations.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_order_item_operations.py)
+  - [`test_order_item_attachment.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_order_item_attachment.py)
   - [`test_shelly_status.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_shelly_status.py)
   - [`test_shelly_history_aggregation.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_shelly_history_aggregation.py)
   - [`test_shelly_device_routes.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_shelly_device_routes.py)
   - [`test_shelly_reading_log.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_shelly_reading_log.py)
   - [`test_admin_power_history_gen1.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_admin_power_history_gen1.py)
+  - [`test_upload_and_machine_helpers.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_upload_and_machine_helpers.py)
 
 </details>
 
