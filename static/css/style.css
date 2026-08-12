@@ -725,8 +725,37 @@ button, .btn {
 
 /* --- Hero Layout --- */
 .dmg-hero {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 40px;
     padding: 60px 0 80px 0;
     border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.hero-content {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.hero-poster-link {
+    flex: 0 0 auto;
+    display: block;
+}
+
+.hero-poster {
+    display: block;
+    width: 420px;
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    background: #fff;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+    transition: transform 0.2s ease;
+}
+
+.hero-poster-link:hover .hero-poster {
+    transform: translateY(-4px);
 }
 
 .hero-tag {
@@ -1105,6 +1134,13 @@ button, .btn {
 }
 
 @media (max-width: 900px) {
+    .dmg-hero {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    .hero-poster {
+        width: 280px;
+    }
     .nav-toggle {
         display: flex;
     }

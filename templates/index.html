@@ -22,24 +22,30 @@
 <main class="dmg-container">
 
     <section class="dmg-hero">
-        <div class="hero-tag"><span>01</span> // ОПТИМИЗАЦИЯ НА ПРОИЗВОДСТВОТО</div>
-        <h1 class="hero-title">ИНДУСТРИАЛЕН <br><span class="text-glow">ЦПУ ПОРТАЛ</span></h1>
-        <p class="hero-lead">{{ text('index.hero_lead', 'Автоматизирано изчисляване на производствени оферти и технически анализ на DXF чертежи. Системата осигурява точност при обработка на детайли и листов материал в реалния машинен парк на Трафком ООД - гр. Тетевен.') }}</p>
+        <div class="hero-content">
+            <div class="hero-tag"><span>01</span> // ОПТИМИЗАЦИЯ НА ПРОИЗВОДСТВОТО</div>
+            <h1 class="hero-title">ИНДУСТРИАЛЕН <br><span class="text-glow">ЦПУ ПОРТАЛ</span></h1>
+            <p class="hero-lead">{{ text('index.hero_lead', 'Автоматизирано изчисляване на производствени оферти и технически анализ на DXF чертежи. Системата осигурява точност при обработка на детайли и листов материал в реалния машинен парк на Трафком ООД - гр. Тетевен.') }}</p>
 
-        <div class="hero-stats">
-            <div class="stat-item">
-                <span class="stat-num">1997</span>
-                <span class="stat-label">Основана в гр. Тетевен</span>
-            </div>
-            <div class="stat-item">
-                <span class="stat-num">4 000 m²</span>
-                <span class="stat-label">Механичен цех (от 2021 г.)</span>
-            </div>
-            <div class="stat-item">
-                <span class="stat-num">5-осно</span>
-                <span class="stat-label">Фрезоване и струговане</span>
+            <div class="hero-stats">
+                <div class="stat-item">
+                    <span class="stat-num">1997</span>
+                    <span class="stat-label">Основана в гр. Тетевен</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-num">4 000 m²</span>
+                    <span class="stat-label">Механичен цех (от 2021 г.)</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-num">5-осно</span>
+                    <span class="stat-label">Фрезоване и струговане</span>
+                </div>
             </div>
         </div>
+
+        <a class="hero-poster-link" href="{{ url_for('static', filename='documents/trafcom_eu_poster.pdf') }}" target="_blank" rel="noopener" title="Проект, съфинансиран от Европейския съюз - виж пълния постер (PDF)">
+            <img class="hero-poster" src="{{ url_for('static', filename='img/hero_poster.png') }}" alt="Съфинансиран от Европейския съюз - постер на проект на ТРАФКОМ ООД">
+        </a>
     </section>
 
     <section id="machines" class="dmg-showcase-section">
