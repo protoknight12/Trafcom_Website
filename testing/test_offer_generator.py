@@ -13,9 +13,14 @@ and the admin_offer_print browser-print view):
 - admin_offer_print renders the offer number, a product row's photo, and
   bold/italic markup unescaped (since it's already sanitized - see
   sanitize_rich_text) via the Flask test client.
+- _save_offer(), via POST /admin/offers/new: a free-typed ('text') row can
+  carry its own name/code/qty/price like a catalog row (not just a
+  description paragraph), a note-only row with no qty/price still saves with
+  those fields None, and a fully blank row is dropped as junk.
 
 Run as a module from the repo root:  python -m testing.test_offer_generator
 """
+import json
 import os
 
 from app import app, db, sanitize_rich_text, _next_offer_number, _resolve_staged_offer_image, \
@@ -87,9 +92,44 @@ with app.app_context():
     assert f'uploads/offers/{staged_filename}' in body
     assert '<b>Забележка</b>' in body  # rendered unescaped, not &lt;b&gt;
 
+    # --- free-typed 'text' rows: standard fields, not just a description ---
+    new_resp = client.get('/admin/offers/new')
+    csrf = new_resp.data.decode('utf-8').split('name="csrf_token" value="')[1].split('"')[0]
+    items = [
+        # Priced free-typed line (e.g. "Transport", 1 x 50 EUR) - no catalog link.
+        {'type': 'text', 'name': 'Транспорт', 'quantity': 1, 'unit': 'бр', 'unit_price': 50.0},
+        # Pure note - only a code + description, no qty/price.
+        {'type': 'text', 'code': 'NOTE-1', 'description_html': '<i>само бележка</i>'},
+        # Fully blank row - must be dropped, not saved.
+        {'type': 'text', 'name': '', 'code': '', 'description_html': ''},
+    ]
+    post_resp = client.post('/admin/offers/new', data={
+        'csrf_token': csrf, 'object_title': '', 'client_id': '', 'signed_by': '',
+        'footer_notes': '', 'items_json': json.dumps(items),
+    }, follow_redirects=True)
+    assert post_resp.status_code == 200
+
+    third_offer = Offer.query.filter(Offer.number.notin_([first, second])).order_by(Offer.id.desc()).first()
+    saved_items = sorted(third_offer.items, key=lambda i: i.position)
+    assert len(saved_items) == 2, [(i.name, i.code) for i in saved_items]  # the blank row was dropped
+
+    assert saved_items[0].name == 'Транспорт'
+    assert saved_items[0].quantity == 1
+    assert saved_items[0].unit_price == 50.0
+    assert saved_items[0].line_total == 50.0
+
+    assert saved_items[1].code == 'NOTE-1'
+    assert saved_items[1].description_html == '<i>само бележка</i>'
+    assert saved_items[1].quantity is None
+    assert saved_items[1].unit_price is None
+    assert saved_items[1].line_total == 0.0
+
+    assert third_offer.total == 50.0
+
     os.remove(staged_path)
     db.session.delete(offer2)
     db.session.delete(offer)
+    db.session.delete(third_offer)
     db.session.delete(admin)
     db.session.commit()
 

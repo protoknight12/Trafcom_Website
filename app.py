@@ -221,11 +221,15 @@ class MaterialPrice(db.Model):
     # enough for 'profiles'. Only meaningful/shown for type == 'profiles'.
     height_mm = db.Column(db.Float, nullable=True)
     # Alternate weight-based pricing, informational/catalog-only - not read
-    # by calculate_cnc_price()/_material_cost() (which stay on cost_per_m2),
-    # since no per-material weight/density is tracked to convert a €/kg rate
-    # into a real cost. Available for manual use when building an Offer.
+    # by calculate_cnc_price()/_material_cost() (which stay on cost_per_m2).
+    # Available for manual use (e.g. weight_kg * price_per_kg_*) when
+    # building an Offer.
     price_per_kg_m2 = db.Column(db.Float, nullable=True)
     price_per_kg_m = db.Column(db.Float, nullable=True)
+    # Actual measured weight (kg) of one stock unit (a full sheet, or one
+    # linear meter for rods/pipes/profiles) - purely informational like the
+    # two price_per_kg_* fields above, not read by the pricing engine.
+    weight_kg = db.Column(db.Float, nullable=True)
     # ERP code (shown as text + Code128 barcode) and internal part code (КД №)
     # printed on production labels - see print_label(). Optional/nullable
     # since older rows won't have them.
@@ -1052,13 +1056,16 @@ class Offer(db.Model):
 
 class OfferItem(db.Model):
     """
-    One line of an Offer: either a snapshot of a catalog Product/Detail
-    (name/price frozen at add-time, same pattern as OrderItemComponent, so
-    editing the catalog later never changes an already-generated offer) or a
-    free-form text row (item_type='text', no code/qty/price - a note or
-    section heading rather than a sellable item). description_html allows
-    only bold/italic markup (see sanitize_rich_text()) entered via the offer
-    editor's mini toolbar (admin_offer_edit.html).
+    One line of an Offer, in the same standard field shape (code/name/photo/
+    description/dimensions/qty/unit/price) regardless of source: item_type
+    'product'/'detail' snapshot a catalog row (name/price frozen at add-time,
+    same pattern as OrderItemComponent, so editing the catalog later never
+    changes an already-generated offer); item_type 'text' is the identical
+    shape but every field is typed by hand instead of pulled from a catalog
+    pick - for a one-off line, a note, or a section heading, all of which
+    still want the same columns in the exported/printed table. description_html
+    allows only bold/italic markup (see sanitize_rich_text()) entered via the
+    offer editor's mini toolbar (admin_offer_edit.html).
     """
     id = db.Column(db.Integer, primary_key=True)
     offer_id = db.Column(db.Integer, db.ForeignKey('offer.id'), nullable=False)
@@ -1073,8 +1080,7 @@ class OfferItem(db.Model):
     unit_price = db.Column(db.Float, nullable=True)
     # On-disk filename (uuid-prefixed, see _save_upload) of an optional photo
     # for this line - the 'снимка' column in the shop's original offer
-    # spreadsheets (see build_offer_workbook()). Product/detail rows only;
-    # a free-text row has no dedicated photo slot in the exported layout.
+    # spreadsheets (see admin_offer_print.html).
     image_filename = db.Column(db.String(255), nullable=True)
 
     offer = db.relationship('Offer', backref=db.backref(
@@ -1082,8 +1088,6 @@ class OfferItem(db.Model):
 
     @property
     def line_total(self):
-        if self.item_type == 'text':
-            return 0.0
         return round((self.quantity or 0) * (self.unit_price or 0), 2)
 
 
@@ -3157,6 +3161,7 @@ def admin_update_material(key):
         sheet_length_mm, sheet_width_mm, thickness_mm, height_mm = _parse_sheet_dimensions(request.form)
         price_per_kg_m2 = _parse_optional_float(request.form, 'price_per_kg_m2')
         price_per_kg_m = _parse_optional_float(request.form, 'price_per_kg_m')
+        weight_kg = _parse_optional_float(request.form, 'weight_kg')
         erp_number = _parse_erp_number(request.form)
     except ValueError:
         flash('Всички цени, размери и ERP № трябва да бъдат валидни числа.', 'danger')
@@ -3183,6 +3188,7 @@ def admin_update_material(key):
     material.height_mm = height_mm
     material.price_per_kg_m2 = round(price_per_kg_m2, 2) if price_per_kg_m2 is not None else None
     material.price_per_kg_m = round(price_per_kg_m, 2) if price_per_kg_m is not None else None
+    material.weight_kg = round(weight_kg, 2) if weight_kg is not None else None
     material.erp_number = erp_number
     material.code_number = request.form.get('code_number', '').strip() or None
     material.type = _parse_material_type(request.form)
@@ -3219,6 +3225,7 @@ def admin_add_material():
         sheet_length_mm, sheet_width_mm, thickness_mm, height_mm = _parse_sheet_dimensions(request.form)
         price_per_kg_m2 = _parse_optional_float(request.form, 'price_per_kg_m2')
         price_per_kg_m = _parse_optional_float(request.form, 'price_per_kg_m')
+        weight_kg = _parse_optional_float(request.form, 'weight_kg')
         erp_number = _parse_erp_number(request.form)
     except ValueError:
         flash('Всички цени, размери и ERP № трябва да бъдат валидни числа.', 'danger')
@@ -3260,6 +3267,7 @@ def admin_add_material():
         height_mm=height_mm,
         price_per_kg_m2=round(price_per_kg_m2, 2) if price_per_kg_m2 is not None else None,
         price_per_kg_m=round(price_per_kg_m, 2) if price_per_kg_m is not None else None,
+        weight_kg=round(weight_kg, 2) if weight_kg is not None else None,
         erp_number=erp_number,
         code_number=request.form.get('code_number', '').strip() or None,
         type=material_type,
@@ -5096,6 +5104,7 @@ def api_quick_create_material():
         sheet_length_mm, sheet_width_mm, thickness_mm, height_mm = _parse_sheet_dimensions(request.form)
         price_per_kg_m2 = _parse_optional_float(request.form, 'price_per_kg_m2')
         price_per_kg_m = _parse_optional_float(request.form, 'price_per_kg_m')
+        weight_kg = _parse_optional_float(request.form, 'weight_kg')
         erp_number = _parse_erp_number(request.form)
     except ValueError:
         return jsonify({'status': 'error', 'message': 'Всички цени, размери и ERP № трябва да бъдат валидни числа.'}), 400
@@ -5129,6 +5138,7 @@ def api_quick_create_material():
         height_mm=height_mm,
         price_per_kg_m2=round(price_per_kg_m2, 2) if price_per_kg_m2 is not None else None,
         price_per_kg_m=round(price_per_kg_m, 2) if price_per_kg_m is not None else None,
+        weight_kg=round(weight_kg, 2) if weight_kg is not None else None,
         erp_number=erp_number,
         code_number=request.form.get('code_number', '').strip() or None,
         type=material_type,
@@ -6156,7 +6166,7 @@ def _offer_items_json(offer):
     return [{
         'type': item.item_type, 'code': item.code or '', 'name': item.name or '',
         'description_html': item.description_html or '', 'dimensions': item.dimensions or '',
-        'quantity': item.quantity, 'unit': item.unit or 'бр', 'unit_price': item.unit_price,
+        'quantity': item.quantity, 'unit': item.unit or '', 'unit_price': item.unit_price,
         'image_filename': item.image_filename or '',
     } for item in offer.items]
 
@@ -6215,32 +6225,41 @@ def _save_offer(offer):
         item_type = row.get('type')
         if item_type not in ('product', 'detail', 'text'):
             continue
+
+        def _optional_row_float(key):
+            raw = row.get(key)
+            try:
+                return float(raw) if raw not in (None, '') else None
+            except (TypeError, ValueError):
+                return None
+
         description_html = sanitize_rich_text(row.get('description_html'))
+        name = (row.get('name') or '').strip() or None
+        code = (row.get('code') or '').strip() or None
+        quantity = _optional_row_float('quantity')
+        unit_price = _optional_row_float('unit_price')
 
-        if item_type == 'text':
-            if not description_html:
+        if item_type in ('product', 'detail'):
+            # A catalog pick must be a real quantity/price, same as before.
+            if not name or quantity is None or quantity <= 0 or unit_price is None or unit_price < 0:
                 continue
-            db.session.add(OfferItem(offer=offer, position=position, item_type='text',
-                                      description_html=description_html))
-            continue
+            unit = (row.get('unit') or '').strip() or 'бр'
+        else:
+            # Free-typed row: every field is optional, but keep it only if
+            # it carries *something* (a name, code, or descriptive text) -
+            # a purely blank row is junk, not a note. Qty/price stay None
+            # when left blank, so a pure text note still saves.
+            if not (name or code or description_html):
+                continue
+            if (quantity is not None and quantity <= 0) or (unit_price is not None and unit_price < 0):
+                continue
+            unit = (row.get('unit') or '').strip() or None
 
-        name = (row.get('name') or '').strip()
-        if not name:
-            continue
-        try:
-            quantity = float(row.get('quantity', 0))
-            unit_price = float(row.get('unit_price', 0))
-        except (TypeError, ValueError):
-            continue
-        if quantity <= 0 or unit_price < 0:
-            continue
         db.session.add(OfferItem(
             offer=offer, position=position, item_type=item_type,
-            code=(row.get('code') or '').strip() or None,
-            name=name, description_html=description_html,
+            code=code, name=name, description_html=description_html,
             dimensions=(row.get('dimensions') or '').strip() or None,
-            quantity=quantity, unit=(row.get('unit') or 'бр').strip() or 'бр',
-            unit_price=unit_price,
+            quantity=quantity, unit=unit, unit_price=unit_price,
             image_filename=_resolve_staged_offer_image(row.get('image_filename')),
         ))
 

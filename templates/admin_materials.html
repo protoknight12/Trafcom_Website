@@ -112,6 +112,10 @@
                 <input type="number" id="new_price_per_kg_m" step="0.01" min="0" name="price_per_kg_m" placeholder="напр. 2.20">
             </div>
             <div class="form-group">
+                <label for="new_weight_kg">Тегло (кг, незадължително)</label>
+                <input type="number" id="new_weight_kg" step="0.01" min="0" name="weight_kg" placeholder="напр. 45.00">
+            </div>
+            <div class="form-group">
                 <label for="new_material_erp_number">ERP № (незадължително - оставете празно за автоматично генериране)</label>
                 <input type="number" id="new_material_erp_number" name="erp_number" placeholder="автоматично">
             </div>
@@ -146,6 +150,7 @@
                     <th>Височина (мм)</th>
                     <th>Цена на кг за м² (€)</th>
                     <th>Цена на кг за м (€)</th>
+                    <th>Тегло (кг)</th>
                     <th>На склад</th>
                     <th>ERP №</th>
                     <th>КД №</th>
@@ -207,6 +212,9 @@
                                value="{{ material.price_per_kg_m if material.price_per_kg_m is not none else '' }}"
                                class="material-price-input" placeholder="€/кг/м"
                                style="{{ '' if is_linear else 'display:none;' }}"></td>
+                    <td><input type="number" step="0.01" min="0" name="weight_kg" form="{{ form_id }}"
+                               value="{{ material.weight_kg if material.weight_kg is not none else '' }}"
+                               class="material-price-input" placeholder="кг"></td>
                     <td>{{ material.stock_quantity|round(2) }}</td>
                     <td><input type="number" name="erp_number" form="{{ form_id }}" value="{{ material.erp_number or '' }}"
                                class="material-price-input" placeholder="автоматично"></td>

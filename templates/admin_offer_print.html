@@ -28,7 +28,6 @@
         .offer-sheet .text-center { text-align: center; }
         .offer-sheet .text-right { text-align: right; }
         .offer-sheet img.item-photo { max-width: 90px; max-height: 90px; display: block; margin: 0 auto; }
-        .offer-sheet .offer-text-row td { background: #fafafa; font-style: normal; }
         .offer-sheet .offer-total-row td { border-top: 2px solid #111; font-weight: 700; font-size: 1.05rem; }
         .offer-sheet .offer-terms { margin-top: 24px; }
         .offer-sheet .offer-terms p { font-weight: 700; margin: 4px 0; }
@@ -72,11 +71,6 @@
         </thead>
         <tbody>
         {% for item in offer.items %}
-        {% if item.item_type == 'text' %}
-        <tr class="offer-text-row">
-            <td colspan="9">{{ item.description_html | safe }}</td>
-        </tr>
-        {% else %}
         <tr>
             <td class="text-center">{{ item.code or '' }}</td>
             <td>
@@ -84,15 +78,14 @@
                 <img class="item-photo" src="{{ url_for('static', filename='uploads/offers/' ~ item.image_filename) }}" alt="">
                 {% endif %}
             </td>
-            <td>{{ item.name }}</td>
+            <td>{{ item.name or '' }}</td>
             <td>{{ item.description_html | safe if item.description_html else '' }}</td>
             <td class="text-center">{{ item.dimensions or '' }}</td>
-            <td class="text-center">{{ item.quantity|round(2) }}</td>
-            <td class="text-center">{{ item.unit }}</td>
-            <td class="text-right">{{ '%.2f'|format(item.unit_price) }}</td>
-            <td class="text-right">{{ '%.2f'|format(item.line_total) }}</td>
+            <td class="text-center">{{ '%g'|format(item.quantity) if item.quantity is not none else '' }}</td>
+            <td class="text-center">{{ item.unit or '' }}</td>
+            <td class="text-right">{{ '%.2f'|format(item.unit_price) if item.unit_price is not none else '' }}</td>
+            <td class="text-right">{{ '%.2f'|format(item.line_total) if item.quantity is not none and item.unit_price is not none else '' }}</td>
         </tr>
-        {% endif %}
         {% endfor %}
         <tr class="offer-total-row">
             <td colspan="8" class="text-right">ОБЩО:</td>

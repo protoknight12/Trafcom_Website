@@ -102,6 +102,10 @@
                 {% endfor %}
             </select>
         </div>
+        <div id="name_manual_group" class="form-group" style="display:none;">
+            <label for="item_name_manual">Наименование</label>
+            <input type="text" id="item_name_manual" placeholder="напр. Транспорт">
+        </div>
 
         <div id="item_fields" class="admin-form">
             <div class="form-group">
@@ -231,7 +235,7 @@
         radio.addEventListener('change', function () {
             document.getElementById('product_selector').style.display = this.value === 'product' ? 'block' : 'none';
             document.getElementById('detail_selector').style.display = this.value === 'detail' ? 'block' : 'none';
-            document.getElementById('item_fields').style.display = this.value === 'text' ? 'none' : 'grid';
+            document.getElementById('name_manual_group').style.display = this.value === 'text' ? 'block' : 'none';
         });
     });
 
@@ -268,32 +272,51 @@
 
     function addToCart() {
         const type = document.querySelector('input[name="item_type"]:checked').value;
-        const descriptionHtml = document.getElementById('item_description').innerHTML.trim();
+        let descriptionHtml = document.getElementById('item_description').innerHTML.trim();
+        if (descriptionHtml === '<br>') descriptionHtml = '';
 
+        let name;
         if (type === 'text') {
-            if (!descriptionHtml || descriptionHtml === '<br>') { alert('Моля въведете текст.'); return; }
-            cart.push({ type: 'text', code: '', name: '', description_html: descriptionHtml, dimensions: '', quantity: null, unit: '', unit_price: null, image_filename: '' });
+            name = document.getElementById('item_name_manual').value.trim();
         } else {
             const sel = document.getElementById(type === 'product' ? 'item_product_id' : 'item_detail_id');
             const source = (type === 'product' ? PRODUCTS : DETAILS).find(function (x) { return x.id === parseInt(sel.value, 10); });
             if (!source) { alert('Моля изберете ' + (type === 'product' ? 'продукт' : 'детайл') + '.'); return; }
-            const qty = parseFloat(document.getElementById('item_qty').value);
-            const unitPrice = parseFloat(document.getElementById('item_unit_price').value);
-            if (!qty || qty <= 0) { alert('Моля въведете валидно количество.'); return; }
-            if (isNaN(unitPrice) || unitPrice < 0) { alert('Моля въведете валидна цена.'); return; }
-            cart.push({
-                type: type, code: document.getElementById('item_code').value.trim(),
-                name: source.name, description_html: descriptionHtml,
-                dimensions: readDimensions(),
-                quantity: qty, unit: document.getElementById('item_unit').value.trim() || 'бр', unit_price: unitPrice,
-                image_filename: pendingImageFilename || '',
-            });
-            document.getElementById('item_code').value = '';
-            clearDimensions();
-            document.getElementById('item_qty').value = '1';
-            document.getElementById('item_unit_price').value = '';
-            clearPendingImage();
+            name = source.name;
         }
+
+        const code = document.getElementById('item_code').value.trim();
+        const qtyRaw = document.getElementById('item_qty').value.trim();
+        const priceRaw = document.getElementById('item_unit_price').value.trim();
+        const qty = qtyRaw === '' ? null : parseFloat(qtyRaw);
+        const unitPrice = priceRaw === '' ? null : parseFloat(priceRaw);
+
+        if (type === 'text') {
+            // A free-typed row can leave qty/price blank (a pure note), but
+            // needs *something* - a name, code, or description - and any
+            // qty/price it does carry must still be valid.
+            if (!name && !code && !descriptionHtml) { alert('Въведете поне наименование, код или описание.'); return; }
+            if (qty !== null && (isNaN(qty) || qty <= 0)) { alert('Количеството трябва да е положително число.'); return; }
+            if (unitPrice !== null && (isNaN(unitPrice) || unitPrice < 0)) { alert('Цената не може да бъде отрицателна.'); return; }
+        } else {
+            if (qty === null || isNaN(qty) || qty <= 0) { alert('Моля въведете валидно количество.'); return; }
+            if (unitPrice === null || isNaN(unitPrice) || unitPrice < 0) { alert('Моля въведете валидна цена.'); return; }
+        }
+
+        cart.push({
+            type: type, code: code, name: name, description_html: descriptionHtml,
+            dimensions: readDimensions(), quantity: qty,
+            unit: document.getElementById('item_unit').value.trim(), unit_price: unitPrice,
+            image_filename: pendingImageFilename || '',
+        });
+
+        document.getElementById('item_code').value = '';
+        document.getElementById('item_name_manual').value = '';
+        clearDimensions();
+        document.getElementById('item_qty').value = '1';
+        document.getElementById('item_unit').value = 'бр';
+        document.getElementById('item_unit_price').value = '';
+        clearPendingImage();
         document.getElementById('item_description').innerHTML = '';
         renderCart();
     }
@@ -312,7 +335,8 @@
         } else {
             cart.forEach(function (item, idx) {
                 const tr = document.createElement('tr');
-                const lineTotal = item.type === 'text' ? 0 : (item.quantity || 0) * (item.unit_price || 0);
+                const hasLineTotal = item.quantity != null && item.unit_price != null;
+                const lineTotal = hasLineTotal ? item.quantity * item.unit_price : null;
 
                 tr.appendChild(cell(item.code || ''));
                 const thumbHtml = item.image_filename
@@ -323,10 +347,10 @@
                 if (item.description_html) nameHtml += (nameHtml ? '<br>' : '') + '<span class="text-small text-muted">' + item.description_html + '</span>';
                 tr.appendChild(cell(nameHtml || '-'));
                 tr.appendChild(cell(item.dimensions || ''));
-                tr.appendChild(cell(item.type === 'text' ? '' : item.quantity, { className: 'text-center' }));
-                tr.appendChild(cell(item.type === 'text' ? '' : (item.unit || '')));
-                tr.appendChild(cell(item.type === 'text' ? '' : item.unit_price.toFixed(2) + ' €', { className: 'text-right' }));
-                tr.appendChild(cell(item.type === 'text' ? '' : lineTotal.toFixed(2) + ' €', { className: 'text-right' }));
+                tr.appendChild(cell(item.quantity != null ? item.quantity : '', { className: 'text-center' }));
+                tr.appendChild(cell(item.unit || ''));
+                tr.appendChild(cell(item.unit_price != null ? item.unit_price.toFixed(2) + ' €' : '', { className: 'text-right' }));
+                tr.appendChild(cell(hasLineTotal ? lineTotal.toFixed(2) + ' €' : '', { className: 'text-right' }));
 
                 const actionTd = document.createElement('td');
                 actionTd.className = 'text-right';
@@ -342,7 +366,9 @@
             });
         }
 
-        const total = cart.reduce(function (sum, item) { return sum + (item.type === 'text' ? 0 : (item.quantity || 0) * (item.unit_price || 0)); }, 0);
+        const total = cart.reduce(function (sum, item) {
+            return sum + ((item.quantity != null && item.unit_price != null) ? item.quantity * item.unit_price : 0);
+        }, 0);
         document.getElementById('cartTotal').textContent = total.toFixed(2) + ' €';
         document.getElementById('submitOfferBtn').disabled = cart.length === 0;
     }
