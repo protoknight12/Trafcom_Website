@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Оферти - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Оферти</h3>
+        <p class="section-subtitle">Генериране на оферти в .xlsx формат - продукти, детайли или свободен текст в един ред.</p>
+        <a href="{{ url_for('admin_offer_new') }}" class="btn-submit" style="display: inline-block; margin-bottom: 1rem;">+ Нова оферта</a>
+
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>№</th>
+                    <th>Обект</th>
+                    <th>Клиент</th>
+                    <th>Дата</th>
+                    <th class="text-right">Сума</th>
+                    <th class="text-right">Редакция</th>
+                    <th class="text-right">Износ</th>
+                    <th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for offer in offers %}
+                <tr>
+                    <td><strong>{{ offer.number }}</strong></td>
+                    <td>{{ offer.object_title or '-' }}</td>
+                    <td>{{ offer.client.name if offer.client else '-' }}</td>
+                    <td>{{ offer.created_at.strftime('%d.%m.%Y') }}</td>
+                    <td class="text-right">{{ '%.2f'|format(offer.total) }} €</td>
+                    <td class="text-right"><a href="{{ url_for('admin_offer_edit', offer_id=offer.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редакция</a></td>
+                    <td class="text-right"><a href="{{ url_for('admin_offer_export', offer_id=offer.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">.xlsx</a></td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_offer_delete', offer_id=offer.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на оферта № {{ offer.number }}?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="8" class="text-center no-data">Все още няма създадени оферти.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+</main>
+</body>
+</html>

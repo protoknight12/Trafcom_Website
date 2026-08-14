@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ 'Оферта № ' ~ offer.number if offer else 'Нова оферта' }} - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .rte-toolbar { display: flex; gap: 6px; margin-bottom: 4px; }
+        .rte-toolbar button {
+            width: 32px; height: 32px; border-radius: var(--border-radius-sm);
+            border: 1px solid var(--border-color); background-color: var(--bg-input);
+            color: var(--text-main); cursor: pointer; font-size: 0.9rem;
+        }
+        .rte-toolbar button.italic { font-style: italic; }
+        .rte-box {
+            min-height: 70px; padding: 0.6rem 0.75rem; background-color: var(--bg-input);
+            color: var(--text-main); border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-sm); font-size: 0.9rem;
+        }
+        .rte-box:focus { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+        .item-type-toggle label { font-weight: normal; text-transform: none; letter-spacing: normal; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>{{ 'Оферта № ' ~ offer.number if offer else 'Нова оферта' }}</h3>
+        <p class="section-subtitle">
+            {% if offer %}Редакцията презаписва всички редове на офертата.{% else %}Номерът на офертата се генерира автоматично при запазване.{% endif %}
+        </p>
+
+        <form id="offerForm" action="{{ url_for('admin_offer_edit', offer_id=offer.id) if offer else url_for('admin_offer_new') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+
+            <div class="form-group">
+                <label for="object_title">Обект / заглавие (незадължително)</label>
+                <input type="text" id="object_title" name="object_title" placeholder="напр. ЦТП - Зона за отдих 1.2"
+                       value="{{ offer.object_title if offer else '' }}">
+            </div>
+            <div class="form-group">
+                <label for="client_id">Клиент (незадължително)</label>
+                <select id="client_id" name="client_id">
+                    <option value="">-- без клиент --</option>
+                    {% for c in clients %}
+                    <option value="{{ c.id }}" {% if offer and offer.client_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="signed_by">Подписал (незадължително)</label>
+                <input type="text" id="signed_by" name="signed_by" placeholder=""
+                       value="{{ offer.signed_by if offer else '' }}">
+            </div>
+            <div class="form-group" style="grid-column: 1 / -1;">
+                <label for="footer_notes">Условия / бележки под таблицата (по един ред)</label>
+                <textarea id="footer_notes" name="footer_notes" rows="4" style="width: 100%; box-sizing: border-box; background-color: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); padding: 0.6rem 0.75rem;">{% if offer %}{{ offer.footer_notes or '' }}{% else %}Всички цени са в EUR без включен ДДС
+Валидност на офертата 15 дни{% endif %}</textarea>
+            </div>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Добавяне на ред</h3>
+        <div class="item-type-toggle" style="display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 12px;">
+            <label><input type="radio" name="item_type" value="product" checked> Продукт</label>
+            <label><input type="radio" name="item_type" value="detail"> Детайл</label>
+            <label><input type="radio" name="item_type" value="text"> Свободен текст</label>
+        </div>
+
+        <div id="product_selector" class="form-group">
+            <label for="item_product_id">Продукт</label>
+            <select id="item_product_id">
+                <option value="">-- избери продукт --</option>
+                {% for p in products %}
+                <option value="{{ p.id }}">{{ p.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div id="detail_selector" class="form-group" style="display:none;">
+            <label for="item_detail_id">Детайл</label>
+            <select id="item_detail_id">
+                <option value="">-- избери детайл --</option>
+                {% for d in details %}
+                <option value="{{ d.id }}">{{ d.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div id="item_fields" class="admin-form">
+            <div class="form-group">
+                <label for="item_code">ID / код</label>
+                <input type="text" id="item_code" placeholder="напр. 1.2-M01">
+            </div>
+            <div class="form-group">
+                <label>Размери Ш / Д / В (см)</label>
+                <div style="display: flex; gap: 6px;">
+                    <input type="number" id="item_dim_w" step="0.1" min="0" placeholder="Ш">
+                    <input type="number" id="item_dim_l" step="0.1" min="0" placeholder="Д">
+                    <input type="number" id="item_dim_h" step="0.1" min="0" placeholder="В">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="item_qty">Количество</label>
+                <input type="number" id="item_qty" value="1" min="0.01" step="0.01">
+            </div>
+            <div class="form-group">
+                <label for="item_unit">Мярка</label>
+                <input type="text" id="item_unit" value="бр">
+            </div>
+            <div class="form-group">
+                <label for="item_unit_price">Ед. цена (€)</label>
+                <input type="number" id="item_unit_price" min="0" step="0.01">
+            </div>
+        </div>
+
+        <div class="form-group" style="grid-column: 1 / -1;">
+            <label>Описание</label>
+            <div class="rte-toolbar">
+                <button type="button" onmousedown="event.preventDefault()" onclick="document.execCommand('bold')"><b>Ч</b></button>
+                <button type="button" class="italic" onmousedown="event.preventDefault()" onclick="document.execCommand('italic')"><i>К</i></button>
+            </div>
+            <div id="item_description" class="rte-box" contenteditable="true"></div>
+        </div>
+
+        <button type="button" class="btn-submit" onclick="addToCart()">Добави ред</button>
+    </section>
+
+    <section class="admin-card">
+        <h3>Редове на офертата</h3>
+        <div class="table-responsive">
+            <table class="users-table" id="cartTable">
+                <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Наименование / описание</th>
+                    <th>Размери</th>
+                    <th class="text-center">Кол-во</th>
+                    <th>Мярка</th>
+                    <th class="text-right">Ед. цена</th>
+                    <th class="text-right">Общо</th>
+                    <th class="text-right">Действие</th>
+                </tr>
+                </thead>
+                <tbody id="cartTableBody">
+                    <tr id="cartEmptyRow"><td colspan="8" class="text-center no-data">Все още няма добавени редове.</td></tr>
+                </tbody>
+                <tfoot>
+                    <tr class="cart-total-row">
+                        <td colspan="6" class="text-right">Обща сума:</td>
+                        <td class="text-right" id="cartTotal">0.00 €</td>
+                        <td></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+
+        <input type="hidden" name="items_json" id="itemsJsonInput" form="offerForm">
+        <button type="submit" form="offerForm" class="btn-submit" id="submitOfferBtn" style="margin-top: 1rem;" disabled>Запази офертата</button>
+    </section>
+
+</main>
+
+<script>
+    const PRODUCTS = {{ products|tojson }};
+    const DETAILS = {{ details|tojson }};
+    let cart = {{ initial_items|tojson }};
+
+    document.querySelectorAll('input[name="item_type"]').forEach(function (radio) {
+        radio.addEventListener('change', function () {
+            document.getElementById('product_selector').style.display = this.value === 'product' ? 'block' : 'none';
+            document.getElementById('detail_selector').style.display = this.value === 'detail' ? 'block' : 'none';
+            document.getElementById('item_fields').style.display = this.value === 'text' ? 'none' : 'grid';
+        });
+    });
+
+    document.getElementById('item_product_id').addEventListener('change', function () {
+        const p = PRODUCTS.find(function (x) { return x.id === parseInt(this.value, 10); }.bind(this));
+        if (p) document.getElementById('item_unit_price').value = p.price;
+    });
+    document.getElementById('item_detail_id').addEventListener('change', function () {
+        const d = DETAILS.find(function (x) { return x.id === parseInt(this.value, 10); }.bind(this));
+        if (d) document.getElementById('item_unit_price').value = d.price;
+    });
+
+    function cell(html, opts) {
+        const td = document.createElement('td');
+        td.innerHTML = html;
+        if (opts && opts.className) td.className = opts.className;
+        return td;
+    }
+
+    // Joins the 3 separate Ш/Д/В inputs into the single "W / L / H" string
+    // OfferItem.dimensions stores (same "Ш / Д / В см" convention as the
+    // shop's original offer spreadsheets) - blank fields are dropped rather
+    // than shown as an empty slot.
+    function readDimensions() {
+        return ['item_dim_w', 'item_dim_l', 'item_dim_h']
+            .map(function (id) { return document.getElementById(id).value.trim(); })
+            .filter(function (v) { return v !== ''; })
+            .join(' / ');
+    }
+
+    function clearDimensions() {
+        ['item_dim_w', 'item_dim_l', 'item_dim_h'].forEach(function (id) { document.getElementById(id).value = ''; });
+    }
+
+    function addToCart() {
+        const type = document.querySelector('input[name="item_type"]:checked').value;
+        const descriptionHtml = document.getElementById('item_description').innerHTML.trim();
+
+        if (type === 'text') {
+            if (!descriptionHtml || descriptionHtml === '<br>') { alert('Моля въведете текст.'); return; }
+            cart.push({ type: 'text', code: '', name: '', description_html: descriptionHtml, dimensions: '', quantity: null, unit: '', unit_price: null });
+        } else {
+            const sel = document.getElementById(type === 'product' ? 'item_product_id' : 'item_detail_id');
+            const source = (type === 'product' ? PRODUCTS : DETAILS).find(function (x) { return x.id === parseInt(sel.value, 10); });
+            if (!source) { alert('Моля изберете ' + (type === 'product' ? 'продукт' : 'детайл') + '.'); return; }
+            const qty = parseFloat(document.getElementById('item_qty').value);
+            const unitPrice = parseFloat(document.getElementById('item_unit_price').value);
+            if (!qty || qty <= 0) { alert('Моля въведете валидно количество.'); return; }
+            if (isNaN(unitPrice) || unitPrice < 0) { alert('Моля въведете валидна цена.'); return; }
+            cart.push({
+                type: type, code: document.getElementById('item_code').value.trim(),
+                name: source.name, description_html: descriptionHtml,
+                dimensions: readDimensions(),
+                quantity: qty, unit: document.getElementById('item_unit').value.trim() || 'бр', unit_price: unitPrice,
+            });
+            document.getElementById('item_code').value = '';
+            clearDimensions();
+            document.getElementById('item_qty').value = '1';
+            document.getElementById('item_unit_price').value = '';
+        }
+        document.getElementById('item_description').innerHTML = '';
+        renderCart();
+    }
+
+    function removeFromCart(index) {
+        cart.splice(index, 1);
+        renderCart();
+    }
+
+    function renderCart() {
+        const body = document.getElementById('cartTableBody');
+        body.innerHTML = '';
+
+        if (cart.length === 0) {
+            body.innerHTML = '<tr id="cartEmptyRow"><td colspan="8" class="text-center no-data">Все още няма добавени редове.</td></tr>';
+        } else {
+            cart.forEach(function (item, idx) {
+                const tr = document.createElement('tr');
+                const lineTotal = item.type === 'text' ? 0 : (item.quantity || 0) * (item.unit_price || 0);
+
+                tr.appendChild(cell(item.code || ''));
+                let nameHtml = item.name ? ('<strong>' + item.name + '</strong>') : '';
+                if (item.description_html) nameHtml += (nameHtml ? '<br>' : '') + '<span class="text-small text-muted">' + item.description_html + '</span>';
+                tr.appendChild(cell(nameHtml || '-'));
+                tr.appendChild(cell(item.dimensions || ''));
+                tr.appendChild(cell(item.type === 'text' ? '' : item.quantity, { className: 'text-center' }));
+                tr.appendChild(cell(item.type === 'text' ? '' : (item.unit || '')));
+                tr.appendChild(cell(item.type === 'text' ? '' : item.unit_price.toFixed(2) + ' €', { className: 'text-right' }));
+                tr.appendChild(cell(item.type === 'text' ? '' : lineTotal.toFixed(2) + ' €', { className: 'text-right' }));
+
+                const actionTd = document.createElement('td');
+                actionTd.className = 'text-right';
+                const removeBtn = document.createElement('button');
+                removeBtn.type = 'button';
+                removeBtn.className = 'btn-delete';
+                removeBtn.textContent = 'Премахни';
+                removeBtn.addEventListener('click', function () { removeFromCart(idx); });
+                actionTd.appendChild(removeBtn);
+                tr.appendChild(actionTd);
+
+                body.appendChild(tr);
+            });
+        }
+
+        const total = cart.reduce(function (sum, item) { return sum + (item.type === 'text' ? 0 : (item.quantity || 0) * (item.unit_price || 0)); }, 0);
+        document.getElementById('cartTotal').textContent = total.toFixed(2) + ' €';
+        document.getElementById('submitOfferBtn').disabled = cart.length === 0;
+    }
+
+    document.getElementById('offerForm').addEventListener('submit', function (e) {
+        if (cart.length === 0) {
+            e.preventDefault();
+            alert('Моля добавете поне един ред към офертата.');
+            return;
+        }
+        document.getElementById('itemsJsonInput').value = JSON.stringify(cart);
+    });
+
+    renderCart();
+</script>
+</body>
+</html>

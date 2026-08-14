@@ -12,8 +12,10 @@ import time
 import urllib.request
 import urllib.parse
 import urllib.error
+from html import escape as html_escape
+from html.parser import HTMLParser
 from concurrent.futures import ThreadPoolExecutor
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory, send_file
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_limiter import Limiter
@@ -27,6 +29,10 @@ from ezdxf.math import bulge_to_arc
 import random
 import barcode
 from barcode.writer import SVGWriter
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment
+from openpyxl.cell.rich_text import CellRichText, TextBlock
+from openpyxl.cell.text import InlineFont
 
 # Optional: load a local .env file if python-dotenv is installed, so secrets
 # can be kept out of source control. Safe no-op if the package isn't present.
@@ -193,12 +199,12 @@ class MaterialPrice(db.Model):
     key = db.Column(db.String(50), unique=True, nullable=False)
     display_name = db.Column(db.String(100), nullable=False)
     cost_per_m2 = db.Column(db.Float, nullable=False)
-    # Nullable, same reason as pierce_rate_per_min below: 'rods' stock is cut
-    # to length on a saw, not through the DXF-length/cutting-speed pricing
-    # model, so rod materials carry no cutting speed either.
+    # Nullable, same reason as pierce_rate_per_min below: 'rods' and
+    # 'profiles' stock is cut to length on a saw, not through the DXF-length/
+    # cutting-speed pricing model, so neither carries a cutting speed.
     cutting_speed_mm_per_min = db.Column(db.Float, nullable=True)
-    # Nullable: 'rods' stock is cut to length, never pierced, so rod
-    # materials carry no pierce rate at all (see _parse_material_type callers).
+    # Nullable: 'rods'/'profiles' stock is cut to length, never pierced, so
+    # neither carries a pierce rate at all (see _parse_material_type callers).
     pierce_rate_per_min = db.Column(db.Float, nullable=True)
     # Standard stock sheet size this material entry represents (mm). Purely
     # informational catalog data - pricing still runs off the cut part's own
@@ -207,6 +213,17 @@ class MaterialPrice(db.Model):
     sheet_length_mm = db.Column(db.Float, nullable=True)
     sheet_width_mm = db.Column(db.Float, nullable=True)
     thickness_mm = db.Column(db.Float, nullable=True)
+    # 4th profile dimension - a profile's cross-section needs height AND
+    # width (sheet_width_mm), unlike rods/pipes (diameter alone) or sheets
+    # (no height at all), so the existing 3 generic dimension columns aren't
+    # enough for 'profiles'. Only meaningful/shown for type == 'profiles'.
+    height_mm = db.Column(db.Float, nullable=True)
+    # Alternate weight-based pricing, informational/catalog-only - not read
+    # by calculate_cnc_price()/_material_cost() (which stay on cost_per_m2),
+    # since no per-material weight/density is tracked to convert a €/kg rate
+    # into a real cost. Available for manual use when building an Offer.
+    price_per_kg_m2 = db.Column(db.Float, nullable=True)
+    price_per_kg_m = db.Column(db.Float, nullable=True)
     # ERP code (shown as text + Code128 barcode) and internal part code (КД №)
     # printed on production labels - see print_label(). Optional/nullable
     # since older rows won't have them.
@@ -266,17 +283,17 @@ def material_dimension_labels(type_key):
 
 def material_price_m2_label(type_key):
     """
-    cost_per_m2 is area-based for sheets/profiles (calculate_cnc_price()
-    prices those off the DXF bounding-box area) - only 'plate' in the label is
-    sheet-specific and reads oddly for profiles. Rods and pipes are both
-    round stock bought and priced by the linear meter, not by a cross-section
-    area (see _material_cost) - a pipe's "width" is its outer diameter, not a
+    cost_per_m2 is only genuinely area-based for sheets (calculate_cnc_price()
+    prices those off the DXF bounding-box area). Rods, pipes AND profiles are
+    all bought/cut by the linear meter (a profile is a bar stock, same as a
+    rod or pipe, just non-round - see _material_cost), not by a
+    cross-section area - a pipe's "width" is its outer diameter, not a
     literal width (see DETAIL_DIMENSION_LABELS/MATERIAL_DIMENSION_LABELS), so
-    diameter x length is not a real area.
+    diameter x length (or profile width x length) is not a real area.
     """
     if type_key == 'sheets':
         return 'Цена на м² плоча (€)'
-    if type_key in ('rods', 'pipes'):
+    if type_key in ('rods', 'pipes', 'profiles'):
         return 'Цена на линеен метър (€)'
     return 'Цена на м² материал (€)'
 
@@ -403,11 +420,11 @@ class Detail(db.Model):
     def material_price_breakdown(self):
         """Human-readable "quantity x rate" behind calculated_price, for
         display next to it (see detail_dxf_dashboard.html) - mirrors
-        _material_cost()'s rods/pipes-vs-area branch exactly so this can
-        never drift from the real calculation."""
+        _material_cost()'s rods/pipes/profiles-vs-area branch exactly so this
+        can never drift from the real calculation."""
         if not self.material:
             return None
-        if self.material.type in ('rods', 'pipes'):
+        if self.material.type in ('rods', 'pipes', 'profiles'):
             return f"{self.height:.0f} мм × {self.material.cost_per_m2:.2f} €/м"
         area_m2 = (self.width * self.height) / 1_000_000
         return f"{area_m2:.3f} м² × {self.material.cost_per_m2:.2f} €/м²"
@@ -1003,6 +1020,320 @@ def get_text(key, default=''):
     return row.content if row else default
 
 
+class Offer(db.Model):
+    """
+    A generated sales offer (multi-line quote), exportable as a .xlsx
+    matching the shop's standard offer layout (title/address/object line,
+    item table, footer terms+total+signature - see build_offer_workbook()).
+    Distinct from the older single-Product print-to-PDF flow
+    (offer.html/admin_product_offer()) - this one covers an arbitrary quote
+    made of any mix of catalog Products/Details and free-form text lines
+    (see OfferItem), not just one product.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    # Zero-padded sequential number (e.g. '00000000200') - see _next_offer_number().
+    number = db.Column(db.String(20), unique=True, nullable=False)
+    object_title = db.Column(db.String(255), nullable=True)
+    client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True)
+    footer_notes = db.Column(db.Text, nullable=True)
+    signed_by = db.Column(db.String(150), nullable=True)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    client = db.relationship('Client')
+    created_by = db.relationship('User')
+
+    @property
+    def total(self):
+        return round(sum(item.line_total for item in self.items), 2)
+
+
+class OfferItem(db.Model):
+    """
+    One line of an Offer: either a snapshot of a catalog Product/Detail
+    (name/price frozen at add-time, same pattern as OrderItemComponent, so
+    editing the catalog later never changes an already-generated offer) or a
+    free-form text row (item_type='text', no code/qty/price - a note or
+    section heading rather than a sellable item). description_html allows
+    only bold/italic markup (see sanitize_rich_text()) entered via the offer
+    editor's mini toolbar (admin_offer_edit.html).
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    offer_id = db.Column(db.Integer, db.ForeignKey('offer.id'), nullable=False)
+    position = db.Column(db.Integer, nullable=False, default=0)
+    item_type = db.Column(db.String(10), nullable=False)  # 'product', 'detail', 'text'
+    code = db.Column(db.String(50), nullable=True)
+    name = db.Column(db.String(255), nullable=True)
+    description_html = db.Column(db.Text, nullable=True)
+    dimensions = db.Column(db.String(100), nullable=True)
+    quantity = db.Column(db.Float, nullable=True)
+    unit = db.Column(db.String(20), nullable=True)
+    unit_price = db.Column(db.Float, nullable=True)
+
+    offer = db.relationship('Offer', backref=db.backref(
+        'items', order_by='OfferItem.position', cascade='all, delete-orphan'))
+
+    @property
+    def line_total(self):
+        if self.item_type == 'text':
+            return 0.0
+        return round((self.quantity or 0) * (self.unit_price or 0), 2)
+
+
+def _next_offer_number():
+    """
+    Zero-padded 11-digit sequential offer number (e.g. '00000000200') -
+    starts at 200, continuing the shop's existing paper-offer numbering.
+    ponytail: read-then-use rather than a real DB sequence/lock - same
+    tradeoff as _next_erp_number(), fine for this app's single-admin-at-a-time
+    usage. Numbers sort lexicographically same as numerically since every
+    value is zero-padded to the same width.
+    """
+    last = db.session.query(db.func.max(Offer.number)).scalar()
+    next_n = (int(last) + 1) if last else 200
+    return f'{next_n:011d}'
+
+
+_RICH_TEXT_ALLOWED_TAGS = {'b', 'strong', 'i', 'em'}
+
+
+class _RichTextSanitizer(HTMLParser):
+    """
+    Allowlist-only HTML sanitizer for OfferItem.description_html - the offer
+    editor's toolbar only exposes Bold/Italic, but the raw markup still comes
+    from the browser's contenteditable box, so it must be stripped down to
+    just that before being persisted/rendered anywhere else (stored-XSS risk
+    otherwise, e.g. a pasted <script> or onerror= attribute - see
+    testing/test_security_fixes.py for this project's existing stored-XSS
+    regression coverage). A stray <div>/<p> (Chrome wraps each contenteditable
+    line in one) becomes a line break instead of being dropped silently.
+    """
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out = []
+        # HTMLParser hands <script>/<style> bodies to handle_data as raw
+        # CDATA (not parsed as tags), so without this they'd leak straight
+        # into the sanitized output as escaped text.
+        self._skip_tag = None
+
+    def handle_starttag(self, tag, attrs):
+        if self._skip_tag:
+            return
+        if tag in self.CDATA_CONTENT_ELEMENTS:
+            self._skip_tag = tag
+        elif tag in _RICH_TEXT_ALLOWED_TAGS:
+            self.out.append(f'<{tag}>')
+        elif tag == 'br':
+            self.out.append('<br>')
+
+    def handle_startendtag(self, tag, attrs):
+        if not self._skip_tag and tag == 'br':
+            self.out.append('<br>')
+
+    def handle_endtag(self, tag):
+        if self._skip_tag:
+            if tag == self._skip_tag:
+                self._skip_tag = None
+            return
+        if tag in _RICH_TEXT_ALLOWED_TAGS:
+            self.out.append(f'</{tag}>')
+        elif tag in ('div', 'p'):
+            self.out.append('<br>')
+
+    def handle_data(self, data):
+        if data and not self._skip_tag:
+            self.out.append(html_escape(data))
+
+
+def sanitize_rich_text(raw):
+    """Strips raw contenteditable HTML down to bold/italic/line-breaks only.
+    Blank/whitespace-only input normalizes to None."""
+    if not raw or not raw.strip():
+        return None
+    parser = _RichTextSanitizer()
+    parser.feed(raw)
+    parser.close()
+    result = ''.join(parser.out).strip()
+    # Trim leading/trailing line breaks left over from contenteditable's
+    # div-per-line wrapping, and collapse a result that's now empty tags only.
+    result = re.sub(r'^(<br>)+|(<br>)+$', '', result)
+    return result or None
+
+
+class _RichTextToRuns(HTMLParser):
+    """Walks sanitized bold/italic/<br> HTML (see sanitize_rich_text) into a
+    flat list of (text, bold, italic) runs, for _rich_text_cell_value()."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.runs = []
+        self._bold = 0
+        self._italic = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ('b', 'strong'):
+            self._bold += 1
+        elif tag in ('i', 'em'):
+            self._italic += 1
+        elif tag == 'br':
+            self.runs.append(('\n', self._bold > 0, self._italic > 0))
+
+    def handle_startendtag(self, tag, attrs):
+        if tag == 'br':
+            self.runs.append(('\n', self._bold > 0, self._italic > 0))
+
+    def handle_endtag(self, tag):
+        if tag in ('b', 'strong'):
+            self._bold = max(0, self._bold - 1)
+        elif tag in ('i', 'em'):
+            self._italic = max(0, self._italic - 1)
+
+    def handle_data(self, data):
+        if data:
+            self.runs.append((data, self._bold > 0, self._italic > 0))
+
+
+def _rich_text_cell_value(raw_html, font_name):
+    """
+    Converts sanitized bold/italic HTML (see sanitize_rich_text) into a value
+    openpyxl can write to a cell, preserving the bold/italic runs - a plain
+    string write would silently flatten all formatting in the exported
+    .xlsx. Returns a plain string when there's no bold/italic to preserve
+    (the common case), or a CellRichText otherwise.
+    """
+    if not raw_html:
+        return ''
+    parser = _RichTextToRuns()
+    parser.feed(raw_html)
+    parser.close()
+    if not parser.runs:
+        return ''
+    if not any(bold or italic for _, bold, italic in parser.runs):
+        return ''.join(text for text, _, _ in parser.runs)
+    blocks = [
+        TextBlock(InlineFont(rFont=font_name, b=bold or None, i=italic or None), text)
+        for text, bold, italic in parser.runs
+    ]
+    return CellRichText(*blocks)
+
+
+# Column layout of the exported .xlsx, mirroring the shop's existing offer
+# spreadsheets (see offer.xlsx sheets like 'CTP01-oferta'): ID / name /
+# description / dimensions / qty / unit / unit price / line total / currency.
+# No photo column - this feature has no image-upload step, unlike the manual
+# template it's based on.
+_OFFER_COLUMN_WIDTHS = {
+    'B': 10, 'C': 18, 'D': 30, 'E': 13, 'F': 6, 'G': 7, 'H': 11, 'I': 11, 'J': 6,
+}
+
+
+def build_offer_workbook(offer):
+    """
+    Renders one Offer into an openpyxl Workbook matching the shop's standard
+    offer layout: Oswald title, merged header block, item table (rich-text
+    description preserved via _rich_text_cell_value), footer terms, total,
+    and a date/signature line. See templates/admin_offer_edit.html for where
+    footer_notes/signed_by are entered.
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = f'Оферта {offer.number}'
+
+    center = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    left_wrap = Alignment(horizontal='left', vertical='top', wrap_text=True)
+
+    for col, width in _OFFER_COLUMN_WIDTHS.items():
+        ws.column_dimensions[col].width = width
+
+    ws.merge_cells('B1:J2')
+    title_cell = ws['B1']
+    title_cell.value = 'ТРАФКОМ ООД'
+    title_cell.font = Font(name='Oswald', size=26, bold=True)
+    title_cell.alignment = center
+
+    ws.merge_cells('B3:J3')
+    address_cell = ws['B3']
+    address_cell.value = 'гр. Тетевен, ул Александър Стамболийски 36, trafcom@tafcombg.com, +359 886 762276'
+    address_cell.font = Font(name='Calibri', size=12)
+    address_cell.alignment = center
+
+    ws.merge_cells('B5:J5')
+    number_cell = ws['B5']
+    number_cell.value = f'ОФЕРТА № {offer.number}'
+    number_cell.font = Font(name='Calibri', size=14, bold=True)
+    number_cell.alignment = center
+
+    row = 6
+    if offer.object_title:
+        ws.merge_cells(f'B{row}:J{row}')
+        obj_cell = ws[f'B{row}']
+        obj_cell.value = f'ОБЕКТ: {offer.object_title}'
+        obj_cell.font = Font(name='Calibri', size=11)
+        obj_cell.alignment = center
+        row += 1
+
+    row += 1
+    header_row = row
+    headers = ['ID', 'Наименование', 'Описание', 'Размери', 'Кол-во', 'Мярка',
+               'Ед. цена\n(EUR без ДДС)', 'Обща цена\n(EUR без ДДС)', '']
+    for i, text in enumerate(headers):
+        cell = ws.cell(row=header_row, column=2 + i, value=text or None)
+        cell.font = Font(name='Calibri', size=11, bold=True)
+        cell.alignment = center
+
+    row += 1
+    first_item_row = row
+    for item in offer.items:
+        if item.item_type == 'text':
+            ws.merge_cells(f'C{row}:I{row}')
+            cell = ws.cell(row=row, column=3, value=_rich_text_cell_value(item.description_html, 'Calibri'))
+            cell.alignment = left_wrap
+            cell.font = Font(name='Calibri', size=11)
+        else:
+            ws.cell(row=row, column=2, value=item.code).alignment = center
+            ws.cell(row=row, column=3, value=item.name).alignment = left_wrap
+            desc_cell = ws.cell(row=row, column=4, value=_rich_text_cell_value(item.description_html, 'Calibri'))
+            desc_cell.alignment = left_wrap
+            ws.cell(row=row, column=5, value=item.dimensions).alignment = center
+            ws.cell(row=row, column=6, value=item.quantity).alignment = center
+            ws.cell(row=row, column=7, value=item.unit).alignment = center
+            price_cell = ws.cell(row=row, column=8, value=item.unit_price)
+            price_cell.number_format = '0.00'
+            total_cell = ws.cell(row=row, column=9, value=f'=F{row}*H{row}')
+            total_cell.number_format = '0.00'
+            ws.cell(row=row, column=10, value='EUR')
+            for col in range(2, 11):
+                ws.cell(row=row, column=col).font = Font(name='Calibri', size=11)
+        row += 1
+    last_item_row = row - 1
+
+    if last_item_row >= first_item_row:
+        row += 1
+        ws.cell(row=row, column=7, value='ОБЩО:').font = Font(name='Calibri', size=12, bold=True)
+        total_cell = ws.cell(row=row, column=9, value=f'=SUM(I{first_item_row}:I{last_item_row})')
+        total_cell.font = Font(name='Calibri', size=12, bold=True)
+        total_cell.number_format = '0.00'
+        ws.cell(row=row, column=10, value='EUR').font = Font(name='Calibri', size=12, bold=True)
+        row += 1
+
+    if offer.footer_notes:
+        row += 1
+        for line in offer.footer_notes.splitlines():
+            if line.strip():
+                ws.cell(row=row, column=2, value=line.strip()).font = Font(name='Calibri', size=11, bold=True)
+                row += 1
+
+    row += 2
+    ws.cell(row=row, column=2, value='Дата:').font = Font(name='Calibri', size=11)
+    ws.cell(row=row, column=3, value=offer.created_at.date() if offer.created_at else None).number_format = 'mm-dd-yy'
+    if offer.signed_by:
+        ws.cell(row=row, column=8, value='С уважение:').font = Font(name='Calibri', size=11)
+        ws.cell(row=row + 1, column=8, value=offer.signed_by).font = Font(name='Calibri', size=11)
+
+    return wb
+
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
@@ -1484,15 +1815,16 @@ def _service_time_cost(total_length, pierce_count, material, service):
 def _material_cost(width, height, material):
     """
     Raw-stock cost for one cut, shared by calculate_cnc_price() and
-    calculate_cnc_price_multi_service(). Rods AND pipes are priced off length
-    alone (height, by the Материал и размери tab's Диаметър/Дължина
-    convention - see DETAIL_DIMENSION_LABELS in detail_dxf_dashboard.html) -
-    both are round stock bought and cut by the linear meter, so cost scales
-    with how much you cut off, not with width * height (which for either of
-    them is diameter * length, not a real area). Sheets/profiles are the only
-    types where cost_per_m2 is genuinely an area rate.
+    calculate_cnc_price_multi_service(). Rods, pipes AND profiles are all
+    priced off length alone (height, by the Материал и размери tab's
+    Диаметър|Ширина / Дължина convention - see DETAIL_DIMENSION_LABELS in
+    detail_dxf_dashboard.html) - all three are bar stock bought and cut by
+    the linear meter, so cost scales with how much you cut off, not with
+    width * height (for a profile that's cross-section width * length, not a
+    real area, same reasoning as diameter * length for rods/pipes). Sheets
+    are the only type where cost_per_m2 is genuinely an area rate.
     """
-    if material.type in ('rods', 'pipes'):
+    if material.type in ('rods', 'pipes', 'profiles'):
         return (height / 1000) * material.cost_per_m2
     area_m2 = (width * height) / 1_000_000
     return area_m2 * material.cost_per_m2
@@ -2860,20 +3192,28 @@ def admin_update_user_role(user_id):
     return redirect(url_for('admin_users'))
 
 
+def _parse_optional_float(form, field):
+    """Reads one optional numeric form field (blank -> None). Raises
+    ValueError on non-numeric or negative input, same as the required cost
+    fields, so callers can catch it in one place alongside those."""
+    raw = form.get(field, '').strip()
+    value = float(raw) if raw else None
+    if value is not None and value < 0:
+        raise ValueError(f'{field} must not be negative')
+    return value
+
+
 def _parse_sheet_dimensions(form):
     """
-    Reads the optional sheet_length_mm/sheet_width_mm/thickness_mm fields.
-    All three are optional (blank -> None) since not every material entry
-    represents a specific stock size. Raises ValueError on non-numeric input,
-    same as the required cost fields, so callers can catch it in one place.
+    Reads the optional sheet_length_mm/sheet_width_mm/thickness_mm/height_mm
+    fields. All four are optional (blank -> None) since not every material
+    entry represents a specific stock size, and height_mm only applies to
+    'profiles' (see MaterialPrice.height_mm). Raises ValueError on
+    non-numeric input, same as the required cost fields, so callers can catch
+    it in one place.
     """
-    values = []
-    for field in ('sheet_length_mm', 'sheet_width_mm', 'thickness_mm'):
-        raw = form.get(field, '').strip()
-        values.append(float(raw) if raw else None)
-        if values[-1] is not None and values[-1] < 0:
-            raise ValueError(f'{field} must not be negative')
-    return values
+    return [_parse_optional_float(form, field) for field in
+            ('sheet_length_mm', 'sheet_width_mm', 'thickness_mm', 'height_mm')]
 
 
 def _next_erp_number():
@@ -2913,7 +3253,7 @@ def _parse_material_type(form):
 
 
 def _material_variant_exists(display_name, material_type, brand, cost_per_m2, cutting_speed_mm_per_min,
-                              pierce_rate_per_min, sheet_length_mm, sheet_width_mm, thickness_mm):
+                              pierce_rate_per_min, sheet_length_mm, sheet_width_mm, thickness_mm, height_mm):
     """
     Two materials only count as the same catalog row if every property
     matches - name/brand alone are not enough. This lets e.g. a 2mm and a
@@ -2924,7 +3264,8 @@ def _material_variant_exists(display_name, material_type, brand, cost_per_m2, cu
     return MaterialPrice.query.filter_by(
         display_name=display_name, type=material_type, brand=brand, cost_per_m2=cost_per_m2,
         cutting_speed_mm_per_min=cutting_speed_mm_per_min, pierce_rate_per_min=pierce_rate_per_min,
-        sheet_length_mm=sheet_length_mm, sheet_width_mm=sheet_width_mm, thickness_mm=thickness_mm
+        sheet_length_mm=sheet_length_mm, sheet_width_mm=sheet_width_mm, thickness_mm=thickness_mm,
+        height_mm=height_mm
     ).first() is not None
 
 
@@ -2974,12 +3315,14 @@ def admin_update_material(key):
 
     try:
         cost_per_m2 = float(request.form.get('cost_per_m2', ''))
-        # Rods are cut to length on a saw, never pierced or DXF-cut - no
-        # cutting/drill speed for them.
-        is_rod = material_type == 'rods'
-        cutting_speed_mm_per_min = None if is_rod else float(request.form.get('cutting_speed_mm_per_min', ''))
-        pierce_rate_per_min = None if is_rod else float(request.form.get('pierce_rate_per_min', ''))
-        sheet_length_mm, sheet_width_mm, thickness_mm = _parse_sheet_dimensions(request.form)
+        # Rods/profiles are cut to length on a saw, never pierced or DXF-cut
+        # - no cutting/drill speed for either.
+        skip_speed_fields = material_type in ('rods', 'profiles')
+        cutting_speed_mm_per_min = None if skip_speed_fields else float(request.form.get('cutting_speed_mm_per_min', ''))
+        pierce_rate_per_min = None if skip_speed_fields else float(request.form.get('pierce_rate_per_min', ''))
+        sheet_length_mm, sheet_width_mm, thickness_mm, height_mm = _parse_sheet_dimensions(request.form)
+        price_per_kg_m2 = _parse_optional_float(request.form, 'price_per_kg_m2')
+        price_per_kg_m = _parse_optional_float(request.form, 'price_per_kg_m')
         erp_number = _parse_erp_number(request.form)
     except ValueError:
         flash('Всички цени, размери и ERP № трябва да бъдат валидни числа.', 'danger')
@@ -3003,6 +3346,9 @@ def admin_update_material(key):
     material.sheet_length_mm = sheet_length_mm
     material.sheet_width_mm = sheet_width_mm
     material.thickness_mm = thickness_mm
+    material.height_mm = height_mm
+    material.price_per_kg_m2 = round(price_per_kg_m2, 2) if price_per_kg_m2 is not None else None
+    material.price_per_kg_m = round(price_per_kg_m, 2) if price_per_kg_m is not None else None
     material.erp_number = erp_number
     material.code_number = request.form.get('code_number', '').strip() or None
     material.type = _parse_material_type(request.form)
@@ -3028,15 +3374,17 @@ def admin_add_material():
     material_type = _parse_material_type(request.form)
     brand = request.form.get('brand', '').strip() or None
 
-    # Rods are cut to length on a saw, never pierced or DXF-cut - no
-    # cutting/drill speed for them.
-    is_rod = material_type == 'rods'
+    # Rods/profiles are cut to length on a saw, never pierced or DXF-cut -
+    # no cutting/drill speed for either.
+    skip_speed_fields = material_type in ('rods', 'profiles')
 
     try:
         cost_per_m2 = float(request.form.get('cost_per_m2', ''))
-        cutting_speed_mm_per_min = None if is_rod else float(request.form.get('cutting_speed_mm_per_min', ''))
-        pierce_rate_per_min = None if is_rod else float(request.form.get('pierce_rate_per_min', ''))
-        sheet_length_mm, sheet_width_mm, thickness_mm = _parse_sheet_dimensions(request.form)
+        cutting_speed_mm_per_min = None if skip_speed_fields else float(request.form.get('cutting_speed_mm_per_min', ''))
+        pierce_rate_per_min = None if skip_speed_fields else float(request.form.get('pierce_rate_per_min', ''))
+        sheet_length_mm, sheet_width_mm, thickness_mm, height_mm = _parse_sheet_dimensions(request.form)
+        price_per_kg_m2 = _parse_optional_float(request.form, 'price_per_kg_m2')
+        price_per_kg_m = _parse_optional_float(request.form, 'price_per_kg_m')
         erp_number = _parse_erp_number(request.form)
     except ValueError:
         flash('Всички цени, размери и ERP № трябва да бъдат валидни числа.', 'danger')
@@ -3053,7 +3401,7 @@ def admin_add_material():
     if _material_variant_exists(display_name, material_type, brand, round(cost_per_m2, 2),
                                  round(cutting_speed_mm_per_min, 2) if cutting_speed_mm_per_min is not None else None,
                                  round(pierce_rate_per_min, 2) if pierce_rate_per_min is not None else None,
-                                 sheet_length_mm, sheet_width_mm, thickness_mm):
+                                 sheet_length_mm, sheet_width_mm, thickness_mm, height_mm):
         flash(f'Вече съществува идентичен материал с име "{display_name}".', 'danger')
         return redirect(url_for('admin_materials'))
 
@@ -3075,6 +3423,9 @@ def admin_add_material():
         sheet_length_mm=sheet_length_mm,
         sheet_width_mm=sheet_width_mm,
         thickness_mm=thickness_mm,
+        height_mm=height_mm,
+        price_per_kg_m2=round(price_per_kg_m2, 2) if price_per_kg_m2 is not None else None,
+        price_per_kg_m=round(price_per_kg_m, 2) if price_per_kg_m is not None else None,
         erp_number=erp_number,
         code_number=request.form.get('code_number', '').strip() or None,
         type=material_type,
@@ -4900,15 +5251,17 @@ def api_quick_create_material():
 
     material_type = _parse_material_type(request.form)
     brand = request.form.get('brand', '').strip() or None
-    # Rods are cut to length on a saw, never pierced or DXF-cut - no
-    # cutting/drill speed for them.
-    is_rod = material_type == 'rods'
+    # Rods/profiles are cut to length on a saw, never pierced or DXF-cut -
+    # no cutting/drill speed for either.
+    skip_speed_fields = material_type in ('rods', 'profiles')
 
     try:
         cost_per_m2 = float(request.form.get('cost_per_m2', ''))
-        cutting_speed_mm_per_min = None if is_rod else float(request.form.get('cutting_speed_mm_per_min', ''))
-        pierce_rate_per_min = None if is_rod else float(request.form.get('pierce_rate_per_min', ''))
-        sheet_length_mm, sheet_width_mm, thickness_mm = _parse_sheet_dimensions(request.form)
+        cutting_speed_mm_per_min = None if skip_speed_fields else float(request.form.get('cutting_speed_mm_per_min', ''))
+        pierce_rate_per_min = None if skip_speed_fields else float(request.form.get('pierce_rate_per_min', ''))
+        sheet_length_mm, sheet_width_mm, thickness_mm, height_mm = _parse_sheet_dimensions(request.form)
+        price_per_kg_m2 = _parse_optional_float(request.form, 'price_per_kg_m2')
+        price_per_kg_m = _parse_optional_float(request.form, 'price_per_kg_m')
         erp_number = _parse_erp_number(request.form)
     except ValueError:
         return jsonify({'status': 'error', 'message': 'Всички цени, размери и ERP № трябва да бъдат валидни числа.'}), 400
@@ -4923,7 +5276,7 @@ def api_quick_create_material():
     if _material_variant_exists(display_name, material_type, brand, round(cost_per_m2, 2),
                                  round(cutting_speed_mm_per_min, 2) if cutting_speed_mm_per_min is not None else None,
                                  round(pierce_rate_per_min, 2) if pierce_rate_per_min is not None else None,
-                                 sheet_length_mm, sheet_width_mm, thickness_mm):
+                                 sheet_length_mm, sheet_width_mm, thickness_mm, height_mm):
         return jsonify({'status': 'error', 'message': f'Вече съществува идентичен материал с име "{display_name}".'}), 400
 
     conflict = _erp_number_conflict(erp_number)
@@ -4939,6 +5292,9 @@ def api_quick_create_material():
         sheet_length_mm=sheet_length_mm,
         sheet_width_mm=sheet_width_mm,
         thickness_mm=thickness_mm,
+        height_mm=height_mm,
+        price_per_kg_m2=round(price_per_kg_m2, 2) if price_per_kg_m2 is not None else None,
+        price_per_kg_m=round(price_per_kg_m, 2) if price_per_kg_m is not None else None,
         erp_number=erp_number,
         code_number=request.form.get('code_number', '').strip() or None,
         type=material_type,
@@ -5912,6 +6268,157 @@ def admin_power_history():
         return jsonify({'error': f'Историята не е налична за това устройство ({type(e).__name__}: {e}).'}), 502
 
     return jsonify(result)
+
+
+# ----------------- ОФЕРТИ (Offer generator) -----------------
+
+@app.route('/admin/offers')
+@role_required('admin')
+def admin_offers():
+    offers = Offer.query.order_by(Offer.created_at.desc()).all()
+    return render_template('admin_offers.html', offers=offers, active_page='admin_offers')
+
+
+def _offer_picker_context():
+    """Shared context for the offer create/edit form: catalog rows to pick
+    from (as plain JSON-friendly dicts, for the add-item panel's JS) and the
+    client list, same shape as order_create.html's cart picker."""
+    products = [{'id': p.id, 'name': p.name, 'price': calculate_product_pricing(p)['sell_price']}
+                for p in Product.query.order_by(Product.name).all()]
+    details = [{'id': d.id, 'name': d.name, 'price': d.total_price} for d in Detail.query.order_by(Detail.name).all()]
+    clients = Client.query.order_by(Client.name).all()
+    return products, details, clients
+
+
+def _offer_items_json(offer):
+    """Serializes an existing Offer's items into the same plain-dict shape
+    the editor's `cart` JS array uses, so admin_offer_edit.html can preload
+    them for editing without a second round-trip."""
+    if not offer:
+        return []
+    return [{
+        'type': item.item_type, 'code': item.code or '', 'name': item.name or '',
+        'description_html': item.description_html or '', 'dimensions': item.dimensions or '',
+        'quantity': item.quantity, 'unit': item.unit or 'бр', 'unit_price': item.unit_price,
+    } for item in offer.items]
+
+
+def _save_offer(offer):
+    """Creates (offer=None) or overwrites (offer=<existing Offer>) an Offer
+    and its OfferItems from the submitted form - see admin_offer_edit.html's
+    `cart` JS array serialized into items_json, same pattern as
+    create_delivery_note()'s items_json. Editing replaces every item rather
+    than diffing, since the whole cart is always resubmitted in full."""
+    try:
+        items = json.loads(request.form.get('items_json', ''))
+        if not isinstance(items, list):
+            items = []
+    except (TypeError, ValueError):
+        items = []
+
+    if not items:
+        flash('Добавете поне един артикул или текстов ред към офертата.', 'danger')
+        return redirect(request.url)
+
+    object_title = request.form.get('object_title', '').strip() or None
+    client_id_raw = request.form.get('client_id', '')
+    client_id = int(client_id_raw) if client_id_raw.isdigit() else None
+    footer_notes = request.form.get('footer_notes', '').strip() or None
+    signed_by = request.form.get('signed_by', '').strip() or None
+
+    is_new = offer is None
+    if is_new:
+        offer = Offer(number=_next_offer_number(), created_by_id=current_user.id)
+        db.session.add(offer)
+    else:
+        OfferItem.query.filter_by(offer_id=offer.id).delete()
+
+    offer.object_title = object_title
+    offer.client_id = client_id
+    offer.footer_notes = footer_notes
+    offer.signed_by = signed_by
+
+    for position, row in enumerate(items):
+        if not isinstance(row, dict):
+            continue
+        item_type = row.get('type')
+        if item_type not in ('product', 'detail', 'text'):
+            continue
+        description_html = sanitize_rich_text(row.get('description_html'))
+
+        if item_type == 'text':
+            if not description_html:
+                continue
+            db.session.add(OfferItem(offer=offer, position=position, item_type='text',
+                                      description_html=description_html))
+            continue
+
+        name = (row.get('name') or '').strip()
+        if not name:
+            continue
+        try:
+            quantity = float(row.get('quantity', 0))
+            unit_price = float(row.get('unit_price', 0))
+        except (TypeError, ValueError):
+            continue
+        if quantity <= 0 or unit_price < 0:
+            continue
+        db.session.add(OfferItem(
+            offer=offer, position=position, item_type=item_type,
+            code=(row.get('code') or '').strip() or None,
+            name=name, description_html=description_html,
+            dimensions=(row.get('dimensions') or '').strip() or None,
+            quantity=quantity, unit=(row.get('unit') or 'бр').strip() or 'бр',
+            unit_price=unit_price,
+        ))
+
+    db.session.commit()
+    flash(f'Офертата № {offer.number} беше запазена успешно.', 'success')
+    return redirect(url_for('admin_offer_edit', offer_id=offer.id))
+
+
+@app.route('/admin/offers/new', methods=['GET', 'POST'])
+@role_required('admin')
+def admin_offer_new():
+    if request.method == 'POST':
+        return _save_offer(None)
+    products, details, clients = _offer_picker_context()
+    return render_template('admin_offer_edit.html', offer=None, initial_items=[],
+                            products=products, details=details, clients=clients, active_page='admin_offers')
+
+
+@app.route('/admin/offers/<int:offer_id>/edit', methods=['GET', 'POST'])
+@role_required('admin')
+def admin_offer_edit(offer_id):
+    offer = Offer.query.get_or_404(offer_id)
+    if request.method == 'POST':
+        return _save_offer(offer)
+    products, details, clients = _offer_picker_context()
+    return render_template('admin_offer_edit.html', offer=offer, initial_items=_offer_items_json(offer),
+                            products=products, details=details, clients=clients, active_page='admin_offers')
+
+
+@app.route('/admin/offers/<int:offer_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_offer_delete(offer_id):
+    offer = Offer.query.get_or_404(offer_id)
+    number = offer.number
+    db.session.delete(offer)
+    db.session.commit()
+    flash(f'Офертата № {number} беше изтрита.', 'success')
+    return redirect(url_for('admin_offers'))
+
+
+@app.route('/admin/offers/<int:offer_id>/export')
+@role_required('admin')
+def admin_offer_export(offer_id):
+    offer = Offer.query.get_or_404(offer_id)
+    wb = build_offer_workbook(offer)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(buf, as_attachment=True, download_name=f'Oferta_{offer.number}.xlsx',
+                      mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 
 if __name__ == '__main__':
