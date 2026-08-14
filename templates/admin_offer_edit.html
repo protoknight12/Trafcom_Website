@@ -79,9 +79,8 @@
                        placeholder="напр. 10" value="{{ offer.discount_percent if offer and offer.discount_percent is not none else '' }}">
             </div>
             <div class="form-group" style="grid-column: 1 / -1;">
-                <label for="footer_notes">Условия / бележки под таблицата (по един ред)</label>
-                <textarea id="footer_notes" name="footer_notes" rows="4" style="width: 100%; box-sizing: border-box; background-color: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); padding: 0.6rem 0.75rem;">{% if offer %}{{ offer.footer_notes or '' }}{% else %}Всички цени са в EUR без включен ДДС
-Валидност на офертата 15 дни{% endif %}</textarea>
+                <label for="footer_notes">Условия / бележки под таблицата (по един ред) - валидността се смята автоматично от "Валидна до"</label>
+                <textarea id="footer_notes" name="footer_notes" rows="4" style="width: 100%; box-sizing: border-box; background-color: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); padding: 0.6rem 0.75rem;">{% if offer %}{{ offer.footer_notes or '' }}{% else %}Всички цени са в EUR без включен ДДС{% endif %}</textarea>
             </div>
         </form>
     </section>

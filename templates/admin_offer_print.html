@@ -106,11 +106,14 @@
         </tbody>
     </table>
 
-    {% if offer.footer_notes %}
+    {% if offer.footer_notes or offer.valid_until %}
     <div class="offer-terms">
-        {% for line in offer.footer_notes.splitlines() %}
+        {% for line in (offer.footer_notes or '').splitlines() %}
         {% if line.strip() %}<p>{{ line.strip() }}</p>{% endif %}
         {% endfor %}
+        {% if offer.valid_until %}
+        <p>Валидност на офертата {{ (offer.valid_until - offer.created_at.date()).days }} дни</p>
+        {% endif %}
     </div>
     {% endif %}
 
