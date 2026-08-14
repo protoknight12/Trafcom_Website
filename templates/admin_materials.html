@@ -103,11 +103,11 @@
                 <label for="new_height_mm">Височина (мм)</label>
                 <input type="number" id="new_height_mm" step="0.1" min="0" name="height_mm" placeholder="напр. 40">
             </div>
-            <div class="form-group">
+            <div class="form-group" id="new_price_per_kg_m2_group">
                 <label for="new_price_per_kg_m2">Цена на кг за м² (€, незадължително)</label>
                 <input type="number" id="new_price_per_kg_m2" step="0.01" min="0" name="price_per_kg_m2" placeholder="напр. 3.50">
             </div>
-            <div class="form-group">
+            <div class="form-group" id="new_price_per_kg_m_group" style="display:none;">
                 <label for="new_price_per_kg_m">Цена на кг за линеен метър (€, незадължително)</label>
                 <input type="number" id="new_price_per_kg_m" step="0.01" min="0" name="price_per_kg_m" placeholder="напр. 2.20">
             </div>
@@ -198,12 +198,15 @@
                                value="{{ material.height_mm if material.height_mm is not none else '' }}"
                                class="material-price-input" placeholder="Височина"
                                style="{{ '' if material.type == 'profiles' else 'display:none;' }}"></td>
+                    {% set is_linear = material.type in ('rods', 'pipes', 'profiles') %}
                     <td><input type="number" step="0.01" min="0" name="price_per_kg_m2" form="{{ form_id }}"
                                value="{{ material.price_per_kg_m2 if material.price_per_kg_m2 is not none else '' }}"
-                               class="material-price-input" placeholder="€/кг/м²"></td>
+                               class="material-price-input" placeholder="€/кг/м²"
+                               style="{{ 'display:none;' if is_linear else '' }}"></td>
                     <td><input type="number" step="0.01" min="0" name="price_per_kg_m" form="{{ form_id }}"
                                value="{{ material.price_per_kg_m if material.price_per_kg_m is not none else '' }}"
-                               class="material-price-input" placeholder="€/кг/м"></td>
+                               class="material-price-input" placeholder="€/кг/м"
+                               style="{{ '' if is_linear else 'display:none;' }}"></td>
                     <td>{{ material.stock_quantity|round(2) }}</td>
                     <td><input type="number" name="erp_number" form="{{ form_id }}" value="{{ material.erp_number or '' }}"
                                class="material-price-input" placeholder="автоматично"></td>
@@ -298,6 +301,14 @@
             heightGroup.style.display = 'none';
             heightInput.value = '';
         }
+
+        // Only one of the two kg-price fields is meaningful per type - €/kg
+        // per linear meter for bar stock (rods/pipes/profiles), €/kg per m²
+        // for area stock (sheets/other) - mirrors cost_per_m2's own
+        // area-vs-linear split above.
+        const isLinear = typeSelect.value === 'rods' || typeSelect.value === 'pipes' || typeSelect.value === 'profiles';
+        document.getElementById('new_price_per_kg_m2_group').style.display = isLinear ? 'none' : '';
+        document.getElementById('new_price_per_kg_m_group').style.display = isLinear ? '' : 'none';
     }
 
     document.getElementById('new_type').addEventListener('change', applyMaterialDimensionLabels);
@@ -339,6 +350,12 @@
         if (heightInput) {
             heightInput.style.display = selectEl.value === 'profiles' ? '' : 'none';
         }
+
+        const isLinear = selectEl.value === 'rods' || selectEl.value === 'pipes' || selectEl.value === 'profiles';
+        const kgM2Input = row.querySelector('input[name="price_per_kg_m2"]');
+        const kgMInput = row.querySelector('input[name="price_per_kg_m"]');
+        if (kgM2Input) kgM2Input.style.display = isLinear ? 'none' : '';
+        if (kgMInput) kgMInput.style.display = isLinear ? '' : 'none';
     }
     document.querySelectorAll('table.users-table select[name="type"]').forEach(function (sel) {
         sel.addEventListener('change', function () { applyRowSpeedVisibility(sel); });

@@ -15,7 +15,7 @@ import urllib.error
 from html import escape as html_escape
 from html.parser import HTMLParser
 from concurrent.futures import ThreadPoolExecutor
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory, send_file
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_limiter import Limiter
@@ -29,10 +29,6 @@ from ezdxf.math import bulge_to_arc
 import random
 import barcode
 from barcode.writer import SVGWriter
-from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment
-from openpyxl.cell.rich_text import CellRichText, TextBlock
-from openpyxl.cell.text import InlineFont
 
 # Optional: load a local .env file if python-dotenv is installed, so secrets
 # can be kept out of source control. Safe no-op if the package isn't present.
@@ -100,6 +96,12 @@ os.makedirs(app.config['PRODUCT_IMAGES_FOLDER'], exist_ok=True)
 # machine images join them here.
 app.config['MACHINE_IMAGES_FOLDER'] = os.path.join(app.static_folder, 'img', 'machines')
 os.makedirs(app.config['MACHINE_IMAGES_FOLDER'], exist_ok=True)
+# Photos attached to OfferItem rows (see upload_offer_item_image()) - web-
+# accessible like PRODUCT_IMAGES_FOLDER, since the editor shows a live
+# thumbnail, and also read straight off disk when embedding into the
+# exported .xlsx (see build_offer_workbook()).
+app.config['OFFER_IMAGES_FOLDER'] = os.path.join(app.static_folder, 'uploads', 'offers')
+os.makedirs(app.config['OFFER_IMAGES_FOLDER'], exist_ok=True)
 # Private (non-static) storage for Detail DXF files - unlike UPLOAD_FOLDER,
 # files saved here are kept permanently, not deleted after processing. Never
 # served via Flask's static route; only download_detail_dxf() (admin-only)
@@ -1069,6 +1071,11 @@ class OfferItem(db.Model):
     quantity = db.Column(db.Float, nullable=True)
     unit = db.Column(db.String(20), nullable=True)
     unit_price = db.Column(db.Float, nullable=True)
+    # On-disk filename (uuid-prefixed, see _save_upload) of an optional photo
+    # for this line - the 'снимка' column in the shop's original offer
+    # spreadsheets (see build_offer_workbook()). Product/detail rows only;
+    # a free-text row has no dedicated photo slot in the exported layout.
+    image_filename = db.Column(db.String(255), nullable=True)
 
     offer = db.relationship('Offer', backref=db.backref(
         'items', order_by='OfferItem.position', cascade='all, delete-orphan'))
@@ -1159,179 +1166,6 @@ def sanitize_rich_text(raw):
     # div-per-line wrapping, and collapse a result that's now empty tags only.
     result = re.sub(r'^(<br>)+|(<br>)+$', '', result)
     return result or None
-
-
-class _RichTextToRuns(HTMLParser):
-    """Walks sanitized bold/italic/<br> HTML (see sanitize_rich_text) into a
-    flat list of (text, bold, italic) runs, for _rich_text_cell_value()."""
-
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.runs = []
-        self._bold = 0
-        self._italic = 0
-
-    def handle_starttag(self, tag, attrs):
-        if tag in ('b', 'strong'):
-            self._bold += 1
-        elif tag in ('i', 'em'):
-            self._italic += 1
-        elif tag == 'br':
-            self.runs.append(('\n', self._bold > 0, self._italic > 0))
-
-    def handle_startendtag(self, tag, attrs):
-        if tag == 'br':
-            self.runs.append(('\n', self._bold > 0, self._italic > 0))
-
-    def handle_endtag(self, tag):
-        if tag in ('b', 'strong'):
-            self._bold = max(0, self._bold - 1)
-        elif tag in ('i', 'em'):
-            self._italic = max(0, self._italic - 1)
-
-    def handle_data(self, data):
-        if data:
-            self.runs.append((data, self._bold > 0, self._italic > 0))
-
-
-def _rich_text_cell_value(raw_html, font_name):
-    """
-    Converts sanitized bold/italic HTML (see sanitize_rich_text) into a value
-    openpyxl can write to a cell, preserving the bold/italic runs - a plain
-    string write would silently flatten all formatting in the exported
-    .xlsx. Returns a plain string when there's no bold/italic to preserve
-    (the common case), or a CellRichText otherwise.
-    """
-    if not raw_html:
-        return ''
-    parser = _RichTextToRuns()
-    parser.feed(raw_html)
-    parser.close()
-    if not parser.runs:
-        return ''
-    if not any(bold or italic for _, bold, italic in parser.runs):
-        return ''.join(text for text, _, _ in parser.runs)
-    blocks = [
-        TextBlock(InlineFont(rFont=font_name, b=bold or None, i=italic or None), text)
-        for text, bold, italic in parser.runs
-    ]
-    return CellRichText(*blocks)
-
-
-# Column layout of the exported .xlsx, mirroring the shop's existing offer
-# spreadsheets (see offer.xlsx sheets like 'CTP01-oferta'): ID / name /
-# description / dimensions / qty / unit / unit price / line total / currency.
-# No photo column - this feature has no image-upload step, unlike the manual
-# template it's based on.
-_OFFER_COLUMN_WIDTHS = {
-    'B': 10, 'C': 18, 'D': 30, 'E': 13, 'F': 6, 'G': 7, 'H': 11, 'I': 11, 'J': 6,
-}
-
-
-def build_offer_workbook(offer):
-    """
-    Renders one Offer into an openpyxl Workbook matching the shop's standard
-    offer layout: Oswald title, merged header block, item table (rich-text
-    description preserved via _rich_text_cell_value), footer terms, total,
-    and a date/signature line. See templates/admin_offer_edit.html for where
-    footer_notes/signed_by are entered.
-    """
-    wb = Workbook()
-    ws = wb.active
-    ws.title = f'Оферта {offer.number}'
-
-    center = Alignment(horizontal='center', vertical='center', wrap_text=True)
-    left_wrap = Alignment(horizontal='left', vertical='top', wrap_text=True)
-
-    for col, width in _OFFER_COLUMN_WIDTHS.items():
-        ws.column_dimensions[col].width = width
-
-    ws.merge_cells('B1:J2')
-    title_cell = ws['B1']
-    title_cell.value = 'ТРАФКОМ ООД'
-    title_cell.font = Font(name='Oswald', size=26, bold=True)
-    title_cell.alignment = center
-
-    ws.merge_cells('B3:J3')
-    address_cell = ws['B3']
-    address_cell.value = 'гр. Тетевен, ул Александър Стамболийски 36, trafcom@tafcombg.com, +359 886 762276'
-    address_cell.font = Font(name='Calibri', size=12)
-    address_cell.alignment = center
-
-    ws.merge_cells('B5:J5')
-    number_cell = ws['B5']
-    number_cell.value = f'ОФЕРТА № {offer.number}'
-    number_cell.font = Font(name='Calibri', size=14, bold=True)
-    number_cell.alignment = center
-
-    row = 6
-    if offer.object_title:
-        ws.merge_cells(f'B{row}:J{row}')
-        obj_cell = ws[f'B{row}']
-        obj_cell.value = f'ОБЕКТ: {offer.object_title}'
-        obj_cell.font = Font(name='Calibri', size=11)
-        obj_cell.alignment = center
-        row += 1
-
-    row += 1
-    header_row = row
-    headers = ['ID', 'Наименование', 'Описание', 'Размери', 'Кол-во', 'Мярка',
-               'Ед. цена\n(EUR без ДДС)', 'Обща цена\n(EUR без ДДС)', '']
-    for i, text in enumerate(headers):
-        cell = ws.cell(row=header_row, column=2 + i, value=text or None)
-        cell.font = Font(name='Calibri', size=11, bold=True)
-        cell.alignment = center
-
-    row += 1
-    first_item_row = row
-    for item in offer.items:
-        if item.item_type == 'text':
-            ws.merge_cells(f'C{row}:I{row}')
-            cell = ws.cell(row=row, column=3, value=_rich_text_cell_value(item.description_html, 'Calibri'))
-            cell.alignment = left_wrap
-            cell.font = Font(name='Calibri', size=11)
-        else:
-            ws.cell(row=row, column=2, value=item.code).alignment = center
-            ws.cell(row=row, column=3, value=item.name).alignment = left_wrap
-            desc_cell = ws.cell(row=row, column=4, value=_rich_text_cell_value(item.description_html, 'Calibri'))
-            desc_cell.alignment = left_wrap
-            ws.cell(row=row, column=5, value=item.dimensions).alignment = center
-            ws.cell(row=row, column=6, value=item.quantity).alignment = center
-            ws.cell(row=row, column=7, value=item.unit).alignment = center
-            price_cell = ws.cell(row=row, column=8, value=item.unit_price)
-            price_cell.number_format = '0.00'
-            total_cell = ws.cell(row=row, column=9, value=f'=F{row}*H{row}')
-            total_cell.number_format = '0.00'
-            ws.cell(row=row, column=10, value='EUR')
-            for col in range(2, 11):
-                ws.cell(row=row, column=col).font = Font(name='Calibri', size=11)
-        row += 1
-    last_item_row = row - 1
-
-    if last_item_row >= first_item_row:
-        row += 1
-        ws.cell(row=row, column=7, value='ОБЩО:').font = Font(name='Calibri', size=12, bold=True)
-        total_cell = ws.cell(row=row, column=9, value=f'=SUM(I{first_item_row}:I{last_item_row})')
-        total_cell.font = Font(name='Calibri', size=12, bold=True)
-        total_cell.number_format = '0.00'
-        ws.cell(row=row, column=10, value='EUR').font = Font(name='Calibri', size=12, bold=True)
-        row += 1
-
-    if offer.footer_notes:
-        row += 1
-        for line in offer.footer_notes.splitlines():
-            if line.strip():
-                ws.cell(row=row, column=2, value=line.strip()).font = Font(name='Calibri', size=11, bold=True)
-                row += 1
-
-    row += 2
-    ws.cell(row=row, column=2, value='Дата:').font = Font(name='Calibri', size=11)
-    ws.cell(row=row, column=3, value=offer.created_at.date() if offer.created_at else None).number_format = 'mm-dd-yy'
-    if offer.signed_by:
-        ws.cell(row=row, column=8, value='С уважение:').font = Font(name='Calibri', size=11)
-        ws.cell(row=row + 1, column=8, value=offer.signed_by).font = Font(name='Calibri', size=11)
-
-    return wb
 
 
 @login_manager.user_loader
@@ -6279,6 +6113,29 @@ def admin_offers():
     return render_template('admin_offers.html', offers=offers, active_page='admin_offers')
 
 
+@app.route('/api/upload-offer-item-image', methods=['POST'])
+@role_required('admin')
+def upload_offer_item_image():
+    """Stages a photo for a not-yet-saved OfferItem line (product/detail rows
+    only - the 'снимка' column in the shop's original offer spreadsheets),
+    same stage-then-link pattern as upload_order_item_pdf(): saved
+    immediately so the browser isn't holding the raw File object until the
+    whole offer is submitted. _save_offer() links the staged file via
+    _resolve_staged_offer_image(); an added-then-never-submitted row just
+    leaves an orphaned file on disk, same tolerance as that PDF upload."""
+    file = request.files.get('file')
+    if not file or file.filename == '':
+        return jsonify({'status': 'error', 'message': 'Няма избран файл.'}), 400
+    stored_filename = _save_upload(file, app.config['OFFER_IMAGES_FOLDER'], allowed_extensions=IMAGE_EXTENSIONS)
+    if not stored_filename:
+        return jsonify({'status': 'error', 'message': 'Разрешени са само изображения (png/jpg/jpeg/webp/gif).'}), 400
+    return jsonify({
+        'status': 'success',
+        'filename': stored_filename,
+        'url': url_for('static', filename=f'uploads/offers/{stored_filename}'),
+    })
+
+
 def _offer_picker_context():
     """Shared context for the offer create/edit form: catalog rows to pick
     from (as plain JSON-friendly dicts, for the add-item panel's JS) and the
@@ -6300,7 +6157,21 @@ def _offer_items_json(offer):
         'type': item.item_type, 'code': item.code or '', 'name': item.name or '',
         'description_html': item.description_html or '', 'dimensions': item.dimensions or '',
         'quantity': item.quantity, 'unit': item.unit or 'бр', 'unit_price': item.unit_price,
+        'image_filename': item.image_filename or '',
     } for item in offer.items]
+
+
+def _resolve_staged_offer_image(filename):
+    """Validates a client-supplied image filename against OFFER_IMAGES_FOLDER
+    - same re-check-don't-trust pattern as _link_order_item_attachment() for
+    OrderItemAttachment's staged PDFs. Returns the filename only if it was
+    actually staged there via upload_offer_item_image(), else None."""
+    stored_filename = secure_filename(filename or '')
+    if not stored_filename:
+        return None
+    if not os.path.isfile(os.path.join(app.config['OFFER_IMAGES_FOLDER'], stored_filename)):
+        return None
+    return stored_filename
 
 
 def _save_offer(offer):
@@ -6370,6 +6241,7 @@ def _save_offer(offer):
             dimensions=(row.get('dimensions') or '').strip() or None,
             quantity=quantity, unit=(row.get('unit') or 'бр').strip() or 'бр',
             unit_price=unit_price,
+            image_filename=_resolve_staged_offer_image(row.get('image_filename')),
         ))
 
     db.session.commit()
@@ -6409,16 +6281,20 @@ def admin_offer_delete(offer_id):
     return redirect(url_for('admin_offers'))
 
 
-@app.route('/admin/offers/<int:offer_id>/export')
+@app.route('/admin/offers/<int:offer_id>/print')
 @role_required('admin')
-def admin_offer_export(offer_id):
+def admin_offer_print(offer_id):
+    """
+    Browser-print view of an Offer - same pattern as offer.html/protocol.html/
+    certificate.html (see CLAUDE.md's 'Offer / protocol / certificate
+    documents' section): @media print CSS, no server-side PDF library. The
+    user hits the page's 'Печат / PDF' button (window.print()) and saves as
+    PDF from the browser's print dialog. description_html is rendered with
+    |safe since it's already allowlist-sanitized to bold/italic/<br> only
+    (see sanitize_rich_text()) - safe to trust here, unlike raw user input.
+    """
     offer = Offer.query.get_or_404(offer_id)
-    wb = build_offer_workbook(offer)
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return send_file(buf, as_attachment=True, download_name=f'Oferta_{offer.number}.xlsx',
-                      mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    return render_template('admin_offer_print.html', offer=offer)
 
 
 if __name__ == '__main__':
