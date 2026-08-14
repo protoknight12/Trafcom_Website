@@ -38,6 +38,7 @@
                     <th class="text-right">Сума</th>
                     <th class="text-right">Редакция</th>
                     <th class="text-right">Печат</th>
+                    <th class="text-right">Дубликат</th>
                     <th class="text-right">Изтриване</th>
                 </tr>
                 </thead>
@@ -53,6 +54,12 @@
                     <td class="text-right"><a href="{{ url_for('admin_offer_edit', offer_id=offer.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редакция</a></td>
                     <td class="text-right"><a href="{{ url_for('admin_offer_print', offer_id=offer.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;" target="_blank">Печат / PDF</a></td>
                     <td class="text-right">
+                        <form action="{{ url_for('admin_offer_duplicate', offer_id=offer.id) }}" method="POST" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Дублирай</button>
+                        </form>
+                    </td>
+                    <td class="text-right">
                         <form action="{{ url_for('admin_offer_delete', offer_id=offer.id) }}" method="POST"
                               onsubmit="return confirm('Изтриване на оферта № {{ offer.number }}?');" style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
@@ -61,7 +68,7 @@
                     </td>
                 </tr>
                 {% else %}
-                <tr><td colspan="9" class="text-center no-data">Все още няма създадени оферти.</td></tr>
+                <tr><td colspan="10" class="text-center no-data">Все още няма създадени оферти.</td></tr>
                 {% endfor %}
                 </tbody>
             </table>

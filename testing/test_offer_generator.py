@@ -159,7 +159,9 @@ with app.app_context():
     assert third_offer.total == 45.0
 
     discounted_print = client.get(f'/admin/offers/{third_offer.id}/print').data.decode('utf-8')
-    assert '50.00 EUR; -10%, 45.00 EUR' in discounted_print
+    assert 'Сума:' in discounted_print and '50.00 EUR' in discounted_print
+    assert 'Отстъпка (-10%):' in discounted_print and '-5.00 EUR' in discounted_print
+    assert '45.00 EUR' in discounted_print  # ОБЩО row
 
     # An out-of-range discount must be rejected, not silently clamped.
     out_of_range_resp = client.post(f'/admin/offers/{third_offer.id}/edit', data={
@@ -170,10 +172,24 @@ with app.app_context():
     db.session.refresh(third_offer)
     assert third_offer.discount_percent == 10.0  # unchanged
 
+    # --- admin_offer_duplicate: copies the offer and every item under a new number ---
+    dup_resp = client.post(f'/admin/offers/{third_offer.id}/duplicate', data={'csrf_token': edit_csrf}, follow_redirects=True)
+    assert dup_resp.status_code == 200
+    duplicate = Offer.query.filter(Offer.number.notin_([first, second, third_offer.number])).order_by(Offer.id.desc()).first()
+    assert duplicate.number != third_offer.number
+    assert duplicate.object_title == third_offer.object_title
+    assert duplicate.discount_percent == third_offer.discount_percent
+    assert duplicate.valid_until == third_offer.valid_until
+    dup_items = sorted(duplicate.items, key=lambda i: i.position)
+    assert [(i.item_type, i.name, i.code, i.quantity, i.unit_price) for i in dup_items] == \
+           [(i.item_type, i.name, i.code, i.quantity, i.unit_price) for i in sorted(third_offer.items, key=lambda i: i.position)]
+    assert duplicate.id != third_offer.id and all(di.id != oi.id for di, oi in zip(dup_items, sorted(third_offer.items, key=lambda i: i.position)))
+
     os.remove(staged_path)
     db.session.delete(offer2)
     db.session.delete(offer)
     db.session.delete(third_offer)
+    db.session.delete(duplicate)
     db.session.delete(admin)
     db.session.commit()
 

@@ -380,14 +380,15 @@
             return sum + ((item.quantity != null && item.unit_price != null) ? item.quantity * item.unit_price : 0);
         }, 0);
         // Mirrors Offer.subtotal/discount_amount/total in app.py and the
-        // print page's "price; -sale%, actual price" line - without this,
-        // the running total shown here while still editing would ignore
-        // the discount field entirely.
+        // print page's Сума/Отстъпка/ОБЩО breakdown - without this, the
+        // running total shown here while still editing would ignore the
+        // discount field entirely.
         const discountRaw = parseFloat(document.getElementById('discount_percent').value);
         const discountPercent = (!isNaN(discountRaw) && discountRaw > 0) ? discountRaw : 0;
-        const finalTotal = subtotal * (1 - discountPercent / 100);
-        document.getElementById('cartTotal').textContent = discountPercent
-            ? subtotal.toFixed(2) + ' €; -' + discountPercent + '%, ' + finalTotal.toFixed(2) + ' €'
+        const discountAmount = subtotal * discountPercent / 100;
+        const finalTotal = subtotal - discountAmount;
+        document.getElementById('cartTotal').innerHTML = discountPercent
+            ? 'Сума: ' + subtotal.toFixed(2) + ' €<br>Отстъпка (-' + discountPercent + '%): -' + discountAmount.toFixed(2) + ' €<br><strong>ОБЩО: ' + finalTotal.toFixed(2) + ' €</strong>'
             : subtotal.toFixed(2) + ' €';
         document.getElementById('submitOfferBtn').disabled = cart.length === 0;
     }

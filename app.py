@@ -6336,6 +6336,39 @@ def admin_offer_delete(offer_id):
     return redirect(url_for('admin_offers'))
 
 
+@app.route('/admin/offers/<int:offer_id>/duplicate', methods=['POST'])
+@role_required('admin')
+def admin_offer_duplicate(offer_id):
+    """
+    Copies an existing Offer and every OfferItem into a brand-new Offer with
+    its own auto-generated number (see _next_offer_number()) - a quick way
+    to reuse a past quote as the starting point for a new one instead of
+    rebuilding it line by line. Photos aren't re-uploaded, just referenced by
+    the same image_filename as the source item - harmless, since nothing in
+    this app ever deletes an offer photo file off disk (same
+    orphaned-file tolerance as upload_offer_item_image()/
+    upload_order_item_pdf()).
+    """
+    source = Offer.query.get_or_404(offer_id)
+    new_offer = Offer(
+        number=_next_offer_number(), object_title=source.object_title, client_id=source.client_id,
+        footer_notes=source.footer_notes, signed_by=source.signed_by, valid_until=source.valid_until,
+        discount_percent=source.discount_percent, created_by_id=current_user.id,
+    )
+    db.session.add(new_offer)
+    db.session.flush()
+    for item in source.items:
+        db.session.add(OfferItem(
+            offer_id=new_offer.id, position=item.position, item_type=item.item_type,
+            code=item.code, name=item.name, description_html=item.description_html,
+            dimensions=item.dimensions, quantity=item.quantity, unit=item.unit,
+            unit_price=item.unit_price, image_filename=item.image_filename,
+        ))
+    db.session.commit()
+    flash(f'Офертата беше дублирана като № {new_offer.number}.', 'success')
+    return redirect(url_for('admin_offer_edit', offer_id=new_offer.id))
+
+
 @app.route('/admin/offers/<int:offer_id>/print')
 @role_required('admin')
 def admin_offer_print(offer_id):
