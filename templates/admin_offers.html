@@ -34,6 +34,7 @@
                     <th>Обект</th>
                     <th>Клиент</th>
                     <th>Дата</th>
+                    <th>Валидна до</th>
                     <th class="text-right">Сума</th>
                     <th class="text-right">Редакция</th>
                     <th class="text-right">Печат</th>
@@ -47,6 +48,7 @@
                     <td>{{ offer.object_title or '-' }}</td>
                     <td>{{ offer.client.name if offer.client else '-' }}</td>
                     <td>{{ offer.created_at.strftime('%d.%m.%Y') }}</td>
+                    <td>{{ offer.valid_until.strftime('%d.%m.%Y') if offer.valid_until else '-' }}</td>
                     <td class="text-right">{{ '%.2f'|format(offer.total) }} €</td>
                     <td class="text-right"><a href="{{ url_for('admin_offer_edit', offer_id=offer.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редакция</a></td>
                     <td class="text-right"><a href="{{ url_for('admin_offer_print', offer_id=offer.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;" target="_blank">Печат / PDF</a></td>
@@ -59,7 +61,7 @@
                     </td>
                 </tr>
                 {% else %}
-                <tr><td colspan="8" class="text-center no-data">Все още няма създадени оферти.</td></tr>
+                <tr><td colspan="9" class="text-center no-data">Все още няма създадени оферти.</td></tr>
                 {% endfor %}
                 </tbody>
             </table>

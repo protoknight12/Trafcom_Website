@@ -68,6 +68,16 @@
                 <input type="text" id="signed_by" name="signed_by" placeholder=""
                        value="{{ offer.signed_by if offer else '' }}">
             </div>
+            <div class="form-group">
+                <label for="valid_until">Валидна до (незадължително)</label>
+                <input type="date" id="valid_until" name="valid_until"
+                       value="{{ offer.valid_until.isoformat() if offer and offer.valid_until else '' }}">
+            </div>
+            <div class="form-group">
+                <label for="discount_percent">Отстъпка % (незадължително)</label>
+                <input type="number" id="discount_percent" name="discount_percent" min="0" max="100" step="0.1"
+                       placeholder="напр. 10" value="{{ offer.discount_percent if offer and offer.discount_percent is not none else '' }}">
+            </div>
             <div class="form-group" style="grid-column: 1 / -1;">
                 <label for="footer_notes">Условия / бележки под таблицата (по един ред)</label>
                 <textarea id="footer_notes" name="footer_notes" rows="4" style="width: 100%; box-sizing: border-box; background-color: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); padding: 0.6rem 0.75rem;">{% if offer %}{{ offer.footer_notes or '' }}{% else %}Всички цени са в EUR без включен ДДС
@@ -366,10 +376,19 @@
             });
         }
 
-        const total = cart.reduce(function (sum, item) {
+        const subtotal = cart.reduce(function (sum, item) {
             return sum + ((item.quantity != null && item.unit_price != null) ? item.quantity * item.unit_price : 0);
         }, 0);
-        document.getElementById('cartTotal').textContent = total.toFixed(2) + ' €';
+        // Mirrors Offer.subtotal/discount_amount/total in app.py and the
+        // print page's "price; -sale%, actual price" line - without this,
+        // the running total shown here while still editing would ignore
+        // the discount field entirely.
+        const discountRaw = parseFloat(document.getElementById('discount_percent').value);
+        const discountPercent = (!isNaN(discountRaw) && discountRaw > 0) ? discountRaw : 0;
+        const finalTotal = subtotal * (1 - discountPercent / 100);
+        document.getElementById('cartTotal').textContent = discountPercent
+            ? subtotal.toFixed(2) + ' €; -' + discountPercent + '%, ' + finalTotal.toFixed(2) + ' €'
+            : subtotal.toFixed(2) + ' €';
         document.getElementById('submitOfferBtn').disabled = cart.length === 0;
     }
 
@@ -381,6 +400,8 @@
         }
         document.getElementById('itemsJsonInput').value = JSON.stringify(cart);
     });
+
+    document.getElementById('discount_percent').addEventListener('input', renderCart);
 
     renderCart();
 </script>

@@ -1028,13 +1028,13 @@ def get_text(key, default=''):
 
 class Offer(db.Model):
     """
-    A generated sales offer (multi-line quote), exportable as a .xlsx
-    matching the shop's standard offer layout (title/address/object line,
-    item table, footer terms+total+signature - see build_offer_workbook()).
-    Distinct from the older single-Product print-to-PDF flow
-    (offer.html/admin_product_offer()) - this one covers an arbitrary quote
-    made of any mix of catalog Products/Details and free-form text lines
-    (see OfferItem), not just one product.
+    A generated sales offer (multi-line quote), rendered as a browser-print
+    page matching the shop's standard offer layout (title/address/object
+    line, item table, footer terms+total+signature - see
+    templates/admin_offer_print.html). Distinct from the older single-Product
+    print-to-PDF flow (offer.html/admin_product_offer()) - this one covers an
+    arbitrary quote made of any mix of catalog Products/Details and free-form
+    text lines (see OfferItem), not just one product.
     """
     id = db.Column(db.Integer, primary_key=True)
     # Zero-padded sequential number (e.g. '00000000200') - see _next_offer_number().
@@ -1043,6 +1043,15 @@ class Offer(db.Model):
     client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True)
     footer_notes = db.Column(db.Text, nullable=True)
     signed_by = db.Column(db.String(150), nullable=True)
+    # Explicit expiration date shown on the printed offer (e.g. "Валидна до:
+    # 30.09.2026"), separate from the free-text footer_notes line some
+    # offers used to spell out a validity period in prose (e.g. "Валидност
+    # на офертата 15 дни") - this is a real date an admin can pick, not text.
+    valid_until = db.Column(db.Date, nullable=True)
+    # Whole-offer discount (0-100) applied to the item subtotal - see
+    # subtotal/discount_amount/total below and admin_offer_print.html's
+    # "price; -sale%, actual price" total breakdown.
+    discount_percent = db.Column(db.Float, nullable=True)
     created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
@@ -1050,8 +1059,18 @@ class Offer(db.Model):
     created_by = db.relationship('User')
 
     @property
-    def total(self):
+    def subtotal(self):
+        """Sum of every line's price before the whole-offer discount."""
         return round(sum(item.line_total for item in self.items), 2)
+
+    @property
+    def discount_amount(self):
+        return round(self.subtotal * (self.discount_percent or 0) / 100, 2)
+
+    @property
+    def total(self):
+        """Final amount owed - subtotal minus the whole-offer discount, if any."""
+        return round(self.subtotal - self.discount_amount, 2)
 
 
 class OfferItem(db.Model):
@@ -6206,6 +6225,21 @@ def _save_offer(offer):
     client_id = int(client_id_raw) if client_id_raw.isdigit() else None
     footer_notes = request.form.get('footer_notes', '').strip() or None
     signed_by = request.form.get('signed_by', '').strip() or None
+    valid_until_raw = request.form.get('valid_until', '').strip()
+    try:
+        valid_until = datetime.strptime(valid_until_raw, '%Y-%m-%d').date() if valid_until_raw else None
+    except ValueError:
+        flash('Невалидна дата на валидност.', 'danger')
+        return redirect(request.url)
+
+    try:
+        discount_percent = _parse_optional_float(request.form, 'discount_percent')
+    except ValueError:
+        flash('Невалидна отстъпка.', 'danger')
+        return redirect(request.url)
+    if discount_percent is not None and not (0 <= discount_percent <= 100):
+        flash('Отстъпката трябва да бъде между 0 и 100%.', 'danger')
+        return redirect(request.url)
 
     is_new = offer is None
     if is_new:
@@ -6216,6 +6250,8 @@ def _save_offer(offer):
 
     offer.object_title = object_title
     offer.client_id = client_id
+    offer.valid_until = valid_until
+    offer.discount_percent = discount_percent
     offer.footer_notes = footer_notes
     offer.signed_by = signed_by
 

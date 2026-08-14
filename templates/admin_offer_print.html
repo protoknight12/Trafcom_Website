@@ -54,6 +54,7 @@
     <p class="offer-number">ОФЕРТА № {{ offer.number }}</p>
     {% if offer.object_title %}<p class="offer-object">ОБЕКТ: {{ offer.object_title }}</p>{% endif %}
     {% if offer.client %}<p class="offer-client">Клиент: {{ offer.client.name }}</p>{% endif %}
+    {% if offer.valid_until %}<p class="offer-client">Валидна до: {{ offer.valid_until.strftime('%d.%m.%Y') }}</p>{% endif %}
 
     <table>
         <thead>
@@ -89,7 +90,13 @@
         {% endfor %}
         <tr class="offer-total-row">
             <td colspan="8" class="text-right">ОБЩО:</td>
-            <td class="text-right">{{ '%.2f'|format(offer.total) }} EUR</td>
+            <td class="text-right">
+                {% if offer.discount_percent %}
+                {{ '%.2f'|format(offer.subtotal) }} EUR; -{{ '%g'|format(offer.discount_percent) }}%, {{ '%.2f'|format(offer.total) }} EUR
+                {% else %}
+                {{ '%.2f'|format(offer.total) }} EUR
+                {% endif %}
+            </td>
         </tr>
         </tbody>
     </table>

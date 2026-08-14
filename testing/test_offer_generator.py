@@ -16,12 +16,15 @@ and the admin_offer_print browser-print view):
 - _save_offer(), via POST /admin/offers/new: a free-typed ('text') row can
   carry its own name/code/qty/price like a catalog row (not just a
   description paragraph), a note-only row with no qty/price still saves with
-  those fields None, and a fully blank row is dropped as junk.
+  those fields None, and a fully blank row is dropped as junk. valid_until
+  parses into a real date and is rejected (not silently dropped) when
+  malformed.
 
 Run as a module from the repo root:  python -m testing.test_offer_generator
 """
 import json
 import os
+from datetime import date
 
 from app import app, db, sanitize_rich_text, _next_offer_number, _resolve_staged_offer_image, \
     Offer, OfferItem, User
@@ -105,7 +108,7 @@ with app.app_context():
     ]
     post_resp = client.post('/admin/offers/new', data={
         'csrf_token': csrf, 'object_title': '', 'client_id': '', 'signed_by': '',
-        'footer_notes': '', 'items_json': json.dumps(items),
+        'footer_notes': '', 'valid_until': '2026-09-30', 'items_json': json.dumps(items),
     }, follow_redirects=True)
     assert post_resp.status_code == 200
 
@@ -125,6 +128,47 @@ with app.app_context():
     assert saved_items[1].line_total == 0.0
 
     assert third_offer.total == 50.0
+
+    # --- valid_until: parses into a real date, and renders on the print page ---
+    assert third_offer.valid_until == date(2026, 9, 30)
+    print_resp = client.get(f'/admin/offers/{third_offer.id}/print')
+    assert 'Валидна до: 30.09.2026' in print_resp.data.decode('utf-8')
+
+    # A malformed date must be rejected, not silently dropped or crash.
+    edit_resp = client.get(f'/admin/offers/{third_offer.id}/edit')
+    edit_csrf = edit_resp.data.decode('utf-8').split('name="csrf_token" value="')[1].split('"')[0]
+    bad_resp = client.post(f'/admin/offers/{third_offer.id}/edit', data={
+        'csrf_token': edit_csrf, 'object_title': '', 'client_id': '', 'signed_by': '',
+        'footer_notes': '', 'valid_until': 'not-a-date', 'items_json': json.dumps(items),
+    })
+    assert bad_resp.status_code in (302, 200)
+    db.session.refresh(third_offer)
+    assert third_offer.valid_until == date(2026, 9, 30)  # unchanged, not corrupted
+
+    # --- discount_percent: subtotal/discount_amount/total math, and the
+    # "price; -sale%, actual price" print breakdown ---
+    discount_resp = client.post(f'/admin/offers/{third_offer.id}/edit', data={
+        'csrf_token': edit_csrf, 'object_title': '', 'client_id': '', 'signed_by': '',
+        'footer_notes': '', 'valid_until': '2026-09-30', 'discount_percent': '10',
+        'items_json': json.dumps(items),
+    }, follow_redirects=True)
+    assert discount_resp.status_code == 200
+    db.session.refresh(third_offer)
+    assert third_offer.subtotal == 50.0
+    assert third_offer.discount_amount == 5.0
+    assert third_offer.total == 45.0
+
+    discounted_print = client.get(f'/admin/offers/{third_offer.id}/print').data.decode('utf-8')
+    assert '50.00 EUR; -10%, 45.00 EUR' in discounted_print
+
+    # An out-of-range discount must be rejected, not silently clamped.
+    out_of_range_resp = client.post(f'/admin/offers/{third_offer.id}/edit', data={
+        'csrf_token': edit_csrf, 'object_title': '', 'client_id': '', 'signed_by': '',
+        'footer_notes': '', 'discount_percent': '150', 'items_json': json.dumps(items),
+    })
+    assert out_of_range_resp.status_code in (302, 200)
+    db.session.refresh(third_offer)
+    assert third_offer.discount_percent == 10.0  # unchanged
 
     os.remove(staged_path)
     db.session.delete(offer2)
