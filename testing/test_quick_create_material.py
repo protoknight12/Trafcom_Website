@@ -68,7 +68,7 @@ def worker_client(app):
 def test_quick_create_material_full_fields(admin_client):
     res = admin_client.post('/api/quick-create-material', data={
         'display_name': 'QA Титан', 'type': 'sheets', 'brand': 'QA-Brand',
-        'cost_per_m2': '100', 'cutting_speed_mm_per_min': '5', 'pierce_rate_per_min': '0.5',
+        'cost_per_m2': '100', 'cutting_speed_mm_per_min': '5', 'pierce_time_sec': '120',
         'sheet_length_mm': '2000', 'sheet_width_mm': '1000', 'thickness_mm': '2',
     })
     assert res.status_code == 200
@@ -78,6 +78,7 @@ def test_quick_create_material_full_fields(admin_client):
         m = MaterialPrice.query.filter_by(display_name='QA Титан').first()
         assert m is not None
         assert m.cost_per_m2 == 100 and m.brand == 'QA-Brand' and m.sheet_length_mm == 2000
+        assert m.pierce_rate_per_min == 0.5  # 120 sec/pierce -> 60/120 pierces per minute
         assert m.erp_number is not None  # auto-generated
 
 
@@ -90,7 +91,7 @@ def test_quick_create_material_requires_prices(admin_client):
 
 
 def test_quick_create_material_rejects_duplicate_name(admin_client):
-    data = {'display_name': 'QA Dup', 'cost_per_m2': '1', 'cutting_speed_mm_per_min': '1', 'pierce_rate_per_min': '0.1'}
+    data = {'display_name': 'QA Dup', 'cost_per_m2': '1', 'cutting_speed_mm_per_min': '1', 'pierce_time_sec': '600'}
     first = admin_client.post('/api/quick-create-material', data=data)
     assert first.get_json()['status'] == 'success'
     second = admin_client.post('/api/quick-create-material', data=data)
@@ -101,7 +102,7 @@ def test_quick_create_material_rejects_duplicate_name(admin_client):
 def test_quick_create_material_same_name_different_thickness_both_created(admin_client):
     # Same name/brand, different thickness - must NOT be treated as a duplicate
     # (see _material_variant_exists: only a byte-for-byte resubmit is rejected).
-    base = {'display_name': 'QA Алуминий', 'brand': 'QA-Brand', 'cost_per_m2': '40', 'cutting_speed_mm_per_min': '5', 'pierce_rate_per_min': '0.5'}
+    base = {'display_name': 'QA Алуминий', 'brand': 'QA-Brand', 'cost_per_m2': '40', 'cutting_speed_mm_per_min': '5', 'pierce_time_sec': '120'}
     res1 = admin_client.post('/api/quick-create-material', data={**base, 'thickness_mm': '2'})
     res2 = admin_client.post('/api/quick-create-material', data={**base, 'thickness_mm': '3'})
     assert res1.get_json()['status'] == 'success'
@@ -114,7 +115,7 @@ def test_quick_create_material_same_name_different_thickness_both_created(admin_
 
 def test_quick_create_material_rods_no_speed_params_required(admin_client):
     # Rods are cut to length on a saw, never pierced or DXF-cut - neither
-    # cutting_speed_mm_per_min nor pierce_rate_per_min is needed/stored.
+    # cutting_speed_mm_per_min nor pierce_time_sec is needed/stored.
     res = admin_client.post('/api/quick-create-material', data={
         'display_name': 'QA Прът', 'type': 'rods', 'cost_per_m2': '10',
     })
@@ -129,6 +130,6 @@ def test_quick_create_material_rods_no_speed_params_required(admin_client):
 
 def test_quick_create_material_forbidden_for_worker(worker_client):
     res = worker_client.post('/api/quick-create-material', data={
-        'display_name': 'QA Worker Material', 'cost_per_m2': '1', 'cutting_speed_mm_per_min': '1', 'pierce_rate_per_min': '0.1',
+        'display_name': 'QA Worker Material', 'cost_per_m2': '1', 'cutting_speed_mm_per_min': '1', 'pierce_time_sec': '600',
     })
     assert res.status_code == 403

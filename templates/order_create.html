@@ -270,9 +270,9 @@
                 <label for="qm_cutting_speed_mm_per_min">Скорост на рязане (мм/мин)</label>
                 <input type="number" id="qm_cutting_speed_mm_per_min" step="0.01" min="0.01" name="cutting_speed_mm_per_min" required>
             </div>
-            <div class="form-group" style="margin-bottom: 15px;" id="qm_pierce_rate_per_min_group">
-                <label for="qm_pierce_rate_per_min">Скорост на пробиване (проб./мин)</label>
-                <input type="number" id="qm_pierce_rate_per_min" step="0.01" min="0.01" name="pierce_rate_per_min" required>
+            <div class="form-group" style="margin-bottom: 15px;" id="qm_pierce_time_sec_group">
+                <label for="qm_pierce_time_sec">Време за пробождане (сек)</label>
+                <input type="number" id="qm_pierce_time_sec" step="0.01" min="0.01" name="pierce_time_sec" required>
             </div>
             <div class="form-group" style="margin-bottom: 15px;" id="qm_sheet_length_mm_group">
                 <label for="qm_sheet_length_mm">Дължина на плочата (мм)</label>
@@ -857,7 +857,7 @@
         // Rods are cut to length on a saw, never pierced or DXF-cut - no
         // cutting/drill speed for them.
         const isRod = typeSelect.value === 'rods';
-        ['qm_cutting_speed_mm_per_min', 'qm_pierce_rate_per_min'].forEach(function (fieldId) {
+        ['qm_cutting_speed_mm_per_min', 'qm_pierce_time_sec'].forEach(function (fieldId) {
             const group = document.getElementById(fieldId + '_group');
             const input = document.getElementById(fieldId);
             if (isRod) {

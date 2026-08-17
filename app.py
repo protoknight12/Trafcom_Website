@@ -3225,7 +3225,9 @@ def admin_update_material(key):
         # - no cutting/drill speed for either.
         skip_speed_fields = material_type in ('rods', 'profiles')
         cutting_speed_mm_per_min = None if skip_speed_fields else float(request.form.get('cutting_speed_mm_per_min', ''))
-        pierce_rate_per_min = None if skip_speed_fields else float(request.form.get('pierce_rate_per_min', ''))
+        # Entered as seconds per pierce (shop-floor friendly), stored as the
+        # pierces/min rate the pricing formula (_service_time_cost) uses.
+        pierce_time_sec = None if skip_speed_fields else float(request.form.get('pierce_time_sec', ''))
         sheet_length_mm, sheet_width_mm, thickness_mm, height_mm = _parse_sheet_dimensions(request.form)
         price_per_kg_m2 = _parse_optional_float(request.form, 'price_per_kg_m2')
         price_per_kg_m = _parse_optional_float(request.form, 'price_per_kg_m')
@@ -3236,9 +3238,10 @@ def admin_update_material(key):
         return redirect(url_for('admin_materials'))
 
     if cost_per_m2 < 0 or (cutting_speed_mm_per_min is not None and cutting_speed_mm_per_min <= 0) \
-            or (pierce_rate_per_min is not None and pierce_rate_per_min <= 0):
-        flash('Цената не може да бъде отрицателна, а скоростите на рязане/пробиване трябва да бъдат положителни числа.', 'danger')
+            or (pierce_time_sec is not None and pierce_time_sec <= 0):
+        flash('Цената не може да бъде отрицателна, а скоростта на рязане/времето за пробождане трябва да бъдат положителни числа.', 'danger')
         return redirect(url_for('admin_materials'))
+    pierce_rate_per_min = 60.0 / pierce_time_sec if pierce_time_sec else None
 
     conflict = _erp_number_conflict(erp_number, exclude_type='material', exclude_id=material.id)
     if conflict:
@@ -3289,7 +3292,9 @@ def admin_add_material():
     try:
         cost_per_m2 = float(request.form.get('cost_per_m2', ''))
         cutting_speed_mm_per_min = None if skip_speed_fields else float(request.form.get('cutting_speed_mm_per_min', ''))
-        pierce_rate_per_min = None if skip_speed_fields else float(request.form.get('pierce_rate_per_min', ''))
+        # Entered as seconds per pierce (shop-floor friendly), stored as the
+        # pierces/min rate the pricing formula (_service_time_cost) uses.
+        pierce_time_sec = None if skip_speed_fields else float(request.form.get('pierce_time_sec', ''))
         sheet_length_mm, sheet_width_mm, thickness_mm, height_mm = _parse_sheet_dimensions(request.form)
         price_per_kg_m2 = _parse_optional_float(request.form, 'price_per_kg_m2')
         price_per_kg_m = _parse_optional_float(request.form, 'price_per_kg_m')
@@ -3300,9 +3305,10 @@ def admin_add_material():
         return redirect(url_for('admin_materials'))
 
     if cost_per_m2 < 0 or (cutting_speed_mm_per_min is not None and cutting_speed_mm_per_min <= 0) \
-            or (pierce_rate_per_min is not None and pierce_rate_per_min <= 0):
-        flash('Цената не може да бъде отрицателна, а скоростите на рязане/пробиване трябва да бъдат положителни числа.', 'danger')
+            or (pierce_time_sec is not None and pierce_time_sec <= 0):
+        flash('Цената не може да бъде отрицателна, а скоростта на рязане/времето за пробождане трябва да бъдат положителни числа.', 'danger')
         return redirect(url_for('admin_materials'))
+    pierce_rate_per_min = 60.0 / pierce_time_sec if pierce_time_sec else None
 
     # Only a byte-for-byte resubmit (double click) is rejected - a difference
     # in any property (e.g. thickness) always makes a distinct catalog row,
@@ -5168,7 +5174,9 @@ def api_quick_create_material():
     try:
         cost_per_m2 = float(request.form.get('cost_per_m2', ''))
         cutting_speed_mm_per_min = None if skip_speed_fields else float(request.form.get('cutting_speed_mm_per_min', ''))
-        pierce_rate_per_min = None if skip_speed_fields else float(request.form.get('pierce_rate_per_min', ''))
+        # Entered as seconds per pierce (shop-floor friendly), stored as the
+        # pierces/min rate the pricing formula (_service_time_cost) uses.
+        pierce_time_sec = None if skip_speed_fields else float(request.form.get('pierce_time_sec', ''))
         sheet_length_mm, sheet_width_mm, thickness_mm, height_mm = _parse_sheet_dimensions(request.form)
         price_per_kg_m2 = _parse_optional_float(request.form, 'price_per_kg_m2')
         price_per_kg_m = _parse_optional_float(request.form, 'price_per_kg_m')
@@ -5178,8 +5186,9 @@ def api_quick_create_material():
         return jsonify({'status': 'error', 'message': 'Всички цени, размери и ERP № трябва да бъдат валидни числа.'}), 400
 
     if cost_per_m2 < 0 or (cutting_speed_mm_per_min is not None and cutting_speed_mm_per_min <= 0) \
-            or (pierce_rate_per_min is not None and pierce_rate_per_min <= 0):
-        return jsonify({'status': 'error', 'message': 'Цената не може да бъде отрицателна, а скоростите на рязане/пробиване трябва да бъдат положителни числа.'}), 400
+            or (pierce_time_sec is not None and pierce_time_sec <= 0):
+        return jsonify({'status': 'error', 'message': 'Цената не може да бъде отрицателна, а скоростта на рязане/времето за пробождане трябва да бъдат положителни числа.'}), 400
+    pierce_rate_per_min = 60.0 / pierce_time_sec if pierce_time_sec else None
 
     # Only a byte-for-byte resubmit (double click) is rejected - a difference
     # in any property (e.g. thickness) always makes a distinct catalog row,

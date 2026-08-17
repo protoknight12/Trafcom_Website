@@ -84,9 +84,9 @@
                 <label for="new_cutting_speed_mm_per_min">Скорост на рязане (мм/мин)</label>
                 <input type="number" id="new_cutting_speed_mm_per_min" step="0.01" min="0.01" name="cutting_speed_mm_per_min" placeholder="напр. 1500" required>
             </div>
-            <div class="form-group" id="new_pierce_rate_per_min_group">
-                <label for="new_pierce_rate_per_min">Скорост на пробиване (пробождания/мин)</label>
-                <input type="number" id="new_pierce_rate_per_min" step="0.01" min="0.01" name="pierce_rate_per_min" placeholder="напр. 40" required>
+            <div class="form-group" id="new_pierce_time_sec_group">
+                <label for="new_pierce_time_sec">Време за пробождане (сек)</label>
+                <input type="number" id="new_pierce_time_sec" step="0.01" min="0.01" name="pierce_time_sec" placeholder="напр. 1.5" required>
             </div>
             <div class="form-group" id="new_sheet_length_mm_group">
                 <label for="new_sheet_length_mm">Дължина на плочата (мм)</label>
@@ -144,7 +144,7 @@
                     <th>Тип</th>
                     <th>{{ material_price_m2_label(type_key) }}</th>
                     <th>Скорост на рязане (мм/мин)</th>
-                    <th>Скорост на пробиване (проб./мин)</th>
+                    <th>Време за пробождане (сек)</th>
                     <th>{{ dim_labels[0] or '—' }}</th>
                     <th>{{ dim_labels[1] or '—' }}</th>
                     <th>{{ dim_labels[2] or '—' }}</th>
@@ -186,8 +186,8 @@
                                value="{{ '%.2f'|format(material.cutting_speed_mm_per_min) if material.cutting_speed_mm_per_min is not none else '' }}"
                                class="material-price-input" {{ 'required' if not no_speed else '' }}
                                style="{{ 'display:none;' if no_speed else '' }}"></td>
-                    <td><input type="number" step="0.01" min="0.01" name="pierce_rate_per_min" form="{{ form_id }}"
-                               value="{{ '%.2f'|format(material.pierce_rate_per_min) if material.pierce_rate_per_min is not none else '' }}"
+                    <td><input type="number" step="0.01" min="0.01" name="pierce_time_sec" form="{{ form_id }}"
+                               value="{{ '%.2f'|format(60.0 / material.pierce_rate_per_min) if material.pierce_rate_per_min else '' }}"
                                class="material-price-input" {{ 'required' if not no_speed else '' }}
                                style="{{ 'display:none;' if no_speed else '' }}"></td>
                     <td><input type="number" step="1" min="0" name="sheet_length_mm" form="{{ form_id }}"
@@ -286,7 +286,7 @@
         // Rods/profiles are cut to length on a saw, never pierced or
         // DXF-cut - no cutting/drill speed for either.
         const noSpeed = typeSelect.value === 'rods' || typeSelect.value === 'profiles';
-        ['new_cutting_speed_mm_per_min', 'new_pierce_rate_per_min'].forEach(function (fieldId) {
+        ['new_cutting_speed_mm_per_min', 'new_pierce_time_sec'].forEach(function (fieldId) {
             const group = document.getElementById(fieldId + '_group');
             const input = document.getElementById(fieldId);
             if (noSpeed) {
@@ -336,7 +336,7 @@
         // attribute - so siblings are found via the <tr>, not closest('form').
         const row = selectEl.closest('tr');
         const noSpeed = selectEl.value === 'rods' || selectEl.value === 'profiles';
-        ['cutting_speed_mm_per_min', 'pierce_rate_per_min'].forEach(function (name) {
+        ['cutting_speed_mm_per_min', 'pierce_time_sec'].forEach(function (name) {
             const input = row.querySelector('input[name="' + name + '"]');
             if (!input) return;
             input.style.display = noSpeed ? 'none' : '';
