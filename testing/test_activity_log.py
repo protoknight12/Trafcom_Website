@@ -145,10 +145,16 @@ def test_composite_action_stores_expandable_details(app, admin_client):
         assert entry.details is not None
         assert 'QA Detail' in entry.details and '3 бр.' in entry.details
 
-    # And it actually renders on the log page, collapsed by default.
+    # And it actually renders on the log page, collapsed by default. The
+    # action text embeds literal double quotes (Создаден ... "QA Product"),
+    # so the toggle must carry it via an auto-escaped data-action attribute,
+    # not interpolated straight into the onclick="..." attribute (that broke
+    # the handler - the JSON-quoted value prematurely closed the attribute).
     page = admin_client.get('/admin/log').get_data(as_text=True)
     assert 'QA Detail' in page
     assert 'hidden' in page  # details block starts collapsed
+    assert 'onclick="toggleLogDetails(this)"' in page
+    assert 'data-action="' in page
 
 
 def test_simple_update_leaves_details_empty(app, admin_client):
