@@ -296,7 +296,10 @@
             </div>
             <div class="form-group" id="op_duration_group">
                 <label for="op_duration_minutes">Продължителност (мин)</label>
-                <input type="number" id="op_duration_minutes" step="0.01" min="0.01" placeholder="напр. 12">
+                <div style="display: flex; gap: 6px;">
+                    <input type="number" id="op_duration_minutes" step="0.01" min="0.01" placeholder="напр. 12" style="flex: 1;">
+                    <button type="button" class="btn-secondary" onclick="calcOpDurationFromDxf()" title="Изчисли от дължината на рязане и броя пробождания на DXF файла, по скоростта на текущия материал">⏱ От DXF</button>
+                </div>
             </div>
             <div class="form-group" id="op_length_group" style="display: none;">
                 <label for="op_length_mm">Дължина на рязане (мм)</label>
@@ -405,7 +408,21 @@
         const OP_SERVICES = {{ services_data|tojson }};
         const OP_BASE_TOTAL = {{ detail.total_price }};
         const OP_DEFAULT_LENGTH_MM = {{ detail.total_length if detail.total_length else 'null' }};
+        const OP_PIERCE_COUNT = {{ detail.pierce_count if detail.pierce_count else 0 }};
+        const OP_CUTTING_SPEED_MM_PER_MIN = {{ detail.material.cutting_speed_mm_per_min if detail.material and detail.material.cutting_speed_mm_per_min else 'null' }};
+        const OP_PIERCE_RATE_PER_MIN = {{ detail.material.pierce_rate_per_min if detail.material and detail.material.pierce_rate_per_min else 'null' }};
         let pendingOps = [];
+
+        // Same formula as _service_time_cost() in app.py: cutting time from
+        // total cut length / material cutting speed, plus pierce time from
+        // pierce count / material pierce rate.
+        function calcOpDurationFromDxf() {
+            if (!OP_DEFAULT_LENGTH_MM && !OP_PIERCE_COUNT) { alert('Този детайл няма данни от DXF файл (дължина на рязане/пробождания).'); return; }
+            if (!OP_CUTTING_SPEED_MM_PER_MIN && !OP_PIERCE_RATE_PER_MIN) { alert('Текущият материал няма зададена скорост на рязане/пробождане.'); return; }
+            const cuttingTime = OP_CUTTING_SPEED_MM_PER_MIN ? (OP_DEFAULT_LENGTH_MM || 0) / OP_CUTTING_SPEED_MM_PER_MIN : 0;
+            const pierceTime = OP_PIERCE_RATE_PER_MIN ? OP_PIERCE_COUNT / OP_PIERCE_RATE_PER_MIN : 0;
+            document.getElementById('op_duration_minutes').value = (cuttingTime + pierceTime).toFixed(2);
+        }
 
         function opServiceById(id) {
             return OP_SERVICES.find(function (s) { return s.id === id; });
