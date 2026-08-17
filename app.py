@@ -268,6 +268,11 @@ class MaterialPrice(db.Model):
     # Stock on hand, bumped by recording delivery notes (see DeliveryNoteItem
     # / admin_delivery_notes.html) - not editable by hand elsewhere.
     stock_quantity = db.Column(db.Float, nullable=False, default=0.0)
+    # Reorder threshold, admin-set on admin_materials.html - purely a display
+    # trigger (storage_materials.html turns the row's background yellow once
+    # stock_quantity drops to/below this). Nullable: most materials don't
+    # need one, and None means "no threshold set".
+    min_quantity = db.Column(db.Float, nullable=True)
 
 
 # Structural-form categories a material's stock can come in, driving the
@@ -3510,13 +3515,15 @@ def admin_update_material(key):
         price_per_kg_m2 = _parse_optional_float(request.form, 'price_per_kg_m2')
         price_per_kg_m = _parse_optional_float(request.form, 'price_per_kg_m')
         weight_kg = _parse_optional_float(request.form, 'weight_kg')
+        min_quantity = _parse_optional_float(request.form, 'min_quantity')
         erp_number = _parse_erp_number(request.form)
     except ValueError:
         flash('Всички цени, размери и ERP № трябва да бъдат валидни числа.', 'danger')
         return redirect(url_for('admin_materials'))
 
     if cost_per_m2 < 0 or (cutting_speed_mm_per_min is not None and cutting_speed_mm_per_min <= 0) \
-            or (pierce_time_sec is not None and pierce_time_sec <= 0):
+            or (pierce_time_sec is not None and pierce_time_sec <= 0) \
+            or (min_quantity is not None and min_quantity < 0):
         flash('Цената не може да бъде отрицателна, а скоростта на рязане/времето за пробождане трябва да бъдат положителни числа.', 'danger')
         return redirect(url_for('admin_materials'))
     pierce_rate_per_min = 60.0 / pierce_time_sec if pierce_time_sec else None
@@ -3538,6 +3545,7 @@ def admin_update_material(key):
     material.price_per_kg_m2 = round(price_per_kg_m2, 2) if price_per_kg_m2 is not None else None
     material.price_per_kg_m = round(price_per_kg_m, 2) if price_per_kg_m is not None else None
     material.weight_kg = round(weight_kg, 2) if weight_kg is not None else None
+    material.min_quantity = round(min_quantity, 2) if min_quantity is not None else None
     material.erp_number = erp_number
     material.code_number = request.form.get('code_number', '').strip() or None
     material.type = _parse_material_type(request.form)
@@ -3547,7 +3555,7 @@ def admin_update_material(key):
         'pierce_rate_per_min': 'пробождания/min', 'sheet_length_mm': 'дължинаmm',
         'sheet_width_mm': 'ширина mm', 'thickness_mm': 'дебелина mm', 'height_mm': 'височина mm',
         'price_per_kg_m2': 'цена лв/кг(м²)', 'price_per_kg_m': 'цена лв/кг(м)', 'weight_kg': 'тегло кг',
-        'erp_number': 'ERP №', 'code_number': 'КД №', 'type': 'тип', 'brand': 'марка',
+        'min_quantity': 'мин. количество', 'erp_number': 'ERP №', 'code_number': 'КД №', 'type': 'тип', 'brand': 'марка',
     }))
     db.session.commit()
 
@@ -3584,13 +3592,15 @@ def admin_add_material():
         price_per_kg_m2 = _parse_optional_float(request.form, 'price_per_kg_m2')
         price_per_kg_m = _parse_optional_float(request.form, 'price_per_kg_m')
         weight_kg = _parse_optional_float(request.form, 'weight_kg')
+        min_quantity = _parse_optional_float(request.form, 'min_quantity')
         erp_number = _parse_erp_number(request.form)
     except ValueError:
         flash('Всички цени, размери и ERP № трябва да бъдат валидни числа.', 'danger')
         return redirect(url_for('admin_materials'))
 
     if cost_per_m2 < 0 or (cutting_speed_mm_per_min is not None and cutting_speed_mm_per_min <= 0) \
-            or (pierce_time_sec is not None and pierce_time_sec <= 0):
+            or (pierce_time_sec is not None and pierce_time_sec <= 0) \
+            or (min_quantity is not None and min_quantity < 0):
         flash('Цената не може да бъде отрицателна, а скоростта на рязане/времето за пробождане трябва да бъдат положителни числа.', 'danger')
         return redirect(url_for('admin_materials'))
     pierce_rate_per_min = 60.0 / pierce_time_sec if pierce_time_sec else None
@@ -3627,6 +3637,7 @@ def admin_add_material():
         price_per_kg_m2=round(price_per_kg_m2, 2) if price_per_kg_m2 is not None else None,
         price_per_kg_m=round(price_per_kg_m, 2) if price_per_kg_m is not None else None,
         weight_kg=round(weight_kg, 2) if weight_kg is not None else None,
+        min_quantity=round(min_quantity, 2) if min_quantity is not None else None,
         erp_number=erp_number,
         code_number=request.form.get('code_number', '').strip() or None,
         type=material_type,
