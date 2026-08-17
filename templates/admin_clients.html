@@ -75,6 +75,11 @@
 
     <section class="admin-card">
         <h3>Списък с клиенти</h3>
+        {% if clients %}
+        <div class="form-group" style="max-width: 360px;">
+            <input type="text" id="adminClientsSearchInput" placeholder="Търсене по име, имейл, телефон, ЕИК...">
+        </div>
+        {% endif %}
         <div class="table-responsive">
             <table class="users-table">
                 <thead>
@@ -88,9 +93,9 @@
                     <th class="text-right">Изтриване</th>
                 </tr>
                 </thead>
-                <tbody>
+                <tbody id="adminClientsTableBody">
                 {% for client in clients %}
-                <tr>
+                <tr data-search="{{ (client.name ~ ' ' ~ (client.email or '') ~ ' ' ~ (client.phone or '') ~ ' ' ~ (client.eik or '')) | lower }}">
                     <td><strong>{{ client.name }}</strong></td>
                     <td>{{ 'Юридическо лице' if client.client_type == 'company' else 'Физическо лице' }}</td>
                     <td>{{ client.email or '-' }}</td>
@@ -112,6 +117,9 @@
                     <td colspan="7" class="text-center no-data">Няма добавени клиенти.</td>
                 </tr>
                 {% endfor %}
+                {% if clients %}
+                <tr class="search-empty-row" hidden><td colspan="7" class="text-center no-data">Няма съвпадения.</td></tr>
+                {% endif %}
                 </tbody>
             </table>
         </div>
@@ -163,6 +171,11 @@
 
     <section class="admin-card">
         <h3>Списък с куриери</h3>
+        {% if deliverers %}
+        <div class="form-group" style="max-width: 360px;">
+            <input type="text" id="adminDeliverersSearchInput" placeholder="Търсене по име, имейл, телефон, ЕИК...">
+        </div>
+        {% endif %}
         <div class="table-responsive">
             <table class="users-table">
                 <thead>
@@ -175,9 +188,9 @@
                     <th class="text-right">Изтриване</th>
                 </tr>
                 </thead>
-                <tbody>
+                <tbody id="adminDeliverersTableBody">
                 {% for deliverer in deliverers %}
-                <tr>
+                <tr data-search="{{ (deliverer.name ~ ' ' ~ (deliverer.email or '') ~ ' ' ~ (deliverer.phone or '') ~ ' ' ~ (deliverer.eik or '')) | lower }}">
                     <td><strong>{{ deliverer.name }}</strong></td>
                     <td>{{ deliverer.email or '-' }}</td>
                     <td>{{ deliverer.phone or '-' }}</td>
@@ -198,6 +211,9 @@
                     <td colspan="6" class="text-center no-data">Няма добавени куриери.</td>
                 </tr>
                 {% endfor %}
+                {% if deliverers %}
+                <tr class="search-empty-row" hidden><td colspan="6" class="text-center no-data">Няма съвпадения.</td></tr>
+                {% endif %}
                 </tbody>
             </table>
         </div>
@@ -205,5 +221,10 @@
 
 </main>
 
+<script src="{{ url_for('static', filename='js/table_search.js') }}"></script>
+<script>
+    initTableSearch('adminClientsSearchInput', 'adminClientsTableBody');
+    initTableSearch('adminDeliverersSearchInput', 'adminDeliverersTableBody');
+</script>
 </body>
 </html>

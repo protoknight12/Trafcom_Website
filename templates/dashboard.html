@@ -152,6 +152,12 @@
             </div>
         </div>
 
+        {% if uploads %}
+        <div class="form-group" style="max-width: 360px;">
+            <input type="text" id="dashboardUploadsSearchInput" placeholder="Търсене по име на файл, материал...">
+        </div>
+        {% endif %}
+
         <div class="table-responsive">
             <table class="data-table">
                 <thead>
@@ -166,9 +172,16 @@
                     <th class="text-right">Действие</th>
                 </tr>
                 </thead>
-                <tbody>
+                <tbody id="dashboardUploadsTableBody">
                 {% for upload in uploads %}
-                <tr>
+                {% set ns = namespace(display_name=upload.material, type='sheets') %}
+                {% for mat in materials %}
+                    {% if mat.key == upload.material %}
+                        {% set ns.display_name = mat.display_name %}
+                        {% set ns.type = mat.type %}
+                    {% endif %}
+                {% endfor %}
+                <tr data-search="{{ (upload.filename ~ ' ' ~ ns.display_name) | lower }}">
                     <td class="text-muted text-small">#{{ upload.id }}</td>
                     <td>
                         <button type="button" class="filename-link dxf-viewer-trigger"
@@ -177,16 +190,7 @@
                         </button>
                     </td>
                     <td>
-    <span class="badge badge-user">
-        {% set ns = namespace(display_name=upload.material, type='sheets') %}
-        {% for mat in materials %}
-            {% if mat.key == upload.material %}
-                {% set ns.display_name = mat.display_name %}
-                {% set ns.type = mat.type %}
-            {% endif %}
-        {% endfor %}
-        {{ ns.display_name }}
-    </span>
+    <span class="badge badge-user">{{ ns.display_name }}</span>
                     </td>
                     <td>{{ upload.services|map(attribute='name')|join(', ') if upload.services else '-' }}</td>
                     <td>{{ format_cut_dimensions(upload.width, upload.height, ns.type) }}</td>
@@ -208,6 +212,9 @@
                     </td>
                 </tr>
                 {% endfor %}
+                {% if uploads %}
+                <tr class="search-empty-row" hidden><td colspan="8" class="text-center no-data">Няма съвпадения.</td></tr>
+                {% endif %}
                 </tbody>
             </table>
         </div>
@@ -229,5 +236,7 @@
 </div>
 
 <script src="{{ url_for('static', filename='js/dxf_viewer.js') }}"></script>
+<script src="{{ url_for('static', filename='js/table_search.js') }}"></script>
+<script>initTableSearch('dashboardUploadsSearchInput', 'dashboardUploadsTableBody');</script>
 </body>
 </html>

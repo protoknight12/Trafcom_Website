@@ -5,13 +5,20 @@
 // ponytail: plain DOM filtering, fine up to a few thousand rendered rows;
 // past that, switch to server-side search + pagination instead of loading
 // the whole catalog into one table.
-function initTableSearch(inputId, tbodyId) {
+function initTableSearch(inputId, tbodyIds) {
     const input = document.getElementById(inputId);
-    const tbody = document.getElementById(tbodyId);
-    if (!input || !tbody) return;
+    if (!input) return;
+    const ids = Array.isArray(tbodyIds) ? tbodyIds : [tbodyIds];
+    const tbodies = ids.map(id => document.getElementById(id)).filter(Boolean);
+    if (!tbodies.length) return;
 
-    const rows = Array.from(tbody.querySelectorAll('tr[data-search]'));
-    const emptyRow = tbody.querySelector('.search-empty-row');
+    const rows = [];
+    const emptyRows = [];
+    tbodies.forEach(function (tbody) {
+        rows.push(...tbody.querySelectorAll('tr[data-search]'));
+        const emptyRow = tbody.querySelector('.search-empty-row');
+        if (emptyRow) emptyRows.push(emptyRow);
+    });
     let debounceTimer = null;
 
     function applyFilter() {
@@ -22,7 +29,7 @@ function initTableSearch(inputId, tbodyId) {
             row.hidden = !match;
             if (match) visible++;
         });
-        if (emptyRow) emptyRow.hidden = visible !== 0;
+        emptyRows.forEach(function (emptyRow) { emptyRow.hidden = visible !== 0; });
     }
 
     input.addEventListener('input', function () {

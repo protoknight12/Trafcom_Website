@@ -95,6 +95,12 @@
             <button type="submit" class="btn-submit">Добави детайл</button>
         </form>
 
+        {% if details %}
+        <div class="form-group" style="max-width: 360px;">
+            <input type="text" id="adminDetailsSearchInput" placeholder="Търсене по име, материал, ERP №...">
+        </div>
+        {% endif %}
+
         <div class="table-responsive">
             <table class="users-table">
                 <thead>
@@ -110,9 +116,9 @@
                     <th class="text-right">Действие</th>
                 </tr>
                 </thead>
-                <tbody>
+                <tbody id="adminDetailsTableBody">
                 {% for detail in details %}
-                <tr>
+                <tr data-search="{{ (detail.name ~ ' ' ~ (detail.material.display_name if detail.material else '') ~ ' ' ~ (detail.erp_number or '') ~ ' ' ~ (detail.code_number or '')) | lower }}">
                     <td><strong><a href="{{ url_for('detail_dxf_dashboard', detail_id=detail.id) }}">{{ detail.name }}</a></strong></td>
                     <td><span class="badge badge-user">{{ detail.material.display_name if detail.material else 'Неизвестен' }}</span></td>
                     <td>{{ format_cut_dimensions(detail.width, detail.height, detail.material.type if detail.material else 'sheets') }}</td>
@@ -138,6 +144,9 @@
                     <td colspan="9" class="text-center no-data">Няма добавени детайли.</td>
                 </tr>
                 {% endfor %}
+                {% if details %}
+                <tr class="search-empty-row" hidden><td colspan="9" class="text-center no-data">Няма съвпадения.</td></tr>
+                {% endif %}
                 </tbody>
             </table>
         </div>
@@ -145,6 +154,8 @@
 
 </main>
 
+<script src="{{ url_for('static', filename='js/table_search.js') }}"></script>
+<script>initTableSearch('adminDetailsSearchInput', 'adminDetailsTableBody');</script>
 <script>
     const ND_SERVICES = {{ services_data|tojson }};
     let ndPendingOps = [];

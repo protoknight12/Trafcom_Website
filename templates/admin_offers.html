@@ -27,6 +27,12 @@
         <p class="section-subtitle">Генериране на оферти за печат/PDF - продукти, детайли или свободен текст в един ред.</p>
         <a href="{{ url_for('admin_offer_new') }}" class="btn-submit" style="display: inline-block; margin-bottom: 1rem;">+ Нова оферта</a>
 
+        {% if offers %}
+        <div class="form-group" style="max-width: 360px;">
+            <input type="text" id="adminOffersSearchInput" placeholder="Търсене по №, обект, клиент...">
+        </div>
+        {% endif %}
+
         <div class="table-responsive">
             <table class="users-table">
                 <thead>
@@ -43,9 +49,9 @@
                     <th class="text-right">Изтриване</th>
                 </tr>
                 </thead>
-                <tbody>
+                <tbody id="adminOffersTableBody">
                 {% for offer in offers %}
-                <tr>
+                <tr data-search="{{ (offer.number ~ ' ' ~ (offer.object_title or '') ~ ' ' ~ (offer.client.name if offer.client else '')) | lower }}">
                     <td><strong>{{ offer.number }}</strong></td>
                     <td>{{ offer.object_title or '-' }}</td>
                     <td>{{ offer.client.name if offer.client else '-' }}</td>
@@ -71,11 +77,16 @@
                 {% else %}
                 <tr><td colspan="10" class="text-center no-data">Все още няма създадени оферти.</td></tr>
                 {% endfor %}
+                {% if offers %}
+                <tr class="search-empty-row" hidden><td colspan="10" class="text-center no-data">Няма съвпадения.</td></tr>
+                {% endif %}
                 </tbody>
             </table>
         </div>
     </section>
 
 </main>
+<script src="{{ url_for('static', filename='js/table_search.js') }}"></script>
+<script>initTableSearch('adminOffersSearchInput', 'adminOffersTableBody');</script>
 </body>
 </html>

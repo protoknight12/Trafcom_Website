@@ -132,6 +132,12 @@
         <h3>Цени на материалите</h3>
         <p class="section-subtitle">Редактирайте цените на материалите, използвани при изчисляване на всяка поръчка. Промените влизат в сила незабавно за всички нови изчисления.</p>
 
+        {% if materials %}
+        <div class="form-group" style="max-width: 360px;">
+            <input type="text" id="materialsSearchInput" placeholder="Търсене по име, марка, ERP №...">
+        </div>
+        {% endif %}
+
         {% for type_key, group in materials|groupby('type') %}
         {% set dim_labels = material_dimension_labels(type_key) %}
         <h4 style="margin-top: 1.5rem;">{{ material_type_label(type_key) }}</h4>
@@ -160,10 +166,10 @@
                     <th class="text-right">Изтриване</th>
                 </tr>
                 </thead>
-                <tbody>
+                <tbody id="materialsTableBody-{{ type_key }}">
                 {% for material in group %}
                 {% set form_id = 'mat-form-' ~ material.id %}
-                <tr>
+                <tr data-search="{{ (material.display_name ~ ' ' ~ (material.brand or '') ~ ' ' ~ (material.erp_number or '') ~ ' ' ~ (material.code_number or '')) | lower }}">
                     <td>
                         <form id="{{ form_id }}" action="{{ url_for('admin_update_material', key=material.key) }}" method="POST">
                             {% include 'partials/csrf_field.html' %}
@@ -237,6 +243,7 @@
                     </td>
                 </tr>
                 {% endfor %}
+                <tr class="search-empty-row" hidden><td colspan="19" class="text-center no-data">Няма съвпадения.</td></tr>
                 </tbody>
             </table>
         </div>
@@ -369,6 +376,13 @@
     document.querySelectorAll('table.users-table select[name="type"]').forEach(function (sel) {
         sel.addEventListener('change', function () { applyRowSpeedVisibility(sel); });
     });
+</script>
+
+<script src="{{ url_for('static', filename='js/table_search.js') }}"></script>
+<script>
+initTableSearch('materialsSearchInput', [
+{% for type_key, group in materials|groupby('type') %}'materialsTableBody-{{ type_key }}'{% if not loop.last %}, {% endif %}{% endfor %}
+]);
 </script>
 
 </body>
