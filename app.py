@@ -2445,9 +2445,11 @@ def storage_dashboard():
         'materials': MaterialPrice.query.count(),
         'details': Detail.query.count(),
         'products': Product.query.count(),
-        'requests': MaterialRequest.query.filter(MaterialRequest.status != 'ordered').count(),
     }
-    return render_template('storage_dashboard.html', counts=counts, active_page='storage')
+    request_counts = {
+        status: MaterialRequest.query.filter_by(status=status).count() for status in REQUEST_STATUS_LABELS
+    }
+    return render_template('storage_dashboard.html', counts=counts, request_counts=request_counts, active_page='storage')
 
 
 @app.route('/storage/materials')

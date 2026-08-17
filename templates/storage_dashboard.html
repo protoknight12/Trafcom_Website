@@ -35,6 +35,10 @@
             font-weight: 700;
             color: var(--accent-primary);
         }
+        .hub-count-split .status-new { color: #ffc107; }
+        .hub-count-split .status-processing { color: #17a2b8; }
+        .hub-count-split .status-ordered { color: #28a745; }
+        .hub-count-split span:not(:last-child)::after { content: "/"; color: var(--text-muted); }
         .admin-hub-card p {
             margin: 4px 0 0 0;
             font-size: 0.85rem;
@@ -79,7 +83,9 @@
                 <p>Наличност по готови продукти.</p>
             </a>
             <a class="admin-hub-card" href="{{ url_for('storage_requests') }}">
-                <div class="hub-count">{{ counts.requests }}</div>
+                <div class="hub-count hub-count-split">
+                    <span class="status-new">{{ request_counts.new }}</span><span class="status-processing">{{ request_counts.processing }}</span><span class="status-ordered">{{ request_counts.ordered }}</span>
+                </div>
                 <h4>Заявки</h4>
                 <p>Открити заявки за материали.</p>
             </a>
