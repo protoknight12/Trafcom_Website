@@ -35,8 +35,15 @@
 
     <h2 style="margin-bottom: 20px;">Моите Поръчки</h2>
 
+    {% if orders %}
+    <div class="form-group" style="max-width: 360px;">
+        <input type="text" id="myOrdersSearchInput" placeholder="Търсене по № поръчка, клиент, артикул...">
+    </div>
+    {% endif %}
+
+    <div id="myOrdersList">
     {% for order in orders %}
-    <section class="admin-card">
+    <section class="admin-card" data-search="{{ (order.order_number ~ ' ' ~ order.customer_name ~ ' ' ~ (order.items|map(attribute='item_name')|join(' '))) | lower }}">
         <div class="order-card-header">
             <div>
                 <strong style="font-size: 1.1rem;">{{ order.order_number }}</strong> &nbsp;—&nbsp; {{ order.customer_name }}
@@ -108,6 +115,13 @@
     {% else %}
     <div class="admin-card text-center no-data">Нямате направени поръчки все още. <a href="{{ url_for('create_order') }}">Направете първата си поръчка</a>.</div>
     {% endfor %}
+    {% if orders %}
+    <div class="admin-card text-center no-data search-empty-row" hidden>Няма съвпадения.</div>
+    {% endif %}
+    </div>
 </main>
+
+<script src="{{ url_for('static', filename='js/table_search.js') }}"></script>
+<script>initTableSearch('myOrdersSearchInput', 'myOrdersList');</script>
 </body>
 </html>
