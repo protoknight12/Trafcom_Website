@@ -51,7 +51,7 @@
                 </thead>
                 <tbody id="materialsTableBody">
                 {% for material in materials %}
-                <tr data-search="{{ (format_material_option(material) ~ ' ' ~ material_type_label(material.type)) | lower }}">
+                <tr data-search="{{ (format_material_option(material) ~ ' ' ~ material_type_label(material.type)) | lower }}" {% if material.stock_quantity <= 0 %}style="background-color: rgba(220, 53, 69, 0.12);"{% endif %}>
                     <td>{{ format_material_option(material) }}</td>
                     <td>{{ material_type_label(material.type) }}</td>
                     <td class="text-center">{{ material.stock_quantity|round(2) }}</td>
