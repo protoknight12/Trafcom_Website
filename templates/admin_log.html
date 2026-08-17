@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Лог на дейността - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">
+            {{ message }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Лог на дейността</h3>
+        <p class="section-subtitle">Всички действия на потребители и администратори в системата. Логът не се изтрива при обновления - само администратор може да го изчисти.</p>
+
+        <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+            {% if logs %}
+            <div class="form-group" style="max-width: 360px; margin-bottom: 0;">
+                <input type="text" id="adminLogSearchInput" placeholder="Търсене по потребител, роля или действие...">
+            </div>
+            {% else %}
+            <div></div>
+            {% endif %}
+            <div style="display: flex; gap: 8px;">
+                <a href="{{ url_for('admin_log_export') }}" class="btn-secondary">Изтегли .xlsx</a>
+                <form action="{{ url_for('admin_log_clear') }}" method="POST" onsubmit="return confirm('Логът ще бъде изтрит безвъзвратно. Потвърждавате ли?');">
+                    {% include 'partials/csrf_field.html' %}
+                    <button type="submit" class="btn-delete">Изчисти лога</button>
+                </form>
+            </div>
+        </div>
+
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Час</th>
+                    <th>Потребител</th>
+                    <th>Роля</th>
+                    <th>Действие</th>
+                </tr>
+                </thead>
+                <tbody id="adminLogTableBody">
+                {% for entry in logs %}
+                <tr data-search="{{ entry.username | lower }} {{ entry.role | lower }} {{ entry.action | lower }}">
+                    <td>{{ entry.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td><strong>{{ entry.username }}</strong></td>
+                    <td>{{ entry.role }}</td>
+                    <td>{{ entry.action }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" class="text-center no-data">Логът е празен.</td>
+                </tr>
+                {% endfor %}
+                {% if logs %}
+                <tr class="search-empty-row" hidden><td colspan="4" class="text-center no-data">Няма съвпадения.</td></tr>
+                {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+</main>
+
+<script src="{{ url_for('static', filename='js/table_search.js') }}"></script>
+<script>initTableSearch('adminLogSearchInput', 'adminLogTableBody');</script>
+</body>
+</html>

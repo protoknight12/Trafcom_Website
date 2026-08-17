@@ -15,7 +15,8 @@ import urllib.error
 from html import escape as html_escape
 from html.parser import HTMLParser
 from concurrent.futures import ThreadPoolExecutor
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory, send_file
+from openpyxl import Workbook
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_limiter import Limiter
@@ -145,6 +146,21 @@ class User(db.Model, UserMixin):
     def can_edit_content(self):
         """Admins and web designers can redact info pages (machine names, detail names, product text)."""
         return self.role in ('admin', 'web_designer')
+
+
+class ActivityLog(db.Model):
+    """
+    Blanket audit trail, one row per successful state-changing request by a
+    logged-in user - see the after_request hook near role_required() below.
+    username/role are stored as plain snapshot strings (not a User FK) so a
+    row still makes sense after the user is renamed/deleted, and reflects the
+    role they had *at the time*, not whatever their role is now.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    username = db.Column(db.String(50), nullable=False)
+    role = db.Column(db.String(20), nullable=False)
+    action = db.Column(db.String(255), nullable=False)
 
 
 class DxfFile(db.Model):
@@ -1840,6 +1856,29 @@ def role_required(roles):
     return decorator
 
 
+@app.after_request
+def _log_activity(response):
+    """
+    Logs every successful state-changing request by a logged-in user as one
+    ActivityLog row - a blanket audit trail instead of sprinkling log calls
+    into every route by hand. GETs are excluded (nothing changes on a GET,
+    and it would spam the log with page views / polling endpoints like
+    /admin/power/data). Rows are never auto-deleted - only admin_log_clear()
+    below removes them, and that action ends up logged too.
+    """
+    if (request.method != 'GET' and current_user.is_authenticated
+            and request.endpoint and 200 <= response.status_code < 400):
+        action = request.endpoint
+        if request.view_args:
+            action += ' (' + ', '.join(f'{k}={v}' for k, v in request.view_args.items()) + ')'
+        try:
+            db.session.add(ActivityLog(username=current_user.username, role=current_user.role, action=action))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+    return response
+
+
 # ----------------- МАРШРУТИ И ЛОГИКА -----------------
 
 @app.context_processor
@@ -2217,6 +2256,43 @@ def admin_users():
         return redirect(url_for('dashboard'))
     all_users = User.query.filter(User.id != current_user.id).all()
     return render_template('admin_users.html', users=all_users, active_page='admin_users')
+
+
+@app.route('/admin/log')
+@role_required('admin')
+def admin_log():
+    logs = ActivityLog.query.order_by(ActivityLog.timestamp.desc()).all()
+    return render_template('admin_log.html', logs=logs, active_page='admin_log')
+
+
+@app.route('/admin/log/clear', methods=['POST'])
+@role_required('admin')
+def admin_log_clear():
+    ActivityLog.query.delete()
+    db.session.commit()
+    flash('Логът е изчистен.', 'success')
+    return redirect(url_for('admin_log'))
+
+
+@app.route('/admin/log/export')
+@role_required('admin')
+def admin_log_export():
+    logs = ActivityLog.query.order_by(ActivityLog.timestamp.desc()).all()
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Log'
+    ws.append(['Време', 'Потребител', 'Роля', 'Действие'])
+    for entry in logs:
+        ws.append([entry.timestamp.strftime('%Y-%m-%d %H:%M:%S'), entry.username, entry.role, entry.action])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(
+        buf,
+        as_attachment=True,
+        download_name=f'activity_log_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
 
 
 @app.route('/admin/materials')
