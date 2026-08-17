@@ -869,6 +869,41 @@ class DeliveryNoteItem(db.Model):
     brand = db.Column(db.String(100), nullable=True)
 
 
+# Request status slugs, same ASCII-slug-as-CSS-class convention as
+# STATUS_LABELS (Order.status) above.
+REQUEST_STATUS_LABELS = {
+    'new': 'Нова',
+    'processing': 'В обработка',
+    'ordered': 'Поръчана',
+}
+
+
+class MaterialRequest(db.Model):
+    """
+    A request to restock a material, raised from the storage materials page
+    (Склад -> Материали) when stock is running low - separate from
+    DeliveryNote, which records stock actually received. Tracks a request
+    through new -> processing -> ordered; supplier_id (who it was ordered
+    from) is only meaningful once status is 'ordered', reusing the same
+    Supplier catalog as DeliveryNote.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    material_id = db.Column(db.Integer, db.ForeignKey('material_price.id'), nullable=False)
+    quantity = db.Column(db.Float, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='new')
+    supplier_id = db.Column(db.Integer, db.ForeignKey('supplier.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+
+    material = db.relationship('MaterialPrice')
+    supplier = db.relationship('Supplier')
+    created_by = db.relationship('User')
+
+    @property
+    def status_label(self):
+        return REQUEST_STATUS_LABELS.get(self.status, self.status)
+
+
 class Machine(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
@@ -2410,6 +2445,7 @@ def storage_dashboard():
         'materials': MaterialPrice.query.count(),
         'details': Detail.query.count(),
         'products': Product.query.count(),
+        'requests': MaterialRequest.query.filter(MaterialRequest.status != 'ordered').count(),
     }
     return render_template('storage_dashboard.html', counts=counts, active_page='storage')
 
@@ -2419,6 +2455,76 @@ def storage_dashboard():
 def storage_materials():
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     return render_template('storage_materials.html', materials=materials, active_page='storage')
+
+
+@app.route('/storage/requests')
+@role_required(['admin', 'worker'])
+def storage_requests():
+    requests_list = MaterialRequest.query.order_by(MaterialRequest.created_at.desc()).all()
+    suppliers = Supplier.query.order_by(Supplier.name).all()
+    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    return render_template(
+        'storage_requests.html', requests=requests_list, suppliers=suppliers, materials=materials,
+        status_labels=REQUEST_STATUS_LABELS, active_page='storage'
+    )
+
+
+@app.route('/storage/requests/create', methods=['POST'])
+@role_required(['admin', 'worker'])
+def create_material_request():
+    """
+    Creates one MaterialRequest per line in items_json ([{material_id, quantity}]) -
+    the "new request" page lets an admin/worker queue up several materials at
+    once instead of submitting one at a time. Invalid lines (unknown material,
+    missing/non-positive quantity) are silently skipped rather than failing
+    the whole batch, same tolerance as create_delivery_note()'s item loop.
+    """
+    try:
+        items = json.loads(request.form.get('items_json', ''))
+        if not isinstance(items, list):
+            items = []
+    except (TypeError, ValueError):
+        items = []
+
+    created_names = []
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        material = MaterialPrice.query.get(row.get('material_id'))
+        quantity = row.get('quantity')
+        if not material or not isinstance(quantity, (int, float)) or quantity <= 0:
+            continue
+        db.session.add(MaterialRequest(material_id=material.id, quantity=quantity, created_by_id=current_user.id))
+        created_names.append(material.display_name)
+
+    if not created_names:
+        flash('Моля добавете поне един материал с валидно количество.', 'danger')
+        return redirect(url_for('storage_requests'))
+
+    db.session.commit()
+    log_action(f'Създадени {len(created_names)} заявки за материали: {", ".join(created_names)}')
+    flash(f'Добавени бяха {len(created_names)} заявки за материали.', 'success')
+    return redirect(url_for('storage_requests'))
+
+
+@app.route('/storage/requests/<int:request_id>/update', methods=['POST'])
+@role_required(['admin', 'worker'])
+def update_material_request(request_id):
+    material_request = MaterialRequest.query.get_or_404(request_id)
+    status = request.form.get('status', '')
+    if status not in REQUEST_STATUS_LABELS:
+        flash('Невалиден статус.', 'danger')
+        return redirect(url_for('storage_requests'))
+    supplier_id = request.form.get('supplier_id', type=int)
+    if status == 'ordered' and not supplier_id:
+        flash('Изберете от кого е поръчан материалът, за да отбележите заявката като поръчана.', 'danger')
+        return redirect(url_for('storage_requests'))
+    material_request.status = status
+    material_request.supplier_id = supplier_id if status == 'ordered' else None
+    db.session.commit()
+    log_action(f'Обновен статус на заявка #{material_request.id} на "{material_request.status_label}"')
+    flash('Заявката беше обновена.', 'success')
+    return redirect(url_for('storage_requests'))
 
 
 @app.route('/storage/details')

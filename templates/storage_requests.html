@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Склад - Заявки за материали - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .status-badge { padding: 4px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; display: inline-block; }
+        .status-new { background-color: #ffc107; color: #000; }
+        .status-processing { background-color: #17a2b8; color: #fff; }
+        .status-ordered { background-color: #28a745; color: #fff; }
+        .add-item-row { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
+        .add-item-row .form-group { flex: 1; min-width: 220px; margin-bottom: 0; }
+        .add-item-row .form-group.qty-field { flex: 0 0 120px; min-width: 100px; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3 style="margin-bottom: 4px;">Нова заявка за материали</h3>
+        <p class="section-subtitle" style="margin: 0 0 16px 0;">Добавете колкото материали са необходими, след което запишете - всеки се появява като отделна заявка по-долу.</p>
+
+        <form method="POST" action="{{ url_for('create_material_request') }}" id="requestForm">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+            <div class="add-item-row">
+                <div class="form-group">
+                    <label for="reqMaterialSelect">Материал</label>
+                    <select id="reqMaterialSelect">
+                        {% for type_key, group in materials|groupby('type') %}
+                        <optgroup label="{{ material_type_label(type_key) }}">
+                            {% for material in group %}
+                            <option value="{{ material.id }}">{{ format_material_option(material) }}</option>
+                            {% endfor %}
+                        </optgroup>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group qty-field">
+                    <label for="reqQty">Количество</label>
+                    <input type="number" id="reqQty" value="1" min="0.01" step="any">
+                </div>
+                <div class="form-group" style="flex: 0 0 auto;">
+                    <button type="button" class="btn-secondary" onclick="addRequestRow()" style="padding: 12px 20px;">+ Добави</button>
+                </div>
+            </div>
+
+            <div class="table-responsive" style="margin-top: 20px;">
+                <table class="data-table" id="reqTable">
+                    <thead>
+                    <tr>
+                        <th>Материал</th>
+                        <th class="text-center">Количество</th>
+                        <th class="text-right">Действие</th>
+                    </tr>
+                    </thead>
+                    <tbody id="reqTableBody">
+                        <tr id="reqEmptyRow"><td colspan="3" class="text-center no-data">Все още няма добавени материали.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <input type="hidden" name="items_json" id="itemsJsonInput">
+            <button type="submit" class="btn-submit" style="width: 100%; margin-top: 16px;" id="submitRequestBtn" disabled>Изпрати заявките</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3 style="margin-bottom: 4px;">Склад &middot; Заявки за материали</h3>
+        <p class="section-subtitle" style="margin: 0 0 16px 0;">Отбележете като "Поръчана" и изберете от кого е поръчан материалът.</p>
+
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                <tr>
+                    <th>Материал</th>
+                    <th class="text-center">Количество</th>
+                    <th>Създадена</th>
+                    <th class="text-center">Статус</th>
+                    <th>Поръчана от</th>
+                    <th></th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for req in requests %}
+                <tr>
+                    <td>{{ req.material.display_name if req.material else 'Изтрит материал' }}</td>
+                    <td class="text-center">{{ req.quantity|round(2) }}</td>
+                    <td>{{ req.created_at.strftime('%d.%m.%Y %H:%M') if req.created_at else '-' }} {% if req.created_by %}<div class="text-muted text-small">{{ req.created_by.username }}</div>{% endif %}</td>
+                    <td class="text-center"><span class="status-badge status-{{ req.status }}">{{ req.status_label }}</span></td>
+                    <td>{{ req.supplier.name if req.supplier else '-' }}</td>
+                    <td>
+                        <form method="POST" action="{{ url_for('update_material_request', request_id=req.id) }}" style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <select name="status" class="request-status-select" onchange="toggleSupplier(this)">
+                                {% for key, label in status_labels.items() %}
+                                <option value="{{ key }}" {% if req.status == key %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                            <select name="supplier_id" class="request-supplier-select" {% if req.status != 'ordered' %}hidden{% endif %}>
+                                <option value="">— доставчик —</option>
+                                {% for s in suppliers %}
+                                <option value="{{ s.id }}" {% if req.supplier_id == s.id %}selected{% endif %}>{{ s.name }}</option>
+                                {% endfor %}
+                            </select>
+                            <button type="submit" class="btn-secondary">Запази</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" class="text-center no-data">Няма заявки за материали.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+</main>
+<script>
+    function toggleSupplier(select) {
+        var supplierSelect = select.closest('form').querySelector('.request-supplier-select');
+        supplierSelect.hidden = select.value !== 'ordered';
+    }
+
+    let reqItems = [];
+
+    function addRequestRow() {
+        const sel = document.getElementById('reqMaterialSelect');
+        const qty = parseFloat(document.getElementById('reqQty').value);
+        if (!sel.value) { alert('Моля изберете материал.'); return; }
+        if (!qty || qty <= 0) { alert('Моля въведете валидно количество.'); return; }
+
+        const materialId = parseInt(sel.value, 10);
+        const name = sel.options[sel.selectedIndex].textContent;
+        const existing = reqItems.find(function (i) { return i.materialId === materialId; });
+        if (existing) {
+            existing.quantity += qty;
+        } else {
+            reqItems.push({ materialId: materialId, name: name, quantity: qty });
+        }
+        document.getElementById('reqQty').value = 1;
+        renderRequestTable();
+    }
+
+    function removeRequestRow(index) {
+        reqItems.splice(index, 1);
+        renderRequestTable();
+    }
+
+    function renderRequestTable() {
+        const body = document.getElementById('reqTableBody');
+        body.innerHTML = '';
+        if (reqItems.length === 0) {
+            body.innerHTML = '<tr id="reqEmptyRow"><td colspan="3" class="text-center no-data">Все още няма добавени материали.</td></tr>';
+        } else {
+            reqItems.forEach(function (item, idx) {
+                const tr = document.createElement('tr');
+                const nameTd = document.createElement('td');
+                nameTd.textContent = item.name;
+                tr.appendChild(nameTd);
+                const qtyTd = document.createElement('td');
+                qtyTd.className = 'text-center';
+                qtyTd.textContent = item.quantity;
+                tr.appendChild(qtyTd);
+                const actionTd = document.createElement('td');
+                actionTd.className = 'text-right';
+                const removeBtn = document.createElement('button');
+                removeBtn.type = 'button';
+                removeBtn.className = 'btn-delete';
+                removeBtn.textContent = 'Премахни';
+                removeBtn.addEventListener('click', function () { removeRequestRow(idx); });
+                actionTd.appendChild(removeBtn);
+                tr.appendChild(actionTd);
+                body.appendChild(tr);
+            });
+        }
+        document.getElementById('submitRequestBtn').disabled = reqItems.length === 0;
+    }
+
+    document.getElementById('requestForm').addEventListener('submit', function (e) {
+        if (reqItems.length === 0) {
+            e.preventDefault();
+            alert('Моля добавете поне един материал към заявката.');
+            return;
+        }
+        document.getElementById('itemsJsonInput').value = JSON.stringify(
+            reqItems.map(function (i) { return { material_id: i.materialId, quantity: i.quantity }; })
+        );
+    });
+</script>
+</body>
+</html>

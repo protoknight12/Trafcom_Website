@@ -28,7 +28,10 @@
                 <h3 style="margin-bottom: 4px;">Склад &middot; Материали</h3>
                 <p class="section-subtitle" style="margin: 0;">Текуща наличност по материали.</p>
             </div>
-            <a class="btn-submit" style="text-decoration: none;" href="{{ url_for('admin_delivery_notes', type='material') }}">+ Бърза заявка (стокова разписка)</a>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <a class="btn-submit" style="text-decoration: none;" href="{{ url_for('storage_requests') }}">Заявки за материали</a>
+                <a class="btn-submit" style="text-decoration: none;" href="{{ url_for('admin_delivery_notes', type='material') }}">+ Бърза заявка (стокова разписка)</a>
+            </div>
         </div>
 
         {% if materials %}

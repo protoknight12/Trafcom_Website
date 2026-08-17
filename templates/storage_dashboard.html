@@ -78,6 +78,11 @@
                 <h4>Продукти</h4>
                 <p>Наличност по готови продукти.</p>
             </a>
+            <a class="admin-hub-card" href="{{ url_for('storage_requests') }}">
+                <div class="hub-count">{{ counts.requests }}</div>
+                <h4>Заявки</h4>
+                <p>Открити заявки за материали.</p>
+            </a>
         </div>
     </section>
 
