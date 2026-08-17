@@ -15,9 +15,10 @@ import urllib.error
 from html import escape as html_escape
 from html.parser import HTMLParser
 from concurrent.futures import ThreadPoolExecutor
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory, send_file
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory, send_file, g
 from openpyxl import Workbook
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import inspect as sa_inspect
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -161,6 +162,11 @@ class ActivityLog(db.Model):
     username = db.Column(db.String(50), nullable=False)
     role = db.Column(db.String(20), nullable=False)
     action = db.Column(db.String(255), nullable=False)
+    # Optional longer breakdown for actions where the one-line action summary
+    # necessarily drops detail (e.g. every line of a delivery note or order,
+    # not just a count) - see log_action()'s details= param. NULL when the
+    # action text already says everything (e.g. a field-by-field diff).
+    details = db.Column(db.Text, nullable=True)
 
 
 class DxfFile(db.Model):
@@ -1856,23 +1862,73 @@ def role_required(roles):
     return decorator
 
 
+def log_action(text, details=None):
+    """
+    Call from inside a route - anywhere before the response is returned - to
+    give this request's ActivityLog row a precise, human-readable Bulgarian
+    description ("Обновен материал ...: цена 12.50 → 13.00 лв/м²") instead of
+    the generic "endpoint_name (arg=val)" fallback in _log_activity() below.
+    `details` is an optional longer breakdown (e.g. one line per item on a
+    delivery note/order) shown when the admin log dashboard expands this row -
+    use it where the one-line `text` necessarily drops detail (a count, not
+    every line); leave it out where `text` already says everything.
+    """
+    g.log_action = text
+    if details:
+        g.log_action_details = details
+
+
+def describe_changes(label, obj, field_labels):
+    """
+    Diffs an object's pending SQLAlchemy attribute changes into a Bulgarian
+    "label: поле стара_ст → нова_ст, ..." string for log_action(), using
+    SQLAlchemy's own dirty-attribute history instead of manually snapshotting
+    old values in every route. field_labels is {attribute_name: bg_label}.
+    MUST be called after assigning the new values but before db.session.
+    commit() (commit expires attribute history). Returns "label (без
+    промени)" if none of the tracked fields actually changed.
+    """
+    changes = []
+    state = sa_inspect(obj)
+    for attr, bg_label in field_labels.items():
+        hist = state.attrs[attr].history
+        if not hist.has_changes():
+            continue
+        old_val = hist.deleted[0] if hist.deleted else None
+        new_val = hist.added[0] if hist.added else getattr(obj, attr)
+        if old_val != new_val:
+            old_display = old_val if old_val is not None else '-'
+            new_display = new_val if new_val is not None else '-'
+            changes.append(f'{bg_label} {old_display} → {new_display}')
+    if not changes:
+        return f'{label} (без промени)'
+    return f'{label}: ' + ', '.join(changes)
+
+
 @app.after_request
 def _log_activity(response):
     """
     Logs every successful state-changing request by a logged-in user as one
-    ActivityLog row - a blanket audit trail instead of sprinkling log calls
-    into every route by hand. GETs are excluded (nothing changes on a GET,
-    and it would spam the log with page views / polling endpoints like
-    /admin/power/data). Rows are never auto-deleted - only admin_log_clear()
-    below removes them, and that action ends up logged too.
+    ActivityLog row - a blanket audit trail instead of requiring a log call
+    in every route. Prefers a route-supplied log_action() description; falls
+    back to the bare endpoint name for routes that don't set one. GETs are
+    excluded (nothing changes on a GET, and it would spam the log with page
+    views / polling endpoints like /admin/power/data). Rows are never
+    auto-deleted - only admin_log_clear() below removes them, and that
+    action ends up logged too.
     """
     if (request.method != 'GET' and current_user.is_authenticated
             and request.endpoint and 200 <= response.status_code < 400):
-        action = request.endpoint
-        if request.view_args:
-            action += ' (' + ', '.join(f'{k}={v}' for k, v in request.view_args.items()) + ')'
+        action = g.get('log_action')
+        if not action:
+            action = request.endpoint
+            if request.view_args:
+                action += ' (' + ', '.join(f'{k}={v}' for k, v in request.view_args.items()) + ')'
         try:
-            db.session.add(ActivityLog(username=current_user.username, role=current_user.role, action=action))
+            db.session.add(ActivityLog(
+                username=current_user.username, role=current_user.role,
+                action=action, details=g.get('log_action_details'),
+            ))
             db.session.commit()
         except Exception:
             db.session.rollback()
@@ -2406,6 +2462,7 @@ def admin_add_client():
     )
     db.session.add(client)
     db.session.commit()
+    log_action(f'Създаден клиент "{name}"')
     flash(f'Клиентът "{name}" беше добавен успешно.', 'success')
     return redirect(url_for('admin_clients'))
 
@@ -2459,6 +2516,10 @@ def update_client(client_id):
     client.vat_number = request.form.get('vat_number', '').strip() or None
     client.address = request.form.get('address', '').strip() or None
     client.mol = request.form.get('mol', '').strip() or None
+    log_action(describe_changes(f'клиент "{client.name}"', client, {
+        'name': 'име', 'client_type': 'тип', 'email': 'имейл', 'phone': 'телефон',
+        'eik': 'ЕИК', 'vat_number': 'ДДС №', 'address': 'адрес', 'mol': 'МОЛ',
+    }))
     db.session.commit()
     flash('Клиентът беше обновен успешно.', 'success')
     if request.form.get('popup') == '1':
@@ -2478,6 +2539,7 @@ def admin_delete_client(client_id):
     Order.query.filter_by(client_id=client.id).update({'client_id': None})
     db.session.delete(client)
     db.session.commit()
+    log_action(f'Изтрит клиент "{client.name}"')
     flash(f'Клиентът "{client.name}" беше изтрит.', 'success')
     return redirect(url_for('admin_clients'))
 
@@ -2507,6 +2569,7 @@ def admin_add_deliverer():
     )
     db.session.add(deliverer)
     db.session.commit()
+    log_action(f'Създаден куриер "{name}"')
     flash(f'Куриерът "{name}" беше добавен успешно.', 'success')
     return redirect(url_for('admin_clients'))
 
@@ -2557,6 +2620,10 @@ def update_deliverer(deliverer_id):
     deliverer.vat_number = request.form.get('vat_number', '').strip() or None
     deliverer.address = request.form.get('address', '').strip() or None
     deliverer.mol = request.form.get('mol', '').strip() or None
+    log_action(describe_changes(f'куриер "{deliverer.name}"', deliverer, {
+        'name': 'име', 'email': 'имейл', 'phone': 'телефон',
+        'eik': 'ЕИК', 'vat_number': 'ДДС №', 'address': 'адрес', 'mol': 'МОЛ',
+    }))
     db.session.commit()
     flash('Куриерът беше обновен успешно.', 'success')
     if request.form.get('popup') == '1':
@@ -2574,6 +2641,7 @@ def admin_delete_deliverer(deliverer_id):
     Order.query.filter_by(deliverer_id=deliverer.id).update({'deliverer_id': None})
     db.session.delete(deliverer)
     db.session.commit()
+    log_action(f'Изтрит куриер "{deliverer.name}"')
     flash(f'Куриерът "{deliverer.name}" беше изтрит.', 'success')
     return redirect(url_for('admin_clients'))
 
@@ -2754,6 +2822,7 @@ def admin_add_supplier():
     )
     db.session.add(supplier)
     db.session.commit()
+    log_action(f'Създаден доставчик "{name}"')
     flash(f'Доставчикът "{name}" беше добавен успешно.', 'success')
     return redirect(url_for('admin_delivery_notes'))
 
@@ -2802,7 +2871,10 @@ def create_delivery_note():
     db.session.add(note)
     db.session.flush()
 
+    item_type_labels = {'material': 'материал', 'detail': 'детайл', 'product': 'продукт'}
     added_any = False
+    log_parts = []
+    log_detail_lines = []
     for row in items:
         if not isinstance(row, dict):
             continue
@@ -2867,6 +2939,10 @@ def create_delivery_note():
         ))
         _bump_stock(target, quantity)
         added_any = True
+        log_parts.append(f'{item_type_labels.get(item_type, item_type)} "{description}" +{quantity:g} (нова наличност {target.stock_quantity:g})')
+        price_note = f', цена {unit_price:g} лв.' if unit_price is not None else ''
+        notes_note = f', бележка: {row.get("notes")}' if (row.get('notes') or '').strip() else ''
+        log_detail_lines.append(f'{item_type_labels.get(item_type, item_type)} "{description}": +{quantity:g} бр. → нова наличност {target.stock_quantity:g}{price_note}{notes_note}')
 
     if not added_any:
         db.session.rollback()
@@ -2874,6 +2950,9 @@ def create_delivery_note():
         return redirect(url_for('admin_delivery_notes'))
 
     db.session.commit()
+    supplier_name = note.supplier.name if note.supplier else '-'
+    header = f'Стокова разписка №{note.id} (доставчик: {supplier_name}, № {note.note_number or "-"}, дата {note.note_date or "-"})'
+    log_action(f'Стокова разписка №{note.id}: ' + ', '.join(log_parts), details=header + '\n' + '\n'.join(log_detail_lines))
     flash('Стоковата разписка беше записана и наличностите бяха обновени.', 'success')
     return redirect(url_for('admin_delivery_notes'))
 
@@ -2990,6 +3069,7 @@ def create_machine_card():
     )
     db.session.add(card)
     db.session.commit()
+    log_action(f'Създадена карта "{title}" ({"продукт" if kind == "product" else "машина"}, страница {page})')
     flash('Добавено успешно.', 'success')
     if request.form.get('popup') == '1':
         return redirect(url_for('new_machine_card_window', page=page, kind=kind, saved='1'))
@@ -3059,6 +3139,10 @@ def update_machine_card(card_id):
                     print(f"Error deleting old machine image: {e}")
         card.image_filename = new_image_filename
 
+    log_action(describe_changes(f'карта "{card.title}"', card, {
+        'title': 'име', 'series_label': 'етикет', 'section_title': 'раздел',
+        'specs_text': 'характеристики', 'description': 'описание', 'image_filename': 'снимка',
+    }))
     db.session.commit()
     flash('Обновено успешно.', 'success')
     if request.form.get('popup') == '1':
@@ -3074,8 +3158,10 @@ def delete_machine_card(card_id):
         return redirect(url_for('dashboard'))
     card = ServiceMachineCard.query.get_or_404(card_id)
     redirect_target = _machine_card_home(card.page)
+    title = card.title
     db.session.delete(card)
     db.session.commit()
+    log_action(f'Изтрита карта "{title}"')
     flash('Премахнато успешно.', 'success')
     return redirect(redirect_target)
 
@@ -3113,11 +3199,16 @@ def update_text(key):
 
     content = request.form.get('content', '').strip()
     row = db.session.get(EditableText, key)
+    old_content = row.content if row else None
     if row:
         row.content = content
     else:
         db.session.add(EditableText(key=key, content=content))
     db.session.commit()
+    # Free text can be long - show only a short before/after preview, not the full block.
+    old_preview = (old_content[:60] + '…') if old_content and len(old_content) > 60 else (old_content or '(по подразбиране)')
+    new_preview = (content[:60] + '…') if len(content) > 60 else content
+    log_action(f'Редактиран текст "{key}": "{old_preview}" → "{new_preview}"')
     flash('Текстът беше запазен успешно.', 'success')
     if request.form.get('popup') == '1':
         return redirect(url_for('edit_text_window', key=key, saved='1'))
@@ -3148,6 +3239,7 @@ def admin_create_user():
     new_user = User(username=username, password=secure_pass, role=role)
     db.session.add(new_user)
     db.session.commit()
+    log_action(f'Създаден потребител "{username}" (роля {role})')
     flash(f'Успешно създаден потребител: {username}')
     return redirect(url_for('admin_users'))
 
@@ -3168,8 +3260,10 @@ def admin_update_user_role(user_id):
         return redirect(url_for('admin_users'))
 
     user_to_update = User.query.get_or_404(user_id)
+    old_role = user_to_update.role
     user_to_update.role = role
     db.session.commit()
+    log_action(f'Роля на "{user_to_update.username}": {old_role} → {role}')
     flash(f'Ролята на {user_to_update.username} беше обновена успешно.', 'success')
     return redirect(url_for('admin_users'))
 
@@ -3340,6 +3434,13 @@ def admin_update_material(key):
     material.code_number = request.form.get('code_number', '').strip() or None
     material.type = _parse_material_type(request.form)
     material.brand = request.form.get('brand', '').strip() or None
+    log_action(describe_changes(f'материал "{material.display_name}"', material, {
+        'cost_per_m2': 'цена лв/м²', 'cutting_speed_mm_per_min': 'ск. рязане mm/min',
+        'pierce_rate_per_min': 'пробождания/min', 'sheet_length_mm': 'дължинаmm',
+        'sheet_width_mm': 'ширина mm', 'thickness_mm': 'дебелина mm', 'height_mm': 'височина mm',
+        'price_per_kg_m2': 'цена лв/кг(м²)', 'price_per_kg_m': 'цена лв/кг(м)', 'weight_kg': 'тегло кг',
+        'erp_number': 'ERP №', 'code_number': 'КД №', 'type': 'тип', 'brand': 'марка',
+    }))
     db.session.commit()
 
     flash(f'Цените за "{material.display_name}" бяха обновени успешно.', 'success')
@@ -3428,6 +3529,7 @@ def admin_add_material():
     new_material.key = f'material_{new_material.id}'
     db.session.commit()
 
+    log_action(f'Създаден материал "{display_name}" (цена {new_material.cost_per_m2:g} лв/м², тип {material_type})')
     flash(f'Материалът "{display_name}" беше добавен успешно.', 'success')
     return redirect(url_for('admin_materials'))
 
@@ -3480,6 +3582,7 @@ def add_machine():
     new_machine = Machine(name=name, machine_type=request.form.get('machine_type', '').strip() or None)
     db.session.add(new_machine)
     db.session.commit()
+    log_action(f'Създадена машина "{name}"')
     flash('Машината е добавена успешно!', 'success')
     return redirect(url_for('list_machines'))
 
@@ -3526,6 +3629,7 @@ def rename_machine(id):
     machine = Machine.query.get_or_404(id)
     machine.name = name
     machine.machine_type = request.form.get('machine_type', '').strip() or None
+    log_action(describe_changes(f'машина #{id}', machine, {'name': 'име', 'machine_type': 'тип'}))
     db.session.commit()
     flash('Машината беше преименувана успешно.', 'success')
     if request.form.get('popup') == '1':
@@ -3545,8 +3649,10 @@ def update_machine_status(id):
         return "Invalid status", 400
 
     machine = Machine.query.get_or_404(id)
+    old_status = machine.status
     machine.status = status
     db.session.commit()
+    log_action(f'Статус на машина "{machine.name}": {old_status} → {status}')
     flash(f'Статусът на {machine.name} е актуализиран.', 'success')
     return redirect(url_for('list_machines'))
 
@@ -3643,6 +3749,7 @@ def admin_add_service():
     )
     db.session.add(new_service)
     db.session.commit()
+    log_action(f'Създадена услуга "{name}" ({price_per_hour_eur:g} €/час)')
     flash(f'Услугата "{name}" беше добавена успешно.', 'success')
     return redirect(url_for('admin_services'))
 
@@ -3672,6 +3779,10 @@ def admin_update_service(service_id):
     service.price_per_meter_eur = price_per_meter_eur
     service.description = request.form.get('description', '').strip() or None
     service.machines = _selected_machines(request.form)
+    log_action(describe_changes(f'услуга "{service.name}"', service, {
+        'name': 'име', 'machine_type': 'тип машина', 'price_per_hour_eur': 'цена €/час',
+        'pricing_mode': 'режим ценообр.', 'price_per_meter_eur': 'цена €/м', 'description': 'описание',
+    }))
     db.session.commit()
     flash(f'Услугата "{name}" беше обновена успешно.', 'success')
     return redirect(url_for('admin_services'))
@@ -3697,8 +3808,10 @@ def admin_delete_service(service_id):
         flash(f'Услугата "{service.name}" се използва и не може да бъде изтрита.', 'danger')
         return redirect(url_for('admin_services'))
 
+    name = service.name
     db.session.delete(service)
     db.session.commit()
+    log_action(f'Изтрита услуга "{name}"')
     flash(f'Услугата "{service.name}" беше изтрита.', 'success')
     return redirect(url_for('admin_services'))
 
@@ -3846,6 +3959,7 @@ def admin_add_detail():
         # cart and _add_operations_from_rows().
         extra_ops = _add_operations_from_rows(new_detail, _parse_operations_json(request.form.get('operations_json')))
         db.session.commit()
+        log_action(f'Създаден детайл "{name}" (цена {new_detail.calculated_price:g} лв.{", "+str(extra_ops)+" доп. операции" if extra_ops else ""})')
         if extra_ops:
             flash(f'Детайлът "{name}" беше добавен успешно, с {extra_ops} допълнителна операция(и).', 'success')
         else:
@@ -3924,6 +4038,10 @@ def admin_update_detail_material(detail_id):
     detail.height = height
     detail.thickness_mm = thickness
     detail.calculated_price = calculate_material_price(width, height, material_key)
+    log_action(describe_changes(f'детайл "{detail.name}"', detail, {
+        'material_key': 'материал', 'width': 'ширина мм', 'height': 'височина мм',
+        'thickness_mm': 'дебелина мм', 'calculated_price': 'цена лв.',
+    }))
     db.session.commit()
     flash('Материалът и размерите бяха обновени успешно.', 'success')
     return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
@@ -4188,6 +4306,7 @@ def admin_add_operation(detail_id):
         return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
     db.session.commit()
+    log_action(f'Добавени {added} операция(и) към детайл "{detail.name}"')
     flash('Добавена е 1 операция.' if added == 1 else f'Добавени са {added} операции.', 'success')
     return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
@@ -4201,8 +4320,10 @@ def admin_delete_operation(operation_id):
 
     operation = Operation.query.get_or_404(operation_id)
     detail_id = operation.detail_id
+    op_label = f'{operation.service.name} ({operation.detail.name})' if operation.service and operation.detail else str(operation_id)
     db.session.delete(operation)
     db.session.commit()
+    log_action(f'Изтрита операция "{op_label}"')
     flash('Операцията беше премахната.', 'success')
     return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
@@ -4235,8 +4356,10 @@ def admin_rename_detail(detail_id):
         return redirect(url_for('admin_content'))
 
     detail = Detail.query.get_or_404(detail_id)
+    old_name = detail.name
     detail.name = name
     db.session.commit()
+    log_action(f'Преименуван детайл "{old_name}" → "{name}"')
     flash('Детайлът беше преименуван успешно.', 'success')
     if request.form.get('popup') == '1':
         return redirect(url_for('edit_detail_window', detail_id=detail_id, saved='1'))
@@ -4264,8 +4387,10 @@ def admin_delete_detail(detail_id):
         if os.path.exists(dxf_path):
             os.remove(dxf_path)
 
+    name = detail.name
     db.session.delete(detail)
     db.session.commit()
+    log_action(f'Изтрит детайл "{name}"')
     flash(f'Детайлът "{detail.name}" беше изтрит.', 'success')
     return redirect(url_for('admin_details'))
 
@@ -4297,6 +4422,7 @@ def admin_add_product():
     db.session.add(new_product)
     db.session.commit()
 
+    log_action(f'Създаден продукт "{name}" (надценка {markup_percent:g}%)')
     flash(f'Продуктът "{name}" беше създаден. Добавете детайли и допълнителни разходи по-долу.', 'success')
     return redirect(url_for('admin_product_edit', product_id=new_product.id))
 
@@ -4381,6 +4507,10 @@ def admin_product_update(product_id):
         product.erp_number = erp_number
         product.code_number = request.form.get('code_number', '').strip() or None
 
+    log_action(describe_changes(f'продукт "{product.name}"', product, {
+        'name': 'име', 'description': 'описание', 'markup_percent': 'надценка %',
+        'erp_number': 'ERP №', 'code_number': 'КД №',
+    }))
     db.session.commit()
 
     flash('Продуктът беше обновен успешно.', 'success')
@@ -4408,6 +4538,7 @@ def admin_product_delete(product_id):
 
     db.session.delete(product)  # Cascades database records
     db.session.commit()
+    log_action(f'Изтрит продукт "{name}"')
     flash(f'Продуктът "{name}" беше изтрит.', 'success')
     return redirect(url_for('admin_products'))
 
@@ -4443,6 +4574,7 @@ def admin_product_add_detail(product_id):
         db.session.add(ProductDetail(product_id=product.id, detail_id=detail.id, quantity=quantity))
 
     db.session.commit()
+    log_action(f'Добавен детайл "{detail.name}" x{quantity} към продукт "{product.name}"')
     flash(f'Детайлът "{detail.name}" беше добавен към продукта.', 'success')
     return redirect(url_for('admin_product_edit', product_id=product.id))
 
@@ -4455,8 +4587,10 @@ def admin_product_remove_detail(product_id, product_detail_id):
         return redirect(url_for('dashboard'))
 
     line_item = ProductDetail.query.filter_by(id=product_detail_id, product_id=product_id).first_or_404()
+    detail_name = line_item.detail.name if line_item.detail else str(product_detail_id)
     db.session.delete(line_item)
     db.session.commit()
+    log_action(f'Премахнат детайл "{detail_name}" от продукт #{product_id}')
     flash('Детайлът беше премахнат от продукта.', 'success')
     return redirect(url_for('admin_product_edit', product_id=product_id))
 
@@ -4487,6 +4621,7 @@ def admin_product_add_cost(product_id):
 
     db.session.add(ProductExtraCost(product_id=product.id, label=label, amount=round(amount, 2)))
     db.session.commit()
+    log_action(f'Добавен разход "{label}" ({amount:g} лв.) към продукт "{product.name}"')
     flash(f'Разходът "{label}" беше добавен.', 'success')
     return redirect(url_for('admin_product_edit', product_id=product.id))
 
@@ -4499,8 +4634,10 @@ def admin_product_remove_cost(product_id, cost_id):
         return redirect(url_for('dashboard'))
 
     cost = ProductExtraCost.query.filter_by(id=cost_id, product_id=product_id).first_or_404()
+    label = cost.label
     db.session.delete(cost)
     db.session.commit()
+    log_action(f'Премахнат разход "{label}" от продукт #{product_id}')
     flash('Разходът беше премахнат.', 'success')
     return redirect(url_for('admin_product_edit', product_id=product_id))
 
@@ -4564,9 +4701,11 @@ def admin_delete_user(user_id):
         # the extracted metrics/geometry persist in the DB. So there are no
         # leftover files on disk to clean up here; deleting the user cascades
         # to their DxfFile rows via the model's cascade='all, delete-orphan'.
+        deleted_username = user_to_delete.username
         db.session.delete(user_to_delete)
         db.session.commit()
 
+        log_action(f'Изтрит потребител "{deleted_username}"')
         flash(f'Потребителят {user_to_delete.username} и неговите чертежи бяха изтрити!', 'success')
 
     except Exception as e:
@@ -4709,6 +4848,13 @@ def create_order():
             return redirect(url_for('create_order'))
 
         db.session.commit()
+        order_items = OrderItem.query.filter_by(order_id=new_order.id).all()
+        header = f'Поръчка {new_order.order_number} за "{customer_name}"'
+        if new_order.client:
+            header += f' (клиент: {new_order.client.name})'
+        item_lines = [f'{oi.item_name}: {oi.quantity_ordered} бр. x {oi.unit_price:g} лв. = {oi.line_total:g} лв.' for oi in order_items]
+        log_action(f'Създадена поръчка {new_order.order_number} за "{customer_name}" ({len(order_items)} артикул(и))',
+                   details=header + '\n' + '\n'.join(item_lines))
         flash(f'Поръчка {new_order.order_number} беше успешно изпратена!', 'success')
 
         shortfalls = order_missing_items(new_order)
@@ -4778,6 +4924,7 @@ def cancel_order(order_id):
 
     order.status = 'cancelled'
     db.session.commit()
+    log_action(f'Отменена поръчка {order.order_number}')
     flash(f'Поръчка {order.order_number} беше отменена.', 'success')
     return redirect(url_for('my_orders'))
 
@@ -4808,17 +4955,20 @@ def admin_production_report():
             component.quantity_produced = produced_qty
             order_item = component.order_item
             target_percent = component.percent_complete
+            target_label = f'детайл "{component.detail.name}"' if component.detail else f'компонент #{target_id}'
         elif target_type == 'item':
             order_item = OrderItem.query.get_or_404(target_id)
             produced_qty = max(0, min(produced_qty, order_item.quantity_ordered))
             order_item.quantity_produced = produced_qty
             target_percent = order_item.percent_complete
+            target_label = f'артикул "{order_item.item_name}"'
         else:
             return jsonify({'status': 'error', 'message': 'Невалиден тип на артикула.'}), 400
 
         order = order_item.order
         refresh_order_status(order)
         db.session.commit()
+        log_action(f'Изработени {produced_qty} бр. от {target_label} (поръчка {order.order_number})')
 
         return jsonify({
             'status': 'success',
@@ -4997,6 +5147,8 @@ def update_label_codes(edit_target_type, edit_target_id):
 
     row.erp_number = erp_number
     row.code_number = request.form.get('code_number', '').strip() or None
+    row_label = row.display_name if edit_target_type == 'material' else row.name
+    log_action(describe_changes(f'{edit_target_type} "{row_label}"', row, {'erp_number': 'ERP №', 'code_number': 'КД №'}))
     db.session.commit()
     flash('ERP №/КД № бяха обновени.', 'success')
 
@@ -5137,6 +5289,7 @@ def api_quick_create_detail():
                 original_filename=secure_filename(pdf_file.filename), uploaded_by_id=current_user.id
             ))
         db.session.commit()
+        log_action(f'Създаден детайл "{name}" (бърз избор, материал "{mat.display_name}", цена {new_detail.calculated_price:g} лв.)')
 
         return jsonify({
             'status': 'success',
@@ -5211,6 +5364,9 @@ def api_quick_create_product():
         db.session.add(ProductDetail(product_id=new_product.id, detail_id=detail_id, quantity=quantity))
 
     db.session.commit()
+    component_lines = [f'{Detail.query.get(detail_id).name}: {quantity} бр.' for detail_id, quantity in components.items()]
+    log_action(f'Създаден продукт "{name}" (бърз избор, {len(components)} детайл(а) в BOM)',
+               details=f'Продукт "{name}"' + ('\n' + '\n'.join(component_lines) if component_lines else ''))
 
     pricing = calculate_product_pricing(new_product)
 
@@ -5301,6 +5457,7 @@ def api_quick_create_material():
     db.session.flush()
     new_material.key = f'material_{new_material.id}'
     db.session.commit()
+    log_action(f'Създаден материал "{display_name}" (бърз избор, цена {new_material.cost_per_m2:g} лв/м², тип {material_type})')
 
     return jsonify({
         'status': 'success',
@@ -5338,6 +5495,7 @@ def api_quick_create_client():
     )
     db.session.add(client)
     db.session.commit()
+    log_action(f'Създаден клиент "{name}" (бърз избор)')
 
     return jsonify({'status': 'success', 'client': {'id': client.id, 'name': client.name}})
 
@@ -5365,6 +5523,7 @@ def api_quick_create_deliverer():
     )
     db.session.add(deliverer)
     db.session.commit()
+    log_action(f'Създаден куриер "{name}" (бърз избор)')
 
     return jsonify({'status': 'success', 'deliverer': {'id': deliverer.id, 'name': deliverer.name}})
 
@@ -5390,6 +5549,7 @@ def admin_assign_machine(order_id):
         machine_name = None
 
     db.session.commit()
+    log_action(f'Машина за поръчка {order.order_number}: {machine_name or "-"}')
 
     return jsonify({
         'status': 'success',
@@ -5426,6 +5586,7 @@ def delete_dxf_file(file_id):
         filename = dxf_file.filename
         db.session.delete(dxf_file)
         db.session.commit()
+        log_action(f'Изтрит DXF файл "{filename}"')
         flash(f'Файлът "{filename}" беше изтрит.', 'success')
     except Exception as e:
         db.session.rollback()
@@ -5440,6 +5601,7 @@ def delete_all_dxf_files():
     try:
         deleted = DxfFile.query.filter_by(user_id=current_user.id).delete()
         db.session.commit()
+        log_action(f'Изтрити {deleted} DXF файл(а) от личната библиотека')
         flash(f'Изтрити бяха {deleted} файл(а) от библиотеката.', 'success')
     except Exception as e:
         db.session.rollback()
@@ -5470,8 +5632,10 @@ def delete_machine(id):
         db.session.execute(
             service_machine.delete().where(service_machine.c.machine_id == machine.id)
         )
+        machine_name = machine.name
         db.session.delete(machine)
         db.session.commit()
+        log_action(f'Изтрита машина "{machine_name}"')
         flash(f'Машина "{machine.name}" беше изтрита.', 'success')
     except Exception as e:
         db.session.rollback()
@@ -5500,8 +5664,10 @@ def admin_delete_material(key):
         )
         return redirect(url_for('admin_materials'))
     try:
+        material_name = material.display_name
         db.session.delete(material)
         db.session.commit()
+        log_action(f'Изтрит материал "{material_name}"')
         flash(f'Материал "{material.display_name}" беше изтрит.', 'success')
     except Exception as e:
         db.session.rollback()
@@ -6030,6 +6196,7 @@ def admin_power_add_device():
     device = ShellyDevice(name=name or host, host=host, machines=machines)
     db.session.add(device)
     db.session.commit()
+    log_action(f'Добавен електромер "{name or host}" ({host})')
     flash(f'Машината "{name or host}" беше добавена.', 'success')
     return redirect(url_for('admin_power'))
 
@@ -6043,8 +6210,10 @@ def admin_power_rename_device(device_id):
     if not name:
         flash('Името не може да бъде празно.', 'danger')
         return redirect(url_for('admin_power'))
+    old_name = device.name
     device.name = name
     db.session.commit()
+    log_action(f'Преименуван електромер "{old_name}" → "{name}"')
     flash(f'Машината беше преименувана на "{name}".', 'success')
     return redirect(url_for('admin_power'))
 
@@ -6054,8 +6223,10 @@ def admin_power_rename_device(device_id):
 def admin_power_delete_device(device_id):
     """Remove a machine from the power dashboard - stops polling it immediately."""
     device = ShellyDevice.query.get_or_404(device_id)
+    name = device.name
     db.session.delete(device)
     db.session.commit()
+    log_action(f'Изтрит електромер "{name}"')
     flash(f'Машината "{device.name}" беше премахната от таблото.', 'success')
     return redirect(url_for('admin_power'))
 
@@ -6079,6 +6250,7 @@ def admin_power_set_device_machines(device_id):
         return redirect(url_for('admin_power'))
     device.machines = machines
     db.session.commit()
+    log_action(f'Обновени машини за електромер "{device.name}": ' + (', '.join(m.name for m in machines) if machines else 'няма'))
     flash(f'Връзките за "{device.name}" бяха обновени.', 'success')
     return redirect(url_for('admin_power'))
 
@@ -6434,6 +6606,13 @@ def _save_offer(offer):
         ))
 
     db.session.commit()
+    offer_items = OfferItem.query.filter_by(offer_id=offer.id).order_by(OfferItem.position).all()
+    item_lines = [
+        f'{oi.name or "(текст)"}' + (f': {oi.quantity:g} {oi.unit or ""} x {oi.unit_price:g} лв.' if oi.quantity is not None and oi.unit_price is not None else '')
+        for oi in offer_items
+    ]
+    log_action(f'{"Създадена" if is_new else "Обновена"} оферта № {offer.number} ("{offer.object_title or "-"}", {len(items)} артикул(и))',
+               details=f'Оферта № {offer.number} ("{offer.object_title or "-"}")' + ('\n' + '\n'.join(item_lines) if item_lines else ''))
     flash(f'Офертата № {offer.number} беше запазена успешно.', 'success')
     return redirect(url_for('admin_offer_edit', offer_id=offer.id))
 
@@ -6466,6 +6645,7 @@ def admin_offer_delete(offer_id):
     number = offer.number
     db.session.delete(offer)
     db.session.commit()
+    log_action(f'Изтрита оферта № {number}')
     flash(f'Офертата № {number} беше изтрита.', 'success')
     return redirect(url_for('admin_offers'))
 
@@ -6499,6 +6679,7 @@ def admin_offer_duplicate(offer_id):
             unit_price=item.unit_price, image_filename=item.image_filename,
         ))
     db.session.commit()
+    log_action(f'Дублирана оферта № {source.number} → № {new_offer.number}')
     flash(f'Офертата беше дублирана като № {new_offer.number}.', 'success')
     return redirect(url_for('admin_offer_edit', offer_id=new_offer.id))
 
