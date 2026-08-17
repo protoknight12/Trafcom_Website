@@ -2254,6 +2254,44 @@ def admin_clients():
     return render_template('admin_clients.html', clients=clients, deliverers=deliverers, active_page='admin_clients')
 
 
+@app.route('/storage')
+@role_required(['admin', 'worker'])
+def storage_dashboard():
+    """
+    Read-only inventory hub (Склад): counts + links into the 3 stock views
+    below, same hub/sub-page pattern as admin_dashboard(). Restocking itself
+    happens on admin_delivery_notes(), not here - each sub-page just links
+    there via a "Бърза заявка" button.
+    """
+    counts = {
+        'materials': MaterialPrice.query.count(),
+        'details': Detail.query.count(),
+        'products': Product.query.count(),
+    }
+    return render_template('storage_dashboard.html', counts=counts, active_page='storage')
+
+
+@app.route('/storage/materials')
+@role_required(['admin', 'worker'])
+def storage_materials():
+    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    return render_template('storage_materials.html', materials=materials, active_page='storage')
+
+
+@app.route('/storage/details')
+@role_required(['admin', 'worker'])
+def storage_details():
+    details = Detail.query.order_by(Detail.name).all()
+    return render_template('storage_details.html', details=details, active_page='storage')
+
+
+@app.route('/storage/products')
+@role_required(['admin', 'worker'])
+def storage_products():
+    products = Product.query.order_by(Product.name).all()
+    return render_template('storage_products.html', products=products, active_page='storage')
+
+
 @app.route('/admin/clients/add', methods=['POST'])
 @login_required
 def admin_add_client():

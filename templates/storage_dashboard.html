@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Склад - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .admin-hub-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 18px;
+        }
+        .admin-hub-card {
+            display: block;
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-md);
+            padding: 22px;
+            text-decoration: none;
+            color: var(--text-main);
+            transition: border-color 0.2s ease, transform 0.2s ease;
+        }
+        .admin-hub-card:hover {
+            border-color: var(--accent-primary);
+            transform: translateY(-2px);
+        }
+        .admin-hub-card h4 {
+            margin: 0 0 6px 0;
+            font-size: 1.05rem;
+        }
+        .admin-hub-card .hub-count {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--accent-primary);
+        }
+        .admin-hub-card p {
+            margin: 4px 0 0 0;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">
+            {{ message }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Склад</h3>
+        <p class="section-subtitle">Текуща наличност по материали, детайли и продукти. За заприхождаване на нова стока използвайте стокова разписка.</p>
+        <div class="admin-hub-grid">
+            <a class="admin-hub-card" href="{{ url_for('storage_materials') }}">
+                <div class="hub-count">{{ counts.materials }}</div>
+                <h4>Материали</h4>
+                <p>Наличност по суровини.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('storage_details') }}">
+                <div class="hub-count">{{ counts.details }}</div>
+                <h4>Детайли</h4>
+                <p>Наличност по готови детайли.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('storage_products') }}">
+                <div class="hub-count">{{ counts.products }}</div>
+                <h4>Продукти</h4>
+                <p>Наличност по готови продукти.</p>
+            </a>
+        </div>
+    </section>
+
+</main>
+
+</body>
+</html>

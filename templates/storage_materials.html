@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Склад - Материали - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+            <div>
+                <h3 style="margin-bottom: 4px;">Склад &middot; Материали</h3>
+                <p class="section-subtitle" style="margin: 0;">Текуща наличност по материали.</p>
+            </div>
+            <a class="btn-submit" style="text-decoration: none;" href="{{ url_for('admin_delivery_notes', type='material') }}">+ Бърза заявка (стокова разписка)</a>
+        </div>
+
+        {% if materials %}
+        <div class="form-group" style="margin-top: 16px; max-width: 360px;">
+            <input type="text" id="materialSearchInput" placeholder="Търсене по име, марка, тип...">
+        </div>
+        {% endif %}
+
+        <div class="table-responsive" style="margin-top: 16px;">
+            <table class="data-table">
+                <thead>
+                <tr>
+                    <th>Материал</th>
+                    <th>Тип</th>
+                    <th class="text-center">Наличност</th>
+                </tr>
+                </thead>
+                <tbody id="materialsTableBody">
+                {% for material in materials %}
+                <tr data-search="{{ (format_material_option(material) ~ ' ' ~ material_type_label(material.type)) | lower }}">
+                    <td>{{ format_material_option(material) }}</td>
+                    <td>{{ material_type_label(material.type) }}</td>
+                    <td class="text-center">{{ material.stock_quantity|round(2) }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="3" class="text-center no-data">Няма добавени материали.</td></tr>
+                {% endfor %}
+                {% if materials %}
+                <tr class="search-empty-row" hidden><td colspan="3" class="text-center no-data">Няма съвпадения.</td></tr>
+                {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+</main>
+<script src="{{ url_for('static', filename='js/table_search.js') }}"></script>
+<script>initTableSearch('materialSearchInput', 'materialsTableBody');</script>
+</body>
+</html>

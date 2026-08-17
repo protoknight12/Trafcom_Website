@@ -778,6 +778,22 @@
     ['dn_material_select', 'dn_detail_select', 'dn_product_select'].forEach(function (id) {
         document.getElementById(id).addEventListener('change', fillParamsFromSelection);
     });
+
+    // Storage pages' "Бърза заявка" buttons link here with ?type=material/
+    // detail/product to preselect the item type radio, skipping a click.
+    (function preselectTypeFromQuery() {
+        const type = new URLSearchParams(window.location.search).get('type');
+        const radio = type && document.querySelector('input[name="dn_item_type"][value="' + type + '"]');
+        if (radio) radio.checked = true;
+    })();
+    document.querySelectorAll('input[name="dn_item_type"]').forEach(function (radio) {
+        if (radio.checked) {
+            document.getElementById('material_selector').style.display = radio.value === 'material' ? 'block' : 'none';
+            document.getElementById('detail_selector').style.display = radio.value === 'detail' ? 'block' : 'none';
+            document.getElementById('product_selector').style.display = radio.value === 'product' ? 'block' : 'none';
+            document.getElementById('detail_material_row').style.display = radio.value === 'detail' ? 'flex' : 'none';
+        }
+    });
     fillParamsFromSelection();
 
     function addDeliveryRow() {
