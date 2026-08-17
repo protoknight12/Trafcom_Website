@@ -19,3 +19,4 @@ migrate_erp_number_unique_int.py
 seed_test_data.py
 /change_admin_password.py
 /static/img/machines/9bef4657e3f24cd2a51fd97b31c1ac36_newpic.gif
+/trafcom_dump.dump

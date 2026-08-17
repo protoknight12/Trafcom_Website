@@ -1870,6 +1870,17 @@ app.jinja_env.globals['material_price_m2_label'] = material_price_m2_label
 app.jinja_env.globals['format_cut_dimensions'] = format_cut_dimensions
 
 
+@app.route('/favicon.ico')
+def favicon():
+    # Browsers request this exact path as a fallback regardless of the
+    # <link rel="icon"> tags in <head> (see templates/partials/favicon.html);
+    # without this route it 404s since static files only serve under /static/.
+    return send_from_directory(
+        os.path.join(app.static_folder, 'img', 'favicon'), 'favicon.ico',
+        mimetype='image/vnd.microsoft.icon'
+    )
+
+
 @app.route('/robots.txt')
 def robots_txt():
     # Public marketing pages (/, /services, /about, /contact) are the only
