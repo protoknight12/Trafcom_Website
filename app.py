@@ -19,6 +19,7 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for, f
 from openpyxl import Workbook
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.exc import IntegrityError
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -2138,7 +2139,12 @@ def register():
         )
 
         db.session.add(new_user)
-        db.session.commit()
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash('Това потребителско име вече съществува.', 'danger')
+            return redirect(url_for('register'))
 
         flash('Регистрацията е успешна!', 'success')
         return redirect(url_for('login'))

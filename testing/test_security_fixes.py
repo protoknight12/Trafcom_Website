@@ -151,6 +151,18 @@ def test_password_length_validation_accepts_valid_length(client, app):
         assert User.query.filter_by(username='okpwuser').first() is not None
 
 
+def test_duplicate_username_registration_does_not_500(client, app):
+    """Registering an existing username must flash an error, not crash with
+    an unhandled IntegrityError (this is what took prod down - see register())."""
+    _register(client, 'dupeuser', 'longenough1')
+    resp = _register(client, 'dupeuser', 'anotherlongpw1')
+    assert resp.status_code == 302
+    assert resp.headers['Location'].endswith('/register')
+
+    html = client.get(resp.headers['Location']).get_data(as_text=True)
+    assert 'вече съществува' in html
+
+
 # ---------------------------------------------------------- Vuln 4: whitelist
 
 def test_machine_status_whitelisting(client, app):
