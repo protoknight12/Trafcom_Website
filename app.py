@@ -949,6 +949,10 @@ class Service(db.Model):
     # EUR per meter (1000 mm) of cut length - only used when pricing_mode == 'length'.
     price_per_meter_eur = db.Column(db.Float, nullable=True)
     description = db.Column(db.Text, nullable=True)
+    # Whether the public /services page shows this service's hourly rate -
+    # see services.html's "ЦЕНИ НА УСЛУГИ" section. Toggled per-service from
+    # /admin/services; some services stay listed there without a public price.
+    show_price = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     machines = db.relationship('Machine', secondary='service_machine', backref='services')
 
@@ -3870,6 +3874,7 @@ def admin_add_service():
         pricing_mode=pricing_mode,
         price_per_meter_eur=price_per_meter_eur,
         description=request.form.get('description', '').strip() or None,
+        show_price='show_price' in request.form,
         machines=_selected_machines(request.form),
     )
     db.session.add(new_service)
@@ -3903,10 +3908,12 @@ def admin_update_service(service_id):
     service.pricing_mode = pricing_mode
     service.price_per_meter_eur = price_per_meter_eur
     service.description = request.form.get('description', '').strip() or None
+    service.show_price = 'show_price' in request.form
     service.machines = _selected_machines(request.form)
     log_action(describe_changes(f'услуга "{service.name}"', service, {
         'name': 'име', 'machine_type': 'тип машина', 'price_per_hour_eur': 'цена €/час',
         'pricing_mode': 'режим ценообр.', 'price_per_meter_eur': 'цена €/м', 'description': 'описание',
+        'show_price': 'видима цена в /services',
     }))
     db.session.commit()
     flash(f'Услугата "{name}" беше обновена успешно.', 'success')

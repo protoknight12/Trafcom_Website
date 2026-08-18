@@ -124,6 +124,9 @@
                 <label for="new_service_description">Описание (незадължително)</label>
                 <input type="text" id="new_service_description" name="description" placeholder="показва се на страница Услуги">
             </div>
+            <div class="form-group">
+                <label><input type="checkbox" name="show_price" checked> Показвай цената на страница /services</label>
+            </div>
             <button type="submit" class="btn-submit">Добави услуга</button>
         </form>
     </section>
@@ -155,6 +158,7 @@
                     <th>Ценообразуване</th>
                     <th>Цена на метър (€)</th>
                     <th>Описание</th>
+                    <th class="text-center">Цена в /services</th>
                     <th class="text-right">Действие</th>
                     <th class="text-right">Изтриване</th>
                 </tr>
@@ -203,6 +207,7 @@
                     </td>
                     <td><input type="text" name="description" form="{{ form_id }}" value="{{ service.description or '' }}"
                                class="service-price-input" style="width: 180px;" placeholder="Описание"></td>
+                    <td class="text-center"><input type="checkbox" name="show_price" form="{{ form_id }}" {% if service.show_price %}checked{% endif %}></td>
                     <td class="text-right"><button type="submit" form="{{ form_id }}" class="btn-save-price">Запази</button></td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_service', service_id=service.id) }}" method="POST"
@@ -214,7 +219,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="9" class="text-center no-data">Няма добавени услуги.</td>
+                    <td colspan="10" class="text-center no-data">Няма добавени услуги.</td>
                 </tr>
                 {% endfor %}
                 </tbody>
