@@ -1,3 +1,10 @@
+/* Native cross-page fade (View Transitions API, Chrome/Edge 126+) - a plain
+   multi-page app gets a smooth fade between full page loads for free.
+   Unsupported browsers just ignore this and navigate as before. */
+@view-transition {
+    navigation: auto;
+}
+
 /* ==========================================================================
    GLOBAL VARIABLES & THEMING (Cyber-Dark & Glow Purple)
    ========================================================================== */
@@ -168,37 +175,96 @@ body {
     margin-bottom: 8px;
     color: var(--text-muted);
 }
-.form-group input[type="text"],
-.form-group input[type="password"],
-.form-group input[type="number"],
-.form-group select {
+/* Applied globally (not just inside .form-group) so every input/select in
+   the app - including the inline per-row edit forms in admin tables - gets
+   the same dark theming instead of falling back to the browser's default
+   white control. Deliberately doesn't set width/box-sizing here - table-row
+   inputs rely on their own (often narrower, e.g. .material-price-input)
+   sizing; .form-group below still owns the "full-width form field" look. */
+input[type="text"],
+input[type="password"],
+input[type="number"],
+input[type="date"],
+input[type="email"],
+input[type="tel"],
+input[type="search"],
+textarea,
+select {
     background-color: var(--bg-input);
     border: 1px solid var(--border-color);
     color: var(--text-main);
-    padding: 12px 16px;
+    padding: 10px 14px;
     border-radius: var(--border-radius-sm);
     font-size: 0.95rem;
     outline: none;
-    width: 100%;
     box-sizing: border-box;
+    font-family: inherit;
     transition: all 0.2s ease;
 }
-.form-group input:focus,
-.form-group select:focus {
+.form-group input,
+.form-group select,
+.form-group textarea {
+    width: 100%;
+    padding: 12px 16px;
+}
+input:focus, textarea:focus, select:focus {
     border-color: var(--accent-secondary);
     box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.15);
+}
+select {
+    /* Custom chevron to replace the browser's native (light-themed) arrow,
+       which otherwise stays white/light and clashes with the dark fill. */
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%2394a3b8' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 14px center;
+    padding-right: 36px;
+    cursor: pointer;
+}
+select option {
+    background-color: var(--bg-input);
+    color: var(--text-main);
+}
+/* File pickers otherwise render as an unstyled OS-native control - jarring
+   light-gray button against this dark theme. */
+input[type="file"] {
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    color: var(--text-muted);
+    padding: 8px;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+input[type="file"]::file-selector-button {
+    background-color: var(--accent-primary);
+    color: var(--text-main);
+    border: none;
+    border-radius: var(--border-radius-sm);
+    padding: 8px 14px;
+    margin-right: 12px;
+    font-family: inherit;
+    font-weight: 600;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+input[type="file"]::file-selector-button:hover {
+    background-color: var(--accent-secondary);
+}
+input[type="checkbox"], input[type="radio"] {
+    accent-color: var(--accent-primary);
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    flex-shrink: 0;
 }
 .checkbox-group {
     flex-direction: row;
     align-items: center;
     gap: 10px;
     margin: 24px 0;
-}
-.checkbox-group input[type="checkbox"] {
-    accent-color: var(--accent-primary);
-    width: 16px;
-    height: 16px;
-    cursor: pointer;
 }
 .checkbox-group label {
     margin-bottom: 0;
@@ -404,6 +470,29 @@ button, .btn {
     color: var(--danger-text);
     border-color: rgba(239, 68, 68, 0.3);
     box-shadow: 0 4px 12px rgba(239, 68, 68, 0.05);
+}
+
+/* ==========================================================================
+   MODAL FLUIDITY (quick-create modals - order_create.html, product_edit.html,
+   admin_delivery_notes.html, detail_dxf_dashboard.html)
+   ========================================================================== */
+/* These modals are plain `<div id="...Modal" style="display:none">` overlays
+   toggled from JS via style.display = 'flex'/'none' (see openQuickXModal()/
+   closeQuickXModal() in each template) - not a shared class. Animating on
+   the [id$="Modal"] attribute selector means every one of them gets a fade/
+   pop-in for free, no JS or template changes needed: switching a child's
+   display from none to flex always restarts its CSS animation. */
+@keyframes modalOverlayFadeIn {
+    from { background-color: rgba(0, 0, 0, 0); }
+}
+@keyframes modalBoxPopIn {
+    from { opacity: 0; transform: translateY(8px) scale(0.97); }
+}
+div[id$="Modal"] {
+    animation: modalOverlayFadeIn 0.2s ease;
+}
+div[id$="Modal"] > .admin-card {
+    animation: modalBoxPopIn 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* Keyframe Render Mechanics */
@@ -638,6 +727,32 @@ button, .btn {
 .dropdown:hover .dropdown-arrow {
     transform: rotate(180deg);
     color: var(--accent-secondary);
+}
+
+/* Grouped variant (see partials/navbar.html's "Управление" menu) - plain
+   section labels, not links, to break up a long flat list of pages. */
+.dropdown-content-grouped {
+    max-height: 80vh;
+    overflow-y: auto;
+}
+.dropdown-group-label {
+    padding: 10px 20px 4px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    opacity: 0.7;
+}
+.dropdown-content-grouped > .dropdown-group-label:first-child {
+    padding-top: 4px;
+}
+.dropdown-home-link {
+    font-weight: 700 !important;
+    color: var(--text-main) !important;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 12px !important;
+    margin-bottom: 4px;
 }
 
 /* ==========================================================================

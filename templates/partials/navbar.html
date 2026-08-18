@@ -28,27 +28,40 @@
                     {% if current_user.is_admin or current_user.is_worker or current_user.can_edit_content %}
                         <div class="dropdown">
                             <a class="dropdown-trigger {{ 'active-nav-link' if active_page in ['admin', 'admin_users', 'admin_materials', 'admin_details', 'admin_products', 'admin_services', 'admin_clients', 'admin_offers', 'admin_delivery_notes', 'production', 'admin_missing_stock', 'machines', 'admin_power', 'content', 'storage', 'admin_log'] else '' }}" href="#" tabindex="0" onclick="event.preventDefault()">Управление <span class="dropdown-arrow">▼</span></a>
-                            <div class="dropdown-content">
+                            <div class="dropdown-content dropdown-content-grouped">
                                 {% if current_user.is_admin %}
-                                    <a href="{{ url_for('admin_dashboard') }}">Админ Панел</a>
+                                    <a href="{{ url_for('admin_dashboard') }}" class="dropdown-home-link">Админ Панел</a>
+                                {% endif %}
+                                {% if current_user.is_admin %}
+                                    <div class="dropdown-group-label">Каталог</div>
                                     <a href="{{ url_for('admin_users') }}">Потребители</a>
                                     <a href="{{ url_for('admin_materials') }}">Материали</a>
                                     <a href="{{ url_for('admin_details') }}">Детайли</a>
                                     <a href="{{ url_for('admin_products') }}">Продукти</a>
                                     <a href="{{ url_for('admin_services') }}">Услуги (цени/час)</a>
+                                {% endif %}
+                                {% if current_user.is_admin %}
+                                    <div class="dropdown-group-label">Продажби</div>
                                     <a href="{{ url_for('admin_clients') }}">Клиенти / Куриери</a>
                                     <a href="{{ url_for('admin_offers') }}">Оферти</a>
-                                    <a href="{{ url_for('admin_power') }}">Консумация</a>
-                                    <a href="{{ url_for('admin_log') }}">Лог</a>
                                 {% endif %}
                                 {% if current_user.is_admin or current_user.is_worker %}
-                                    <a href="{{ url_for('storage_dashboard') }}">Склад</a>
+                                    <div class="dropdown-group-label">Производство</div>
                                     <a href="{{ url_for('admin_production_report') }}">Справка Производство</a>
-                                    <a href="{{ url_for('admin_delivery_notes') }}">Стокови Разписки</a>
                                     <a href="{{ url_for('admin_missing_stock') }}">Липсваща Наличност</a>
                                 {% endif %}
+                                {% if current_user.is_admin or current_user.is_worker %}
+                                    <div class="dropdown-group-label">Склад</div>
+                                    <a href="{{ url_for('storage_dashboard') }}">Склад</a>
+                                    <a href="{{ url_for('admin_delivery_notes') }}">Стокови Разписки</a>
+                                {% endif %}
                                 {% if current_user.is_admin or current_user.is_worker or current_user.can_edit_content %}
+                                    <div class="dropdown-group-label">Система</div>
                                     <a href="{{ url_for('list_machines') }}">Машини</a>
+                                {% endif %}
+                                {% if current_user.is_admin %}
+                                    <a href="{{ url_for('admin_power') }}">Консумация</a>
+                                    <a href="{{ url_for('admin_log') }}">Лог</a>
                                 {% endif %}
                                 {% if current_user.can_edit_content %}
                                     <a href="{{ url_for('admin_content') }}">Съдържание</a>

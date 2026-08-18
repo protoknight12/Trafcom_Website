@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import json
 import math
@@ -15,7 +15,7 @@ import urllib.error
 from html import escape as html_escape
 from html.parser import HTMLParser
 from concurrent.futures import ThreadPoolExecutor
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory, send_file, g
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory, send_file, g, session
 from openpyxl import Workbook
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import inspect as sa_inspect
@@ -23,7 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from flask_wtf.csrf import CSRFProtect
+from flask_wtf.csrf import CSRFProtect, CSRFError
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import ezdxf
@@ -61,6 +61,11 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 # SameSite, the session cookie's cross-site behavior is left to each
 # browser's own default rather than a value this app controls.
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+# Idle-timeout logout: a session cookie is valid for this long since the
+# user's last request, not since login. Flask refreshes the cookie's
+# expiry on every request by default (SESSION_REFRESH_EACH_REQUEST), so an
+# active user never gets logged out mid-work - only a genuinely idle one.
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=10)
 
 # All state-changing (POST/PUT/PATCH/DELETE) requests must carry a valid CSRF
 # token - either the `csrf_token` form field or an `X-CSRFToken` header for
@@ -2118,6 +2123,7 @@ def login():
         user = User.query.filter_by(username=username).first()
 
         if user and check_password_hash(user.password, password):
+            session.permanent = True
             login_user(user)
             if user.role == 'admin':
                 return redirect(url_for('admin_dashboard'))
@@ -6863,6 +6869,41 @@ def admin_offer_print(offer_id):
     """
     offer = Offer.query.get_or_404(offer_id)
     return render_template('admin_offer_print.html', offer=offer)
+
+
+# ----------------- CUSTOM ERROR PAGES -----------------
+# One shared template (error.html), parameterized per status code, instead
+# of a near-duplicate page per code.
+@app.errorhandler(404)
+def handle_404(e):
+    return render_template('error.html', code=404, title='Страницата не е намерена',
+                            message='Проверете адреса или се върнете към началото.'), 404
+
+
+@app.errorhandler(403)
+def handle_403(e):
+    return render_template('error.html', code=403, title='Нямате достъп',
+                            message='Нямате права за тази страница.'), 403
+
+
+@app.errorhandler(429)
+def handle_429(e):
+    return render_template('error.html', code=429, title='Твърде много опити',
+                            message='Изчакайте малко и опитайте отново.'), 429
+
+
+@app.errorhandler(500)
+def handle_500(e):
+    return render_template('error.html', code=500, title='Възникна грешка',
+                            message='Нещо се обърка от наша страна. Опитайте отново по-късно.'), 500
+
+
+@app.errorhandler(CSRFError)
+def handle_csrf_error(e):
+    # Expired/missing CSRF token - most often a form left open too long
+    # across a login-session boundary, not an attack in the normal case.
+    return render_template('error.html', code=400, title='Изтекла сесия на формата',
+                            message='Презаредете страницата и опитайте отново.'), 400
 
 
 if __name__ == '__main__':
