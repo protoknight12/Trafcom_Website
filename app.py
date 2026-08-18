@@ -1093,6 +1093,17 @@ def get_text(key, default=''):
     return row.content if row else default
 
 
+_REGISTRATION_CLOSED_KEY = 'settings.registration_closed'
+
+
+def registration_closed():
+    """Site-wide new-account lock, stored as a '1'/'0' row in the same
+    EditableText key/value table used for editable prose - no new table
+    needed for one boolean flag. Existing users can still log in; this only
+    gates /register."""
+    return get_text(_REGISTRATION_CLOSED_KEY, '0') == '1'
+
+
 class Offer(db.Model):
     """
     A generated sales offer (multi-line quote), rendered as a browser-print
@@ -2121,6 +2132,10 @@ def register():
     if current_user.is_authenticated:
         return redirect(url_for('index'))
 
+    if registration_closed():
+        flash('Сайтът е в момента на техническа поддръжка. Регистрацията на нови профили е временно спряна.', 'danger')
+        return redirect(url_for('login'))
+
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password', '')
@@ -2361,7 +2376,25 @@ def admin_users():
         flash('Нямате достъп до тази страница.')
         return redirect(url_for('dashboard'))
     all_users = User.query.filter(User.id != current_user.id).all()
-    return render_template('admin_users.html', users=all_users, active_page='admin_users')
+    return render_template('admin_users.html', users=all_users, registration_closed=registration_closed(), active_page='admin_users')
+
+
+@app.route('/admin/users/toggle-registration', methods=['POST'])
+@login_required
+def admin_toggle_registration():
+    if not current_user.is_admin:
+        return jsonify({'error': 'Неоторизиран достъп'}), 403
+
+    closed = request.form.get('registration_closed') == '1'
+    row = db.session.get(EditableText, _REGISTRATION_CLOSED_KEY)
+    if row:
+        row.content = '1' if closed else '0'
+    else:
+        db.session.add(EditableText(key=_REGISTRATION_CLOSED_KEY, content='1' if closed else '0'))
+    db.session.commit()
+    log_action('Регистрацията на нови профили беше ' + ('спряна' if closed else 'възобновена'))
+    flash('Регистрацията на нови профили е ' + ('спряна.' if closed else 'отворена отново.'), 'success')
+    return redirect(url_for('admin_users'))
 
 
 @app.route('/admin/log')

@@ -49,6 +49,20 @@
                 <button type="submit" class="btn-submit">Регистрация на акаунт</button>
             </form>
         </section>
+
+        <section class="admin-card">
+            <h3>Контрол на регистрациите</h3>
+            <form action="{{ url_for('admin_toggle_registration') }}" method="POST" class="admin-form">
+                {% include 'partials/csrf_field.html' %}
+                <input type="hidden" name="registration_closed" value="{{ '0' if registration_closed else '1' }}">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                    <input type="checkbox" {% if registration_closed %}checked{% endif %}
+                           onclick="if (this.checked && !confirm('Спиране на регистрацията на нови профили - потвърждавате ли?')) { this.checked = false; return; } this.form.registration_closed.value = this.checked ? '1' : '0'; this.form.submit();">
+                    Спри регистрацията на нови профили (техническа поддръжка)
+                </label>
+                <p class="section-subtitle" style="margin-top: 6px;">Вече регистрираните потребители продължават да могат да влизат в профилите си.</p>
+            </form>
+        </section>
     </div>
 
     <section class="admin-card">
