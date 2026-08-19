@@ -380,20 +380,31 @@
                     const canSelect = item.id != null && (item.product_id || item.detail_id);
                     const cb = document.createElement('input');
                     cb.type = 'checkbox';
+                    const cbTd = document.createElement('td');
                     if (!canSelect) {
                         cb.disabled = true;
                         cb.title = item.id == null
                             ? 'Запази офертата, за да избереш този ред.'
                             : 'Текстов ред - няма връзка към продукт/детайл.';
+                        cbTd.appendChild(cb);
+                        // A disabled checkbox alone reads as broken rather than
+                        // intentional - spell out *why* right next to it instead
+                        // of relying on a hover-only title tooltip.
+                        if (item.id == null) {
+                            const note = document.createElement('div');
+                            note.className = 'text-small text-muted';
+                            note.style.whiteSpace = 'nowrap';
+                            note.textContent = 'запази офертата';
+                            cbTd.appendChild(note);
+                        }
                     } else {
                         cb.checked = selectedItemIds.has(item.id);
                         cb.addEventListener('change', function () {
                             if (cb.checked) selectedItemIds.add(item.id); else selectedItemIds.delete(item.id);
                             document.getElementById('createOrderBtn').disabled = selectedItemIds.size === 0;
                         });
+                        cbTd.appendChild(cb);
                     }
-                    const cbTd = document.createElement('td');
-                    cbTd.appendChild(cb);
                     tr.appendChild(cbTd);
                 }
 
