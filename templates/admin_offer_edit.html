@@ -168,6 +168,7 @@
             <table class="users-table" id="cartTable">
                 <thead>
                 <tr>
+                    {% if offer %}<th></th>{% endif %}
                     <th>ID</th>
                     <th>Снимка</th>
                     <th>Наименование / описание</th>
@@ -180,11 +181,11 @@
                 </tr>
                 </thead>
                 <tbody id="cartTableBody">
-                    <tr id="cartEmptyRow"><td colspan="9" class="text-center no-data">Все още няма добавени редове.</td></tr>
+                    <tr id="cartEmptyRow"><td colspan="{{ 10 if offer else 9 }}" class="text-center no-data">Все още няма добавени редове.</td></tr>
                 </tbody>
                 <tfoot>
                     <tr class="cart-total-row">
-                        <td colspan="7" class="text-right">Обща сума:</td>
+                        <td colspan="{{ 8 if offer else 7 }}" class="text-right">Обща сума:</td>
                         <td class="text-right" id="cartTotal">0.00 €</td>
                         <td></td>
                     </tr>
@@ -196,14 +197,36 @@
         <button type="submit" form="offerForm" class="btn-submit" id="submitOfferBtn" style="margin-top: 1rem;" disabled>Запази офертата</button>
     </section>
 
+    {% if offer %}
+    <section class="admin-card">
+        <h3>Създаване на поръчка от избраните редове</h3>
+        <p class="section-subtitle">
+            Отметни продукт/детайл редовете по-горе (текстовите редове нямат връзка към каталога и не могат да бъдат
+            избрани), после натисни бутона. Ако редовете са добавени в тази сесия, първо запази офертата.
+        </p>
+        <form action="{{ url_for('admin_offer_create_order', offer_id=offer.id) }}" method="POST" class="admin-form" id="createOrderForm">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="order_customer_name">Име на клиент</label>
+                <input type="text" id="order_customer_name" name="customer_name"
+                       value="{{ offer.client.name if offer.client else (offer.object_title or '') }}" required>
+            </div>
+            <div id="createOrderItemIds"></div>
+            <button type="submit" class="btn-submit" id="createOrderBtn" disabled>Създай поръчка от избраните редове</button>
+        </form>
+    </section>
+    {% endif %}
+
 </main>
 
 <script>
     const PRODUCTS = {{ products|tojson }};
     const DETAILS = {{ details|tojson }};
     const OFFER_IMAGE_URL_PREFIX = {{ url_for('static', filename='uploads/offers/')|tojson }};
+    const HAS_OFFER = {{ 'true' if offer else 'false' }};
     let cart = {{ initial_items|tojson }};
     let pendingImageFilename = null;
+    let selectedItemIds = new Set();
 
     document.getElementById('item_image_input').addEventListener('change', function () {
         const file = this.files[0];
@@ -286,6 +309,8 @@
         if (descriptionHtml === '<br>') descriptionHtml = '';
 
         let name;
+        let productId = null;
+        let detailId = null;
         if (type === 'text') {
             name = document.getElementById('item_name_manual').value.trim();
         } else {
@@ -293,6 +318,7 @@
             const source = (type === 'product' ? PRODUCTS : DETAILS).find(function (x) { return x.id === parseInt(sel.value, 10); });
             if (!source) { alert('Моля изберете ' + (type === 'product' ? 'продукт' : 'детайл') + '.'); return; }
             name = source.name;
+            if (type === 'product') productId = source.id; else detailId = source.id;
         }
 
         const code = document.getElementById('item_code').value.trim();
@@ -318,6 +344,7 @@
             dimensions: readDimensions(), quantity: qty,
             unit: document.getElementById('item_unit').value.trim(), unit_price: unitPrice,
             image_filename: pendingImageFilename || '',
+            product_id: productId, detail_id: detailId,
         });
 
         document.getElementById('item_code').value = '';
@@ -332,7 +359,8 @@
     }
 
     function removeFromCart(index) {
-        cart.splice(index, 1);
+        const removed = cart.splice(index, 1)[0];
+        if (removed && removed.id != null) selectedItemIds.delete(removed.id);
         renderCart();
     }
 
@@ -341,12 +369,33 @@
         body.innerHTML = '';
 
         if (cart.length === 0) {
-            body.innerHTML = '<tr id="cartEmptyRow"><td colspan="8" class="text-center no-data">Все още няма добавени редове.</td></tr>';
+            body.innerHTML = '<tr id="cartEmptyRow"><td colspan="' + (HAS_OFFER ? 10 : 9) + '" class="text-center no-data">Все още няма добавени редове.</td></tr>';
         } else {
             cart.forEach(function (item, idx) {
                 const tr = document.createElement('tr');
                 const hasLineTotal = item.quantity != null && item.unit_price != null;
                 const lineTotal = hasLineTotal ? item.quantity * item.unit_price : null;
+
+                if (HAS_OFFER) {
+                    const canSelect = item.id != null && (item.product_id || item.detail_id);
+                    const cb = document.createElement('input');
+                    cb.type = 'checkbox';
+                    if (!canSelect) {
+                        cb.disabled = true;
+                        cb.title = item.id == null
+                            ? 'Запази офертата, за да избереш този ред.'
+                            : 'Текстов ред - няма връзка към продукт/детайл.';
+                    } else {
+                        cb.checked = selectedItemIds.has(item.id);
+                        cb.addEventListener('change', function () {
+                            if (cb.checked) selectedItemIds.add(item.id); else selectedItemIds.delete(item.id);
+                            document.getElementById('createOrderBtn').disabled = selectedItemIds.size === 0;
+                        });
+                    }
+                    const cbTd = document.createElement('td');
+                    cbTd.appendChild(cb);
+                    tr.appendChild(cbTd);
+                }
 
                 tr.appendChild(cell(item.code || ''));
                 const thumbHtml = item.image_filename
@@ -403,6 +452,20 @@
     });
 
     document.getElementById('discount_percent').addEventListener('input', renderCart);
+
+    if (HAS_OFFER) {
+        document.getElementById('createOrderForm').addEventListener('submit', function () {
+            const container = document.getElementById('createOrderItemIds');
+            container.innerHTML = '';
+            selectedItemIds.forEach(function (id) {
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'item_ids';
+                input.value = id;
+                container.appendChild(input);
+            });
+        });
+    }
 
     renderCart();
 </script>

@@ -1173,6 +1173,13 @@ class OfferItem(db.Model):
     offer_id = db.Column(db.Integer, db.ForeignKey('offer.id'), nullable=False)
     position = db.Column(db.Integer, nullable=False, default=0)
     item_type = db.Column(db.String(10), nullable=False)  # 'product', 'detail', 'text'
+    # Which catalog row this line was picked from, if any (nullable - 'text'
+    # rows and hand-typed product/detail names have neither). Only used to
+    # let admin_offer_create_order() turn a selected line back into a real
+    # OrderItem; every other display path still uses the frozen name/price
+    # columns below, never these.
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=True)
+    detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=True)
     code = db.Column(db.String(50), nullable=True)
     name = db.Column(db.String(255), nullable=True)
     description_html = db.Column(db.Text, nullable=True)
@@ -1187,6 +1194,8 @@ class OfferItem(db.Model):
 
     offer = db.relationship('Offer', backref=db.backref(
         'items', order_by='OfferItem.position', cascade='all, delete-orphan'))
+    product = db.relationship('Product')
+    detail = db.relationship('Detail')
 
     @property
     def line_total(self):
@@ -6660,10 +6669,11 @@ def _offer_items_json(offer):
     if not offer:
         return []
     return [{
-        'type': item.item_type, 'code': item.code or '', 'name': item.name or '',
+        'id': item.id, 'type': item.item_type, 'code': item.code or '', 'name': item.name or '',
         'description_html': item.description_html or '', 'dimensions': item.dimensions or '',
         'quantity': item.quantity, 'unit': item.unit or '', 'unit_price': item.unit_price,
         'image_filename': item.image_filename or '',
+        'product_id': item.product_id, 'detail_id': item.detail_id,
     } for item in offer.items]
 
 
@@ -6752,11 +6762,23 @@ def _save_offer(offer):
         quantity = _optional_row_float('quantity')
         unit_price = _optional_row_float('unit_price')
 
+        product_id = None
+        detail_id = None
         if item_type in ('product', 'detail'):
             # A catalog pick must be a real quantity/price, same as before.
             if not name or quantity is None or quantity <= 0 or unit_price is None or unit_price < 0:
                 continue
             unit = (row.get('unit') or '').strip() or 'бр'
+            # Catalog id is optional even here - only set when the row came
+            # from the product/detail picker (not a hand-edited name); used
+            # solely by admin_offer_create_order() to turn the line back
+            # into a real OrderItem.
+            if item_type == 'product':
+                product_id = row.get('product_id')
+                product_id = int(product_id) if isinstance(product_id, (int, str)) and str(product_id).isdigit() else None
+            else:
+                detail_id = row.get('detail_id')
+                detail_id = int(detail_id) if isinstance(detail_id, (int, str)) and str(detail_id).isdigit() else None
         else:
             # Free-typed row: every field is optional, but keep it only if
             # it carries *something* (a name, code, or descriptive text) -
@@ -6770,6 +6792,7 @@ def _save_offer(offer):
 
         db.session.add(OfferItem(
             offer=offer, position=position, item_type=item_type,
+            product_id=product_id, detail_id=detail_id,
             code=code, name=name, description_html=description_html,
             dimensions=(row.get('dimensions') or '').strip() or None,
             quantity=quantity, unit=unit, unit_price=unit_price,
@@ -6807,6 +6830,70 @@ def admin_offer_edit(offer_id):
     products, details, clients = _offer_picker_context()
     return render_template('admin_offer_edit.html', offer=offer, initial_items=_offer_items_json(offer),
                             products=products, details=details, clients=clients, active_page='admin_offers')
+
+
+@app.route('/admin/offers/<int:offer_id>/create-order', methods=['POST'])
+@role_required('admin')
+def admin_offer_create_order(offer_id):
+    """Turns the checked product/detail lines of an existing Offer into a new
+    Order, via the same product-recipe-snapshot / current-catalog-price logic
+    as create_order()'s cart loop (component snapshot for products,
+    detail.calculated_price for standalone details) - offer lines don't carry
+    per-detail operations/attachments, so those parts of that loop don't apply
+    here. Text lines have no product_id/detail_id (see OfferItem) and can't be
+    selected."""
+    offer = Offer.query.get_or_404(offer_id)
+    item_ids = request.form.getlist('item_ids', type=int)
+    customer_name = request.form.get('customer_name', '').strip()
+    if not customer_name:
+        flash('Моля въведете име на клиент за новата поръчка.', 'danger')
+        return redirect(url_for('admin_offer_edit', offer_id=offer.id))
+
+    selected = [oi for oi in offer.items if oi.id in item_ids and (oi.product_id or oi.detail_id)]
+    if not selected:
+        flash('Изберете поне един ред (продукт/детайл) от офертата.', 'danger')
+        return redirect(url_for('admin_offer_edit', offer_id=offer.id))
+
+    new_order = Order(order_number=generate_order_number(), user_id=current_user.id,
+                       customer_name=customer_name, status='new', client_id=offer.client_id)
+    db.session.add(new_order)
+    db.session.flush()
+
+    added_any = False
+    for oi in selected:
+        qty = int(oi.quantity) if oi.quantity and oi.quantity >= 1 else 1
+        if oi.product_id:
+            product = Product.query.get(oi.product_id)
+            if not product:
+                continue
+            pricing = calculate_product_pricing(product)
+            order_item = OrderItem(order_id=new_order.id, product_id=product.id,
+                                    quantity_ordered=qty, unit_price=pricing['sell_price'])
+            db.session.add(order_item)
+            db.session.flush()
+            for pd in product.product_details:
+                db.session.add(OrderItemComponent(
+                    order_item_id=order_item.id, detail_id=pd.detail_id,
+                    detail_name_snapshot=pd.detail.name, quantity_needed=pd.quantity * qty
+                ))
+            added_any = True
+        elif oi.detail_id:
+            detail = Detail.query.get(oi.detail_id)
+            if not detail:
+                continue
+            db.session.add(OrderItem(order_id=new_order.id, detail_id=detail.id,
+                                      quantity_ordered=qty, unit_price=detail.calculated_price))
+            added_any = True
+
+    if not added_any:
+        db.session.rollback()
+        flash('Избраните редове вече не съответстват на съществуващи продукти/детайли.', 'danger')
+        return redirect(url_for('admin_offer_edit', offer_id=offer.id))
+
+    db.session.commit()
+    log_action(f'Създадена поръчка {new_order.order_number} от оферта № {offer.number} за "{customer_name}" ({len(selected)} артикул(и))')
+    flash(f'Поръчка {new_order.order_number} беше създадена от офертата.', 'success')
+    return redirect(url_for('admin_production_report'))
 
 
 @app.route('/admin/offers/<int:offer_id>/delete', methods=['POST'])
