@@ -121,6 +121,41 @@ def test_create_order_from_selected_offer_items(client):
         assert detail_line.unit_price == 17.5
 
 
+def test_create_order_respects_qty_override(client):
+    c, offer_id, product_item_id, detail_item_id, _text_item_id, _product_id, detail_id = client
+    res = c.post(f'/admin/offers/{offer_id}/create-order', data={
+        'customer_name': 'QA Override Customer',
+        'item_ids': [str(product_item_id), str(detail_item_id)],
+        f'qty_{product_item_id}': '9',
+        f'qty_{detail_item_id}': '20',
+    })
+    assert res.status_code == 302
+    with flask_app.app_context():
+        order = Order.query.filter_by(customer_name='QA Override Customer').first()
+        items = OrderItem.query.filter_by(order_id=order.id).all()
+        product_line = next(i for i in items if i.product_id is not None)
+        detail_line = next(i for i in items if i.detail_id == detail_id)
+        assert product_line.quantity_ordered == 9  # overridden, not the offer's 3
+        assert detail_line.quantity_ordered == 20  # overridden, not the offer's 4
+        # the product's component snapshot must scale with the overridden qty too
+        component = OrderItemComponent.query.filter_by(order_item_id=product_line.id).first()
+        assert component.quantity_needed == 2 * 9
+
+
+def test_create_order_ignores_invalid_qty_override(client):
+    c, offer_id, product_item_id, _detail_item_id, _text_item_id, _product_id, _detail_id = client
+    res = c.post(f'/admin/offers/{offer_id}/create-order', data={
+        'customer_name': 'QA Bad Override',
+        'item_ids': [str(product_item_id)],
+        f'qty_{product_item_id}': '-5',  # invalid - must fall back to the offer's own quantity
+    })
+    assert res.status_code == 302
+    with flask_app.app_context():
+        order = Order.query.filter_by(customer_name='QA Bad Override').first()
+        item = OrderItem.query.filter_by(order_id=order.id).first()
+        assert item.quantity_ordered == 3
+
+
 def test_create_order_requires_customer_name(client):
     c, offer_id, product_item_id, _detail_item_id, _text_item_id, _product_id, _detail_id = client
     res = c.post(f'/admin/offers/{offer_id}/create-order', data={

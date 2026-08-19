@@ -6877,7 +6877,18 @@ def admin_offer_create_order(offer_id):
 
     added_any = False
     for oi in selected:
-        qty = int(oi.quantity) if oi.quantity and oi.quantity >= 1 else 1
+        # The offer's own quantity is just the default - the order-creation
+        # panel lets an admin tweak it per line before creating the order
+        # (e.g. quoted 2000 but only ordering 500 right now), via a
+        # `qty_<offer_item_id>` field alongside each checked item_id. Falls
+        # back to the offer's quantity when that field is missing/invalid.
+        qty_override = request.form.get(f'qty_{oi.id}', '')
+        try:
+            qty = int(float(qty_override)) if qty_override else 0
+        except ValueError:
+            qty = 0
+        if qty < 1:
+            qty = int(oi.quantity) if oi.quantity and oi.quantity >= 1 else 1
         if oi.product_id:
             product = Product.query.get(oi.product_id)
             if not product:

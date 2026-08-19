@@ -242,6 +242,7 @@
     let cart = {{ initial_items|tojson }};
     let pendingImageFilename = null;
     let selectedItemIds = new Set();
+    let qtyOverrides = {}; // offer item id -> edited order quantity (order-selector panel)
 
     document.getElementById('item_image_input').addEventListener('change', function () {
         const file = this.files[0];
@@ -467,7 +468,27 @@
                 cbTd.appendChild(cb);
                 tr.appendChild(cbTd);
                 tr.appendChild(cell('<strong>' + item.name + '</strong>'));
-                tr.appendChild(cell(item.quantity != null ? item.quantity : '', { className: 'text-center' }));
+
+                // Quantity here is just the offer's default, editable per line
+                // before creating the order (e.g. quoted 2000 but ordering
+                // 500 now) - qtyOverrides keeps the typed value across
+                // re-renders (adding another row, changing the discount, ...)
+                // instead of snapping back to the offer's quantity each time.
+                const qtyTd = document.createElement('td');
+                qtyTd.className = 'text-center';
+                const qtyInput = document.createElement('input');
+                qtyInput.type = 'number';
+                qtyInput.min = '1';
+                qtyInput.step = '1';
+                qtyInput.style.width = '80px';
+                qtyInput.id = 'qty-override-' + item.id;
+                qtyInput.value = qtyOverrides.hasOwnProperty(item.id)
+                    ? qtyOverrides[item.id]
+                    : (item.quantity != null ? Math.max(1, Math.round(item.quantity)) : 1);
+                qtyInput.addEventListener('input', function () { qtyOverrides[item.id] = qtyInput.value; });
+                qtyTd.appendChild(qtyInput);
+                tr.appendChild(qtyTd);
+
                 tr.appendChild(cell(item.unit_price != null ? item.unit_price.toFixed(2) + ' €' : '', { className: 'text-right' }));
                 body.appendChild(tr);
             });
@@ -500,11 +521,18 @@
             const container = document.getElementById('createOrderItemIds');
             container.innerHTML = '';
             selectedItemIds.forEach(function (id) {
-                const input = document.createElement('input');
-                input.type = 'hidden';
-                input.name = 'item_ids';
-                input.value = id;
-                container.appendChild(input);
+                const idInput = document.createElement('input');
+                idInput.type = 'hidden';
+                idInput.name = 'item_ids';
+                idInput.value = id;
+                container.appendChild(idInput);
+
+                const qtyEl = document.getElementById('qty-override-' + id);
+                const qtyInput = document.createElement('input');
+                qtyInput.type = 'hidden';
+                qtyInput.name = 'qty_' + id;
+                qtyInput.value = qtyEl ? qtyEl.value : '';
+                container.appendChild(qtyInput);
             });
         });
     }
