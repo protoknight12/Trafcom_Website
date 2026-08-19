@@ -81,7 +81,7 @@
                         <span style="color: #a56cff; font-weight: 600;">[ДЕТАЙЛ]</span> {{ item.detail.name if item.detail else 'Изтрит детайл' }}
                         {% endif %}
                     </td>
-                    <td class="text-center">{{ item.quantity_ordered }} бр.</td>
+                    <td class="text-center">{{ item.quantity_ordered }} бр. <span class="text-muted text-small" id="item-remaining-{{ item.id }}">(остават {{ item.quantity_remaining }})</span></td>
                     <td class="text-center">
                         {% if item.detail %}
                         <input type="number" class="qty-updater" min="0" max="{{ item.quantity_ordered }}"
@@ -105,7 +105,7 @@
                 {% for comp in item.components %}
                 <tr>
                     <td style="padding-left: 30px; color: var(--text-muted);">↳ Компонент: {{ comp.detail_name_snapshot }}</td>
-                    <td class="text-center">{{ comp.quantity_needed }} бр.</td>
+                    <td class="text-center">{{ comp.quantity_needed }} бр. <span class="text-muted text-small" id="component-remaining-{{ comp.id }}">(остават {{ comp.quantity_remaining }})</span></td>
                     <td class="text-center">
                         <input type="number" class="qty-updater" min="0" max="{{ comp.quantity_needed }}"
                                value="{{ comp.quantity_produced }}"
@@ -159,6 +159,9 @@
                     alert(data.message || 'Възникна грешка при обновяването.');
                     return;
                 }
+
+                const remainingEl = document.getElementById(targetType + '-remaining-' + targetId);
+                if (remainingEl) remainingEl.textContent = '(остават ' + (max - val) + ')';
 
                 if (targetType === 'component') {
                     const compEl = document.getElementById('component-pct-' + targetId);

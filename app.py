@@ -5129,17 +5129,31 @@ def admin_production_report():
         except (TypeError, ValueError):
             return jsonify({'status': 'error', 'message': 'Невалидно количество.'}), 400
 
+        # A produced piece is a piece that now physically exists, so moving
+        # quantity_produced up (or down, on a correction) moves the linked
+        # Detail's stock_quantity by the same delta - same _bump_stock() used
+        # by delivery-note intake, just triggered by production instead of a
+        # goods-received note. No-op for a product OrderItem's own row (it
+        # has no detail) and for a component whose source Detail was since
+        # deleted from the catalog (detail_id nullable, only detail_name_snapshot
+        # survives).
         if target_type == 'component':
             component = OrderItemComponent.query.get_or_404(target_id)
             produced_qty = max(0, min(produced_qty, component.quantity_needed))
+            stock_delta = produced_qty - component.quantity_produced
             component.quantity_produced = produced_qty
+            if stock_delta and component.detail:
+                _bump_stock(component.detail, stock_delta)
             order_item = component.order_item
             target_percent = component.percent_complete
             target_label = f'детайл "{component.detail.name}"' if component.detail else f'компонент #{target_id}'
         elif target_type == 'item':
             order_item = OrderItem.query.get_or_404(target_id)
             produced_qty = max(0, min(produced_qty, order_item.quantity_ordered))
+            stock_delta = produced_qty - order_item.quantity_produced
             order_item.quantity_produced = produced_qty
+            if stock_delta and order_item.detail:
+                _bump_stock(order_item.detail, stock_delta)
             target_percent = order_item.percent_complete
             target_label = f'артикул "{order_item.item_name}"'
         else:
@@ -5148,7 +5162,8 @@ def admin_production_report():
         order = order_item.order
         refresh_order_status(order)
         db.session.commit()
-        log_action(f'Изработени {produced_qty} бр. от {target_label} (поръчка {order.order_number})')
+        stock_note = f' - наличността е коригирана с {stock_delta:+d} бр.' if stock_delta else ''
+        log_action(f'Изработени {produced_qty} бр. от {target_label} (поръчка {order.order_number}){stock_note}')
 
         return jsonify({
             'status': 'success',
