@@ -168,7 +168,6 @@
             <table class="users-table" id="cartTable">
                 <thead>
                 <tr>
-                    {% if offer %}<th></th>{% endif %}
                     <th>ID</th>
                     <th>Снимка</th>
                     <th>Наименование / описание</th>
@@ -181,11 +180,11 @@
                 </tr>
                 </thead>
                 <tbody id="cartTableBody">
-                    <tr id="cartEmptyRow"><td colspan="{{ 10 if offer else 9 }}" class="text-center no-data">Все още няма добавени редове.</td></tr>
+                    <tr id="cartEmptyRow"><td colspan="9" class="text-center no-data">Все още няма добавени редове.</td></tr>
                 </tbody>
                 <tfoot>
                     <tr class="cart-total-row">
-                        <td colspan="{{ 8 if offer else 7 }}" class="text-right">Обща сума:</td>
+                        <td colspan="7" class="text-right">Обща сума:</td>
                         <td class="text-right" id="cartTotal">0.00 €</td>
                         <td></td>
                     </tr>
@@ -201,9 +200,25 @@
     <section class="admin-card">
         <h3>Създаване на поръчка от избраните редове</h3>
         <p class="section-subtitle">
-            Отметни продукт/детайл редовете по-горе (текстовите редове нямат връзка към каталога и не могат да бъдат
-            избрани), после натисни бутона. Ако редовете са добавени в тази сесия, първо запази офертата.
+            Отметни продукт/детайл редовете по-долу (текстовите редове и редовете, добавени в тази сесия и още
+            незапазени, нямат връзка към каталога и не са включени в списъка), после натисни бутона.
         </p>
+        <div class="table-responsive">
+            <table class="users-table" id="orderSelectorTable">
+                <thead>
+                <tr>
+                    <th></th>
+                    <th>Наименование</th>
+                    <th class="text-center">Кол-во</th>
+                    <th class="text-right">Ед. цена</th>
+                </tr>
+                </thead>
+                <tbody id="orderSelectorBody">
+                    <tr><td colspan="4" class="text-center no-data">Няма редове, които могат да бъдат добавени към поръчка.</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <p class="text-small text-muted" id="orderSelectorNote"></p>
         <form action="{{ url_for('admin_offer_create_order', offer_id=offer.id) }}" method="POST" class="admin-form" id="createOrderForm">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
@@ -369,55 +384,12 @@
         body.innerHTML = '';
 
         if (cart.length === 0) {
-            body.innerHTML = '<tr id="cartEmptyRow"><td colspan="' + (HAS_OFFER ? 10 : 9) + '" class="text-center no-data">Все още няма добавени редове.</td></tr>';
+            body.innerHTML = '<tr id="cartEmptyRow"><td colspan="9" class="text-center no-data">Все още няма добавени редове.</td></tr>';
         } else {
             cart.forEach(function (item, idx) {
                 const tr = document.createElement('tr');
                 const hasLineTotal = item.quantity != null && item.unit_price != null;
                 const lineTotal = hasLineTotal ? item.quantity * item.unit_price : null;
-
-                if (HAS_OFFER) {
-                    const canSelect = item.id != null && (item.product_id || item.detail_id);
-                    const cb = document.createElement('input');
-                    cb.type = 'checkbox';
-                    const cbTd = document.createElement('td');
-                    if (!canSelect) {
-                        cb.disabled = true;
-                        // A disabled checkbox alone reads as broken rather than
-                        // intentional - spell out *why* right next to it instead
-                        // of relying on a hover-only title tooltip (three distinct
-                        // reasons: not saved yet, a free-text row that was never
-                        // catalog-linked, or a pre-existing row saved before
-                        // product_id/detail_id tracking was added to OfferItem).
-                        let noteText;
-                        if (item.id == null) {
-                            cb.title = 'Запази офертата, за да избереш този ред.';
-                            noteText = 'запази офертата';
-                        } else if (item.type === 'text') {
-                            cb.title = 'Текстов ред - няма връзка към продукт/детайл.';
-                            noteText = null;
-                        } else {
-                            cb.title = 'Този ред е добавен преди тази функция и няма връзка към продукт/детайл - премахни го и го добави отново от списъка горе.';
-                            noteText = 'премахни и добави отново';
-                        }
-                        cbTd.appendChild(cb);
-                        if (noteText) {
-                            const note = document.createElement('div');
-                            note.className = 'text-small text-muted';
-                            note.style.whiteSpace = 'nowrap';
-                            note.textContent = noteText;
-                            cbTd.appendChild(note);
-                        }
-                    } else {
-                        cb.checked = selectedItemIds.has(item.id);
-                        cb.addEventListener('change', function () {
-                            if (cb.checked) selectedItemIds.add(item.id); else selectedItemIds.delete(item.id);
-                            document.getElementById('createOrderBtn').disabled = selectedItemIds.size === 0;
-                        });
-                        cbTd.appendChild(cb);
-                    }
-                    tr.appendChild(cbTd);
-                }
 
                 tr.appendChild(cell(item.code || ''));
                 const thumbHtml = item.image_filename
@@ -462,6 +434,54 @@
             ? 'Сума: ' + subtotal.toFixed(2) + ' €<br>Отстъпка (-' + discountPercent + '%): -' + discountAmount.toFixed(2) + ' €<br><strong>ОБЩО: ' + finalTotal.toFixed(2) + ' €</strong>'
             : subtotal.toFixed(2) + ' €';
         document.getElementById('submitOfferBtn').disabled = cart.length === 0;
+
+        if (HAS_OFFER) renderOrderSelector();
+    }
+
+    // The "create order" panel gets its own self-contained list (checkbox +
+    // name/qty/price only) instead of reusing checkboxes bolted onto the
+    // main offer-editing table above - that table already does double duty
+    // (editing offer lines), so mixing "which of these becomes an order" into
+    // it made the checkboxes easy to miss/misread. Only rows that can
+    // actually become an OrderItem show up here at all: a text row or a row
+    // added this session but not yet saved (no id) has no product_id/detail_id
+    // to select, so it's simply left out rather than shown disabled.
+    function renderOrderSelector() {
+        const body = document.getElementById('orderSelectorBody');
+        const selectable = cart.filter(function (item) { return item.id != null && (item.product_id || item.detail_id); });
+
+        if (selectable.length === 0) {
+            body.innerHTML = '<tr><td colspan="4" class="text-center no-data">Няма редове, които могат да бъдат добавени към поръчка.</td></tr>';
+        } else {
+            body.innerHTML = '';
+            selectable.forEach(function (item) {
+                const tr = document.createElement('tr');
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.checked = selectedItemIds.has(item.id);
+                cb.addEventListener('change', function () {
+                    if (cb.checked) selectedItemIds.add(item.id); else selectedItemIds.delete(item.id);
+                    document.getElementById('createOrderBtn').disabled = selectedItemIds.size === 0;
+                });
+                const cbTd = document.createElement('td');
+                cbTd.appendChild(cb);
+                tr.appendChild(cbTd);
+                tr.appendChild(cell('<strong>' + item.name + '</strong>'));
+                tr.appendChild(cell(item.quantity != null ? item.quantity : '', { className: 'text-center' }));
+                tr.appendChild(cell(item.unit_price != null ? item.unit_price.toFixed(2) + ' €' : '', { className: 'text-right' }));
+                body.appendChild(tr);
+            });
+        }
+
+        const remainingSelected = new Set();
+        selectable.forEach(function (item) { if (selectedItemIds.has(item.id)) remainingSelected.add(item.id); });
+        selectedItemIds = remainingSelected;
+        document.getElementById('createOrderBtn').disabled = selectedItemIds.size === 0;
+
+        const skippedNew = cart.some(function (item) { return item.id == null && item.type !== 'text'; });
+        document.getElementById('orderSelectorNote').textContent = skippedNew
+            ? 'Запази офертата, за да можеш да избереш редовете, добавени в тази сесия.'
+            : '';
     }
 
     document.getElementById('offerForm').addEventListener('submit', function (e) {
