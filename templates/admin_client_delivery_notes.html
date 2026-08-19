@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Стокови разписки към клиенти - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .item-type-toggle { display: flex; gap: 20px; margin: 8px 0 4px; }
+        .item-type-toggle label { font-weight: normal; text-transform: none; letter-spacing: normal; display: flex; align-items: center; gap: 6px; }
+        .add-item-row { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
+        .add-item-row .form-group { flex: 1; min-width: 180px; margin-bottom: 0; }
+        .add-item-row .form-group.qty-field { flex: 0 0 120px; min-width: 100px; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Нова стокова разписка към клиент</h3>
+        <p class="section-subtitle">Изберете клиента и артикулите, които напускат склада - всеки ред намалява наличността на съответния материал, детайл или продукт. Могат да се избират само артикули, които вече са в каталога.</p>
+
+        <form action="{{ url_for('create_client_delivery_note') }}" method="POST" id="clientDeliveryNoteForm">
+            {% include 'partials/csrf_field.html' %}
+            <div class="add-item-row" style="margin-bottom: 16px;">
+                <div class="form-group">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <label for="client_id" style="margin-bottom: 0;">Клиент</label>
+                        <button type="button" onclick="openQuickClientModal()" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
+                    </div>
+                    <select id="client_id" name="client_id">
+                        <option value="">-- Без клиент --</option>
+                        {% for c in clients %}
+                        <option value="{{ c.id }}">{{ c.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="note_number">Фактура № / Наша реф.</label>
+                    <input type="text" id="note_number" name="note_number" placeholder="напр. 0000070244">
+                </div>
+                <div class="form-group">
+                    <label for="note_date">Дата</label>
+                    <input type="date" id="note_date" name="note_date">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Тип артикул</label>
+                <div class="item-type-toggle">
+                    <label><input type="radio" name="cdn_item_type" value="material" checked> Материал</label>
+                    <label><input type="radio" name="cdn_item_type" value="detail"> Детайл</label>
+                    <label><input type="radio" name="cdn_item_type" value="product"> Продукт</label>
+                </div>
+            </div>
+
+            <div class="add-item-row">
+                <div class="form-group" id="material_selector">
+                    <label for="cdn_material_select">Материал *</label>
+                    <select id="cdn_material_select">
+                        <option value="">-- Изберете материал --</option>
+                        {% for m in materials_data %}
+                        <option value="{{ m.id }}" data-price="{{ m.price if m.price is not none else '' }}" data-stock="{{ m.stock if m.stock is not none else 0 }}">{{ m.name }} (наличност: {{ '%g'|format(m.stock or 0) }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group" id="detail_selector" style="display: none;">
+                    <label for="cdn_detail_select">Детайл *</label>
+                    <select id="cdn_detail_select">
+                        <option value="">-- Изберете детайл --</option>
+                        {% for d in details_data %}
+                        <option value="{{ d.id }}" data-price="{{ d.price if d.price is not none else '' }}" data-stock="{{ d.stock if d.stock is not none else 0 }}">{{ d.name }} (наличност: {{ '%g'|format(d.stock or 0) }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group" id="product_selector" style="display: none;">
+                    <label for="cdn_product_select">Продукт *</label>
+                    <select id="cdn_product_select">
+                        <option value="">-- Изберете продукт --</option>
+                        {% for p in products_data %}
+                        <option value="{{ p.id }}" data-price="{{ p.price if p.price is not none else '' }}" data-stock="{{ p.stock if p.stock is not none else 0 }}">{{ p.name }} (наличност: {{ '%g'|format(p.stock or 0) }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group qty-field">
+                    <label for="cdn_qty">Количество</label>
+                    <input type="number" id="cdn_qty" value="1" min="0.01" step="0.01">
+                </div>
+                <div class="form-group qty-field">
+                    <label for="cdn_price">Ед. цена (€, по избор)</label>
+                    <input type="number" id="cdn_price" min="0" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label for="cdn_notes">Описание (по избор)</label>
+                    <input type="text" id="cdn_notes" placeholder="напр. партида, забележка">
+                </div>
+                <div class="form-group" style="flex: 0 0 auto;">
+                    <button type="button" class="btn-secondary" onclick="addClientDeliveryRow()" style="padding: 12px 20px;">+ Добави</button>
+                </div>
+            </div>
+
+            <div class="table-responsive" style="margin-top: 20px;">
+                <table class="data-table" id="cdnTable">
+                    <thead>
+                    <tr>
+                        <th>Артикул</th>
+                        <th>Тип</th>
+                        <th class="text-center">Кол.</th>
+                        <th class="text-right">Ед. цена</th>
+                        <th>Описание</th>
+                        <th class="text-right">Действие</th>
+                    </tr>
+                    </thead>
+                    <tbody id="cdnTableBody">
+                        <tr id="cdnEmptyRow"><td colspan="6" class="text-center no-data">Все още няма добавени артикули.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <input type="hidden" name="items_json" id="itemsJsonInput">
+            <button type="submit" class="btn-submit" style="width: 100%; margin-top: 16px;" id="submitNoteBtn" disabled>Запази разписка и обнови наличности</button>
+        </form>
+    </section>
+
+    <div id="quickClientModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
+        <div class="admin-card" style="width: 100%; max-width: 500px; margin: 20px; background-color: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 28px; box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15); position: relative;">
+            <span onclick="closeQuickClientModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
+            <h3 style="margin-top: 0; margin-bottom: 16px;">Бързо създаване на клиент</h3>
+            <form id="quickClientForm">
+                {% include 'partials/csrf_field.html' %}
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label>Тип клиент</label>
+                    <div class="item-type-toggle" style="flex-wrap: wrap;">
+                        <label style="white-space: nowrap;"><input type="radio" name="client_type" value="individual" checked onchange="toggleQcCompanyFields()"> Физическо лице</label>
+                        <label style="white-space: nowrap;"><input type="radio" name="client_type" value="company" onchange="toggleQcCompanyFields()"> Юридическо лице</label>
+                    </div>
+                </div>
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label for="qc_name">Име *</label>
+                    <input type="text" id="qc_name" name="name" required placeholder="напр. Иван Иванов / Фирма ЕООД">
+                </div>
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label for="qc_email">Имейл</label>
+                    <input type="email" id="qc_email" name="email" placeholder="example@mail.com">
+                </div>
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label for="qc_phone">Телефон</label>
+                    <input type="text" id="qc_phone" name="phone" placeholder="напр. 0888 123 456">
+                </div>
+                <div id="qcCompanyFields" style="display: none;">
+                    <div class="form-group" style="margin-bottom: 15px;">
+                        <label for="qc_eik">ЕИК / Булстат</label>
+                        <input type="text" id="qc_eik" name="eik" placeholder="напр. 203040557"
+                               pattern="\d{9}" maxlength="9" inputmode="numeric" title="Точно 9 цифри">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 15px;">
+                        <label for="qc_vat">ИН по ДДС</label>
+                        <input type="text" id="qc_vat" name="vat_number" placeholder="напр. BG203040557">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 15px;">
+                        <label for="qc_address">Адрес на управление</label>
+                        <input type="text" id="qc_address" name="address" placeholder="напр. София, бул. ...">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 15px;">
+                        <label for="qc_mol">МОЛ</label>
+                        <input type="text" id="qc_mol" name="mol" placeholder="напр. Иван Иванов">
+                    </div>
+                </div>
+                <button type="submit" class="btn-submit" style="width: 100%;">Добави клиент</button>
+                <div id="qc_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
+            </form>
+        </div>
+    </div>
+
+    <section class="admin-card">
+        <h3>История на разписките</h3>
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Дата на записване</th>
+                    <th>Клиент</th>
+                    <th>Фактура №</th>
+                    <th>Артикули</th>
+                    <th></th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for note in notes %}
+                <tr>
+                    <td>{{ note.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+                    <td>{{ note.client.name if note.client else '-' }}</td>
+                    <td>{{ note.note_number or '-' }}</td>
+                    <td>
+                        {% for item in note.items %}
+                        <div>
+                            {{ item.description_snapshot }} &times; {{ item.quantity }}
+                            {%- if item.unit_price %} @ {{ "%.2f"|format(item.unit_price) }} €{% endif %}
+                            {%- if item.notes %} - {{ item.notes }}{% endif %}
+                        </div>
+                        {% endfor %}
+                    </td>
+                    <td><a href="{{ url_for('admin_client_delivery_note_print', note_id=note.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Печат</a></td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5" class="text-center no-data">Няма записани разписки.</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+</main>
+
+<script>
+    let cdnItems = [];
+
+    function toggleQcCompanyFields() {
+        var isCompany = document.querySelector('input[name="client_type"]:checked').value === 'company';
+        document.getElementById('qcCompanyFields').style.display = isCompany ? 'block' : 'none';
+    }
+    function openQuickClientModal() {
+        document.getElementById('quickClientModal').style.display = 'flex';
+        document.getElementById('qc_error').style.display = 'none';
+    }
+    function closeQuickClientModal() {
+        document.getElementById('quickClientModal').style.display = 'none';
+        document.getElementById('quickClientForm').reset();
+        toggleQcCompanyFields();
+    }
+    document.getElementById('quickClientForm').addEventListener('submit', function (e) {
+        e.preventDefault();
+        const submitBtn = this.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Обработване...';
+
+        const formData = new FormData(this);
+        const errDiv = document.getElementById('qc_error');
+        errDiv.style.display = 'none';
+
+        fetch('/api/quick-create-client', { method: 'POST', body: formData })
+        .then(res => res.json())
+        .then(data => {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Добави клиент';
+            if (data.status === 'success') {
+                const sel = document.getElementById('client_id');
+                const opt = document.createElement('option');
+                opt.value = data.client.id;
+                opt.textContent = data.client.name;
+                sel.appendChild(opt);
+                sel.value = data.client.id;
+                closeQuickClientModal();
+            } else {
+                errDiv.textContent = data.message || 'Грешка при създаване.';
+                errDiv.style.display = 'block';
+            }
+        })
+        .catch(function () {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Добави клиент';
+            errDiv.textContent = 'Връзката със сървъра беше прекъсната.';
+            errDiv.style.display = 'block';
+        });
+    });
+
+    function cell(text, opts) {
+        const td = document.createElement('td');
+        td.textContent = text;
+        if (opts && opts.className) td.className = opts.className;
+        return td;
+    }
+
+    function currentSelectField(type) {
+        return type === 'material' ? 'cdn_material_select' : (type === 'detail' ? 'cdn_detail_select' : 'cdn_product_select');
+    }
+
+    function fillPriceFromSelection() {
+        const type = document.querySelector('input[name="cdn_item_type"]:checked').value;
+        const sel = document.getElementById(currentSelectField(type));
+        const opt = sel.options[sel.selectedIndex];
+        const price = opt ? opt.dataset.price : '';
+        document.getElementById('cdn_price').value = price || '';
+    }
+
+    document.querySelectorAll('input[name="cdn_item_type"]').forEach(function (radio) {
+        radio.addEventListener('change', function () {
+            document.getElementById('material_selector').style.display = this.value === 'material' ? 'block' : 'none';
+            document.getElementById('detail_selector').style.display = this.value === 'detail' ? 'block' : 'none';
+            document.getElementById('product_selector').style.display = this.value === 'product' ? 'block' : 'none';
+            fillPriceFromSelection();
+        });
+    });
+    ['cdn_material_select', 'cdn_detail_select', 'cdn_product_select'].forEach(function (id) {
+        document.getElementById(id).addEventListener('change', fillPriceFromSelection);
+    });
+
+    function addClientDeliveryRow() {
+        const type = document.querySelector('input[name="cdn_item_type"]:checked').value;
+        const sel = document.getElementById(currentSelectField(type));
+        const qty = parseFloat(document.getElementById('cdn_qty').value);
+        const priceRaw = document.getElementById('cdn_price').value;
+        const unitPrice = priceRaw === '' ? null : parseFloat(priceRaw);
+
+        if (!sel.value) { alert('Моля изберете артикул.'); return; }
+        if (!qty || qty <= 0) { alert('Моля въведете валидно количество.'); return; }
+
+        const opt = sel.options[sel.selectedIndex];
+        const stock = parseFloat(opt.dataset.stock || '0');
+        if (qty > stock) {
+            if (!confirm('Количеството (' + qty + ') надвишава наличността (' + stock + '). Продължавате ли?')) return;
+        }
+
+        cdnItems.push({
+            type: type, target_id: parseInt(sel.value, 10), name: opt.textContent.replace(/ \(наличност:.*\)$/, ''),
+            qty: qty, unit_price: unitPrice,
+            notes: document.getElementById('cdn_notes').value.trim() || null,
+        });
+        document.getElementById('cdn_notes').value = '';
+        renderCdnTable();
+    }
+
+    function removeCdnRow(index) {
+        cdnItems.splice(index, 1);
+        renderCdnTable();
+    }
+
+    const TYPE_LABELS = { material: 'Материал', detail: 'Детайл', product: 'Продукт' };
+
+    function renderCdnTable() {
+        const body = document.getElementById('cdnTableBody');
+        body.innerHTML = '';
+
+        if (cdnItems.length === 0) {
+            body.innerHTML = '<tr id="cdnEmptyRow"><td colspan="6" class="text-center no-data">Все още няма добавени артикули.</td></tr>';
+        } else {
+            cdnItems.forEach(function (item, idx) {
+                const tr = document.createElement('tr');
+                tr.appendChild(cell(item.name));
+                tr.appendChild(cell(TYPE_LABELS[item.type]));
+                tr.appendChild(cell(item.qty, { className: 'text-center' }));
+                tr.appendChild(cell(item.unit_price != null ? item.unit_price.toFixed(2) + ' €' : '-', { className: 'text-right' }));
+                tr.appendChild(cell(item.notes || '-'));
+
+                const actionTd = document.createElement('td');
+                actionTd.className = 'text-right';
+                const removeBtn = document.createElement('button');
+                removeBtn.type = 'button';
+                removeBtn.className = 'btn-delete';
+                removeBtn.textContent = 'Премахни';
+                removeBtn.addEventListener('click', function () { removeCdnRow(idx); });
+                actionTd.appendChild(removeBtn);
+                tr.appendChild(actionTd);
+
+                body.appendChild(tr);
+            });
+        }
+
+        document.getElementById('submitNoteBtn').disabled = cdnItems.length === 0;
+    }
+
+    document.getElementById('clientDeliveryNoteForm').addEventListener('submit', function (e) {
+        if (cdnItems.length === 0) {
+            e.preventDefault();
+            alert('Моля добавете поне един артикул към разписката.');
+            return;
+        }
+        document.getElementById('itemsJsonInput').value = JSON.stringify(
+            cdnItems.map(function (c) {
+                return { type: c.type, target_id: c.target_id, qty: c.qty, unit_price: c.unit_price, notes: c.notes };
+            })
+        );
+    });
+
+    fillPriceFromSelection();
+</script>
+</body>
+</html>

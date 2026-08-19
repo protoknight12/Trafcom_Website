@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Стокова разписка № {{ note.id }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@700&display=swap" rel="stylesheet">
+    <style>
+        .offer-toolbar {
+            max-width: 900px; margin: 24px auto 0; padding: 0 24px;
+            display: flex; justify-content: flex-end;
+        }
+        .offer-sheet {
+            max-width: 900px; margin: 24px auto 60px; background-color: #ffffff; color: #111111;
+            border-radius: var(--border-radius-md); padding: 48px; box-sizing: border-box;
+        }
+        .offer-sheet h1 {
+            font-family: 'Oswald', sans-serif; font-weight: 700; font-size: 2.2rem;
+            text-align: center; margin: 0 0 6px;
+        }
+        .offer-sheet .offer-address, .offer-sheet .offer-object, .offer-sheet .offer-client { text-align: center; color: #333; margin: 4px 0; }
+        .offer-sheet .offer-number { text-align: center; font-weight: 700; font-size: 1.15rem; margin: 14px 0 20px; }
+        .offer-sheet table { width: 100%; border-collapse: collapse; font-size: 0.88rem; margin-top: 20px; }
+        .offer-sheet th { text-align: center; padding: 8px 6px; border: 1px solid #ccc; background: #f4f4f4; font-weight: 700; }
+        .offer-sheet td { padding: 8px 6px; border: 1px solid #ddd; vertical-align: top; }
+        .offer-sheet .text-center { text-align: center; }
+        .offer-sheet .text-right { text-align: right; }
+        .offer-sheet .offer-total-row td { border-top: 2px solid #111; font-weight: 700; font-size: 1.05rem; }
+        .offer-sheet .offer-terms { margin-top: 24px; }
+        .offer-sheet .offer-terms p { font-weight: 700; margin: 4px 0; }
+        .offer-sheet .offer-signoff { margin-top: 40px; display: flex; justify-content: space-between; }
+
+        @media print {
+            .navbar, .offer-toolbar, .no-print { display: none !important; }
+            body { background: #fff; }
+            .offer-sheet { margin: 0; box-shadow: none; padding: 0; }
+        }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<div class="offer-toolbar no-print">
+    <a href="{{ url_for('admin_client_delivery_notes') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem; margin-right: 12px;">← Обратно</a>
+    <button class="btn-submit" style="padding: 12px 24px;" onclick="window.print()">Печат / PDF</button>
+</div>
+
+<div class="offer-sheet">
+    <h1>ТРАФКОМ ООД</h1>
+    <p class="offer-address">гр. Тетевен, ул Александър Стамболийски 36, trafcom@tafcombg.com, +359 886 762276</p>
+    <p class="offer-number">СТОКОВА РАЗПИСКА № {{ note.id }}</p>
+    {% if note.client %}<p class="offer-client">Клиент: {{ note.client.name }}</p>{% endif %}
+    {% if note.note_number %}<p class="offer-client">Фактура № / Наша реф.: {{ note.note_number }}</p>{% endif %}
+    {% if note.note_date %}<p class="offer-client">Дата на издаване: {{ note.note_date.strftime('%d.%m.%Y') }}</p>{% endif %}
+
+    <table>
+        <thead>
+        <tr>
+            <th>Наименование</th>
+            <th>Описание</th>
+            <th>Кол-во</th>
+            <th>Ед. цена<br>(EUR без ДДС)</th>
+            <th>Обща цена<br>(EUR без ДДС)</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% set ns = namespace(total=0) %}
+        {% for item in note.items %}
+        {% set line_total = (item.quantity * item.unit_price) if item.unit_price is not none else 0 %}
+        {% set ns.total = ns.total + line_total %}
+        <tr>
+            <td>{{ item.description_snapshot }}</td>
+            <td>{{ item.notes or '' }}</td>
+            <td class="text-center">{{ '%g'|format(item.quantity) }}</td>
+            <td class="text-right">{{ '%.2f'|format(item.unit_price) if item.unit_price is not none else '' }}</td>
+            <td class="text-right">{{ '%.2f'|format(line_total) if item.unit_price is not none else '' }}</td>
+        </tr>
+        {% endfor %}
+        <tr class="offer-total-row">
+            <td colspan="4" class="text-right">ОБЩО:</td>
+            <td class="text-right">{{ '%.2f'|format(ns.total) }} EUR</td>
+        </tr>
+        </tbody>
+    </table>
+
+    <div class="offer-terms">
+        <p>Всички цени са в EUR без включен ДДС</p>
+    </div>
+
+    <div class="offer-signoff">
+        <span>Дата: {{ note.created_at.strftime('%d.%m.%Y') if note.created_at else '' }}</span>
+        <span>Съставил: {{ note.created_by.username if note.created_by else '' }}</span>
+    </div>
+</div>
+</body>
+</html>

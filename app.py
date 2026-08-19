@@ -880,6 +880,45 @@ class DeliveryNoteItem(db.Model):
     brand = db.Column(db.String(100), nullable=True)
 
 
+class ClientDeliveryNote(db.Model):
+    """
+    A goods-issued delivery note (стокова разписка към клиент) - the mirror
+    of DeliveryNote: instead of restocking from a Supplier, it records stock
+    leaving to a Client and decrements stock_quantity on each referenced
+    MaterialPrice/Detail/Product line (via ClientDeliveryNoteItem, using
+    _bump_stock with a negative quantity). See admin_client_delivery_notes.html.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True)
+    note_number = db.Column(db.String(100), nullable=True)
+    note_date = db.Column(db.Date, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+
+    client = db.relationship('Client')
+    created_by = db.relationship('User')
+    items = db.relationship('ClientDeliveryNoteItem', backref='client_delivery_note', cascade='all, delete-orphan', lazy=True)
+
+
+class ClientDeliveryNoteItem(db.Model):
+    """
+    One issued line on a ClientDeliveryNote - same target_type/target_id
+    convention as DeliveryNoteItem ('material'/'detail'/'product'), but
+    always points at an existing catalog row: issuing stock that isn't
+    already in the catalog makes no sense, unlike intake where a brand-new
+    row can be created on arrival. description_snapshot freezes the name at
+    issue time, same reasoning as DeliveryNoteItem.description_snapshot.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    client_delivery_note_id = db.Column(db.Integer, db.ForeignKey('client_delivery_note.id'), nullable=False)
+    target_type = db.Column(db.String(20), nullable=False)  # 'material' / 'detail' / 'product'
+    target_id = db.Column(db.Integer, nullable=False)
+    description_snapshot = db.Column(db.String(255), nullable=False)
+    quantity = db.Column(db.Float, nullable=False)
+    unit_price = db.Column(db.Float, nullable=True)
+    notes = db.Column(db.String(255), nullable=True)
+
+
 # Request status slugs, same ASCII-slug-as-CSS-class convention as
 # STATUS_LABELS (Order.status) above.
 REQUEST_STATUS_LABELS = {
@@ -3139,6 +3178,130 @@ def admin_delivery_note_print(note_id):
     """
     note = DeliveryNote.query.get_or_404(note_id)
     return render_template('admin_delivery_note_print.html', note=note)
+
+
+@app.route('/admin/client-delivery-notes')
+@role_required(['admin', 'worker'])
+def admin_client_delivery_notes():
+    """
+    Intake page for the reverse flow of admin_delivery_notes(): issuing stock
+    to a Client instead of receiving it from a Supplier. Every line must pick
+    an existing catalog row (materials_data/details_data/products_data carry
+    `id`, not a `key`/`name` to resolve on submit) - unlike the supplier
+    intake form there's no "+ Нов ..." option, since there's nothing to
+    create when stock is only leaving.
+    """
+    clients = Client.query.order_by(Client.name).all()
+    notes = ClientDeliveryNote.query.order_by(ClientDeliveryNote.created_at.desc()).all()
+    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    details = Detail.query.order_by(Detail.name).all()
+    products = Product.query.order_by(Product.name).all()
+    materials_data = [{'id': m.id, 'name': format_material_option(m), 'price': None, 'stock': m.stock_quantity} for m in materials]
+    details_data = [{'id': d.id, 'name': d.name, 'price': d.calculated_price, 'stock': d.stock_quantity} for d in details]
+    products_data = [{'id': p.id, 'name': p.name, 'price': None, 'stock': p.stock_quantity} for p in products]
+    return render_template(
+        'admin_client_delivery_notes.html', clients=clients, notes=notes,
+        materials_data=materials_data, details_data=details_data, products_data=products_data,
+        active_page='admin_client_delivery_notes'
+    )
+
+
+@app.route('/admin/client-delivery-notes/create', methods=['POST'])
+@role_required(['admin', 'worker'])
+def create_client_delivery_note():
+    """
+    Records a client delivery note and decrements stock_quantity on every
+    referenced Material/Detail/Product - the mirror of create_delivery_note().
+    items_json follows [{type, target_id, qty, unit_price, notes}] - target_id
+    is required and must resolve to an existing row (see
+    admin_client_delivery_notes()'s docstring for why, unlike
+    create_delivery_note() there's no _find_or_create_delivery_target here).
+    """
+    try:
+        items = json.loads(request.form.get('items_json', ''))
+        if not isinstance(items, list):
+            items = []
+    except (TypeError, ValueError):
+        items = []
+
+    if not items:
+        flash('Моля добавете поне един артикул към стоковата разписка.', 'danger')
+        return redirect(url_for('admin_client_delivery_notes'))
+
+    client_id_raw = request.form.get('client_id', '')
+    client_id = int(client_id_raw) if client_id_raw and client_id_raw.isdigit() else None
+    note_date_raw = request.form.get('note_date', '').strip()
+    note_date = datetime.strptime(note_date_raw, '%Y-%m-%d').date() if note_date_raw else None
+
+    note = ClientDeliveryNote(
+        client_id=client_id,
+        note_number=request.form.get('note_number', '').strip() or None,
+        note_date=note_date,
+        created_by_id=current_user.id,
+    )
+    db.session.add(note)
+    db.session.flush()
+
+    item_type_labels = {'material': 'материал', 'detail': 'детайл', 'product': 'продукт'}
+    added_any = False
+    log_parts = []
+    log_detail_lines = []
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        item_type = row.get('type')
+        model = DELIVERY_NOTE_TARGET_MODELS.get(item_type)
+        if not model:
+            continue
+        try:
+            target_id = int(row.get('target_id'))
+            quantity = float(row.get('qty', 0))
+        except (TypeError, ValueError):
+            continue
+        if quantity <= 0:
+            continue
+        target = model.query.get(target_id)
+        if not target:
+            continue
+
+        try:
+            unit_price_raw = row.get('unit_price')
+            unit_price = float(unit_price_raw) if unit_price_raw not in (None, '') else None
+        except (TypeError, ValueError):
+            unit_price = None
+
+        description = target.display_name if item_type == 'material' else target.name
+        db.session.add(ClientDeliveryNoteItem(
+            client_delivery_note_id=note.id, target_type=item_type, target_id=target.id,
+            description_snapshot=description, quantity=quantity, unit_price=unit_price,
+            notes=(row.get('notes') or '').strip() or None,
+        ))
+        _bump_stock(target, -quantity)
+        added_any = True
+        log_parts.append(f'{item_type_labels.get(item_type, item_type)} "{description}" -{quantity:g} (нова наличност {target.stock_quantity:g})')
+        price_note = f', цена {unit_price:g} €' if unit_price is not None else ''
+        notes_note = f', бележка: {row.get("notes")}' if (row.get('notes') or '').strip() else ''
+        log_detail_lines.append(f'{item_type_labels.get(item_type, item_type)} "{description}": -{quantity:g} бр. → нова наличност {target.stock_quantity:g}{price_note}{notes_note}')
+
+    if not added_any:
+        db.session.rollback()
+        flash('Няма валидни артикули за добавяне.', 'danger')
+        return redirect(url_for('admin_client_delivery_notes'))
+
+    db.session.commit()
+    client_name = note.client.name if note.client else '-'
+    header = f'Стокова разписка (издадена) №{note.id} (клиент: {client_name}, № {note.note_number or "-"}, дата {note.note_date or "-"})'
+    log_action(f'Издадена стокова разписка №{note.id}: ' + ', '.join(log_parts), details=header + '\n' + '\n'.join(log_detail_lines))
+    flash('Стоковата разписка беше записана и наличностите бяха обновени.', 'success')
+    return redirect(url_for('admin_client_delivery_notes'))
+
+
+@app.route('/admin/client-delivery-notes/<int:note_id>/print')
+@role_required(['admin', 'worker'])
+def admin_client_delivery_note_print(note_id):
+    """Browser-print view of a ClientDeliveryNote - mirrors admin_delivery_note_print()."""
+    note = ClientDeliveryNote.query.get_or_404(note_id)
+    return render_template('admin_client_delivery_note_print.html', note=note)
 
 
 @app.route('/admin/content')
