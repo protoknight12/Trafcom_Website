@@ -3197,7 +3197,7 @@ def admin_client_delivery_notes():
     details = Detail.query.order_by(Detail.name).all()
     products = Product.query.order_by(Product.name).all()
     materials_data = [{'id': m.id, 'name': format_material_option(m), 'price': None, 'stock': m.stock_quantity} for m in materials]
-    details_data = [{'id': d.id, 'name': d.name, 'price': d.calculated_price, 'stock': d.stock_quantity} for d in details]
+    details_data = [{'id': d.id, 'name': d.name, 'price': d.total_price, 'stock': d.stock_quantity} for d in details]
     products_data = [{'id': p.id, 'name': p.name, 'price': None, 'stock': p.stock_quantity} for p in products]
     return render_template(
         'admin_client_delivery_notes.html', clients=clients, notes=notes,

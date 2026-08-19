@@ -171,7 +171,7 @@
         <select id="inClientSelect">
             <option value="">-- Ръчно въвеждане --</option>
             {% for c in clients %}
-            <option value="{{ c.id }}" data-name="{{ c.name }}" data-address="{{ c.address or '' }}" data-eik="{{ c.eik or '' }}" data-mol="{{ c.mol or '' }}">{{ c.name }}</option>
+            <option value="{{ c.id }}" data-name="{{ c.name }}" data-address="{{ c.address or '' }}" data-eik="{{ c.eik or '' }}" data-vat="{{ c.vat_number or '' }}" data-mol="{{ c.mol or '' }}">{{ c.name }}</option>
             {% endfor %}
         </select>
     </div>
@@ -186,6 +186,10 @@
     <div class="form-group">
         <label for="inClientEik">ЕИК на приемащата фирма</label>
         <input type="text" id="inClientEik" placeholder="Булстат / ЕИК...">
+    </div>
+    <div class="form-group">
+        <label for="inClientVat">ДДС № на приемащата фирма</label>
+        <input type="text" id="inClientVat" placeholder="напр. BG203040557">
     </div>
     <div class="form-group">
         <label for="inClientRep">МОЛ на приемащата фирма</label>
@@ -226,6 +230,7 @@
         <strong>Приемаща страна:</strong> <span id="lblClientName" style="border-bottom: 1px dotted #000; min-width: 150px; display: inline-block;">............................................................</span>,
         ситуирана на адрес: <span id="lblClientAddress" style="border-bottom: 1px dotted #000; min-width: 150px; display: inline-block;">............................................................</span>,
         ЕИК: <span id="lblClientEik" style="border-bottom: 1px dotted #000; min-width: 80px; display: inline-block;">........................</span>,
+        ДДС №: <span id="lblClientVat" style="border-bottom: 1px dotted #000; min-width: 80px; display: inline-block;">........................</span>,
         представлявано от <span id="lblClientRep" style="border-bottom: 1px dotted #000; min-width: 120px; display: inline-block;">............................................................</span><br><br>
         се подписа настоящият Приемо-Предавателен Протокол, наричан по-нататък за краткост Протокола, при следните условия:<br><br>
         Предаващата Страна предаде, а Приемащата Страна прие, както следва:
@@ -314,13 +319,14 @@
         { input: 'inClientName', label: 'lblClientName', fallback: '............................................................' },
         { input: 'inClientAddress', label: 'lblClientAddress', fallback: '............................................................' },
         { input: 'inClientEik', label: 'lblClientEik', fallback: '........................' },
+        { input: 'inClientVat', label: 'lblClientVat', fallback: '........................' },
         { input: 'inClientRep', label: 'lblClientRep', fallback: '............................................................' }
     ];
 
     document.getElementById('inClientSelect').addEventListener('change', function () {
         const opt = this.options[this.selectedIndex];
         if (!opt.value) return;
-        const fillMap = { inClientName: opt.dataset.name, inClientAddress: opt.dataset.address, inClientEik: opt.dataset.eik, inClientRep: opt.dataset.mol };
+        const fillMap = { inClientName: opt.dataset.name, inClientAddress: opt.dataset.address, inClientEik: opt.dataset.eik, inClientVat: opt.dataset.vat, inClientRep: opt.dataset.mol };
         Object.keys(fillMap).forEach(id => {
             const el = document.getElementById(id);
             el.value = fillMap[id] || '';

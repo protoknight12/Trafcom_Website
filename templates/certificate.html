@@ -182,13 +182,29 @@
         <select id="inClientSelect">
             <option value="">-- Ръчно въвеждане --</option>
             {% for c in clients %}
-            <option value="{{ c.id }}" data-name="{{ c.name }}">{{ c.name }}</option>
+            <option value="{{ c.id }}" data-name="{{ c.name }}" data-eik="{{ c.eik or '' }}" data-vat="{{ c.vat_number or '' }}" data-address="{{ c.address or '' }}" data-mol="{{ c.mol or '' }}">{{ c.name }}</option>
             {% endfor %}
         </select>
     </div>
     <div class="form-group">
         <label for="inClient">За клиент</label>
         <input type="text" id="inClient" placeholder="напр. Оптикоелектрон">
+    </div>
+    <div class="form-group">
+        <label for="inClientEik">ЕИК на клиента</label>
+        <input type="text" id="inClientEik" placeholder="Булстат / ЕИК...">
+    </div>
+    <div class="form-group">
+        <label for="inClientVat">ДДС № на клиента</label>
+        <input type="text" id="inClientVat" placeholder="напр. BG203040557">
+    </div>
+    <div class="form-group">
+        <label for="inClientAddress">Адрес на клиента</label>
+        <input type="text" id="inClientAddress" placeholder="Адрес по регистрация...">
+    </div>
+    <div class="form-group">
+        <label for="inClientMol">МОЛ на клиента</label>
+        <input type="text" id="inClientMol" placeholder="Три имена...">
     </div>
     <div class="form-group" style="grid-column: span 2;">
         <label for="inNotes">Забележка</label>
@@ -243,6 +259,22 @@
             <td class="label-cell"> За клиент:</td>
             <td id="lblClient" style="font-weight: 600;"></td>
         </tr>
+        <tr id="rowClientEik" style="display: none;">
+            <td class="label-cell"> ЕИК:</td>
+            <td id="lblClientEik"></td>
+        </tr>
+        <tr id="rowClientVat" style="display: none;">
+            <td class="label-cell"> ДДС №:</td>
+            <td id="lblClientVat"></td>
+        </tr>
+        <tr id="rowClientAddress" style="display: none;">
+            <td class="label-cell"> Адрес:</td>
+            <td id="lblClientAddress"></td>
+        </tr>
+        <tr id="rowClientMol" style="display: none;">
+            <td class="label-cell"> МОЛ:</td>
+            <td id="lblClientMol"></td>
+        </tr>
         <tr>
             <td class="label-cell"> Забележка:</td>
             <td id="lblNotes"></td>
@@ -282,8 +314,18 @@
     clientSelectEl.addEventListener('change', function() {
         const selected = clientSelectEl.options[clientSelectEl.selectedIndex];
         if (selected.value !== "") {
-            document.getElementById('inClient').value = selected.getAttribute('data-name');
-            document.getElementById('inClient').dispatchEvent(new Event('input'));
+            const fillMap = {
+                inClient: selected.getAttribute('data-name'),
+                inClientEik: selected.getAttribute('data-eik'),
+                inClientVat: selected.getAttribute('data-vat'),
+                inClientAddress: selected.getAttribute('data-address'),
+                inClientMol: selected.getAttribute('data-mol'),
+            };
+            Object.keys(fillMap).forEach(id => {
+                const el = document.getElementById(id);
+                el.value = fillMap[id] || '';
+                el.dispatchEvent(new Event('input'));
+            });
         }
     });
 
@@ -298,6 +340,10 @@
         { input: 'inOrderNum', label: 'lblOrderNum', fallback: '' },
         { input: 'inProtocolNum', label: 'lblProtocolNum', fallback: '' },
         { input: 'inClient', label: 'lblClient', fallback: '' },
+        { input: 'inClientEik', label: 'lblClientEik', fallback: '', row: 'rowClientEik' },
+        { input: 'inClientVat', label: 'lblClientVat', fallback: '', row: 'rowClientVat' },
+        { input: 'inClientAddress', label: 'lblClientAddress', fallback: '', row: 'rowClientAddress' },
+        { input: 'inClientMol', label: 'lblClientMol', fallback: '', row: 'rowClientMol' },
         { input: 'inNotes', label: 'lblNotes', fallback: '' },
         { input: 'inInspector', label: 'lblInspector', fallback: 'инж. Ц. Цветанов' }
     ];
@@ -308,7 +354,12 @@
 
         if (inputEl && labelEl) {
             inputEl.addEventListener('input', () => {
-                labelEl.textContent = inputEl.value.trim() || b.fallback;
+                const val = inputEl.value.trim();
+                labelEl.textContent = val || b.fallback;
+
+                if (b.row) {
+                    document.getElementById(b.row).style.display = val ? '' : 'none';
+                }
 
                 if(b.input === 'inCertDate') {
                     document.getElementById('lblFooterDate').textContent = inputEl.value.trim() || '................';

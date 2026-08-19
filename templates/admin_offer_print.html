@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@700&display=swap" rel="stylesheet">
+    {% from 'partials/legal_fields.html' import legal_lines %}
     <style>
         .offer-toolbar {
             max-width: 900px; margin: 24px auto 0; padding: 0 24px;
@@ -55,7 +56,7 @@
     <p class="offer-address">гр. Тетевен, ул Александър Стамболийски 36, trafcom@tafcombg.com, +359 886 762276</p>
     <p class="offer-number">ОФЕРТА № {{ offer.number }}</p>
     {% if offer.object_title %}<p class="offer-object">ОБЕКТ: {{ offer.object_title }}</p>{% endif %}
-    {% if offer.client %}<p class="offer-client">Клиент: {{ offer.client.name }}</p>{% endif %}
+    {% if offer.client %}<p class="offer-client">Клиент: {{ offer.client.name }}</p>{{ legal_lines(offer.client) }}{% endif %}
     {% if offer.valid_until %}<p class="offer-client">Валидна до: {{ offer.valid_until.strftime('%d.%m.%Y') }}</p>{% endif %}
 
     <table>

@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@700&display=swap" rel="stylesheet">
+    {% from 'partials/legal_fields.html' import legal_lines %}
     <style>
         .offer-toolbar {
             max-width: 900px; margin: 24px auto 0; padding: 0 24px;
@@ -52,7 +53,7 @@
     <h1>ТРАФКОМ ООД</h1>
     <p class="offer-address">гр. Тетевен, ул Александър Стамболийски 36, trafcom@tafcombg.com, +359 886 762276</p>
     <p class="offer-number">СТОКОВА РАЗПИСКА № {{ note.id }}</p>
-    {% if note.client %}<p class="offer-client">Клиент: {{ note.client.name }}</p>{% endif %}
+    {% if note.client %}<p class="offer-client">Клиент: {{ note.client.name }}</p>{{ legal_lines(note.client) }}{% endif %}
     {% if note.note_number %}<p class="offer-client">Фактура № / Наша реф.: {{ note.note_number }}</p>{% endif %}
     {% if note.note_date %}<p class="offer-client">Дата на издаване: {{ note.note_date.strftime('%d.%m.%Y') }}</p>{% endif %}
 

@@ -1,0 +1,18 @@
+{#
+    Renders a legal entity's company fields (ЕИК, ДДС №, Адрес, МОЛ) as
+    paragraphs, for print documents that link a real Client/Supplier record
+    (see CLAUDE.md's Client/Deliverer/Supplier legal-fields note). Only shown
+    for company-type entities - `entity.client_type is not defined` also lets
+    this work for Supplier, which has no client_type column at all (every
+    Supplier is a business by definition, see its docstring) without
+    special-casing it here.
+#}
+{% macro legal_lines(entity, css_class='offer-client') %}
+{% if entity and (entity.client_type is not defined or entity.client_type == 'company') %}
+{% if entity.eik or entity.vat_number %}
+<p class="{{ css_class }}">{% if entity.eik %}ЕИК: {{ entity.eik }}{% endif %}{% if entity.eik and entity.vat_number %} &middot; {% endif %}{% if entity.vat_number %}ДДС №: {{ entity.vat_number }}{% endif %}</p>
+{% endif %}
+{% if entity.address %}<p class="{{ css_class }}">Адрес: {{ entity.address }}</p>{% endif %}
+{% if entity.mol %}<p class="{{ css_class }}">МОЛ: {{ entity.mol }}</p>{% endif %}
+{% endif %}
+{% endmacro %}
