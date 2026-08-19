@@ -373,6 +373,7 @@
                     <th>Доставчик</th>
                     <th>Фактура №</th>
                     <th>Артикули</th>
+                    <th></th>
                 </tr>
                 </thead>
                 <tbody>
@@ -396,10 +397,11 @@
                         </div>
                         {% endfor %}
                     </td>
+                    <td><a href="{{ url_for('admin_delivery_note_print', note_id=note.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Печат</a></td>
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="4" class="text-center no-data">Няма записани разписки.</td>
+                    <td colspan="5" class="text-center no-data">Няма записани разписки.</td>
                 </tr>
                 {% endfor %}
                 </tbody>

@@ -3128,6 +3128,19 @@ def create_delivery_note():
     return redirect(url_for('admin_delivery_notes'))
 
 
+@app.route('/admin/delivery-notes/<int:note_id>/print')
+@role_required(['admin', 'worker'])
+def admin_delivery_note_print(note_id):
+    """
+    Browser-print view of a DeliveryNote (стокова разписка) - same
+    @media-print pattern as admin_offer_print.html/offer.html (see CLAUDE.md's
+    'Offer / protocol / certificate documents' section), reused for a
+    goods-received note instead of a sales quote.
+    """
+    note = DeliveryNote.query.get_or_404(note_id)
+    return render_template('admin_delivery_note_print.html', note=note)
+
+
 @app.route('/admin/content')
 @login_required
 def admin_content():
