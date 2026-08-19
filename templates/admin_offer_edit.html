@@ -383,18 +383,29 @@
                     const cbTd = document.createElement('td');
                     if (!canSelect) {
                         cb.disabled = true;
-                        cb.title = item.id == null
-                            ? 'Запази офертата, за да избереш този ред.'
-                            : 'Текстов ред - няма връзка към продукт/детайл.';
-                        cbTd.appendChild(cb);
                         // A disabled checkbox alone reads as broken rather than
                         // intentional - spell out *why* right next to it instead
-                        // of relying on a hover-only title tooltip.
+                        // of relying on a hover-only title tooltip (three distinct
+                        // reasons: not saved yet, a free-text row that was never
+                        // catalog-linked, or a pre-existing row saved before
+                        // product_id/detail_id tracking was added to OfferItem).
+                        let noteText;
                         if (item.id == null) {
+                            cb.title = 'Запази офертата, за да избереш този ред.';
+                            noteText = 'запази офертата';
+                        } else if (item.type === 'text') {
+                            cb.title = 'Текстов ред - няма връзка към продукт/детайл.';
+                            noteText = null;
+                        } else {
+                            cb.title = 'Този ред е добавен преди тази функция и няма връзка към продукт/детайл - премахни го и го добави отново от списъка горе.';
+                            noteText = 'премахни и добави отново';
+                        }
+                        cbTd.appendChild(cb);
+                        if (noteText) {
                             const note = document.createElement('div');
                             note.className = 'text-small text-muted';
                             note.style.whiteSpace = 'nowrap';
-                            note.textContent = 'запази офертата';
+                            note.textContent = noteText;
                             cbTd.appendChild(note);
                         }
                     } else {
