@@ -5009,7 +5009,7 @@ def create_order():
                     continue
                 order_item = OrderItem(
                     order_id=new_order.id, detail_id=detail.id,
-                    quantity_ordered=qty, unit_price=detail.calculated_price
+                    quantity_ordered=qty, unit_price=detail.total_price
                 )
                 db.session.add(order_item)
                 db.session.flush()  # need order_item.id for its operations
@@ -6838,9 +6838,10 @@ def admin_offer_create_order(offer_id):
     """Turns the checked product/detail lines of an existing Offer into a new
     Order, via the same product-recipe-snapshot / current-catalog-price logic
     as create_order()'s cart loop (component snapshot for products,
-    detail.calculated_price for standalone details) - offer lines don't carry
-    per-detail operations/attachments, so those parts of that loop don't apply
-    here. Text lines have no product_id/detail_id (see OfferItem) and can't be
+    detail.total_price - material plus the detail's own permanent operations -
+    for standalone details) - offer lines don't carry per-detail ad-hoc
+    operations/attachments, so those parts of that loop don't apply here.
+    Text lines have no product_id/detail_id (see OfferItem) and can't be
     selected."""
     offer = Offer.query.get_or_404(offer_id)
     item_ids = request.form.getlist('item_ids', type=int)
@@ -6882,7 +6883,7 @@ def admin_offer_create_order(offer_id):
             if not detail:
                 continue
             db.session.add(OrderItem(order_id=new_order.id, detail_id=detail.id,
-                                      quantity_ordered=qty, unit_price=detail.calculated_price))
+                                      quantity_ordered=qty, unit_price=detail.total_price))
             added_any = True
 
     if not added_any:

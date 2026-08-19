@@ -32,7 +32,7 @@ import pytest
 from werkzeug.security import generate_password_hash
 
 from app import (app as flask_app, db, User, MaterialPrice, Detail, Product, ProductDetail,
-                  Offer, OfferItem, Order, OrderItem, OrderItemComponent, limiter)
+                  Offer, OfferItem, Order, OrderItem, OrderItemComponent, Service, Operation, limiter)
 
 
 @pytest.fixture
@@ -50,6 +50,14 @@ def app():
         detail = Detail(name='QA Detail', material_key=material.key, width=10, height=10,
                          total_length=1, pierce_count=1, calculated_price=7.5)
         db.session.add(detail)
+        db.session.flush()
+        # A permanent catalog operation on the detail (e.g. deburring) - its
+        # cost must be included in the order's unit_price via total_price,
+        # not silently dropped by using calculated_price instead.
+        service = Service(name='QA Service', price_per_hour_eur=60)
+        db.session.add(service)
+        db.session.flush()
+        db.session.add(Operation(detail_id=detail.id, service_id=service.id, sequence=0, duration_minutes=10))
         db.session.flush()
         product = Product(name='QA Product', markup_percent=0)
         db.session.add(product)
@@ -108,7 +116,9 @@ def test_create_order_from_selected_offer_items(client):
 
         detail_line = next(i for i in items if i.detail_id == detail_id)
         assert detail_line.quantity_ordered == 4
-        assert detail_line.unit_price == 7.5  # Detail.calculated_price
+        # Detail.total_price = calculated_price (7.5) + its permanent Operation
+        # (10 min @ 60 EUR/h = 10.0) - must NOT be calculated_price alone.
+        assert detail_line.unit_price == 17.5
 
 
 def test_create_order_requires_customer_name(client):
