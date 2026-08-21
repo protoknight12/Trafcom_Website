@@ -265,6 +265,13 @@
                     {% include 'partials/material_options.html' %}
                 </select>
             </div>
+            <div class="form-group" style="margin-bottom: 12px;">
+                <select id="in-service" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-color); color: #fff; padding: 8px; border-radius: 4px;">
+                    {% for s in services %}
+                    <option value="{{ s.id }}">{{ s.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
             <button id="btn-calculate" class="btn-submit" style="width: 100%;">Изчисли цена в Калкулатора</button>
         </div>
 
@@ -283,11 +290,12 @@
     </div>
 
     <!-- Hidden form that submits the generated DXF straight into the same
-         /dashboard upload flow used by the main calculator - reuses all of
-         its existing pricing/geometry logic instead of duplicating it. -->
-    <form id="sendToCalculatorForm" action="{{ url_for('dashboard') }}" method="POST" enctype="multipart/form-data" style="display: none;">
+         /upload flow used by the main calculator - reuses all of its
+         existing pricing/geometry logic instead of duplicating it. -->
+    <form id="sendToCalculatorForm" action="{{ url_for('upload') }}" method="POST" enctype="multipart/form-data" style="display: none;">
         {% include 'partials/csrf_field.html' %}
         <input type="hidden" name="material" id="calc-material-field">
+        <input type="hidden" name="service_ids" id="calc-service-field">
         <input type="file" name="file" id="calc-file-field">
     </form>
 </main>
@@ -850,108 +858,51 @@
     }
 
     /**
-     * Builds the DXF file text for the current panel + generated holes.
+     * Gets the DXF file for the current panel + generated holes from the
+     * server (/api/generator/dxf, built with ezdxf) instead of hand-rolling
+     * DXF text in JS - the hand-rolled version was missing sections/tables
+     * (BLOCK_RECORD, OBJECTS, entity handles) real CAD software expects,
+     * even though our own reader (ezdxf.readfile) tolerated it fine.
      * Shared by both the download button and the "send to calculator"
      * button, so the two stay in sync automatically.
      */
-    function buildDxfString(W, H) {
-        let dxf = [];
-
-        // HEADER: $ACADVER tells AutoCAD which DXF version this is, which in
-        // turn tells it what entity types are even valid. Without it,
-        // AutoCAD can silently assume a much older format that predates
-        // LWPOLYLINE (introduced in AutoCAD 2000/AC1015) - which is exactly
-        // the entity type used for the panel border and every non-circle
-        // hole. $EXTMIN/$EXTMAX also help AutoCAD zoom to the right area
-        // instead of opening on an empty/default view.
-        dxf.push("  0\nSECTION\n  2\nHEADER");
-        dxf.push("  9\n$ACADVER\n  1\nAC1015");
-        dxf.push(`  9\n$INSBASE\n 10\n0.0\n 20\n0.0\n 30\n0.0`);
-        dxf.push(`  9\n$EXTMIN\n 10\n0.0\n 20\n0.0\n 30\n0.0`);
-        dxf.push(`  9\n$EXTMAX\n 10\n${W}\n 20\n${H}\n 30\n0.0`);
-        dxf.push("  0\nENDSEC");
-
-        // TABLES: a minimal but properly-formed LTYPE + LAYER table, with
-        // handle (5) and owner (330) references matching standard AC1015
-        // structure. Layer "0" and linetype "CONTINUOUS" are referenced
-        // (implicitly, or via group code 8) by every entity below - some CAD
-        // software tolerates these being undefined, but AutoCAD expects them
-        // formally present and properly linked for a well-formed file.
-        dxf.push("  0\nSECTION\n  2\nTABLES");
-        dxf.push("  0\nTABLE\n  2\nLTYPE\n  5\n1\n330\n0\n100\nAcDbSymbolTable\n 70\n1");
-        dxf.push("  0\nLTYPE\n  5\n2\n330\n1\n100\nAcDbSymbolTableRecord\n100\nAcDbLinetypeTableRecord\n  2\nCONTINUOUS\n 70\n0\n  3\nSolid line\n 72\n65\n 73\n0\n 40\n0.0");
-        dxf.push("  0\nENDTAB");
-        dxf.push("  0\nTABLE\n  2\nLAYER\n  5\n3\n330\n0\n100\nAcDbSymbolTable\n 70\n1");
-        dxf.push("  0\nLAYER\n  5\n4\n330\n3\n100\nAcDbSymbolTableRecord\n100\nAcDbLayerTableRecord\n  2\n0\n 70\n0\n 62\n7\n  6\nCONTINUOUS");
-        dxf.push("  0\nENDTAB");
-        dxf.push("  0\nENDSEC");
-
-        // BLOCKS: some CAD software expects this section to at least exist,
-        // even empty.
-        dxf.push("  0\nSECTION\n  2\nBLOCKS\n  0\nENDSEC");
-
-        dxf.push("  0\nSECTION\n  2\nENTITIES");
-        dxf.push("  0\nLWPOLYLINE\n100\nAcDbEntity\n  8\n0\n100\nAcDbPolyline\n 90\n5\n 70\n1");
-        dxf.push(` 10\n0.0\n 20\n0.0\n 10\n${W}\n 20\n0.0\n 10\n${W}\n 20\n${H}\n 10\n0.0\n 20\n${H}\n 10\n0.0\n 20\n0.0`);
-
-        function emitPolyline(pts, h) {
-            const closed = pts.slice();
-            closed.push(closed[0]);
-            dxf.push(`  0\nLWPOLYLINE\n100\nAcDbEntity\n  8\n0\n100\nAcDbPolyline\n 90\n${closed.length}\n 70\n1`);
-            closed.forEach(p => {
-                let rx = p[0] * Math.cos(h.rot) - p[1] * Math.sin(h.rot);
-                let ry = p[0] * Math.sin(h.rot) + p[1] * Math.cos(h.rot);
-                dxf.push(` 10\n${(h.x + rx).toFixed(3)}\n 20\n${(h.y + ry).toFixed(3)}`);
-            });
-        }
-
-        generatedHoles.forEach(h => {
-            let rad = h.size / 2;
-            if (h.type === 'circle') {
-                dxf.push(`  0\nCIRCLE\n  8\n0\n 10\n${h.x.toFixed(3)}\n 20\n${h.y.toFixed(3)}\n 40\n${rad.toFixed(3)}`);
-            } else if (h.type === 'hexcluster') {
-                // 3 separate rhombus holes, not one polygon - see
-                // hexClusterRhombi() for why.
-                hexClusterRhombi(rad).forEach(pts => emitPolyline(pts, h));
-            } else {
-                let pts = [];
-                if (h.type === 'square') pts = [[-rad, -rad], [rad, -rad], [rad, rad], [-rad, rad]];
-                else if (h.type === 'hexagon') { for(let i=0; i<6; i++) { let a=i*Math.PI/3; pts.push([rad*Math.cos(a), rad*Math.sin(a)]); } }
-                else if (h.type === 'triangle') pts = [[0, -rad], [rad * 0.866, rad/2], [-rad * 0.866, rad/2]];
-                else if (h.type === 'rhombus') pts = [[0, -rad], [rad/1.5, 0], [0, rad], [-rad/1.5, 0]];
-                emitPolyline(pts, h);
-            }
+    async function fetchGeneratedDxf(W, H) {
+        const res = await fetch('/api/generator/dxf', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': window.CSRF_TOKEN },
+            body: JSON.stringify({ width: W, height: H, holes: generatedHoles })
         });
-        dxf.push("  0\nENDSEC\n  0\nEOF");
-        return dxf.join('\n');
+        if (!res.ok) throw new Error('DXF generation failed');
+        return res.blob();
     }
 
-    document.getElementById('btn-download').addEventListener('click', () => {
+    document.getElementById('btn-download').addEventListener('click', async () => {
         const W = parseFloat(document.getElementById('in-width').value);
         const H = parseFloat(document.getElementById('in-height').value);
-        const blob = new Blob([buildDxfString(W, H)], { type: "application/dxf" });
+        const blob = await fetchGeneratedDxf(W, H);
         const link = document.createElement("a");
         link.href = URL.createObjectURL(blob);
         link.download = `Panel_${W}x${H}_Mixed.dxf`;
         link.click();
     });
 
-    document.getElementById('btn-calculate').addEventListener('click', () => {
+    document.getElementById('btn-calculate').addEventListener('click', async () => {
         const W = parseFloat(document.getElementById('in-width').value);
         const H = parseFloat(document.getElementById('in-height').value);
-        const dxfText = buildDxfString(W, H);
         const filename = `Panel_${W}x${H}_Mixed.dxf`;
+        const blob = await fetchGeneratedDxf(W, H);
 
-        // Wrap the generated DXF text as a real File object and attach it
-        // to the hidden form's file input via DataTransfer - this lets us
+        // Wrap the generated DXF as a real File object and attach it to
+        // the hidden form's file input via DataTransfer - this lets us
         // submit it through the exact same multipart upload flow /dashboard
         // already handles for manually-uploaded files, so pricing/geometry
         // logic never needs to be duplicated in JS.
-        const file = new File([dxfText], filename, { type: 'application/dxf' });
+        const file = new File([blob], filename, { type: 'application/dxf' });
         const dataTransfer = new DataTransfer();
         dataTransfer.items.add(file);
         document.getElementById('calc-file-field').files = dataTransfer.files;
         document.getElementById('calc-material-field').value = document.getElementById('in-material').value;
+        document.getElementById('calc-service-field').value = document.getElementById('in-service').value;
 
         document.getElementById('sendToCalculatorForm').submit();
     });

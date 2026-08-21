@@ -1587,7 +1587,21 @@ def process_entity(entity):
             # (total_length, calculated_price) into numpy.float64, which
             # psycopg2 can't bind - causing an obscure "schema np does not
             # exist" error on INSERT. Cast to native float immediately.
-            vertices = [(float(p[0]), float(p[1]), float(p[2])) for p in entity.get_points(format='xyb')]
+            if dtype == 'LWPOLYLINE':
+                vertices = [(float(p[0]), float(p[1]), float(p[2])) for p in entity.get_points(format='xyb')]
+            else:
+                # Old-style POLYLINE has no get_points() - it's not an
+                # LWPolyline subclass, its vertices are separate sub-entities
+                # (entity.vertices) each with their own dxf.location/bulge.
+                # Calling get_points() on it raised AttributeError, silently
+                # swallowed below, so any drawing using this (older/other-
+                # CAD-exported) entity type analyzed as empty geometry - zero
+                # length, blank preview. Only 2D polylines carry a flat
+                # cuttable outline; 3D polylines/polymeshes/polyfaces aren't
+                # planar cut paths and are skipped like any other shape type
+                # we don't handle.
+                vertices = [(float(v.dxf.location.x), float(v.dxf.location.y), float(v.dxf.bulge))
+                            for v in entity.vertices] if entity.is_2d_polyline else []
 
             if vertices:
                 segment_pairs = [(vertices[i], vertices[i + 1]) for i in range(len(vertices) - 1)]
@@ -2173,7 +2187,8 @@ def generator():
     # Requires login, same as every other app (matches the "apps require an
     # account, the public site doesn't" design used across the project).
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
-    return render_template('generator.html', materials=materials, active_page='generator')
+    services = Service.query.order_by(Service.name).all()
+    return render_template('generator.html', materials=materials, services=services, active_page='generator')
 
 
 @app.route('/api/generator-presets')
@@ -2218,6 +2233,81 @@ def api_generator_presets_delete(preset_id):
     db.session.delete(preset)
     db.session.commit()
     return jsonify({'status': 'success'})
+
+
+def _generator_hole_polygon(hole_type, rad):
+    """
+    Same shape-outline math as shapeOutlineLoops()/buildDxfString() in
+    templates/generator.html, kept in sync by hand since it's static
+    per-shape geometry (not the randomized layout, which stays client-side).
+    Returns a list of point-loops - more than one only for 'hexcluster'.
+    """
+    if hole_type == 'square':
+        return [[(-rad, -rad), (rad, -rad), (rad, rad), (-rad, rad)]]
+    if hole_type == 'hexagon':
+        return [[(rad * math.cos(i * math.pi / 3), rad * math.sin(i * math.pi / 3)) for i in range(6)]]
+    if hole_type == 'triangle':
+        return [[(0, -rad), (rad * 0.866, rad / 2), (-rad * 0.866, rad / 2)]]
+    if hole_type == 'rhombus':
+        return [[(0, -rad), (rad / 1.5, 0), (0, rad), (-rad / 1.5, 0)]]
+    if hole_type == 'hexcluster':
+        shrink = 0.88
+        r = rad * 2 / (1 + shrink)
+        v = [(r * math.cos(k * math.pi / 3), r * math.sin(k * math.pi / 3)) for k in range(6)]
+        loops = []
+        for a, b, c in ((0, 1, 2), (2, 3, 4), (4, 5, 0)):
+            pts = [(0, 0), v[a], v[b], v[c]]
+            cx = sum(p[0] for p in pts) / 4
+            cy = sum(p[1] for p in pts) / 4
+            loops.append([(cx + (x - cx) * shrink, cy + (y - cy) * shrink) for x, y in pts])
+        return loops
+    return []
+
+
+@app.route('/api/generator/dxf', methods=['POST'])
+@login_required
+def api_generator_dxf():
+    """
+    Builds the Panel Generator's export server-side with ezdxf instead of
+    the hand-rolled DXF text this used to build in JS. The hand-rolled
+    version skipped several sections/tables (BLOCK_RECORD, OBJECTS, entity
+    handles) that ezdxf's writer always includes correctly - our own reader
+    (ezdxf.readfile, used by analyze_dxf_geometry) is lenient enough to open
+    it anyway, but real CAD software is stricter and was failing on it.
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        width = float(data.get('width'))
+        height = float(data.get('height'))
+    except (TypeError, ValueError):
+        return jsonify({'status': 'error', 'message': 'Невалидни размери.'}), 400
+    holes = data.get('holes') or []
+
+    doc = ezdxf.new('R2000')
+    msp = doc.modelspace()
+    msp.add_lwpolyline([(0, 0), (width, 0), (width, height), (0, height)], close=True)
+
+    for hole in holes:
+        try:
+            hx, hy, size, rot = float(hole['x']), float(hole['y']), float(hole['size']), float(hole.get('rot', 0))
+        except (KeyError, TypeError, ValueError):
+            continue
+        rad = size / 2
+        if hole.get('type') == 'circle':
+            msp.add_circle((hx, hy), rad)
+            continue
+        cos_r, sin_r = math.cos(rot), math.sin(rot)
+        for loop in _generator_hole_polygon(hole.get('type'), rad):
+            pts = [(hx + x * cos_r - y * sin_r, hy + x * sin_r + y * cos_r) for x, y in loop]
+            if pts:
+                msp.add_lwpolyline(pts, close=True)
+
+    buf = io.StringIO()
+    doc.write(buf)
+    mem = io.BytesIO(buf.getvalue().encode('utf-8'))
+    mem.seek(0)
+    filename = f"Panel_{width:g}x{height:g}_Mixed.dxf"
+    return send_file(mem, mimetype='application/dxf', as_attachment=True, download_name=filename)
 
 
 @app.route('/admin/generator-presets')
