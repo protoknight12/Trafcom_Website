@@ -452,6 +452,17 @@
      */
     function hexClusterRhombi(r, shrink) {
         shrink = shrink === undefined ? 0.88 : shrink;
+        // Shrinking each rhombus toward its OWN centroid (below) also pulls
+        // the cluster's outer corners in - by exactly (1+shrink)/2, a fixed
+        // ratio independent of r - leaving it visibly smaller than a plain
+        // hexagon at the same nominal "size" (~6% smaller at the default
+        // 0.88). That matters beyond looks: "size" is what the spacing
+        // formula in generateHoles() treats as this hole's true diameter,
+        // so an undersized cluster reads as extra gap around it that isn't
+        // really there for any other shape. Scale the hexagon this is built
+        // from up by the inverse so the cluster's actual outer reach - not
+        // just its nominal size - matches a real hexagon's.
+        r = r * 2 / (1 + shrink);
         const V = [];
         for (let k = 0; k < 6; k++) {
             let a = k * Math.PI / 3;
@@ -597,34 +608,45 @@
         generatedHoles = [];
         let totalCutLength = 2 * (W + H); // outer panel boundary is also a cut (see DXF export)
 
-        const step = maxSize + spacing;
         const startX = border + maxSize / 2;
         const startY = border + maxSize / 2;
         const endX = W - border - maxSize / 2;
         const endY = H - border - maxSize / 2;
 
+        // "Spacing" is meant as the real gap between adjacent hole edges.
+        // Holes shrink toward minSize away from the dense zone (see
+        // scaleFactor below), so a step sized off the fixed maxSize would
+        // leave far more than `spacing` of daylight between small holes -
+        // exactly backwards from what the slider says. Each row's step is
+        // sized off THAT row's actual hole size instead, so 0.1mm reads as
+        // 0.1mm regardless of how far into the falloff it's drawn. Row
+        // height reuses the same row's size for its neighbor too - not
+        // exact if the next row lands somewhere the gradient is changing
+        // fast, but rows are close enough together that it holds up.
         let rowIdx = 0;
-        for (let y = startY; y <= endY; y += step * 0.866) {
+        let y = startY;
+        while (y <= endY) {
+            let normY = (y - startY) / (endY - startY || 1);
+            if (dir === 'bottom-top') normY = 1.0 - normY;
+
+            let scaleFactor = 1.0;
+            let activeSparseness = 0;
+            if (normY > densePct) {
+                let falloffDomain = (normY - densePct) / (1.0 - densePct);
+                scaleFactor = 1.0 - Math.pow(falloffDomain, falloff);
+                activeSparseness = sparseness * falloffDomain;
+            }
+
+            let rowSize = minSize + (maxSize - minSize) * Math.max(0, scaleFactor);
+            let rowStep = rowSize + spacing;
+
             let isStaggered = rowIdx % 2 !== 0;
-            let rowStartX = startX + (isStaggered ? step / 2 : 0);
+            let rowStartX = startX + (isStaggered ? rowStep / 2 : 0);
 
-            for (let x = rowStartX; x <= endX; x += step) {
-                let normY = (y - startY) / (endY - startY || 1);
-                if (dir === 'bottom-top') normY = 1.0 - normY;
-
-                let scaleFactor = 1.0;
-                let activeSparseness = 0;
-                if (normY > densePct) {
-                    let falloffDomain = (normY - densePct) / (1.0 - densePct);
-                    scaleFactor = 1.0 - Math.pow(falloffDomain, falloff);
-                    activeSparseness = sparseness * falloffDomain;
-                }
-
+            for (let x = rowStartX; x <= endX; x += rowStep) {
                 if (rand() < topRandomness && normY <= densePct) continue;
                 if (rand() < activeSparseness) continue;
-
-                let finalSize = minSize + (maxSize - minSize) * Math.max(0, scaleFactor);
-                if (finalSize < 2) continue;
+                if (rowSize < 2) continue;
 
                 // Pick random shape from selected
                 let shapeIdx = Math.floor(rand() * selectedShapes.length);
@@ -638,9 +660,11 @@
                     jY += (rand() * 2 - 1) * jitterAmt;
                 }
 
-                generatedHoles.push({ x: jX, y: jY, size: finalSize, rot: rotRad, type: shapeType });
-                totalCutLength += shapePerimeter(shapeType, finalSize);
+                generatedHoles.push({ x: jX, y: jY, size: rowSize, rot: rotRad, type: shapeType });
+                totalCutLength += shapePerimeter(shapeType, rowSize);
             }
+
+            y += rowStep * 0.866;
             rowIdx++;
         }
 
