@@ -4446,8 +4446,14 @@ def admin_add_detail():
     stored_path = None
     try:
         if has_dxf:
-            original_filename = secure_filename(file.filename)
-            stored_filename = f"{uuid.uuid4().hex}_{original_filename}"
+            # secure_filename() strips non-ASCII entirely (a Cyrillic-only
+            # name like "панел_метален.dxf" becomes just "dxf", losing even
+            # the extension) - fine for the on-disk name below, but the
+            # DB's display name (original_filename, shown in the dashboard
+            # and used to gate the .dxf preview button) needs
+            # sanitize_display_filename() instead, which keeps Cyrillic.
+            original_filename = sanitize_display_filename(file.filename)
+            stored_filename = f"{uuid.uuid4().hex}_{secure_filename(file.filename)}"
             stored_path = os.path.join(app.config['DETAIL_DXF_FOLDER'], stored_filename)
             file.save(stored_path)
 
@@ -4483,7 +4489,7 @@ def admin_add_detail():
             pdf_stored_filename = _save_upload(pdf_file, app.config['DETAIL_DXF_FOLDER'], allowed_extensions={'pdf'})
             db.session.add(DetailDxfFile(
                 detail_id=new_detail.id, filename=pdf_stored_filename,
-                original_filename=secure_filename(pdf_file.filename), uploaded_by_id=current_user.id
+                original_filename=sanitize_display_filename(pdf_file.filename), uploaded_by_id=current_user.id
             ))
         # Optional extra services (mill, deburr, ...) staged alongside the
         # base cut on the same form - see admin_details.html's operations
@@ -4587,6 +4593,16 @@ def upload_detail_dxf(detail_id):
     only .dxf files get the 2D preview button (see detail_dxf_dashboard.html
     and get_detail_dxf_geometry() below), everything else just sits there
     for download.
+
+    If the detail has no cut-length/pierce data yet (the "catalogued with a
+    manually-entered price, DXF/geometry added later" path admin_add_detail()
+    documents), and this upload is a .dxf, parse it and fill that data in -
+    otherwise detail_dxf_dashboard.html's "calculate duration from DXF"
+    helper (see OP_DEFAULT_LENGTH_MM) always has nothing to work with, since
+    nothing else ever populates it after creation. Only fills in *missing*
+    geometry, never overwrites existing data - once a detail has real cut
+    data, further .dxf uploads here are just reference/revision files like
+    any other attachment.
     """
     detail = Detail.query.get_or_404(detail_id)
     file = request.files.get('file')
@@ -4594,12 +4610,24 @@ def upload_detail_dxf(detail_id):
         flash('Моля изберете файл.', 'danger')
         return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
-    original_filename = secure_filename(file.filename)
+    original_filename = sanitize_display_filename(file.filename)
     stored_filename = _save_upload(file, app.config['DETAIL_DXF_FOLDER'])
     db.session.add(DetailDxfFile(
         detail_id=detail.id, filename=stored_filename, original_filename=original_filename,
         uploaded_by_id=current_user.id
     ))
+
+    if not detail.total_length and file.filename.lower().endswith('.dxf'):
+        path = os.path.join(app.config['DETAIL_DXF_FOLDER'], stored_filename)
+        width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(path)
+        if width is not None:
+            detail.width = width
+            detail.height = height
+            detail.total_length = total_length
+            detail.pierce_count = pierce_count
+            detail.geometry_json = json.dumps(shapes)
+            detail.calculated_price = calculate_material_price(width, height, detail.material_key)
+
     db.session.commit()
     flash('Файлът беше качен успешно.', 'success')
     return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
@@ -4804,7 +4832,7 @@ def _link_order_item_attachment(order_item, attachment):
     stored_path = os.path.join(app.config['ORDER_ITEM_FILE_FOLDER'], stored_filename)
     if not os.path.isfile(stored_path):
         return
-    original_filename = secure_filename(attachment.get('original_filename') or stored_filename) or stored_filename
+    original_filename = sanitize_display_filename(attachment.get('original_filename') or stored_filename) or stored_filename
     db.session.add(OrderItemAttachment(
         order_item_id=order_item.id, filename=stored_filename, original_filename=original_filename,
         uploaded_by_id=current_user.id
@@ -5272,7 +5300,7 @@ def upload_order_item_pdf():
     return jsonify({
         'status': 'success',
         'filename': stored_filename,
-        'original_filename': secure_filename(file.filename),
+        'original_filename': sanitize_display_filename(file.filename),
     })
 
 
@@ -5832,7 +5860,7 @@ def api_quick_create_detail():
             pdf_stored_filename = _save_upload(pdf_file, app.config['DETAIL_DXF_FOLDER'], allowed_extensions={'pdf'})
             db.session.add(DetailDxfFile(
                 detail_id=new_detail.id, filename=pdf_stored_filename,
-                original_filename=secure_filename(pdf_file.filename), uploaded_by_id=current_user.id
+                original_filename=sanitize_display_filename(pdf_file.filename), uploaded_by_id=current_user.id
             ))
         db.session.commit()
         log_action(f'Създаден детайл "{name}" (бърз избор, материал "{mat.display_name}", цена {new_detail.calculated_price:g} лв.)')
