@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Пресети - Генератор - TRAFCOM</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .preset-card-header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 8px; }
+        .preset-settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 4px 16px; font-size: 0.85rem; }
+        .preset-settings-grid span { color: var(--text-muted); }
+        .preset-settings-grid b { color: var(--text-main); font-family: monospace; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container" style="max-width: 1100px; margin: 30px auto; padding: 0 15px;">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <h2 style="margin-bottom: 20px;">Пресети на Параметричния Генератор</h2>
+    <p class="section-subtitle" style="margin-top: -10px;">Всички пресети, запазени от потребителите на /generator. „Запази в моя акаунт“ копира пресета във вашия собствен списък (виждате го на страницата на генератора).</p>
+
+    {% for row in presets_view %}
+    {% set preset = row.preset %}
+    <section class="admin-card">
+        <div class="preset-card-header">
+            <div>
+                <strong style="font-size: 1.1rem;">{{ preset.name }}</strong>
+                <div class="text-muted text-small">{{ preset.created_at.strftime('%d.%m.%Y %H:%M') }} · Потребител: {{ preset.user.username if preset.user else 'Изтрит потребител' }}</div>
+            </div>
+            <form action="{{ url_for('admin_generator_preset_copy', preset_id=preset.id) }}" method="POST">
+                {% include 'partials/csrf_field.html' %}
+                <button type="submit" class="btn-submit" style="padding: 6px 14px;">Запази в моя акаунт</button>
+            </form>
+        </div>
+        <details>
+            <summary style="cursor: pointer; color: var(--accent-secondary); font-size: 0.85rem; margin-bottom: 8px;">Преглед на настройките</summary>
+            <div class="preset-settings-grid">
+                {% for key, value in row.settings.items() %}
+                <div><span>{{ key }}:</span> <b>{{ value }}</b></div>
+                {% endfor %}
+            </div>
+        </details>
+    </section>
+    {% else %}
+    <section class="admin-card">
+        <p class="no-data text-center">Все още няма запазени пресети.</p>
+    </section>
+    {% endfor %}
+
+</main>
+</body>
+</html>

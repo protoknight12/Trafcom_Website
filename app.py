@@ -209,6 +209,23 @@ dxf_file_service = db.Table(
 )
 
 
+class GeneratorPreset(db.Model):
+    """
+    A saved set of Panel Generator (templates/generator.html) slider/shape
+    settings, so a user doesn't have to re-dial in a look from scratch.
+    Owned by the user who saved it (one row per user+name, saving over an
+    existing name overwrites it - see api_generator_presets_save()). Admins
+    get a dashboard listing every user's presets and can copy one into their
+    own account - see admin_generator_presets() / admin_generator_preset_copy().
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    settings_json = db.Column(db.Text, nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    user = db.relationship('User', backref='generator_presets')
+
+
 class MaterialPrice(db.Model):
     """
     Per-material pricing, editable by admins at runtime instead of being
@@ -2157,6 +2174,74 @@ def generator():
     # account, the public site doesn't" design used across the project).
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     return render_template('generator.html', materials=materials, active_page='generator')
+
+
+@app.route('/api/generator-presets')
+@login_required
+def api_generator_presets_list():
+    """The current user's own saved Panel Generator presets, for the picker on /generator."""
+    presets = GeneratorPreset.query.filter_by(user_id=current_user.id).order_by(GeneratorPreset.name).all()
+    return jsonify({'status': 'success', 'presets': [
+        {'id': p.id, 'name': p.name, 'settings': json.loads(p.settings_json)} for p in presets
+    ]})
+
+
+@app.route('/api/generator-presets', methods=['POST'])
+@login_required
+def api_generator_presets_save():
+    """Save (or overwrite, if the name already exists for this user) a Panel Generator preset."""
+    name = request.form.get('name', '').strip()
+    settings_json = request.form.get('settings_json', '')
+    if not name:
+        return jsonify({'status': 'error', 'message': 'Моля въведете име на пресет.'}), 400
+    try:
+        json.loads(settings_json)
+    except ValueError:
+        return jsonify({'status': 'error', 'message': 'Невалидни настройки.'}), 400
+
+    preset = GeneratorPreset.query.filter_by(user_id=current_user.id, name=name).first()
+    if preset:
+        preset.settings_json = settings_json
+    else:
+        preset = GeneratorPreset(name=name, settings_json=settings_json, user_id=current_user.id)
+        db.session.add(preset)
+    db.session.commit()
+    return jsonify({'status': 'success', 'id': preset.id})
+
+
+@app.route('/api/generator-presets/<int:preset_id>/delete', methods=['POST'])
+@login_required
+def api_generator_presets_delete(preset_id):
+    preset = GeneratorPreset.query.get_or_404(preset_id)
+    if preset.user_id != current_user.id:
+        return jsonify({'status': 'error', 'message': 'Нямате достъп.'}), 403
+    db.session.delete(preset)
+    db.session.commit()
+    return jsonify({'status': 'success'})
+
+
+@app.route('/admin/generator-presets')
+@role_required('admin')
+def admin_generator_presets():
+    """Admin-only dashboard listing every user's saved Panel Generator presets."""
+    presets = GeneratorPreset.query.order_by(GeneratorPreset.created_at.desc()).all()
+    presets_view = [{'preset': p, 'settings': json.loads(p.settings_json)} for p in presets]
+    return render_template('admin_generator_presets.html', presets_view=presets_view, active_page='admin_generator_presets')
+
+
+@app.route('/admin/generator-presets/<int:preset_id>/copy', methods=['POST'])
+@role_required('admin')
+def admin_generator_preset_copy(preset_id):
+    """Copies another user's preset into the current admin's own account (own row, own name)."""
+    source = GeneratorPreset.query.get_or_404(preset_id)
+    name = source.name
+    if GeneratorPreset.query.filter_by(user_id=current_user.id, name=name).first():
+        name = f'{name} (копие)'
+    copy = GeneratorPreset(name=name, settings_json=source.settings_json, user_id=current_user.id)
+    db.session.add(copy)
+    db.session.commit()
+    flash(f'Пресет "{source.name}" е запазен във вашия акаунт.', 'success')
+    return redirect(url_for('admin_generator_presets'))
 
 
 @app.route('/login', methods=['GET', 'POST'])
