@@ -623,25 +623,69 @@
         // height reuses the same row's size for its neighbor too - not
         // exact if the next row lands somewhere the gradient is changing
         // fast, but rows are close enough together that it holds up.
-        let rowIdx = 0;
-        let y = startY;
-        while (y <= endY) {
-            let normY = (y - startY) / (endY - startY || 1);
-            if (dir === 'bottom-top') normY = 1.0 - normY;
+        //
+        // First pass: walk the rows purely to find out where they land and
+        // how tall the whole stack ends up - row height varies with the
+        // gradient, so there's no way to know how much vertical space is
+        // left over after the last row without walking it once first. No
+        // holes are placed here, so it doesn't touch rand()/the seed.
+        const rows = [];
+        {
+            let ySim = startY;
+            let rowIdxSim = 0;
+            while (ySim <= endY) {
+                let normY = (ySim - startY) / (endY - startY || 1);
+                if (dir === 'bottom-top') normY = 1.0 - normY;
 
-            let scaleFactor = 1.0;
-            let activeSparseness = 0;
-            if (normY > densePct) {
-                let falloffDomain = (normY - densePct) / (1.0 - densePct);
-                scaleFactor = 1.0 - Math.pow(falloffDomain, falloff);
-                activeSparseness = sparseness * falloffDomain;
+                let scaleFactor = 1.0;
+                let activeSparseness = 0;
+                if (normY > densePct) {
+                    let falloffDomain = (normY - densePct) / (1.0 - densePct);
+                    scaleFactor = 1.0 - Math.pow(falloffDomain, falloff);
+                    activeSparseness = sparseness * falloffDomain;
+                }
+
+                let rowSize = minSize + (maxSize - minSize) * Math.max(0, scaleFactor);
+                let rowStep = rowSize + spacing;
+                rows.push({ yOffset: ySim - startY, rowIdx: rowIdxSim, normY, scaleFactor, activeSparseness, rowSize, rowStep });
+                ySim += rowStep * 0.866;
+                rowIdxSim++;
             }
+        }
 
-            let rowSize = minSize + (maxSize - minSize) * Math.max(0, scaleFactor);
-            let rowStep = rowSize + spacing;
+        // Stepping down from a fixed top edge until the next row would cross
+        // endY strands whatever's left over entirely at the bottom - same
+        // problem as the horizontal one below, just vertical (see the
+        // reported "top and bottom have an offset"). Center the whole row
+        // stack in the space actually available to it instead.
+        const usedHeight = rows.length ? rows[rows.length - 1].yOffset : 0;
+        const yShift = Math.max(0, (endY - startY) - usedHeight) / 2;
 
+        rows.forEach(row => {
+            const y = startY + yShift + row.yOffset;
+            const { normY, scaleFactor, activeSparseness, rowSize, rowStep, rowIdx } = row;
+
+            // Stepping from a fixed left edge until the next step would
+            // cross endX leaves whatever doesn't divide evenly by rowStep
+            // stranded entirely on the right - the border ends up lopsided
+            // (see the reported "right side has way more spacing"). Center
+            // the BASE (unstaggered) grid in the space available to it, then
+            // add the honeycomb offset on top for odd rows - centering each
+            // row type separately instead would center them in two
+            // different windows (since the staggered start is already
+            // shifted right by half a step before you even get to centering
+            // it), throwing the two row types out of alignment with each
+            // other and reintroducing a left/right imbalance across the
+            // whole pattern.
+            const baseAvailableWidth = endX - startX;
+            let rowStartX = startX;
+            if (baseAvailableWidth >= 0) {
+                const count = Math.floor(baseAvailableWidth / rowStep);
+                const leftover = baseAvailableWidth - count * rowStep;
+                rowStartX += leftover / 2;
+            }
             let isStaggered = rowIdx % 2 !== 0;
-            let rowStartX = startX + (isStaggered ? rowStep / 2 : 0);
+            if (isStaggered) rowStartX += rowStep / 2;
 
             for (let x = rowStartX; x <= endX; x += rowStep) {
                 if (rand() < topRandomness && normY <= densePct) continue;
@@ -655,7 +699,12 @@
                 let jX = x;
                 let jY = y;
                 if (jitterPct > 0 && scaleFactor < 0.9) {
-                    let jitterAmt = maxSize * jitterPct * (1.0 - scaleFactor);
+                    // Same bug as the old spacing formula: sizing this off
+                    // the fixed maxSize instead of this row's actual cell
+                    // size (rowStep) makes jitter dwarf small holes in the
+                    // sparse zone, shoving them off-grid into each other
+                    // instead of a gentle nudge - the "strange offset" look.
+                    let jitterAmt = rowStep * jitterPct * (1.0 - scaleFactor);
                     jX += (rand() * 2 - 1) * jitterAmt;
                     jY += (rand() * 2 - 1) * jitterAmt;
                 }
@@ -663,10 +712,7 @@
                 generatedHoles.push({ x: jX, y: jY, size: rowSize, rot: rotRad, type: shapeType });
                 totalCutLength += shapePerimeter(shapeType, rowSize);
             }
-
-            y += rowStep * 0.866;
-            rowIdx++;
-        }
+        });
 
         return { W, H, holes: generatedHoles, totalCutLength };
     }
