@@ -153,6 +153,31 @@
         }
         .stat-line { display: flex; justify-content: space-between; gap: 20px; font-size: 0.85rem; margin-bottom: 6px; }
         .stat-line span:last-child { font-family: monospace; color: var(--accent-secondary); font-weight: bold; }
+
+        .view-toggle {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            display: flex;
+            gap: 4px;
+            z-index: 2;
+        }
+        .view-toggle-btn {
+            background: rgba(20, 24, 36, 0.85);
+            border: 1px solid var(--border-color);
+            color: var(--text-muted);
+            padding: 8px 18px;
+            border-radius: var(--border-radius-sm);
+            font-size: 0.8rem;
+            font-weight: bold;
+            cursor: pointer;
+            backdrop-filter: blur(4px);
+        }
+        .view-toggle-btn.active {
+            background: rgba(124, 58, 237, 0.35);
+            border-color: var(--accent-primary);
+            color: var(--text-main);
+        }
     </style>
 </head>
 <body>
@@ -244,6 +269,10 @@
         </div>
 
         <div class="preview-area">
+            <div class="view-toggle" id="view-toggle">
+                <button type="button" class="view-toggle-btn active" data-view="2d">2D</button>
+                <button type="button" class="view-toggle-btn" data-view="3d">3D</button>
+            </div>
             <canvas id="genCanvas"></canvas>
             <div class="stats-overlay">
                 <div class="stat-line"><span>Панел</span><span id="stat-panel">0 x 0 mm</span></div>
@@ -268,6 +297,15 @@
     const ctx = canvas.getContext('2d');
     let selectedShapes = ['hexagon'];
     let generatedHoles = [];
+    let viewMode = '2d';
+
+    document.querySelectorAll('.view-toggle-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            viewMode = btn.getAttribute('data-view');
+            document.querySelectorAll('.view-toggle-btn').forEach(b => b.classList.toggle('active', b === btn));
+            render();
+        });
+    });
 
     const inputs = ['width', 'height', 'thickness', 'cellsize', 'minsize', 'spacing', 'rotation', 'border', 'densezone', 'falloff', 'sparseness', 'jitter', 'randomness', 'seed'];
 
@@ -497,7 +535,49 @@
         return perimeter;
     }
 
-    function render() {
+    /**
+     * Polygon approximation of one hole's outline, in LOCAL (unrotated,
+     * centered on the origin) coordinates. Only the 3D view needs this - the
+     * 2D view draws straight through drawShapePath()/ctx.arc() and the DXF
+     * export emits a real CIRCLE entity - because the isometric projection
+     * below is a linear transform of real vertices (turning a circle into an
+     * ellipse), not something a canvas arc/rect primitive can do.
+     */
+    function shapeOutlineLoops(type, size) {
+        const r = size / 2;
+        if (type === 'circle') {
+            const pts = [];
+            const segments = 16; // fewer facets than the 2D ctx.arc() - keeps per-edge tube walls from getting busy
+            for (let i = 0; i < segments; i++) {
+                const a = (i / segments) * Math.PI * 2;
+                pts.push([r * Math.cos(a), r * Math.sin(a)]);
+            }
+            return [pts];
+        }
+        if (type === 'hexcluster') return hexClusterRhombi(r);
+        if (type === 'square') return [[[-r, -r], [r, -r], [r, r], [-r, r]]];
+        if (type === 'hexagon') {
+            const pts = [];
+            for (let i = 0; i < 6; i++) { const a = i * Math.PI / 3; pts.push([r * Math.cos(a), r * Math.sin(a)]); }
+            return [pts];
+        }
+        if (type === 'triangle') return [[[0, -r], [r * 0.866, r / 2], [-r * 0.866, r / 2]]];
+        if (type === 'rhombus') return [[[0, -r], [r / 1.5, 0], [0, r], [-r / 1.5, 0]]];
+        return [[]];
+    }
+
+    function rotateTranslatePts(pts, rot, cx, cy) {
+        const cosR = Math.cos(rot), sinR = Math.sin(rot);
+        return pts.map(([x, y]) => [cx + x * cosR - y * sinR, cy + x * sinR + y * cosR]);
+    }
+
+    /**
+     * Generates the hole layout from the current control values. Pure data -
+     * no canvas drawing - so both the 2D and 3D views (and the DXF export,
+     * via the generatedHoles global they both populate) render exactly the
+     * same pattern.
+     */
+    function generateHoles() {
         const W = parseFloat(document.getElementById('in-width').value);
         const H = parseFloat(document.getElementById('in-height').value);
         const maxSize = parseFloat(document.getElementById('in-cellsize').value);
@@ -516,14 +596,6 @@
         const rand = mulberry32(seed);
         generatedHoles = [];
         let totalCutLength = 2 * (W + H); // outer panel boundary is also a cut (see DXF export)
-
-        const drawScale = Math.min(800 / W, 800 / H);
-        canvas.width = W * drawScale;
-        canvas.height = H * drawScale;
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = '#475569';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = '#0b0c10';
 
         const step = maxSize + spacing;
         const startX = border + maxSize / 2;
@@ -568,20 +640,117 @@
 
                 generatedHoles.push({ x: jX, y: jY, size: finalSize, rot: rotRad, type: shapeType });
                 totalCutLength += shapePerimeter(shapeType, finalSize);
-
-                ctx.save();
-                ctx.translate(jX * drawScale, jY * drawScale);
-                ctx.rotate(rotRad);
-                ctx.beginPath();
-                drawShapePath(shapeType, (finalSize * drawScale) / 2);
-                ctx.fill();
-                ctx.restore();
             }
             rowIdx++;
         }
-        document.getElementById('stat-panel').innerText = `${W} x ${H} mm`;
-        document.getElementById('stat-holes').innerText = generatedHoles.length;
-        document.getElementById('stat-cut').innerText = (totalCutLength / 1000).toFixed(2) + ' m';
+
+        return { W, H, holes: generatedHoles, totalCutLength };
+    }
+
+    function draw2D(layout) {
+        const { W, H, holes } = layout;
+        const drawScale = Math.min(800 / W, 800 / H);
+        canvas.width = W * drawScale;
+        canvas.height = H * drawScale;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#475569';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#0b0c10';
+
+        holes.forEach(h => {
+            ctx.save();
+            ctx.translate(h.x * drawScale, h.y * drawScale);
+            ctx.rotate(h.rot);
+            ctx.beginPath();
+            drawShapePath(h.type, (h.size * drawScale) / 2);
+            ctx.fill();
+            ctx.restore();
+        });
+    }
+
+    // ponytail: fixed 30deg isometric angle rather than a user-orbitable
+    // camera - gives the classic "corner view" that shows the top face plus
+    // the two thickness edges nearest the viewer, which is the whole point
+    // of this view. A free-rotate control would also need to work out which
+    // walls face the camera at each angle (face-normal test); add that if a
+    // fixed angle ever stops being enough.
+    const ISO_ANGLE = Math.PI / 6;
+    function projectIso(x, y, z) {
+        return [
+            (x - y) * Math.cos(ISO_ANGLE),
+            (x + y) * Math.sin(ISO_ANGLE) - z,
+        ];
+    }
+
+    // ponytail: real sheet thickness (0.1-5mm) is invisible against a panel
+    // that's 1000-3000mm wide - this exaggerates it purely so the 3D view
+    // reads as a slab instead of a flat sheet. Tune this constant (not the
+    // real thickness value) if a thick material still looks flat, or a thin
+    // one looks like a brick.
+    const THICKNESS_VISUAL_SCALE = 55;
+
+    function draw3D(layout) {
+        const { W, H, holes } = layout;
+        const T = parseFloat(document.getElementById('in-thickness').value) * THICKNESS_VISUAL_SCALE;
+
+        const corners = [];
+        [0, W].forEach(x => [0, H].forEach(y => [0, T].forEach(z => corners.push(projectIso(x, y, z)))));
+        const xs = corners.map(c => c[0]), ys = corners.map(c => c[1]);
+        const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+        const target = 720;
+        const scale = Math.min(target / (maxX - minX), target / (maxY - minY));
+        const pad = 20;
+        const offX = -minX * scale + pad;
+        const offY = -minY * scale + pad;
+
+        canvas.width = (maxX - minX) * scale + pad * 2;
+        canvas.height = (maxY - minY) * scale + pad * 2;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        function pt(x, y, z) {
+            const [ix, iy] = projectIso(x, y, z);
+            return [ix * scale + offX, iy * scale + offY];
+        }
+        function fillPoly(points, fillStyle, stroke) {
+            ctx.beginPath();
+            points.forEach((p, i) => { if (i === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]); });
+            ctx.closePath();
+            ctx.fillStyle = fillStyle;
+            ctx.fill();
+            if (stroke !== false) {
+                ctx.strokeStyle = '#1c2028';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            }
+        }
+
+        // Only the two walls touching the nearest (front) corner are ever
+        // visible from this fixed angle - the other two sit behind the top
+        // face. The front corner is (W,H,0): with this projection, screen-Y
+        // grows with (x+y), so the corner that maximizes x+y is the one
+        // closest to the viewer (bottom of the diamond on screen), not (0,0).
+        fillPoly([pt(W, H, 0), pt(W, 0, 0), pt(W, 0, T), pt(W, H, T)], '#4b525f');
+        fillPoly([pt(W, H, 0), pt(0, H, 0), pt(0, H, T), pt(W, H, T)], '#5b6472');
+
+        // Top face
+        fillPoly([pt(0, 0, T), pt(W, 0, T), pt(W, H, T), pt(0, H, T)], '#94a1b8');
+
+        // Holes - flat dark cutouts on the top face.
+        holes.forEach(h => {
+            shapeOutlineLoops(h.type, h.size).forEach(loop => {
+                if (!loop.length) return;
+                const worldPts = rotateTranslatePts(loop, h.rot, h.x, h.y);
+                fillPoly(worldPts.map(([x, y]) => pt(x, y, T)), '#0a0b0e');
+            });
+        });
+    }
+
+    function render() {
+        const layout = generateHoles();
+        if (viewMode === '3d') draw3D(layout); else draw2D(layout);
+        document.getElementById('stat-panel').innerText = `${layout.W} x ${layout.H} mm`;
+        document.getElementById('stat-holes').innerText = layout.holes.length;
+        document.getElementById('stat-cut').innerText = (layout.totalCutLength / 1000).toFixed(2) + ' m';
     }
 
     /**
