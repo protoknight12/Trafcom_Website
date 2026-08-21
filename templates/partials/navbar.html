@@ -62,7 +62,7 @@
                                 {% endif %}
                                 {% if current_user.is_admin %}
                                     <a href="{{ url_for('admin_power') }}">Консумация</a>
-                                    <a href="{{ url_for('admin_generator_presets') }}">Пресети Генератор</a>
+                                    <a href="{{ url_for('admin_generator_presets') }}">Пресети</a>
                                     <a href="{{ url_for('admin_log') }}">Лог</a>
                                 {% endif %}
                                 {% if current_user.can_edit_content %}
