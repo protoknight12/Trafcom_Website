@@ -329,13 +329,39 @@
     inputs.forEach(id => {
         const range = document.getElementById(`in-${id}`);
         const num = document.getElementById(`num-${id}`);
-        const sync = (val) => {
-            range.value = val;
-            num.value = range.value; // range clamps to min/max; reflect the clamped value back
+
+        range.addEventListener('input', () => {
+            num.value = range.value;
             render();
-        };
-        range.addEventListener('input', () => sync(range.value));
-        num.addEventListener('input', () => sync(num.value));
+        });
+
+        // The number field is a free-typing field, not just a readout - it
+        // must NOT get overwritten on every keystroke, or selecting the
+        // text and deleting it (to type a fresh value) gets instantly
+        // reverted the moment the field goes empty (range.value='' resets
+        // the slider to its default, which then gets written straight back
+        // into the field). So: while typing, only push a live preview
+        // through once there's an actual number to show, and leave
+        // whatever's in the field - including empty - alone.
+        num.addEventListener('input', () => {
+            if (num.value.trim() === '' || isNaN(parseFloat(num.value))) return;
+            range.value = num.value; // range clamps internally to min/max
+            render();
+        });
+
+        // Done editing (blur, or Enter via the keydown handler below) -
+        // this is the point where the field should snap to a real, clamped
+        // value instead of possibly sitting empty or out of range.
+        num.addEventListener('change', () => {
+            if (num.value.trim() === '' || isNaN(parseFloat(num.value))) {
+                num.value = range.value; // nothing usable was typed - restore the last good value
+            } else {
+                range.value = num.value;
+                num.value = range.value;
+            }
+            render();
+        });
+        num.addEventListener('keydown', (e) => { if (e.key === 'Enter') num.blur(); });
     });
     document.getElementById('in-direction').addEventListener('change', render);
 
