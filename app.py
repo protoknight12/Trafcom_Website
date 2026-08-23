@@ -2362,31 +2362,38 @@ def admin_generator_preset_copy(preset_id):
 
 
 # ----- EMAIL DELIVERY -----
-# Plain stdlib smtplib - provider-agnostic (Resend, Mailgun, or the
-# company's own mail server all speak SMTP) so nothing here has to change
-# once a provider is picked. Configure via SMTP_* env vars; if unset,
-# logs instead of sending so the reset flow is still exercisable in dev.
+# Plain stdlib smtplib. Defaults to localhost:25 with no auth/TLS - i.e.
+# it hands the message to whatever mail transport is running on this same
+# server (e.g. a bare `postfix` install) and lets that do the actual
+# delivery, no third-party account needed. Set SMTP_HOST/PORT/USER/PASSWORD
+# later to point at a real relay (Resend, Mailgun, etc.) instead - auth and
+# STARTTLS only kick in once SMTP_USER is set, so switching providers is an
+# env-var change, not a code change.
+# Never raises - a delivery failure logs and is swallowed, since the caller
+# (forgot_password()) must show the same message either way, to avoid
+# leaking which emails are registered.
 def send_email(to_addr, subject, body):
-    host = os.environ.get('SMTP_HOST')
-    if not host:
-        print(f"[email] SMTP not configured - would send to {to_addr}: {subject}\n{body}")
-        return False
+    host = os.environ.get('SMTP_HOST', 'localhost')
+    port = int(os.environ.get('SMTP_PORT', '25'))
+    username = os.environ.get('SMTP_USER')
+    password = os.environ.get('SMTP_PASSWORD')
 
     msg = EmailMessage()
     msg['Subject'] = subject
-    msg['From'] = os.environ.get('SMTP_FROM') or os.environ.get('SMTP_USER') or 'no-reply@trafcombg.com'
+    msg['From'] = os.environ.get('SMTP_FROM') or username or 'no-reply@trafcombg.com'
     msg['To'] = to_addr
     msg.set_content(body)
 
-    port = int(os.environ.get('SMTP_PORT', '587'))
-    username = os.environ.get('SMTP_USER')
-    password = os.environ.get('SMTP_PASSWORD')
-    with smtplib.SMTP(host, port, timeout=10) as server:
-        server.starttls()
-        if username:
-            server.login(username, password)
-        server.send_message(msg)
-    return True
+    try:
+        with smtplib.SMTP(host, port, timeout=10) as server:
+            if username:
+                server.starttls()
+                server.login(username, password)
+            server.send_message(msg)
+        return True
+    except (OSError, smtplib.SMTPException) as e:
+        print(f"[email] failed to send to {to_addr} via {host}:{port}: {e}")
+        return False
 
 
 PASSWORD_RESET_MAX_AGE = 3600  # seconds

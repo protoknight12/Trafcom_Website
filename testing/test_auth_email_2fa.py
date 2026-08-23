@@ -78,6 +78,21 @@ def test_forgot_password_unknown_email_gives_generic_message(client):
     assert 'изпратихме връзка'.encode('utf-8') in resp.data
 
 
+def test_forgot_password_known_email_does_not_crash_without_local_mta(client, app):
+    """send_email() defaults to localhost:25 - on a dev/test box nothing is
+    listening there, so this must fail closed (log + return False), not
+    blow up the request with an unhandled SMTPException/ConnectionError."""
+    with app.app_context():
+        user = User(username='mailuser', email='mailuser@example.com',
+                     password=generate_password_hash('password123', method='scrypt'))
+        db.session.add(user)
+        db.session.commit()
+
+    resp = client.post('/forgot-password', data={'email': 'mailuser@example.com'}, follow_redirects=True)
+    assert resp.status_code == 200
+    assert 'изпратихме връзка'.encode('utf-8') in resp.data
+
+
 def test_reset_password_token_roundtrip(client, app):
     with app.app_context():
         user = User(username='resetuser', email='reset@example.com',
