@@ -85,6 +85,7 @@
                     {% else %}
                         <span class="user-badge">{{ current_user.username }}</span>
                     {% endif %}
+                    <a href="{{ url_for('account') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Профил</a>
                     <a href="{{ url_for('logout') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Изход</a>
                 {% else %}
                     <a href="{{ url_for('login') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Вход</a>

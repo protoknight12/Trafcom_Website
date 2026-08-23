@@ -59,7 +59,9 @@ def client(app):
 
 
 def _register(client, username, password):
-    return client.post('/register', data={'username': username, 'password': password})
+    # /register now requires an email too - derive one from the username so
+    # every caller here keeps getting a distinct, valid address for free.
+    return client.post('/register', data={'username': username, 'password': password, 'email': f'{username}@example.com'})
 
 
 def _login(client, username, password):

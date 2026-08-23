@@ -10,3 +10,6 @@ python-barcode
 python-dotenv
 gunicorn
 openpyxl
+itsdangerous
+pyotp
+qrcode

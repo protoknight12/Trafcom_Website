@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Моят профил - TRAFCOM</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container" style="max-width: 600px; margin: 30px auto; padding: 0 15px;">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ 'danger' if category == 'error' else category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <h2 style="margin-bottom: 20px;">Моят профил</h2>
+
+    <div class="admin-card">
+        <h3 style="margin-top: 0;">Имейл</h3>
+        <p class="section-subtitle">Използва се за възстановяване на паролата.</p>
+        <form method="POST" action="{{ url_for('account_update_email') }}" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <input type="email" name="email" value="{{ current_user.email or '' }}" placeholder="you@example.com" required autocomplete="email">
+            </div>
+            <button type="submit" class="btn-submit">{{ 'Смени имейла' if current_user.email else 'Добави имейл' }}</button>
+        </form>
+    </div>
+
+    <div class="admin-card" style="margin-top: 20px;">
+        <h3 style="margin-top: 0;">Двуфакторно удостоверяване (2FA)</h3>
+        {% if current_user.totp_secret %}
+            <p class="section-subtitle">Активирано е. При вход ще се изисква код от приложението за удостоверяване.</p>
+            <form method="POST" action="{{ url_for('account_2fa_disable') }}" class="admin-form">
+                {% include 'partials/csrf_field.html' %}
+                <div class="form-group">
+                    <label for="disable-password">Парола (за потвърждение)</label>
+                    <input type="password" id="disable-password" name="password" required>
+                </div>
+                <button type="submit" class="btn-secondary">Изключи 2FA</button>
+            </form>
+        {% else %}
+            <p class="section-subtitle">Не е активирано. Добавете допълнителен слой защита на входа.</p>
+            <a href="{{ url_for('account_2fa_setup') }}" class="btn-submit">Активирай 2FA</a>
+        {% endif %}
+    </div>
+
+</main>
+</body>
+</html>

@@ -32,6 +32,12 @@ from ezdxf.math import bulge_to_arc
 import random
 import barcode
 from barcode.writer import SVGWriter
+import smtplib
+from email.message import EmailMessage
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+import pyotp
+import qrcode
+import qrcode.image.svg
 
 # Optional: load a local .env file if python-dotenv is installed, so secrets
 # can be kept out of source control. Safe no-op if the package isn't present.
@@ -133,6 +139,12 @@ class User(db.Model, UserMixin):
     password = db.Column(db.String(255), nullable=False)
     # roles: 'regular_user', 'worker', 'admin', 'web_designer'
     role = db.Column(db.String(20), default='regular_user')
+    # Nullable so pre-existing accounts don't need a backfill - required
+    # going forward at /register since password reset depends on it.
+    email = db.Column(db.String(150), unique=True, nullable=True)
+    # Base32 TOTP secret (pyotp). Presence of a value is the on/off switch
+    # for 2FA - see login()'s pending-2FA branch.
+    totp_secret = db.Column(db.String(32), nullable=True)
 
     uploads = db.relationship('DxfFile', cascade='all, delete-orphan', backref='owner', lazy=True)
 
@@ -382,6 +394,21 @@ def _validate_eik(raw):
         return None, None
     if not re.fullmatch(r'\d{9}', value):
         return None, 'ЕИК трябва да съдържа точно 9 цифри.'
+    return value, None
+
+
+_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+
+
+def _validate_email(raw):
+    """Blank is valid (email is optional on the model for pre-existing
+    accounts) - callers that require it (e.g. /register) check for a blank
+    value themselves. Returns (cleaned_value_or_None, error_message_or_None)."""
+    value = (raw or '').strip().lower()
+    if not value:
+        return None, None
+    if not _EMAIL_RE.fullmatch(value):
+        return None, 'Невалиден имейл адрес.'
     return value, None
 
 
@@ -2334,6 +2361,41 @@ def admin_generator_preset_copy(preset_id):
     return redirect(url_for('admin_generator_presets'))
 
 
+# ----- EMAIL DELIVERY -----
+# Plain stdlib smtplib - provider-agnostic (Resend, Mailgun, or the
+# company's own mail server all speak SMTP) so nothing here has to change
+# once a provider is picked. Configure via SMTP_* env vars; if unset,
+# logs instead of sending so the reset flow is still exercisable in dev.
+def send_email(to_addr, subject, body):
+    host = os.environ.get('SMTP_HOST')
+    if not host:
+        print(f"[email] SMTP not configured - would send to {to_addr}: {subject}\n{body}")
+        return False
+
+    msg = EmailMessage()
+    msg['Subject'] = subject
+    msg['From'] = os.environ.get('SMTP_FROM') or os.environ.get('SMTP_USER') or 'no-reply@trafcombg.com'
+    msg['To'] = to_addr
+    msg.set_content(body)
+
+    port = int(os.environ.get('SMTP_PORT', '587'))
+    username = os.environ.get('SMTP_USER')
+    password = os.environ.get('SMTP_PASSWORD')
+    with smtplib.SMTP(host, port, timeout=10) as server:
+        server.starttls()
+        if username:
+            server.login(username, password)
+        server.send_message(msg)
+    return True
+
+
+PASSWORD_RESET_MAX_AGE = 3600  # seconds
+
+
+def _reset_serializer():
+    return URLSafeTimedSerializer(app.config['SECRET_KEY'], salt='password-reset')
+
+
 @app.route('/login', methods=['GET', 'POST'])
 @limiter.limit("10 per minute")
 def login():
@@ -2346,6 +2408,9 @@ def login():
         user = User.query.filter_by(username=username).first()
 
         if user and check_password_hash(user.password, password):
+            if user.totp_secret:
+                session['pending_2fa_user_id'] = user.id
+                return redirect(url_for('login_2fa'))
             session.permanent = True
             login_user(user)
             if user.role == 'admin':
@@ -2353,6 +2418,86 @@ def login():
             return redirect(url_for('dashboard'))
         flash('Невалидно потребителско име или парола.')
     return render_template('login.html')
+
+
+@app.route('/login/2fa', methods=['GET', 'POST'])
+@limiter.limit("10 per minute")
+def login_2fa():
+    user_id = session.get('pending_2fa_user_id')
+    user = db.session.get(User, user_id) if user_id else None
+    if not user or not user.totp_secret:
+        session.pop('pending_2fa_user_id', None)
+        return redirect(url_for('login'))
+
+    if request.method == 'POST':
+        code = (request.form.get('code') or '').strip()
+        if pyotp.TOTP(user.totp_secret).verify(code, valid_window=1):
+            session.pop('pending_2fa_user_id', None)
+            session.permanent = True
+            login_user(user)
+            if user.role == 'admin':
+                return redirect(url_for('admin_dashboard'))
+            return redirect(url_for('dashboard'))
+        flash('Невалиден код.', 'danger')
+    return render_template('login_2fa.html')
+
+
+@app.route('/forgot-password', methods=['GET', 'POST'])
+@limiter.limit("5 per hour")
+def forgot_password():
+    if current_user.is_authenticated:
+        return redirect(url_for('index'))
+    if request.method == 'POST':
+        email, _ = _validate_email(request.form.get('email'))
+        user = User.query.filter_by(email=email).first() if email else None
+        if user:
+            token = _reset_serializer().dumps(user.id)
+            reset_url = url_for('reset_password', token=token, _external=True)
+            send_email(
+                user.email,
+                'Възстановяване на парола - TRAFCOM',
+                f'Здравейте, {user.username},\n\n'
+                'Натиснете връзката по-долу, за да зададете нова парола. '
+                f'Връзката е валидна 1 час:\n\n{reset_url}\n\n'
+                'Ако не сте заявили това, просто игнорирайте писмото.'
+            )
+        # Same message whether or not the email exists - the form must not
+        # be usable to enumerate registered addresses.
+        flash('Ако имейлът съществува в системата, изпратихме връзка за възстановяване на паролата.', 'success')
+        return redirect(url_for('login'))
+    return render_template('forgot_password.html')
+
+
+@app.route('/reset-password/<token>', methods=['GET', 'POST'])
+@limiter.limit("10 per hour")
+def reset_password(token):
+    if current_user.is_authenticated:
+        return redirect(url_for('index'))
+    try:
+        user_id = _reset_serializer().loads(token, max_age=PASSWORD_RESET_MAX_AGE)
+    except SignatureExpired:
+        flash('Връзката за възстановяване е изтекла. Заявете нова.', 'danger')
+        return redirect(url_for('forgot_password'))
+    except BadSignature:
+        flash('Невалидна връзка за възстановяване.', 'danger')
+        return redirect(url_for('forgot_password'))
+
+    user = db.session.get(User, user_id)
+    if not user:
+        flash('Невалидна връзка за възстановяване.', 'danger')
+        return redirect(url_for('forgot_password'))
+
+    if request.method == 'POST':
+        password = request.form.get('password', '')
+        if len(password) < 8:
+            flash('Паролата трябва да бъде поне 8 символа.', 'danger')
+            return render_template('reset_password.html', token=token)
+        user.password = generate_password_hash(password, method='scrypt')
+        db.session.commit()
+        flash('Паролата е сменена успешно. Влезте с новата парола.', 'success')
+        return redirect(url_for('login'))
+
+    return render_template('reset_password.html', token=token)
 
 
 @app.route('/register', methods=['GET', 'POST'])
@@ -2368,6 +2513,11 @@ def register():
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password', '')
+        email, email_error = _validate_email(request.form.get('email'))
+
+        if not email:
+            flash(email_error or 'Имейл е задължителен.', 'danger')
+            return redirect(url_for('register'))
 
         # Same 8-character floor migration/change_admin_password.py already enforces
         # for the admin account - short passwords are well within the
@@ -2383,6 +2533,7 @@ def register():
         new_user = User(
             username=username,
             password=hashed_password,
+            email=email,
             role='regular_user'  # Make sure this is 'role', not 'is_admin'
         )
 
@@ -2391,13 +2542,80 @@ def register():
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
-            flash('Това потребителско име вече съществува.', 'danger')
+            flash('Това потребителско име или имейл вече съществува.', 'danger')
             return redirect(url_for('register'))
 
         flash('Регистрацията е успешна!', 'success')
         return redirect(url_for('login'))
 
     return render_template('register.html')
+
+
+@app.route('/account')
+@login_required
+def account():
+    return render_template('account.html')
+
+
+@app.route('/account/email', methods=['POST'])
+@login_required
+def account_update_email():
+    email, error = _validate_email(request.form.get('email'))
+    if not email:
+        flash(error or 'Имейл е задължителен.', 'danger')
+        return redirect(url_for('account'))
+    current_user.email = email
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        flash('Този имейл вече се използва от друг акаунт.', 'danger')
+        return redirect(url_for('account'))
+    flash('Имейлът е обновен.', 'success')
+    return redirect(url_for('account'))
+
+
+@app.route('/account/2fa/setup', methods=['GET', 'POST'])
+@login_required
+def account_2fa_setup():
+    if current_user.totp_secret:
+        flash('Двуфакторното удостоверяване вече е активирано.', 'danger')
+        return redirect(url_for('account'))
+
+    if request.method == 'POST':
+        secret = session.get('pending_totp_secret')
+        code = (request.form.get('code') or '').strip()
+        if not secret or not pyotp.TOTP(secret).verify(code, valid_window=1):
+            flash('Невалиден код. Опитайте отново.', 'danger')
+            return redirect(url_for('account_2fa_setup'))
+        current_user.totp_secret = secret
+        db.session.commit()
+        session.pop('pending_totp_secret', None)
+        flash('Двуфакторното удостоверяване е активирано.', 'success')
+        return redirect(url_for('account'))
+
+    # Reuse a secret already pending in this session so refreshing the page
+    # (or a failed code) doesn't invalidate the QR code the user just scanned.
+    secret = session.get('pending_totp_secret') or pyotp.random_base32()
+    session['pending_totp_secret'] = secret
+    otp_uri = pyotp.TOTP(secret).provisioning_uri(name=current_user.username, issuer_name='Trafcom CNC Портал')
+    qr_img = qrcode.make(otp_uri, image_factory=qrcode.image.svg.SvgPathImage)
+    buf = io.BytesIO()
+    qr_img.save(buf)
+    return render_template('account_2fa_setup.html', secret=secret, qr_svg=buf.getvalue().decode('utf-8'))
+
+
+@app.route('/account/2fa/disable', methods=['POST'])
+@login_required
+def account_2fa_disable():
+    if not check_password_hash(current_user.password, request.form.get('password', '')):
+        flash('Грешна парола.', 'danger')
+        return redirect(url_for('account'))
+    current_user.totp_secret = None
+    db.session.commit()
+    session.pop('pending_totp_secret', None)
+    flash('Двуфакторното удостоверяване е изключено.', 'success')
+    return redirect(url_for('account'))
 
 
 # Characters with no legitimate reason to appear in a display filename but

@@ -86,7 +86,7 @@ def test_toggle_off_allows_registration_again(app, admin_client):
     admin_client.post('/admin/users/toggle-registration', data={'registration_closed': '0'})
 
     anon = app.test_client()
-    resp = anon.post('/register', data={'username': 'new_guy2', 'password': 'longenough1'}, follow_redirects=True)
+    resp = anon.post('/register', data={'username': 'new_guy2', 'password': 'longenough1', 'email': 'new_guy2@example.com'}, follow_redirects=True)
     assert resp.status_code == 200
     with app.app_context():
         assert User.query.filter_by(username='new_guy2').first() is not None
