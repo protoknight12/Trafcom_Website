@@ -27,6 +27,17 @@
     <div class="admin-card">
         <h3 style="margin-top: 0;">Имейл</h3>
         <p class="section-subtitle">Използва се за възстановяване на паролата.</p>
+        {% if current_user.email %}
+            {% if current_user.email_verified %}
+                <p class="section-subtitle" style="color: var(--success, #2e8540);">Потвърден.</p>
+            {% else %}
+                <p class="section-subtitle" style="color: var(--danger, #c0392b);">Непотвърден.</p>
+                <form method="POST" action="{{ url_for('account_resend_verification') }}" class="admin-form" style="margin-bottom: 16px;">
+                    {% include 'partials/csrf_field.html' %}
+                    <button type="submit" class="btn-secondary">Изпрати връзка за потвърждение отново</button>
+                </form>
+            {% endif %}
+        {% endif %}
         <form method="POST" action="{{ url_for('account_update_email') }}" class="admin-form">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">

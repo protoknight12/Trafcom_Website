@@ -142,6 +142,10 @@ class User(db.Model, UserMixin):
     # Nullable so pre-existing accounts don't need a backfill - required
     # going forward at /register since password reset depends on it.
     email = db.Column(db.String(150), unique=True, nullable=True)
+    # Set by verify_email() once the user clicks the link sent by
+    # _send_verification_email(). Not enforced anywhere (login/features work
+    # regardless) - it's just a "did this address actually reach them" signal.
+    email_verified = db.Column(db.Boolean, nullable=False, default=False)
     # Base32 TOTP secret (pyotp). Presence of a value is the on/off switch
     # for 2FA - see login()'s pending-2FA branch.
     totp_secret = db.Column(db.String(32), nullable=True)
@@ -2403,6 +2407,28 @@ def _reset_serializer():
     return URLSafeTimedSerializer(app.config['SECRET_KEY'], salt='password-reset')
 
 
+EMAIL_VERIFY_MAX_AGE = 3 * 24 * 3600  # 3 days
+
+
+def _verify_serializer():
+    return URLSafeTimedSerializer(app.config['SECRET_KEY'], salt='email-verify')
+
+
+def _send_verification_email(user):
+    token = _verify_serializer().dumps(user.id)
+    verify_url = url_for('verify_email', token=token, _external=True)
+    send_email(
+        user.email,
+        'Потвърдете имейл адреса си - TRAFCOM',
+        f'Здравейте, {user.username},\n\n'
+        'Натиснете връзката по-долу, за да потвърдите имейл адреса си. '
+        f'Връзката е валидна 3 дни:\n\n{verify_url}\n\n'
+        'Ако не сте заявили това, просто игнорирайте писмото.\n\n'
+        '---\n'
+        'Това е автоматично съобщение. Моля, не отговаряйте на този имейл.'
+    )
+
+
 @app.route('/login', methods=['GET', 'POST'])
 @limiter.limit("10 per minute")
 def login():
@@ -2466,7 +2492,9 @@ def forgot_password():
                 f'Здравейте, {user.username},\n\n'
                 'Натиснете връзката по-долу, за да зададете нова парола. '
                 f'Връзката е валидна 1 час:\n\n{reset_url}\n\n'
-                'Ако не сте заявили това, просто игнорирайте писмото.'
+                'Ако не сте заявили това, просто игнорирайте писмото.\n\n'
+                '---\n'
+                'Това е автоматично съобщение. Моля, не отговаряйте на този имейл.'
             )
         # Same message whether or not the email exists - the form must not
         # be usable to enumerate registered addresses.
@@ -2496,8 +2524,12 @@ def reset_password(token):
 
     if request.method == 'POST':
         password = request.form.get('password', '')
+        password_confirm = request.form.get('password_confirm', '')
         if len(password) < 8:
             flash('Паролата трябва да бъде поне 8 символа.', 'danger')
+            return render_template('reset_password.html', token=token)
+        if password != password_confirm:
+            flash('Паролите не съвпадат.', 'danger')
             return render_template('reset_password.html', token=token)
         user.password = generate_password_hash(password, method='scrypt')
         db.session.commit()
@@ -2552,10 +2584,33 @@ def register():
             flash('Това потребителско име или имейл вече съществува.', 'danger')
             return redirect(url_for('register'))
 
-        flash('Регистрацията е успешна!', 'success')
+        _send_verification_email(new_user)
+        flash('Регистрацията е успешна! Проверете имейла си, за да потвърдите адреса.', 'success')
         return redirect(url_for('login'))
 
     return render_template('register.html')
+
+
+@app.route('/verify-email/<token>')
+def verify_email(token):
+    try:
+        user_id = _verify_serializer().loads(token, max_age=EMAIL_VERIFY_MAX_AGE)
+    except SignatureExpired:
+        flash('Връзката за потвърждение е изтекла. Заявете нова от профила си.', 'danger')
+        return redirect(url_for('login'))
+    except BadSignature:
+        flash('Невалидна връзка за потвърждение.', 'danger')
+        return redirect(url_for('login'))
+
+    user = db.session.get(User, user_id)
+    if not user:
+        flash('Невалидна връзка за потвърждение.', 'danger')
+        return redirect(url_for('login'))
+
+    user.email_verified = True
+    db.session.commit()
+    flash('Имейлът е потвърден успешно.', 'success')
+    return redirect(url_for('account') if current_user.is_authenticated else url_for('login'))
 
 
 @app.route('/account')
@@ -2572,13 +2627,30 @@ def account_update_email():
         flash(error or 'Имейл е задължителен.', 'danger')
         return redirect(url_for('account'))
     current_user.email = email
+    current_user.email_verified = False
     try:
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
         flash('Този имейл вече се използва от друг акаунт.', 'danger')
         return redirect(url_for('account'))
-    flash('Имейлът е обновен.', 'success')
+    _send_verification_email(current_user)
+    flash('Имейлът е обновен. Изпратихме връзка за потвърждение на новия адрес.', 'success')
+    return redirect(url_for('account'))
+
+
+@app.route('/account/email/resend-verification', methods=['POST'])
+@login_required
+@limiter.limit("5 per hour")
+def account_resend_verification():
+    if current_user.email_verified:
+        flash('Имейлът вече е потвърден.', 'success')
+        return redirect(url_for('account'))
+    if not current_user.email:
+        flash('Нямате зададен имейл.', 'danger')
+        return redirect(url_for('account'))
+    _send_verification_email(current_user)
+    flash('Изпратихме нова връзка за потвърждение.', 'success')
     return redirect(url_for('account'))
 
 
