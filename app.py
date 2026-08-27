@@ -491,8 +491,27 @@ class Detail(db.Model):
     # row, and editing it here must only affect this one detail. Falls back
     # to material.thickness_mm when unset (see detail_dxf_dashboard.html).
     thickness_mm = db.Column(db.Float, nullable=True)
+    # Extra stock margin (mm) added on top of width/height before pricing -
+    # e.g. a couple mm of scrap allowance left on each edge that isn't part
+    # of the net cut geometry. Same width/height convention as the two base
+    # columns (diameter/length for rods/pipes, width/height for sheets/
+    # profiles - see DETAIL_DIMENSION_LABELS in detail_dxf_dashboard.html).
+    # Kept separate from width/height rather than folded in, so the "Материал
+    # и размери" tab can show the DXF-derived size and the manual margin as
+    # two distinct numbers instead of one already-summed value. Nullable,
+    # treated as 0 when unset - see effective_width/effective_height.
+    extra_width_mm = db.Column(db.Float, nullable=True)
+    extra_height_mm = db.Column(db.Float, nullable=True)
 
     material = db.relationship('MaterialPrice')
+
+    @property
+    def effective_width(self):
+        return self.width + (self.extra_width_mm or 0)
+
+    @property
+    def effective_height(self):
+        return self.height + (self.extra_height_mm or 0)
 
     @property
     def total_price(self):
@@ -508,12 +527,15 @@ class Detail(db.Model):
         """Human-readable "quantity x rate" behind calculated_price, for
         display next to it (see detail_dxf_dashboard.html) - mirrors
         _material_cost()'s rods/pipes/profiles-vs-area branch exactly so this
-        can never drift from the real calculation."""
+        can never drift from the real calculation. Uses effective_width/
+        effective_height (base size + extra margin), same as calculated_price
+        itself."""
         if not self.material:
             return None
+        width, height = self.effective_width, self.effective_height
         if self.material.type in ('rods', 'pipes', 'profiles'):
-            return f"{self.height:.0f} мм × {self.material.cost_per_m2:.2f} €/м"
-        area_m2 = (self.width * self.height) / 1_000_000
+            return f"{height:.0f} мм × {self.material.cost_per_m2:.2f} €/м"
+        area_m2 = (width * height) / 1_000_000
         return f"{area_m2:.3f} м² × {self.material.cost_per_m2:.2f} €/м²"
 
 
@@ -4954,10 +4976,15 @@ def admin_update_detail_material(detail_id):
         height = float(request.form.get('height', ''))
         thickness_raw = request.form.get('thickness', '').strip()
         thickness = float(thickness_raw) if thickness_raw else None
+        extra_width_raw = request.form.get('extra_width', '').strip()
+        extra_width = float(extra_width_raw) if extra_width_raw else None
+        extra_height_raw = request.form.get('extra_height', '').strip()
+        extra_height = float(extra_height_raw) if extra_height_raw else None
     except ValueError:
         flash('Моля въведете валидни размери.', 'danger')
         return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
-    if width < 0 or height < 0 or (thickness is not None and thickness < 0):
+    if width < 0 or height < 0 or (thickness is not None and thickness < 0) \
+            or (extra_width is not None and extra_width < 0) or (extra_height is not None and extra_height < 0):
         flash('Размерите не могат да бъдат отрицателни.', 'danger')
         return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
@@ -4965,10 +4992,13 @@ def admin_update_detail_material(detail_id):
     detail.width = width
     detail.height = height
     detail.thickness_mm = thickness
-    detail.calculated_price = calculate_material_price(width, height, material_key)
+    detail.extra_width_mm = extra_width
+    detail.extra_height_mm = extra_height
+    detail.calculated_price = calculate_material_price(width + (extra_width or 0), height + (extra_height or 0), material_key)
     log_action(describe_changes(f'детайл "{detail.name}"', detail, {
         'material_key': 'материал', 'width': 'ширина мм', 'height': 'височина мм',
-        'thickness_mm': 'дебелина мм', 'calculated_price': 'цена лв.',
+        'thickness_mm': 'дебелина мм', 'extra_width_mm': 'доп. ширина мм',
+        'extra_height_mm': 'доп. височина мм', 'calculated_price': 'цена лв.',
     }))
     db.session.commit()
     flash('Материалът и размерите бяха обновени успешно.', 'success')

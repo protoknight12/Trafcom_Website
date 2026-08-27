@@ -153,3 +153,35 @@ def test_update_material_recomputes_material_only_price_without_touching_cutting
         ops = Operation.query.filter_by(detail_id=detail.id).all()
         assert len(ops) == 1
         assert ops[0].length_mm == 10.0
+
+
+def test_update_material_with_extra_margin_is_priced_into_calculated_price(client):
+    c, length_service_id, _time_service_id = client
+    res = c.post('/api/quick-create-detail', data={
+        'name': 'QA Detail 3', 'material': 'qa_mat', 'service_id': str(length_service_id),
+        'file': (io.BytesIO(_minimal_dxf_bytes(10)), 'part.dxf'),
+    }, content_type='multipart/form-data')
+    detail_id = res.get_json()['detail']['id']
+
+    # (1000+100) x (500+50) mm = 1.1 x 0.55 m^2 = 0.605 m^2 * 10 EUR/m^2 = 6.05
+    c.post(f'/details/{detail_id}/update-material', data={
+        'material': 'qa_mat', 'width': '1000', 'height': '500',
+        'extra_width': '100', 'extra_height': '50',
+    })
+
+    with flask_app.app_context():
+        detail = db.session.get(Detail, detail_id)
+        assert detail.extra_width_mm == 100.0
+        assert detail.extra_height_mm == 50.0
+        assert detail.effective_width == 1100.0
+        assert detail.effective_height == 550.0
+        assert detail.calculated_price == 6.05
+
+        # Blank extra fields clear back to no margin (net width/height only).
+        c.post(f'/details/{detail_id}/update-material', data={
+            'material': 'qa_mat', 'width': '1000', 'height': '500',
+        })
+        db.session.refresh(detail)
+        assert detail.extra_width_mm is None
+        assert detail.extra_height_mm is None
+        assert detail.calculated_price == 5.0

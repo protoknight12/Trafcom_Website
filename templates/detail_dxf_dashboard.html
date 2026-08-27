@@ -207,6 +207,20 @@
                 <label for="material_height" id="material_height_label">Височина (мм)</label>
                 <input type="number" id="material_height" name="height" step="0.01" min="0" value="{{ detail.height }}" required>
             </div>
+            <div class="form-group">
+                <label for="material_extra_width" id="material_extra_width_label">Доп. ширина (мм)</label>
+                <input type="number" id="material_extra_width" name="extra_width" step="0.01" min="0"
+                       value="{{ detail.extra_width_mm if detail.extra_width_mm is not none else '' }}">
+            </div>
+            <div class="form-group">
+                <label for="material_extra_height" id="material_extra_height_label">Доп. височина (мм)</label>
+                <input type="number" id="material_extra_height" name="extra_height" step="0.01" min="0"
+                       value="{{ detail.extra_height_mm if detail.extra_height_mm is not none else '' }}">
+                <p class="text-small text-muted" style="margin-top: 4px;">
+                    Допълнителен материал, прибавян към размерите по-горе преди изчисляване на цената (напр. запас
+                    в ръбовете).
+                </p>
+            </div>
             <div class="form-group" id="material_thickness_group">
                 <label for="material_thickness" id="material_thickness_label">Дебелина (мм)</label>
                 <input type="number" id="material_thickness" name="thickness" step="0.01" min="0"
@@ -246,6 +260,8 @@
 
             document.getElementById('material_width_label').textContent = labels[0];
             document.getElementById('material_height_label').textContent = labels[1];
+            document.getElementById('material_extra_width_label').textContent = 'Доп. ' + labels[0].toLowerCase();
+            document.getElementById('material_extra_height_label').textContent = 'Доп. ' + labels[1].toLowerCase();
 
             const group = document.getElementById('material_thickness_group');
             if (labels[2]) {
