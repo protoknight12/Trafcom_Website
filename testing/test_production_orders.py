@@ -12,7 +12,7 @@ used differed from the plan (waste/kerf).
 """
 from types import SimpleNamespace
 
-from app import _detail_material_unit_qty, _bump_stock, ProductionOrder
+from app import _detail_material_unit_qty, _material_available_qty, _material_stock_delta, _bump_stock, ProductionOrder
 
 sheet_detail = SimpleNamespace(effective_width=1000.0, effective_height=500.0,
                                 material=SimpleNamespace(type='sheets'))
@@ -52,5 +52,38 @@ _bump_stock(material, actual_used)    # delete_production_order() on a 'done' jo
 _bump_stock(detail, -quantity)
 assert material.stock_quantity == 5.0, "material stock must return to exactly its starting value"
 assert detail.stock_quantity == 20.0, "detail stock must return to exactly its starting value"
+
+# _material_available_qty()/_material_stock_delta(): sheet stock is a SHEET
+# COUNT (stock_quantity), not a running m² total - available area is
+# stock_quantity x one sheet's own area (sheet_width_mm x sheet_length_mm,
+# the catalog dims, never the cut part's own size).
+sheet_material = SimpleNamespace(stock_quantity=3.0, type='sheets', sheet_width_mm=1000.0, sheet_length_mm=2000.0)
+assert _material_available_qty(sheet_material) == 6.0, "3 sheets x 2 m^2/sheet = 6 m^2 available"
+assert _material_stock_delta(sheet_material, 1.0) == 0.5, "using 1 m^2 consumes half of one 2 m^2 sheet"
+
+# Rods/pipes/profiles are unchanged (still a running length total, never a
+# bar count) regardless of whether sheet_width_mm/sheet_length_mm happen to
+# be set (they store diameter/rod-length for that type, not "one sheet").
+rod_material = SimpleNamespace(stock_quantity=5.0, type='rods', sheet_width_mm=14.0, sheet_length_mm=3000.0)
+assert _material_available_qty(rod_material) == 5.0
+assert _material_stock_delta(rod_material, 0.05) == 0.05
+
+# Legacy/no-sheet-size-on-record materials fall back to treating
+# stock_quantity as already the native unit (m²) - dividing by an unknown
+# sheet size would be meaningless, not merely imprecise.
+no_dims_material = SimpleNamespace(stock_quantity=2.5, type='sheets', sheet_width_mm=None, sheet_length_mm=None)
+assert _material_available_qty(no_dims_material) == 2.5
+assert _material_stock_delta(no_dims_material, 1.0) == 1.0
+
+# Full round trip through the real sheet-count conversion: create (compare
+# against available area) -> complete (convert actual m² used into a sheet-
+# count delta) -> delete (convert back) must land stock_quantity exactly
+# where it started, same guarantee as the rods case above.
+sheet_material2 = SimpleNamespace(stock_quantity=3.0, type='sheets', sheet_width_mm=1000.0, sheet_length_mm=2000.0)
+actual_m2_used = 1.3
+_bump_stock(sheet_material2, -_material_stock_delta(sheet_material2, actual_m2_used))  # complete
+assert round(sheet_material2.stock_quantity, 10) == 3.0 - (1.3 / 2.0)
+_bump_stock(sheet_material2, _material_stock_delta(sheet_material2, actual_m2_used))   # delete (undo)
+assert round(sheet_material2.stock_quantity, 10) == 3.0, "sheet-count stock must return to exactly its starting value"
 
 print("ok")

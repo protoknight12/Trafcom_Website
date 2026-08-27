@@ -229,6 +229,19 @@
                     Само за този детайл - не променя стойността на материала в общия каталог.
                 </p>
             </div>
+            <div class="form-group" style="grid-column: span 2;">
+                <label>Визуализация на площта</label>
+                <div style="display: flex; align-items: center; justify-content: center; min-height: 220px;
+                            background-color: var(--bg-input); border: 1px solid var(--border-color);
+                            border-radius: var(--border-radius-sm); padding: 16px; box-sizing: border-box;">
+                    <div id="area_viz_rect" style="border: 2px solid var(--accent-primary); background-color: rgba(139, 92, 246, 0.15);
+                                display: flex; align-items: center; justify-content: center; text-align: center;
+                                font-weight: 600; font-size: 0.82rem; line-height: 1.5; padding: 4px; box-sizing: border-box;
+                                transition: width 0.15s ease, height 0.15s ease;">
+                        <span id="area_viz_text"></span>
+                    </div>
+                </div>
+            </div>
             <button type="submit" class="btn-submit">Запази</button>
         </form>
     </section>
@@ -273,6 +286,45 @@
         }
 
         applyDetailMaterialDimensionLabels();
+
+        // Draws Ширина+Доп.ширина x Височина+Доп.височина (the effective size
+        // that actually feeds calculate_material_price/_detail_material_unit_qty
+        // - see Detail.effective_width/effective_height in app.py) as a
+        // proportional rectangle with its area in both mm² and m², so the
+        // "area x quantity = needed material" math is easy to point at and
+        // explain rather than just read as a number.
+        function updateAreaVisualization() {
+            const width = parseFloat(document.getElementById('material_width').value) || 0;
+            const height = parseFloat(document.getElementById('material_height').value) || 0;
+            const extraWidth = parseFloat(document.getElementById('material_extra_width').value) || 0;
+            const extraHeight = parseFloat(document.getElementById('material_extra_height').value) || 0;
+            const effWidth = width + extraWidth;
+            const effHeight = height + extraHeight;
+
+            const box = document.getElementById('area_viz_rect');
+            const text = document.getElementById('area_viz_text');
+            if (effWidth <= 0 || effHeight <= 0) {
+                box.style.width = '0px';
+                box.style.height = '0px';
+                text.textContent = '';
+                return;
+            }
+
+            const maxPx = 180; // fits inside the 220px-tall container with padding
+            const scale = maxPx / Math.max(effWidth, effHeight);
+            box.style.width = Math.max(effWidth * scale, 50) + 'px';
+            box.style.height = Math.max(effHeight * scale, 34) + 'px';
+
+            const areaMm2 = effWidth * effHeight;
+            const areaM2 = areaMm2 / 1000000;
+            text.innerHTML = effWidth.toFixed(2) + ' × ' + effHeight.toFixed(2) + ' мм<br>' +
+                areaMm2.toFixed(2) + ' мм²<br>(' + areaM2.toFixed(6) + ' м²)';
+        }
+
+        ['material_width', 'material_height', 'material_extra_width', 'material_extra_height'].forEach(function (id) {
+            document.getElementById(id).addEventListener('input', updateAreaVisualization);
+        });
+        updateAreaVisualization();
     </script>
     {% endif %}
 

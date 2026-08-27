@@ -86,7 +86,7 @@
                     <td>{{ job.detail.name }}</td>
                     <td class="text-center">{{ job.quantity }}</td>
                     <td>{{ format_material_option(job.material) }} — {{ "%.2f"|format(job.material.cost_per_m2) }} €{{ '/м' if job.is_linear_material else '/м²' }}
-                        <span style="color: var(--text-muted);">(наличност: {{ job.material.stock_quantity|round(2) }})</span></td>
+                        <span style="color: var(--text-muted);">(наличност: {{ job.material_available_display }} {{ job.unit_label }})</span></td>
                     <td class="text-right">{{ job.planned_display }} {{ job.unit_label }}</td>
                     <td class="text-right">{{ (job.actual_display ~ ' ' ~ job.unit_label) if job.actual_display is not none else '-' }}</td>
                     <td class="text-center"><span class="status-badge status-{{ job.status }}">{{ job.status_label }}</span></td>

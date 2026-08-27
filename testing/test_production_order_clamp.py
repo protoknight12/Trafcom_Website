@@ -47,7 +47,9 @@ def app():
         db.create_all()
         worker = User(username='qa_worker', password=generate_password_hash('irrelevant123'), role='worker')
         db.session.add(worker)
-        # 1000mm x 500mm piece = 0.5 m^2/piece, sheet stock tracked in m^2.
+        # No sheet_width_mm/sheet_length_mm on record - exercises the legacy
+        # fallback (_material_available_qty treats stock_quantity as already
+        # an m^2 total). 1000mm x 500mm piece = 0.5 m^2/piece.
         material = MaterialPrice(key='qa_sheet', display_name='QA Ламарина', cost_per_m2=10.0,
                                   cutting_speed_mm_per_min=1000, pierce_rate_per_min=30, type='sheets',
                                   stock_quantity=1.2)
@@ -56,6 +58,17 @@ def app():
         detail = Detail(name='QA Detail', material_key=material.key, width=1000.0, height=500.0,
                          total_length=0.0, pierce_count=0, calculated_price=5.0)
         db.session.add(detail)
+
+        # Has real sheet dims - exercises the sheet-count path: 1.0 in stock
+        # means 1 whole sheet (1000mm x 2000mm = 2 m^2), not 1.0 m^2.
+        material2 = MaterialPrice(key='qa_sheet_counted', display_name='QA Ламарина Броена', cost_per_m2=10.0,
+                                   cutting_speed_mm_per_min=1000, pierce_rate_per_min=30, type='sheets',
+                                   sheet_width_mm=1000.0, sheet_length_mm=2000.0, stock_quantity=1.0)
+        db.session.add(material2)
+        db.session.flush()
+        detail2 = Detail(name='QA Detail Counted', material_key=material2.key, width=1000.0, height=500.0,
+                          total_length=0.0, pierce_count=0, calculated_price=5.0)
+        db.session.add(detail2)
         db.session.commit()
         yield flask_app
         db.session.remove()
@@ -73,6 +86,13 @@ def _ids(app):
     with flask_app.app_context():
         m = MaterialPrice.query.filter_by(key='qa_sheet').first()
         d = Detail.query.filter_by(name='QA Detail').first()
+        return d.id, m.id
+
+
+def _ids2(app):
+    with flask_app.app_context():
+        m = MaterialPrice.query.filter_by(key='qa_sheet_counted').first()
+        d = Detail.query.filter_by(name='QA Detail Counted').first()
         return d.id, m.id
 
 
@@ -117,3 +137,42 @@ def test_zero_affordable_quantity_refuses_to_create_job(app, worker_client):
     assert 'alert-warning' in res.get_data(as_text=True)
     with flask_app.app_context():
         assert ProductionOrder.query.count() == 0, "not even a 1-piece job when stock can't cover a single piece"
+
+
+def test_sheet_count_multiplied_by_sheet_area_when_dims_known(app, worker_client):
+    """
+    qa_sheet_counted has stock_quantity=1.0 meaning 1 whole 1000x2000mm sheet
+    (2 m^2), not 1.0 m^2 - available area must be stock x sheet area (2 m^2),
+    so 3 pieces (0.5 m^2 each = 1.5 m^2 needed) must fit without clamping,
+    unlike the legacy-fallback material above where 1.0 stock would only
+    cover 2 pieces.
+    """
+    detail_id, material_id = _ids2(app)
+    res = worker_client.post('/admin/production-orders/create',
+                              data={'detail_id': detail_id, 'material_id': material_id, 'quantity': 3},
+                              follow_redirects=True)
+    assert res.status_code == 200
+    assert 'alert-warning' not in res.get_data(as_text=True), "1 sheet (2 m^2) easily covers 1.5 m^2 needed"
+    with flask_app.app_context():
+        job = ProductionOrder.query.one()
+        assert job.quantity == 3
+        assert job.planned_material_qty == 1.5
+        assert job.material.stock_quantity == 1.0, "creating a job never touches stock"
+
+
+def test_completing_a_counted_sheet_job_deducts_a_fractional_sheet(app, worker_client):
+    detail_id, material_id = _ids2(app)
+    worker_client.post('/admin/production-orders/create',
+                        data={'detail_id': detail_id, 'material_id': material_id, 'quantity': 2})
+    with flask_app.app_context():
+        job = ProductionOrder.query.one()
+        job_id = job.id
+
+    # 1.2 m^2 actually used out of the 2 m^2 sheet -> 0.6 of a sheet consumed.
+    res = worker_client.post(f'/admin/production-orders/{job_id}/complete',
+                              data={'actual_material_qty': '1.2'}, follow_redirects=True)
+    assert res.status_code == 200
+    with flask_app.app_context():
+        m = MaterialPrice.query.filter_by(key='qa_sheet_counted').first()
+        assert round(m.stock_quantity, 10) == round(1.0 - 0.6, 10), \
+            "1.2 m^2 used / 2 m^2 per sheet = 0.6 sheets consumed, not 1.2 sheets"

@@ -1097,6 +1097,15 @@ class ProductionOrder(db.Model):
             return None
         return round(self.actual_material_qty * 1000, 1) if self.is_linear_material else round(self.actual_material_qty, 3)
 
+    @property
+    def material_available_display(self):
+        """Currently available quantity of the linked material batch, in the
+        same display unit as planned_display/actual_display - see
+        _material_available_qty() (sheet stock is a sheet count, converted
+        to an area here so it's directly comparable to planned/actual)."""
+        qty = _material_available_qty(self.material)
+        return round(qty * 1000, 1) if self.is_linear_material else round(qty, 3)
+
 
 class Machine(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -1978,16 +1987,74 @@ def _material_cost(width, height, material):
 
 def _detail_material_unit_qty(detail):
     """
-    Raw-stock quantity needed for ONE unit of `detail`, in the same unit as
-    MaterialPrice.stock_quantity (m² for sheets/other, linear meters for
-    rods/pipes/profiles) - mirrors _material_cost()'s type branching exactly,
-    just returning quantity instead of price. Used by the production wizard
-    (admin_production_orders()) to size a job's material need.
+    Raw-stock quantity needed for ONE unit of `detail` - m² for sheets/other
+    (mirrors _material_cost()'s type branching exactly, just returning
+    quantity instead of price), linear meters for rods/pipes/profiles. This
+    is the "native unit" _material_available_qty()/_material_stock_delta()
+    below convert MaterialPrice.stock_quantity into/out of - see those for
+    why stock_quantity itself isn't already in this unit for sheets. Used by
+    the production wizard (admin_production_orders()) to size a job's
+    material need.
     """
     width, height = detail.effective_width, detail.effective_height
     if detail.material.type in ('rods', 'pipes', 'profiles'):
         return height / 1000.0
     return (width * height) / 1_000_000.0
+
+
+def _material_sheet_area_m2(material):
+    """One raw stock sheet's own area (catalog sheet_width_mm x
+    sheet_length_mm, NOT a cut part's size), in m² - None when either isn't
+    recorded (legacy rows, or a material where "one sheet" isn't a
+    meaningful concept)."""
+    if material.sheet_width_mm and material.sheet_length_mm:
+        return (material.sheet_width_mm * material.sheet_length_mm) / 1_000_000.0
+    return None
+
+
+def _material_available_qty(material):
+    """
+    How much of `material` is actually available, in the same native unit
+    _detail_material_unit_qty()/planned_material_qty use (m² for sheets/
+    other, linear meters for rods/pipes/profiles) - what a planned
+    production job's need is compared against (create_production_order()).
+
+    For sheets/other, MaterialPrice.stock_quantity counts whole raw sheets
+    on hand, not a running m² total - real inventory is counted (sheets on
+    the rack), not measured - so the available area is stock_quantity x one
+    sheet's own area (_material_sheet_area_m2), not stock_quantity itself.
+    Falls back to treating stock_quantity as already the native unit when no
+    sheet size is on record (legacy rows) - dividing by an unknown sheet
+    size would be meaningless, not merely imprecise. Linear stock
+    (rods/pipes/profiles) is unchanged: it's always been tracked as a
+    running length total, not a bar count.
+    """
+    stock = material.stock_quantity or 0.0
+    if material.type not in ('rods', 'pipes', 'profiles'):
+        sheet_area_m2 = _material_sheet_area_m2(material)
+        if sheet_area_m2:
+            return stock * sheet_area_m2
+    return stock
+
+
+def _material_stock_delta(material, native_qty):
+    """
+    Inverse of _material_available_qty(): converts a material-need/material-
+    used figure already expressed in the native unit (m² for sheets/other,
+    linear meters for rods/pipes/profiles) into the delta actually applied
+    to MaterialPrice.stock_quantity via _bump_stock() - dividing by one
+    sheet's own area turns an area figure into the equivalent (possibly
+    fractional, e.g. "used 0.6 of a sheet") sheet-count delta. Same
+    rods/pipes/profiles and unknown-sheet-size pass-through as
+    _material_available_qty() - used by both complete_production_order()
+    and delete_production_order() so completing then deleting a job always
+    lands stock back at exactly its starting value.
+    """
+    if material.type not in ('rods', 'pipes', 'profiles'):
+        sheet_area_m2 = _material_sheet_area_m2(material)
+        if sheet_area_m2:
+            return native_qty / sheet_area_m2
+    return native_qty
 
 
 def calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id):
@@ -6136,8 +6203,13 @@ def admin_production_orders():
         # (see _find_or_create_delivery_target's price-split) are
         # distinguishable in this one picker.
         'materials': [
+            # 'stock' is the AVAILABLE quantity in the same native unit as
+            # per_piece_qty (m²/m - see _material_available_qty()), not the
+            # raw MaterialPrice.stock_quantity - sheet stock is a sheet
+            # count, and showing that raw number next to an area figure
+            # would silently compare the wrong units.
             {'id': m.id, 'label': f'{format_material_option(m)} — {m.cost_per_m2:.2f} €{"/м" if m.type in ("rods", "pipes", "profiles") else "/м²"}',
-             'stock': round(m.stock_quantity or 0, 3)}
+             'stock': round(_material_available_qty(m), 3)}
             for m in MaterialPrice.query.filter_by(
                 display_name=d.material.display_name, brand=d.material.brand, type=d.material.type,
                 sheet_width_mm=d.material.sheet_width_mm, sheet_length_mm=d.material.sheet_length_mm,
@@ -6180,17 +6252,20 @@ def create_production_order():
     unit_label = 'мм' if is_linear else 'м²'
     to_display = (lambda q: round(q * 1000, 1)) if is_linear else (lambda q: round(q, 3))
 
-    stock = material.stock_quantity or 0.0
+    # Sheet/other stock is counted in whole raw sheets, not a running m²
+    # total - see _material_available_qty(). Comparing planned_qty (an area)
+    # against the raw sheet count would be comparing the wrong units.
+    available = _material_available_qty(material)
     planned_qty = per_piece_qty * quantity
 
-    if per_piece_qty > 0 and planned_qty > stock + 1e-9:
-        max_qty = int((stock + 1e-9) // per_piece_qty)
+    if per_piece_qty > 0 and planned_qty > available + 1e-9:
+        max_qty = int((available + 1e-9) // per_piece_qty)
         if max_qty < 1:
-            flash(f'Няма достатъчна наличност от "{material.display_name}" ({to_display(stock)} {unit_label}) '
+            flash(f'Няма достатъчна наличност от "{material.display_name}" ({to_display(available)} {unit_label}) '
                   f'за нито един бр. "{detail.name}" (нужни {to_display(per_piece_qty)} {unit_label} на брой) - '
                   f'задачата не беше създадена.', 'warning')
             return redirect(url_for('admin_production_orders'))
-        flash(f'Внимание: наличността на "{material.display_name}" ({to_display(stock)} {unit_label}) не стига за '
+        flash(f'Внимание: наличността на "{material.display_name}" ({to_display(available)} {unit_label}) не стига за '
               f'{quantity} бр. "{detail.name}" - количеството беше намалено на {max_qty} бр. '
               f'(максималното възможно, без наличността да падне под нула).', 'warning')
         quantity = max_qty
@@ -6216,7 +6291,11 @@ def complete_production_order(order_id):
     actually used (may differ from the planned figure - waste/kerf, see
     ProductionOrder docstring), which is subtracted from the chosen material
     batch's stock, while the planned piece count is added to the Detail's
-    stock - both via _bump_stock(), same as delivery-note intake.
+    stock - both via _bump_stock(), same as delivery-note intake. The
+    material figure is entered/stored in its native unit (m² for sheets,
+    mm/m for linear stock) but converted to a stock-quantity delta via
+    _material_stock_delta() before being applied, since sheet stock is
+    counted in whole sheets, not a running m² total.
     """
     job = ProductionOrder.query.get_or_404(order_id)
     if job.status == 'done':
@@ -6234,7 +6313,7 @@ def complete_production_order(order_id):
     job.status = 'done'
     job.completed_at = datetime.utcnow()
     job.completed_by_id = current_user.id
-    _bump_stock(job.material, -actual_qty)
+    _bump_stock(job.material, -_material_stock_delta(job.material, actual_qty))
     _bump_stock(job.detail, job.quantity)
     db.session.commit()
 
@@ -6260,7 +6339,7 @@ def delete_production_order(order_id):
     job = ProductionOrder.query.get_or_404(order_id)
 
     if job.status == 'done':
-        _bump_stock(job.material, job.actual_material_qty)
+        _bump_stock(job.material, _material_stock_delta(job.material, job.actual_material_qty))
         _bump_stock(job.detail, -job.quantity)
         log_action(f'Изтрита завършена задача за производство: {job.quantity} бр. "{job.detail.name}" - '
                    f'наличностите са върнати (материал "{job.material.display_name}" +{job.actual_display} {job.unit_label}, '
