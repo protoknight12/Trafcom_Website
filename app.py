@@ -6218,6 +6218,36 @@ def complete_production_order(order_id):
     return redirect(url_for('admin_production_orders'))
 
 
+@app.route('/admin/production-orders/<int:order_id>/delete', methods=['POST'])
+@role_required(['admin', 'worker'])
+def delete_production_order(order_id):
+    """
+    Deletes a ProductionOrder outright - a pending job never touched stock
+    (see create_production_order()), so deleting it is a no-op on stock. A
+    'done' job DID touch stock on completion (complete_production_order()):
+    deleting it reverses exactly that - the material batch gets its
+    actual_material_qty back, and the Detail loses the `quantity` pieces
+    that were credited to it - via the same _bump_stock() everything else
+    here uses, just with the signs flipped.
+    """
+    job = ProductionOrder.query.get_or_404(order_id)
+
+    if job.status == 'done':
+        _bump_stock(job.material, job.actual_material_qty)
+        _bump_stock(job.detail, -job.quantity)
+        log_action(f'Изтрита завършена задача за производство: {job.quantity} бр. "{job.detail.name}" - '
+                   f'наличностите са върнати (материал "{job.material.display_name}" +{job.actual_display} {job.unit_label}, '
+                   f'детайл -{job.quantity} бр.)')
+        flash('Завършената задача беше изтрита - наличностите бяха върнати към предишните им стойности.', 'success')
+    else:
+        log_action(f'Изтрита чакаща задача за производство: {job.quantity} бр. "{job.detail.name}"')
+        flash('Задачата беше изтрита.', 'success')
+
+    db.session.delete(job)
+    db.session.commit()
+    return redirect(url_for('admin_production_orders'))
+
+
 def generate_barcode_svg(code):
     """
     Renders `code` as an inline Code128 SVG barcode string for the label

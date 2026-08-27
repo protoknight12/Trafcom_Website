@@ -98,16 +98,21 @@
                         {% endif %}
                     </td>
                     <td class="text-right">
-                        {% if job.status == 'pending' %}
-                        <form method="POST" action="{{ url_for('complete_production_order', order_id=job.id) }}" style="display: flex; gap: 6px; align-items: center; justify-content: flex-end;">
-                            {% include 'partials/csrf_field.html' %}
-                            <input type="number" name="actual_material_qty" step="0.01" min="0" value="{{ job.planned_display }}"
-                                   title="Действително изразходван материал ({{ job.unit_label }})" style="width: 100px;" required>
-                            <button type="submit" class="btn-submit" style="padding: 6px 12px; font-size: 0.85rem;">Завърши</button>
-                        </form>
-                        {% else %}
-                        -
-                        {% endif %}
+                        <div style="display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: wrap;">
+                            {% if job.status == 'pending' %}
+                            <form method="POST" action="{{ url_for('complete_production_order', order_id=job.id) }}" style="display: flex; gap: 6px; align-items: center;">
+                                {% include 'partials/csrf_field.html' %}
+                                <input type="number" name="actual_material_qty" step="0.01" min="0" value="{{ job.planned_display }}"
+                                       title="Действително изразходван материал ({{ job.unit_label }})" style="width: 100px;" required>
+                                <button type="submit" class="btn-submit" style="padding: 6px 12px; font-size: 0.85rem;">Завърши</button>
+                            </form>
+                            {% endif %}
+                            <form method="POST" action="{{ url_for('delete_production_order', order_id=job.id) }}" style="display: inline;"
+                                  onsubmit="return confirm('{% if job.status == "done" %}Задачата е завършена - изтриването ѝ ще върне наличностите (материал +{{ job.actual_display }} {{ job.unit_label }}, детайл -{{ job.quantity }} бр.). Потвърждавате ли?{% else %}Изтриване на задачата?{% endif %}');">
+                                {% include 'partials/csrf_field.html' %}
+                                <button type="submit" class="btn-delete" style="padding: 6px 12px; font-size: 0.85rem;">Изтрий</button>
+                            </form>
+                        </div>
                     </td>
                 </tr>
                 {% else %}
