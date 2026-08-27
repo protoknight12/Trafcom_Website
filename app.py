@@ -1024,6 +1024,80 @@ class MaterialRequest(db.Model):
         return REQUEST_STATUS_LABELS.get(self.status, self.status)
 
 
+# Status slugs for ProductionOrder - same ASCII-slug-as-CSS-class convention
+# as Order.status/STATUS_LABELS.
+PRODUCTION_ORDER_STATUS_LABELS = {
+    'pending': 'Чака изработка',
+    'done': 'Завършена',
+}
+
+
+class ProductionOrder(db.Model):
+    """
+    A standalone "произведи N бр. от този детайл" job (admin_production_orders()),
+    independent of any customer Order - for building up Detail.stock_quantity
+    ahead of demand rather than fulfilling a specific sale. Reserves which
+    MaterialPrice row (batch/lot) to draw from - the same physical material
+    can exist as several catalog rows at different prices, one per delivery
+    note batch (see CLAUDE.md's delivery-note "keep separate items separate"
+    rule) - and freezes the calculated material need (planned_material_qty,
+    same unit as MaterialPrice.stock_quantity: m² for sheets/other, linear
+    meters for rods/pipes/profiles - see _detail_material_unit_qty()) at
+    creation time, so a later edit to the Detail's dimensions never rewrites
+    an already-planned job.
+
+    Marking a job 'done' is the only thing that touches stock: it subtracts
+    actual_material_qty (entered by whoever finished the job, to account for
+    real-world waste vs. the planned figure - e.g. kerf/scrap) from the
+    chosen material's stock_quantity, and adds `quantity` to the Detail's
+    stock_quantity, both via the same _bump_stock() delivery notes use - see
+    complete_production_order().
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=False)
+    material_id = db.Column(db.Integer, db.ForeignKey('material_price.id'), nullable=False)
+    quantity = db.Column(db.Integer, nullable=False)
+    planned_material_qty = db.Column(db.Float, nullable=False)
+    # Entered when marking the job done - what was actually drawn from
+    # stock, same unit as planned_material_qty. Null while pending.
+    actual_material_qty = db.Column(db.Float, nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='pending')  # 'pending' / 'done'
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+    completed_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+
+    detail = db.relationship('Detail')
+    material = db.relationship('MaterialPrice')
+    created_by = db.relationship('User', foreign_keys=[created_by_id])
+    completed_by = db.relationship('User', foreign_keys=[completed_by_id])
+
+    @property
+    def status_label(self):
+        return PRODUCTION_ORDER_STATUS_LABELS.get(self.status, self.status)
+
+    @property
+    def is_linear_material(self):
+        return bool(self.material and self.material.type in ('rods', 'pipes', 'profiles'))
+
+    @property
+    def unit_label(self):
+        return 'мм' if self.is_linear_material else 'м²'
+
+    @property
+    def planned_display(self):
+        """planned_material_qty converted to the unit shown/entered in the UI -
+        mm total length for bar stock (matches how Detail dimensions are
+        already expressed everywhere else), m² for sheets."""
+        return round(self.planned_material_qty * 1000, 1) if self.is_linear_material else round(self.planned_material_qty, 3)
+
+    @property
+    def actual_display(self):
+        if self.actual_material_qty is None:
+            return None
+        return round(self.actual_material_qty * 1000, 1) if self.is_linear_material else round(self.actual_material_qty, 3)
+
+
 class Machine(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
@@ -1900,6 +1974,20 @@ def _material_cost(width, height, material):
         return (height / 1000) * material.cost_per_m2
     area_m2 = (width * height) / 1_000_000
     return area_m2 * material.cost_per_m2
+
+
+def _detail_material_unit_qty(detail):
+    """
+    Raw-stock quantity needed for ONE unit of `detail`, in the same unit as
+    MaterialPrice.stock_quantity (m² for sheets/other, linear meters for
+    rods/pipes/profiles) - mirrors _material_cost()'s type branching exactly,
+    just returning quantity instead of price. Used by the production wizard
+    (admin_production_orders()) to size a job's material need.
+    """
+    width, height = detail.effective_width, detail.effective_height
+    if detail.material.type in ('rods', 'pipes', 'profiles'):
+        return height / 1000.0
+    return (width * height) / 1_000_000.0
 
 
 def calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id):
@@ -3482,8 +3570,15 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
     pierce_rate_per_min (mirrors admin_add_material's required fields) - without
     them we'd otherwise silently create a zero-priced row that produces
     €0.00 CNC prices everywhere it's later picked. Returns None (skip the
-    line) rather than defaulting to 0.0. Matching an *existing* material is
-    unaffected - those keep whatever pricing they already have.
+    line) rather than defaulting to 0.0. Matching an *existing* material at
+    the SAME price (or with no price entered on this line - the common case
+    for a routine restock) reuses that row as-is. A different price on this
+    line is a distinct batch/lot (the "keep separate items separate" rule
+    applies to price too) - it clones the matched row's brand/dims/type/
+    cutting-speed/pierce-rate into a brand-new row instead, so the two price
+    lots keep separate stock counts. This is what lets the production wizard
+    (admin_production_orders()) offer a choice between price lots of what is
+    otherwise "the same" material.
     """
     name = (name or '').strip()
     brand = (brand or '').strip() or None
@@ -3494,6 +3589,11 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
             display_name=name, brand=brand, sheet_width_mm=width,
             sheet_length_mm=height, thickness_mm=thickness, type=material_type
         ).first()
+        if existing and unit_price is not None and abs(existing.cost_per_m2 - unit_price) > 0.001:
+            cost_per_m2 = unit_price
+            cutting_speed_mm_per_min = existing.cutting_speed_mm_per_min
+            pierce_rate_per_min = existing.pierce_rate_per_min
+            existing = None
         if existing:
             return existing
         # A line for an EXISTING catalog material whose dims/brand were
@@ -6003,6 +6103,119 @@ def admin_missing_stock():
         'admin_missing_stock.html', orders_with_shortfalls=orders_with_shortfalls,
         active_page='admin_missing_stock'
     )
+
+
+# АДМИН/РАБОТНИК СТРАНИЦА - ПРОИЗВОДСТВО НА ДЕТАЙЛИ ЗА СКЛАД (guided wizard)
+@app.route('/admin/production-orders')
+@role_required(['admin', 'worker'])
+def admin_production_orders():
+    """
+    Standalone "произведи N бр. от този детайл" wizard + job list - see
+    ProductionOrder. Independent of any customer Order: this is for building
+    up Detail.stock_quantity ahead of demand. Precomputes, per Detail, the
+    material needed for one unit plus every MaterialPrice row sharing that
+    material's display name AND structural type (different price/stock
+    batches of the physically same stock from separate delivery notes - name
+    alone isn't enough, e.g. a "Неръждаема стомана" rod and sheet can share a
+    display name while being physically incompatible) as JSON for the
+    wizard's client-side math - same *_data-as-JSON convention as
+    admin_delivery_notes().
+    """
+    details = Detail.query.order_by(Detail.name).all()
+    details_data = [{
+        'id': d.id,
+        'name': d.name,
+        'is_linear': d.material.type in ('rods', 'pipes', 'profiles'),
+        'per_piece_qty': _detail_material_unit_qty(d),
+        # Price is appended here (not baked into format_material_option()
+        # itself, which is shared by every other material <select> in the
+        # app) specifically so price-lots that only differ by cost_per_m2
+        # (see _find_or_create_delivery_target's price-split) are
+        # distinguishable in this one picker.
+        'materials': [
+            {'id': m.id, 'label': f'{format_material_option(m)} — {m.cost_per_m2:.2f} €{"/м" if m.type in ("rods", "pipes", "profiles") else "/м²"}',
+             'stock': round(m.stock_quantity or 0, 3)}
+            for m in MaterialPrice.query.filter_by(display_name=d.material.display_name, type=d.material.type)
+                .order_by(MaterialPrice.cost_per_m2).all()
+        ],
+    } for d in details]
+
+    pending_jobs = ProductionOrder.query.filter_by(status='pending').order_by(ProductionOrder.created_at.asc()).all()
+    done_jobs = ProductionOrder.query.filter_by(status='done').order_by(ProductionOrder.completed_at.desc()).all()
+
+    return render_template(
+        'admin_production_orders.html', details=details, details_data=details_data,
+        pending_jobs=pending_jobs, done_jobs=done_jobs, active_page='admin_production_orders'
+    )
+
+
+@app.route('/admin/production-orders/create', methods=['POST'])
+@role_required(['admin', 'worker'])
+def create_production_order():
+    detail = Detail.query.get_or_404(request.form.get('detail_id', type=int))
+    material = MaterialPrice.query.get_or_404(request.form.get('material_id', type=int))
+    quantity = request.form.get('quantity', type=int)
+    if not quantity or quantity < 1:
+        flash('Моля въведете валидно количество за производство.', 'danger')
+        return redirect(url_for('admin_production_orders'))
+
+    planned_qty = _detail_material_unit_qty(detail) * quantity
+
+    job = ProductionOrder(
+        detail_id=detail.id, material_id=material.id, quantity=quantity,
+        planned_material_qty=planned_qty, created_by_id=current_user.id,
+    )
+    db.session.add(job)
+
+    if planned_qty > (material.stock_quantity or 0):
+        # Stock is never reserved/blocked anywhere else in this app (see
+        # order_missing_items() docstring) - a shortfall here is informational
+        # too, not a hard stop.
+        flash(f'Внимание: наличността на "{material.display_name}" ({material.stock_quantity or 0:g} {"мм" if job.is_linear_material else "м²"}) '
+              f'е по-малка от нужната ({job.planned_display} {job.unit_label}) - задачата беше записана въпреки това.', 'warning')
+
+    db.session.commit()
+    log_action(f'Нова задача за производство: {quantity} бр. "{detail.name}" от "{material.display_name}" '
+               f'(нужен материал: {job.planned_display} {job.unit_label})')
+    flash(f'Задачата за производство на {quantity} бр. "{detail.name}" беше създадена.', 'success')
+    return redirect(url_for('admin_production_orders'))
+
+
+@app.route('/admin/production-orders/<int:order_id>/complete', methods=['POST'])
+@role_required(['admin', 'worker'])
+def complete_production_order(order_id):
+    """
+    Marks a ProductionOrder done: the operator enters how much material was
+    actually used (may differ from the planned figure - waste/kerf, see
+    ProductionOrder docstring), which is subtracted from the chosen material
+    batch's stock, while the planned piece count is added to the Detail's
+    stock - both via _bump_stock(), same as delivery-note intake.
+    """
+    job = ProductionOrder.query.get_or_404(order_id)
+    if job.status == 'done':
+        flash('Тази задача вече е завършена.', 'danger')
+        return redirect(url_for('admin_production_orders'))
+
+    actual_display = request.form.get('actual_material_qty', type=float)
+    if actual_display is None or actual_display < 0:
+        flash('Моля въведете валидно изразходвано количество материал.', 'danger')
+        return redirect(url_for('admin_production_orders'))
+
+    actual_qty = actual_display / 1000.0 if job.is_linear_material else actual_display
+
+    job.actual_material_qty = actual_qty
+    job.status = 'done'
+    job.completed_at = datetime.utcnow()
+    job.completed_by_id = current_user.id
+    _bump_stock(job.material, -actual_qty)
+    _bump_stock(job.detail, job.quantity)
+    db.session.commit()
+
+    log_action(f'Завършена задача за производство: {job.quantity} бр. "{job.detail.name}" - '
+               f'изразходвани {job.actual_display} {job.unit_label} от "{job.material.display_name}" '
+               f'(нова наличност материал {job.material.stock_quantity:g}, детайл {job.detail.stock_quantity:g})')
+    flash(f'Задачата беше отбелязана като завършена - наличностите са обновени.', 'success')
+    return redirect(url_for('admin_production_orders'))
 
 
 def generate_barcode_svg(code):

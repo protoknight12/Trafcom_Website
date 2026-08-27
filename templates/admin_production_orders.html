@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Производство на детайли - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .status-badge { padding: 4px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; display: inline-block; }
+        .status-pending { background-color: #ffc107; color: #000; }
+        .status-done { background-color: #28a745; color: #fff; }
+        .po-wizard-row { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 8px; }
+        .po-wizard-row .form-group { flex: 1; min-width: 220px; margin-bottom: 0; }
+        .po-wizard-row .form-group.qty-field { flex: 0 0 140px; min-width: 120px; }
+        .po-preview { font-weight: 600; margin: 4px 0 20px; color: var(--accent-primary); }
+        .data-table td { vertical-align: middle; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Нова задача за производство</h3>
+        <p class="section-subtitle">Изберете детайл, количество и от коя партида материал да се произведе - нужният материал се изчислява автоматично.</p>
+
+        <form method="POST" action="{{ url_for('create_production_order') }}">
+            {% include 'partials/csrf_field.html' %}
+            <div class="po-wizard-row">
+                <div class="form-group">
+                    <label for="po_detail_select">Детайл *</label>
+                    <select id="po_detail_select" name="detail_id" required>
+                        {% for d in details %}
+                        <option value="{{ d.id }}">{{ d.name }} (наличност: {{ d.stock_quantity|round(0) }} бр.)</option>
+                        {% else %}
+                        <option disabled>Няма налични детайли в каталога</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group qty-field">
+                    <label for="po_quantity">Количество *</label>
+                    <input type="number" id="po_quantity" name="quantity" min="1" step="1" value="1" required>
+                </div>
+                <div class="form-group">
+                    <label for="po_material_select">Материал (партида) *</label>
+                    <select id="po_material_select" name="material_id" required></select>
+                </div>
+            </div>
+            <p id="po_preview" class="po-preview"></p>
+            <button type="submit" class="btn-submit" {% if not details %}disabled{% endif %}>Създай задача</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Задачи за производство</h3>
+        <p class="section-subtitle">Чакащите задачи са отгоре (по-старите първо); статусът на всяка задача е видим в колоната "Статус".</p>
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                <tr>
+                    <th>Детайл</th>
+                    <th class="text-center">Кол.</th>
+                    <th>Материал (партида)</th>
+                    <th class="text-right">Нужен материал</th>
+                    <th class="text-right">Изразходван материал</th>
+                    <th class="text-center">Статус</th>
+                    <th>Дата</th>
+                    <th class="text-right">Действие</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for job in pending_jobs + done_jobs %}
+                <tr>
+                    <td>{{ job.detail.name }}</td>
+                    <td class="text-center">{{ job.quantity }}</td>
+                    <td>{{ format_material_option(job.material) }} — {{ "%.2f"|format(job.material.cost_per_m2) }} €{{ '/м' if job.is_linear_material else '/м²' }}
+                        <span style="color: var(--text-muted);">(наличност: {{ job.material.stock_quantity|round(2) }})</span></td>
+                    <td class="text-right">{{ job.planned_display }} {{ job.unit_label }}</td>
+                    <td class="text-right">{{ (job.actual_display ~ ' ' ~ job.unit_label) if job.actual_display is not none else '-' }}</td>
+                    <td class="text-center"><span class="status-badge status-{{ job.status }}">{{ job.status_label }}</span></td>
+                    <td>
+                        {% if job.status == 'done' %}
+                        {{ job.completed_at.strftime('%d.%m.%Y %H:%M') }}{% if job.completed_by %} &middot; {{ job.completed_by.username }}{% endif %}
+                        {% else %}
+                        {{ job.created_at.strftime('%d.%m.%Y %H:%M') }}{% if job.created_by %} &middot; {{ job.created_by.username }}{% endif %}
+                        {% endif %}
+                    </td>
+                    <td class="text-right">
+                        {% if job.status == 'pending' %}
+                        <form method="POST" action="{{ url_for('complete_production_order', order_id=job.id) }}" style="display: flex; gap: 6px; align-items: center; justify-content: flex-end;">
+                            {% include 'partials/csrf_field.html' %}
+                            <input type="number" name="actual_material_qty" step="0.01" min="0" value="{{ job.planned_display }}"
+                                   title="Действително изразходван материал ({{ job.unit_label }})" style="width: 100px;" required>
+                            <button type="submit" class="btn-submit" style="padding: 6px 12px; font-size: 0.85rem;">Завърши</button>
+                        </form>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="8" class="text-center no-data">Няма задачи за производство.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+</main>
+
+<script>
+    const PO_DETAILS = {{ details_data|tojson }};
+
+    function poDetailById(id) {
+        return PO_DETAILS.find(function (d) { return d.id === id; });
+    }
+
+    function poUpdateMaterialOptions() {
+        const detailId = parseInt(document.getElementById('po_detail_select').value, 10);
+        const d = poDetailById(detailId);
+        const materialSelect = document.getElementById('po_material_select');
+        materialSelect.innerHTML = '';
+        (d ? d.materials : []).forEach(function (m) {
+            const opt = document.createElement('option');
+            opt.value = m.id;
+            opt.textContent = m.label + ' — наличност: ' + m.stock;
+            materialSelect.appendChild(opt);
+        });
+        poUpdatePreview();
+    }
+
+    function poUpdatePreview() {
+        const detailId = parseInt(document.getElementById('po_detail_select').value, 10);
+        const d = poDetailById(detailId);
+        const qty = parseInt(document.getElementById('po_quantity').value, 10) || 0;
+        const previewEl = document.getElementById('po_preview');
+        if (!d || !qty) { previewEl.textContent = ''; return; }
+        const needed = d.per_piece_qty * qty;
+        const display = d.is_linear ? (needed * 1000).toFixed(1) + ' мм' : needed.toFixed(3) + ' м²';
+        previewEl.textContent = 'Необходим материал: ' + display;
+    }
+
+    if (PO_DETAILS.length) {
+        document.getElementById('po_detail_select').addEventListener('change', poUpdateMaterialOptions);
+        document.getElementById('po_quantity').addEventListener('input', poUpdatePreview);
+        poUpdateMaterialOptions();
+    }
+</script>
+</body>
+</html>
