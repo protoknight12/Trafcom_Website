@@ -2147,12 +2147,64 @@ def favicon():
     )
 
 
+_ROBOTS_EASTER_EGG = """
+#                         __/\\__
+#                         \\    /
+#                   __/\\__/    \\__/\\__
+#                   \\                /
+#                   /_              _\\
+#                     \\            /
+#       __/\\__      __/            \\__      __/\\__
+#       \\    /      \\                /      \\    /
+# __/\\__/    \\__/\\__/                \\__/\\__/    \\__/\\__
+# \\                                                    /
+# /_                                                  _\\
+#   \\                                                /
+# __/                                                \\__
+# \\                                                    /
+# /_  __                                          __  _\\
+#   \\/  \\                                        /  \\/
+#       /_                                      _\\
+#         \\                                    /
+#       __/                                    \\__
+#       \\                                        /
+# __/\\__/                                        \\__/\\__
+# \\                                                    /
+# /_                                                  _\\
+#   \\                                                /
+# __/                                                \\__
+# \\                                                    /
+# /_  __      __  __                  __  __      __  _\\
+#   \\/  \\    /  \\/  \\                /  \\/  \\    /  \\/
+#       /_  _\\      /_              _\\      /_  _\\
+#         \\/          \\            /          \\/
+#                   __/            \\__
+#                   \\                /
+#                   /_  __      __  _\\
+#                     \\/  \\    /  \\/
+#                         /_  _\\
+#                           \\/
+"""
+
+
 @app.route('/robots.txt')
 def robots_txt():
     # Public marketing pages (/, /services, /about, /contact) are the only
     # ones worth indexing - everything else requires login anyway. Just
     # allow everything rather than maintaining a path list here.
-    return app.response_class('User-agent: *\nAllow: /\n', mimetype='text/plain')
+    body = _ROBOTS_EASTER_EGG + '\nUser-agent: *\nAllow: /\nSitemap: ' + request.url_root.rstrip('/') + '/sitemap.xml\n'
+    return app.response_class(body, mimetype='text/plain')
+
+
+@app.route('/sitemap.xml')
+def sitemap_xml():
+    # Only the public marketing pages are worth listing - everything else
+    # requires login, so a crawler can't do anything with those URLs anyway.
+    pages = ['/', '/services', '/about', '/contact']
+    root = request.url_root.rstrip('/')
+    urls = ''.join(f'<url><loc>{root}{p}</loc></url>' for p in pages)
+    xml = f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</urlset>'
+    return app.response_class(xml, mimetype='application/xml')
 
 
 @app.route('/')
