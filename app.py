@@ -6158,6 +6158,16 @@ def admin_production_orders():
 @app.route('/admin/production-orders/create', methods=['POST'])
 @role_required(['admin', 'worker'])
 def create_production_order():
+    """
+    Unlike delivery notes/orders (which never reserve/block stock - see
+    order_missing_items()), a planned job here must never be allowed to send
+    the chosen material batch's stock below zero - explicit product
+    requirement. Rather than rejecting the whole request outright, the
+    requested quantity is clamped down to the largest piece count the
+    current stock actually covers (floor(stock / per-piece need)), with a
+    yellow warning explaining the adjustment; only a genuine zero-stock case
+    (can't even make 1) refuses to create the job at all.
+    """
     detail = Detail.query.get_or_404(request.form.get('detail_id', type=int))
     material = MaterialPrice.query.get_or_404(request.form.get('material_id', type=int))
     quantity = request.form.get('quantity', type=int)
@@ -6165,21 +6175,32 @@ def create_production_order():
         flash('Моля въведете валидно количество за производство.', 'danger')
         return redirect(url_for('admin_production_orders'))
 
-    planned_qty = _detail_material_unit_qty(detail) * quantity
+    per_piece_qty = _detail_material_unit_qty(detail)
+    is_linear = material.type in ('rods', 'pipes', 'profiles')
+    unit_label = 'мм' if is_linear else 'м²'
+    to_display = (lambda q: round(q * 1000, 1)) if is_linear else (lambda q: round(q, 3))
+
+    stock = material.stock_quantity or 0.0
+    planned_qty = per_piece_qty * quantity
+
+    if per_piece_qty > 0 and planned_qty > stock + 1e-9:
+        max_qty = int((stock + 1e-9) // per_piece_qty)
+        if max_qty < 1:
+            flash(f'Няма достатъчна наличност от "{material.display_name}" ({to_display(stock)} {unit_label}) '
+                  f'за нито един бр. "{detail.name}" (нужни {to_display(per_piece_qty)} {unit_label} на брой) - '
+                  f'задачата не беше създадена.', 'warning')
+            return redirect(url_for('admin_production_orders'))
+        flash(f'Внимание: наличността на "{material.display_name}" ({to_display(stock)} {unit_label}) не стига за '
+              f'{quantity} бр. "{detail.name}" - количеството беше намалено на {max_qty} бр. '
+              f'(максималното възможно, без наличността да падне под нула).', 'warning')
+        quantity = max_qty
+        planned_qty = per_piece_qty * quantity
 
     job = ProductionOrder(
         detail_id=detail.id, material_id=material.id, quantity=quantity,
         planned_material_qty=planned_qty, created_by_id=current_user.id,
     )
     db.session.add(job)
-
-    if planned_qty > (material.stock_quantity or 0):
-        # Stock is never reserved/blocked anywhere else in this app (see
-        # order_missing_items() docstring) - a shortfall here is informational
-        # too, not a hard stop.
-        flash(f'Внимание: наличността на "{material.display_name}" ({material.stock_quantity or 0:g} {"мм" if job.is_linear_material else "м²"}) '
-              f'е по-малка от нужната ({job.planned_display} {job.unit_label}) - задачата беше записана въпреки това.', 'warning')
-
     db.session.commit()
     log_action(f'Нова задача за производство: {quantity} бр. "{detail.name}" от "{material.display_name}" '
                f'(нужен материал: {job.planned_display} {job.unit_label})')

@@ -28,6 +28,10 @@
     --danger-text: #f87171;
     --danger-bg: rgba(239, 68, 68, 0.12);
 
+    --warning-border: #f59e0b;
+    --warning-text: #fbbf24;
+    --warning-bg: rgba(251, 191, 36, 0.12);
+
     --border-radius-sm: 8px;
     --border-radius-md: 12px;
     --border-radius-lg: 16px;
@@ -470,6 +474,14 @@ button, .btn {
     color: var(--danger-text);
     border-color: rgba(239, 68, 68, 0.3);
     box-shadow: 0 4px 12px rgba(239, 68, 68, 0.05);
+}
+
+/* Yellow Status Rulesets */
+.alert-warning {
+    background-color: var(--warning-bg);
+    color: var(--warning-text);
+    border-color: rgba(251, 191, 36, 0.3);
+    box-shadow: 0 4px 12px rgba(251, 191, 36, 0.05);
 }
 
 /* ==========================================================================
