@@ -6,6 +6,12 @@
     {% include 'partials/favicon.html' %}
     <title>Склад - Материали - Trafcom DXF</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        /* Table links fall back to the browser's default (blue/visited-purple)
+           link color otherwise - unreadable against this dark theme. */
+        .data-table a { color: var(--text-main); text-decoration: none; }
+        .data-table a:hover { color: var(--accent-primary); text-decoration: underline; }
+    </style>
 </head>
 <body>
 {% include 'partials/navbar.html' %}
@@ -47,6 +53,8 @@
                     <th>Материал</th>
                     <th>Тип</th>
                     <th class="text-center">Наличност</th>
+                    <th class="text-right">Ед. цена</th>
+                    <th class="text-right">Обща стойност</th>
                 </tr>
                 </thead>
                 <tbody id="materialsTableBody">
@@ -58,16 +66,24 @@
                 {% else %}
                 {% set row_bg = none %}
                 {% endif %}
+                {% set unit = 'м' if material.type in ['rods', 'pipes', 'profiles'] else 'м²' %}
                 <tr data-search="{{ (format_material_option(material) ~ ' ' ~ material_type_label(material.type)) | lower }}" {% if row_bg %}style="background-color: {{ row_bg }};"{% endif %}>
                     <td><a href="{{ url_for('admin_material_history', material_id=material.id) }}">{{ format_material_option(material) }}</a></td>
                     <td>{{ material_type_label(material.type) }}</td>
                     <td class="text-center">{{ material.stock_quantity|round(2) }}</td>
+                    <td class="text-right">{{ "%.2f"|format(material.cost_per_m2) }} €/{{ unit }}</td>
+                    {#- Total value = unit price x AVAILABLE quantity (not the raw
+                    stock_quantity shown above) - sheet/other stock is a whole-sheet
+                    count, not a running m² total, so the real €-value of what's on
+                    hand is price x (count x one sheet's own area) - see
+                    material_available_qty()/_material_available_qty() in app.py. #}
+                    <td class="text-right">{{ "%.2f"|format(material.cost_per_m2 * material_available_qty(material)) }} €</td>
                 </tr>
                 {% else %}
-                <tr><td colspan="3" class="text-center no-data">Няма добавени материали.</td></tr>
+                <tr><td colspan="5" class="text-center no-data">Няма добавени материали.</td></tr>
                 {% endfor %}
                 {% if materials %}
-                <tr class="search-empty-row" hidden><td colspan="3" class="text-center no-data">Няма съвпадения.</td></tr>
+                <tr class="search-empty-row" hidden><td colspan="5" class="text-center no-data">Няма съвпадения.</td></tr>
                 {% endif %}
                 </tbody>
             </table>

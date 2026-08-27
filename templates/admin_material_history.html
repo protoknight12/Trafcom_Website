@@ -48,7 +48,11 @@
                 <tr>
                     <td>{{ m.date.strftime('%d.%m.%Y') }}</td>
                     <td>
-                        {% if m.direction == 'in' %}
+                        {% if m.kind == 'production_take' %}
+                        <span class="alert-warning" style="padding: 2px 8px; border-radius: 4px;">Взето за производство</span>
+                        {% elif m.kind == 'production_return' %}
+                        <span class="alert-success" style="padding: 2px 8px; border-radius: 4px;">Върнато от производство</span>
+                        {% elif m.direction == 'in' %}
                         <span class="alert-success" style="padding: 2px 8px; border-radius: 4px;">Постъпление</span>
                         {% else %}
                         <span class="alert-danger" style="padding: 2px 8px; border-radius: 4px;">Издаване</span>

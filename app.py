@@ -1052,6 +1052,16 @@ class ProductionOrder(db.Model):
     chosen material's stock_quantity, and adds `quantity` to the Detail's
     stock_quantity, both via the same _bump_stock() delivery notes use - see
     complete_production_order().
+
+    Deleting a job (delete_production_order()) hard-deletes a 'pending' one
+    outright - it never touched stock, nothing to keep a record of. A 'done'
+    job is soft-deleted instead (reversed_at/reversed_by_id set, row kept):
+    it already moved real stock, and admin_material_history() needs both the
+    original "taken for production" movement AND the reversing "returned
+    from production" movement to stay visible - hard-deleting the row would
+    silently erase that either happened. reversed_at also doubles as "is
+    this done job still active" - see admin_production_orders()'s
+    pending_jobs/done_jobs queries, which exclude reversed rows.
     """
     id = db.Column(db.Integer, primary_key=True)
     detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=False)
@@ -1066,11 +1076,14 @@ class ProductionOrder(db.Model):
     created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     completed_at = db.Column(db.DateTime, nullable=True)
     completed_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    reversed_at = db.Column(db.DateTime, nullable=True)
+    reversed_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
 
     detail = db.relationship('Detail')
     material = db.relationship('MaterialPrice')
     created_by = db.relationship('User', foreign_keys=[created_by_id])
     completed_by = db.relationship('User', foreign_keys=[completed_by_id])
+    reversed_by = db.relationship('User', foreign_keys=[reversed_by_id])
 
     @property
     def status_label(self):
@@ -2311,6 +2324,7 @@ app.jinja_env.globals['format_material_option'] = format_material_option
 app.jinja_env.globals['material_dimension_labels'] = material_dimension_labels
 app.jinja_env.globals['material_price_m2_label'] = material_price_m2_label
 app.jinja_env.globals['format_cut_dimensions'] = format_cut_dimensions
+app.jinja_env.globals['material_available_qty'] = _material_available_qty
 
 
 @app.route('/favicon.ico')
@@ -3204,12 +3218,18 @@ def admin_materials():
 def admin_material_history(material_id):
     """
     Every recorded stock movement for one material: incoming DeliveryNoteItem
-    rows (from a Supplier) and outgoing ClientDeliveryNoteItem rows (to a
-    Client), both keyed on the same target_type='material'/target_id
-    convention as print_label()/erp_lookup(). There's no other place
-    stock_quantity changes (see CLAUDE.md's Stock tracking section), so this
-    is the complete history. Same admin+worker access as storage_materials()
-    (the "склад" page this is linked from) and admin_delivery_notes().
+    rows (from a Supplier), outgoing ClientDeliveryNoteItem rows (to a
+    Client) - both keyed on the same target_type='material'/target_id
+    convention as print_label()/erp_lookup() - plus 'done' ProductionOrder
+    rows against this material, split into up to two movements each: the
+    original "taken for production" (at completed_at) and, if the job was
+    later deleted/undone (see ProductionOrder.reversed_at), a "returned from
+    production" (at reversed_at). Quantities are shown in the stock's own
+    unit (_material_stock_delta()'s output - sheet count for sheets/other,
+    not the raw m² actually used/returned) so they add up against
+    stock_quantity the same way delivery-note quantities do. Same
+    admin+worker access as storage_materials() (the "склад" page this is
+    linked from) and admin_delivery_notes().
     """
     material = MaterialPrice.query.get_or_404(material_id)
 
@@ -3219,22 +3239,40 @@ def admin_material_history(material_id):
     outgoing = (ClientDeliveryNoteItem.query.join(ClientDeliveryNote)
                 .filter(ClientDeliveryNoteItem.target_type == 'material', ClientDeliveryNoteItem.target_id == material_id)
                 .all())
+    production_jobs = ProductionOrder.query.filter_by(material_id=material_id, status='done').all()
 
     movements = [
         {'date': item.delivery_note.note_date or item.delivery_note.created_at.date(),
          'created_at': item.delivery_note.created_at,
-         'direction': 'in', 'quantity': item.quantity,
+         'kind': 'delivery', 'direction': 'in', 'quantity': item.quantity,
          'party': item.delivery_note.supplier.name if item.delivery_note.supplier else '-',
          'note_number': item.delivery_note.note_number, 'unit_price': item.unit_price, 'notes': item.notes}
         for item in incoming
     ] + [
         {'date': item.client_delivery_note.note_date or item.client_delivery_note.created_at.date(),
          'created_at': item.client_delivery_note.created_at,
-         'direction': 'out', 'quantity': item.quantity,
+         'kind': 'client', 'direction': 'out', 'quantity': item.quantity,
          'party': item.client_delivery_note.client.name if item.client_delivery_note.client else '-',
          'note_number': item.client_delivery_note.note_number, 'unit_price': item.unit_price, 'notes': item.notes}
         for item in outgoing
     ]
+    for job in production_jobs:
+        taken_qty = _material_stock_delta(material, job.actual_material_qty)
+        completed_by = job.completed_by.username if job.completed_by else '-'
+        movements.append({
+            'date': job.completed_at.date(), 'created_at': job.completed_at,
+            'kind': 'production_take', 'direction': 'out', 'quantity': taken_qty,
+            'party': 'Производство', 'note_number': None, 'unit_price': None,
+            'notes': f'{job.quantity} бр. "{job.detail.name}" ({completed_by})',
+        })
+        if job.reversed_at is not None:
+            reversed_by = job.reversed_by.username if job.reversed_by else '-'
+            movements.append({
+                'date': job.reversed_at.date(), 'created_at': job.reversed_at,
+                'kind': 'production_return', 'direction': 'in', 'quantity': taken_qty,
+                'party': 'Производство', 'note_number': None, 'unit_price': None,
+                'notes': f'изтрита задача - {job.quantity} бр. "{job.detail.name}" ({reversed_by})',
+            })
     movements.sort(key=lambda m: m['created_at'], reverse=True)
 
     return render_template('admin_material_history.html', material=material, movements=movements,
@@ -6219,7 +6257,10 @@ def admin_production_orders():
     } for d in details]
 
     pending_jobs = ProductionOrder.query.filter_by(status='pending').order_by(ProductionOrder.created_at.asc()).all()
-    done_jobs = ProductionOrder.query.filter_by(status='done').order_by(ProductionOrder.completed_at.desc()).all()
+    # Excludes reversed ('undone') jobs - soft-deleted by delete_production_
+    # order() to keep a record for admin_material_history(), but no longer
+    # an active/completed job from this page's point of view.
+    done_jobs = ProductionOrder.query.filter_by(status='done', reversed_at=None).order_by(ProductionOrder.completed_at.desc()).all()
 
     return render_template(
         'admin_production_orders.html', details=details, details_data=details_data,
@@ -6328,19 +6369,27 @@ def complete_production_order(order_id):
 @role_required(['admin', 'worker'])
 def delete_production_order(order_id):
     """
-    Deletes a ProductionOrder outright - a pending job never touched stock
-    (see create_production_order()), so deleting it is a no-op on stock. A
-    'done' job DID touch stock on completion (complete_production_order()):
-    deleting it reverses exactly that - the material batch gets its
-    actual_material_qty back, and the Detail loses the `quantity` pieces
-    that were credited to it - via the same _bump_stock() everything else
-    here uses, just with the signs flipped.
+    A pending job never touched stock (see create_production_order()), so
+    deleting it is a hard delete with no stock effect. A 'done' job DID
+    touch stock on completion (complete_production_order()): deleting it
+    reverses exactly that - the material batch gets its actual_material_qty
+    back (via the same _material_stock_delta() conversion completion used,
+    signs flipped), and the Detail loses the `quantity` pieces that were
+    credited to it. That job is soft-deleted instead of removed (reversed_at/
+    reversed_by_id set, row kept) so admin_material_history() can still show
+    both the original "taken for production" and this reversing "returned
+    from production" movement - see ProductionOrder's docstring.
     """
     job = ProductionOrder.query.get_or_404(order_id)
 
     if job.status == 'done':
+        if job.reversed_at is not None:
+            flash('Тази задача вече е изтрита.', 'danger')
+            return redirect(url_for('admin_production_orders'))
         _bump_stock(job.material, _material_stock_delta(job.material, job.actual_material_qty))
         _bump_stock(job.detail, -job.quantity)
+        job.reversed_at = datetime.utcnow()
+        job.reversed_by_id = current_user.id
         log_action(f'Изтрита завършена задача за производство: {job.quantity} бр. "{job.detail.name}" - '
                    f'наличностите са върнати (материал "{job.material.display_name}" +{job.actual_display} {job.unit_label}, '
                    f'детайл -{job.quantity} бр.)')
@@ -6348,8 +6397,8 @@ def delete_production_order(order_id):
     else:
         log_action(f'Изтрита чакаща задача за производство: {job.quantity} бр. "{job.detail.name}"')
         flash('Задачата беше изтрита.', 'success')
+        db.session.delete(job)
 
-    db.session.delete(job)
     db.session.commit()
     return redirect(url_for('admin_production_orders'))
 

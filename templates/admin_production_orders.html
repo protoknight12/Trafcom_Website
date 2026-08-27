@@ -56,6 +56,7 @@
                 <div class="form-group">
                     <label for="po_material_select">Материал (партида) *</label>
                     <select id="po_material_select" name="material_id" required></select>
+                    <p id="po_material_stock" class="po-preview" style="margin: 6px 0 0;"></p>
                 </div>
             </div>
             <p id="po_preview" class="po-preview"></p>
@@ -143,7 +144,23 @@
             opt.textContent = m.label + ' — наличност: ' + m.stock;
             materialSelect.appendChild(opt);
         });
+        poUpdateMaterialStock();
         poUpdatePreview();
+    }
+
+    // Dedicated, always-visible readout of the selected batch's available
+    // quantity - the material <select>'s own closed-state text truncates
+    // (brand/dims/price/stock all crammed into one <option> label) and can
+    // cut off the stock figure entirely at normal widths.
+    function poUpdateMaterialStock() {
+        const detailId = parseInt(document.getElementById('po_detail_select').value, 10);
+        const d = poDetailById(detailId);
+        const materialId = parseInt(document.getElementById('po_material_select').value, 10);
+        const stockEl = document.getElementById('po_material_stock');
+        const m = d && d.materials.find(function (x) { return x.id === materialId; });
+        if (!d || !m) { stockEl.textContent = ''; return; }
+        const display = d.is_linear ? (m.stock * 1000).toFixed(1) + ' мм' : m.stock.toFixed(3) + ' м²';
+        stockEl.textContent = 'Налично количество на партидата: ' + display;
     }
 
     function poUpdatePreview() {
@@ -159,6 +176,7 @@
 
     if (PO_DETAILS.length) {
         document.getElementById('po_detail_select').addEventListener('change', poUpdateMaterialOptions);
+        document.getElementById('po_material_select').addEventListener('change', poUpdateMaterialStock);
         document.getElementById('po_quantity').addEventListener('input', poUpdatePreview);
         poUpdateMaterialOptions();
     }
