@@ -6115,11 +6115,14 @@ def admin_production_orders():
     up Detail.stock_quantity ahead of demand. Precomputes, per Detail, the
     material needed for one unit plus every MaterialPrice row sharing that
     material's display name AND structural type (different price/stock
-    batches of the physically same stock from separate delivery notes - name
-    alone isn't enough, e.g. a "Неръждаема стомана" rod and sheet can share a
-    display name while being physically incompatible) as JSON for the
-    wizard's client-side math - same *_data-as-JSON convention as
-    admin_delivery_notes().
+    batches of the physically same stock from separate delivery notes.
+    "Physically the same" means every descriptive field _find_or_create_
+    delivery_target() itself matches on (display name, brand, dims, type) -
+    name and type alone aren't enough, e.g. two rows can both be called
+    "Неръждаема стомана"/sheets while being a different brand and thickness
+    (a genuinely different material, not a price lot of the same one) - as
+    JSON for the wizard's client-side math - same *_data-as-JSON convention
+    as admin_delivery_notes().
     """
     details = Detail.query.order_by(Detail.name).all()
     details_data = [{
@@ -6135,8 +6138,11 @@ def admin_production_orders():
         'materials': [
             {'id': m.id, 'label': f'{format_material_option(m)} — {m.cost_per_m2:.2f} €{"/м" if m.type in ("rods", "pipes", "profiles") else "/м²"}',
              'stock': round(m.stock_quantity or 0, 3)}
-            for m in MaterialPrice.query.filter_by(display_name=d.material.display_name, type=d.material.type)
-                .order_by(MaterialPrice.cost_per_m2).all()
+            for m in MaterialPrice.query.filter_by(
+                display_name=d.material.display_name, brand=d.material.brand, type=d.material.type,
+                sheet_width_mm=d.material.sheet_width_mm, sheet_length_mm=d.material.sheet_length_mm,
+                thickness_mm=d.material.thickness_mm,
+            ).order_by(MaterialPrice.cost_per_m2).all()
         ],
     } for d in details]
 
