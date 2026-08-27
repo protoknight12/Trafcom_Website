@@ -3022,6 +3022,48 @@ def admin_materials():
     return render_template('admin_materials.html', materials=materials, active_page='admin_materials')
 
 
+@app.route('/admin/materials/<int:material_id>/history')
+@role_required(['admin', 'worker'])
+def admin_material_history(material_id):
+    """
+    Every recorded stock movement for one material: incoming DeliveryNoteItem
+    rows (from a Supplier) and outgoing ClientDeliveryNoteItem rows (to a
+    Client), both keyed on the same target_type='material'/target_id
+    convention as print_label()/erp_lookup(). There's no other place
+    stock_quantity changes (see CLAUDE.md's Stock tracking section), so this
+    is the complete history. Same admin+worker access as storage_materials()
+    (the "склад" page this is linked from) and admin_delivery_notes().
+    """
+    material = MaterialPrice.query.get_or_404(material_id)
+
+    incoming = (DeliveryNoteItem.query.join(DeliveryNote)
+                .filter(DeliveryNoteItem.target_type == 'material', DeliveryNoteItem.target_id == material_id)
+                .all())
+    outgoing = (ClientDeliveryNoteItem.query.join(ClientDeliveryNote)
+                .filter(ClientDeliveryNoteItem.target_type == 'material', ClientDeliveryNoteItem.target_id == material_id)
+                .all())
+
+    movements = [
+        {'date': item.delivery_note.note_date or item.delivery_note.created_at.date(),
+         'created_at': item.delivery_note.created_at,
+         'direction': 'in', 'quantity': item.quantity,
+         'party': item.delivery_note.supplier.name if item.delivery_note.supplier else '-',
+         'note_number': item.delivery_note.note_number, 'unit_price': item.unit_price, 'notes': item.notes}
+        for item in incoming
+    ] + [
+        {'date': item.client_delivery_note.note_date or item.client_delivery_note.created_at.date(),
+         'created_at': item.client_delivery_note.created_at,
+         'direction': 'out', 'quantity': item.quantity,
+         'party': item.client_delivery_note.client.name if item.client_delivery_note.client else '-',
+         'note_number': item.client_delivery_note.note_number, 'unit_price': item.unit_price, 'notes': item.notes}
+        for item in outgoing
+    ]
+    movements.sort(key=lambda m: m['created_at'], reverse=True)
+
+    return render_template('admin_material_history.html', material=material, movements=movements,
+                            active_page='storage')
+
+
 @app.route('/admin/details')
 @login_required
 def admin_details():

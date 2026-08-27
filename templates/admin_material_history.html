@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>История на {{ material.display_name }} - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">
+            {{ message }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>История на движенията: {{ material.display_name }}{% if material.brand %} ({{ material.brand }}){% endif %}</h3>
+        <p class="section-subtitle">Текуща наличност: {{ material.stock_quantity|round(2) }}. Всяко постъпление (от доставчик) и всяко издаване (към клиент), записани през складовите разписки.</p>
+        <p><a href="{{ url_for('storage_materials') }}" class="btn-secondary">&larr; Обратно към материалите</a></p>
+
+        {% if movements %}
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Дата</th>
+                    <th>Тип</th>
+                    <th>Контрагент</th>
+                    <th>№ на разписка</th>
+                    <th>Количество</th>
+                    <th>Ед. цена (€)</th>
+                    <th>Бележки</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for m in movements %}
+                <tr>
+                    <td>{{ m.date.strftime('%d.%m.%Y') }}</td>
+                    <td>
+                        {% if m.direction == 'in' %}
+                        <span class="alert-success" style="padding: 2px 8px; border-radius: 4px;">Постъпление</span>
+                        {% else %}
+                        <span class="alert-danger" style="padding: 2px 8px; border-radius: 4px;">Издаване</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ m.party }}</td>
+                    <td>{{ m.note_number or '-' }}</td>
+                    <td>{{ '+' if m.direction == 'in' else '-' }}{{ m.quantity|round(2) }}</td>
+                    <td>{{ '%.2f'|format(m.unit_price) if m.unit_price is not none else '-' }}</td>
+                    <td>{{ m.notes or '-' }}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма записани движения за този материал.</p>
+        {% endif %}
+    </section>
+
+</main>
+</body>
+</html>

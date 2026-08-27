@@ -59,7 +59,7 @@
                 {% set row_bg = none %}
                 {% endif %}
                 <tr data-search="{{ (format_material_option(material) ~ ' ' ~ material_type_label(material.type)) | lower }}" {% if row_bg %}style="background-color: {{ row_bg }};"{% endif %}>
-                    <td>{{ format_material_option(material) }}</td>
+                    <td><a href="{{ url_for('admin_material_history', material_id=material.id) }}">{{ format_material_option(material) }}</a></td>
                     <td>{{ material_type_label(material.type) }}</td>
                     <td class="text-center">{{ material.stock_quantity|round(2) }}</td>
                 </tr>
