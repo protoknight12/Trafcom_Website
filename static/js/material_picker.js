@@ -29,6 +29,7 @@
 .mp-trigger .mp-trigger-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mp-trigger .mp-trigger-arrow { opacity: 0.6; flex-shrink: 0; }
 .mp-panel { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 50; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); box-shadow: 0 8px 24px rgba(0,0,0,0.35); max-height: 340px; display: flex; flex-direction: column; overflow: hidden; }
+.mp-panel[hidden] { display: none; }
 .mp-search { margin: 8px; padding: 6px 8px; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-main); border-radius: var(--border-radius-sm); flex-shrink: 0; }
 .mp-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-bottom: 6px; }
 .mp-section-label { padding: 6px 10px 2px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); }
