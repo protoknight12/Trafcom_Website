@@ -8347,13 +8347,13 @@ CHATBOT_SYSTEM_PROMPT = """Ти си виртуален асистент на с
 - Имейл: trafcom@trafcombg.com
 - Сайтът предлага DXF CNC Калкулатор (клиентът качва DXF чертеж и получава автоматична цена на база площ, дължина на рязане и брой пробождания) и Параметричен Генератор на форми.
 
-Разговаряш само с вписани (логнати) потребители - имаш достъп до инструменти за да провериш реални, актуални данни: каталога на фирмата (материали, детайли, продукти, наличност на склад), машини/услуги, най-скъпи артикули, и собствените поръчки на текущия потребител (my_orders, order_status). Използвай инструментите, вместо да гадаеш, когато въпросът е за нещо, което те биха проверили.
+Разговаряш само с вписани (логнати) потребители - имаш достъп до инструменти за да провериш реални, актуални данни: каталога на фирмата (материали, детайли, продукти, наличност на склад, типове материали), машини и услуги (вкл. цени), най-скъпи артикули, собствените поръчки на текущия потребител (номер, статус, недостиг на наличност), собствената му DXF библиотека с качвания, и основния му профил. Използвай инструментите, вместо да гадаеш, когато въпросът е за нещо, което те биха проверили. Имаш и инструмент за изпълнение на код за математически изчисления (виж правило 4).
 
 Правила, които спазваш стриктно:
 1. Отговаряй кратко, любезно и на български език. Никога не използвай emoji.
 2. НИКОГА не измисляй конкретна цена - реалната цена зависи от геометрията на чертежа и се смята автоматично само след качване на DXF файл. За цена винаги насочвай клиента към DXF калкулатора на сайта или към контакт с офиса.
 3. Ако инструментите не намерят отговор или въпросът е извън тяхната информация (срокове, индивидуални условия), кажи го честно и насочи клиента към телефона или имейла по-горе - не измисляй факти.
-4. Не давай съвети извън темата на фирмата.
+4. Не давай съвети извън темата на фирмата - с едно изключение: ако потребителят помоли за математическо изчисление (дори несвързано с Трафком), реши го точно, като ползваш code execution инструмента за всичко по-сложно от наум смятане.
 5. order_status/my_orders винаги връщат само поръчки на текущия потребител - никога не твърди, че виждаш поръчка на друг клиент."""
 
 
@@ -8566,10 +8566,137 @@ def order_status(order_number: str) -> str:
     return '\n'.join(lines)
 
 
+@anthropic.beta_tool
+def order_missing_stock(order_number: str) -> str:
+    """Проверява дали има недостиг на наличност за конкретна поръчка на текущия потребител - дали може да бъде изпълнена веднага.
+
+    Args:
+        order_number: Номерът на поръчката.
+    """
+    order = Order.query.filter_by(order_number=order_number, user_id=current_user.id).first()
+    if not order:
+        return f"Нямате поръчка с номер '{order_number}'."
+    shortfalls = order_missing_items(order)
+    if not shortfalls:
+        return f'Поръчка № {order.order_number} има пълна наличност за всички артикули.'
+    lines = [f'Поръчка № {order.order_number} има недостиг по следните артикули:']
+    for s in shortfalls:
+        lines.append(f"- {s['item_name']}: нужни {s['needed']}, налични {s['available']}, липсват {s['missing']}")
+    return '\n'.join(lines)
+
+
+@anthropic.beta_tool
+def list_service_prices() -> str:
+    """Връща списък с публичните цени на услугите (€/час или €/метър) на Трафком."""
+    services = Service.query.filter_by(show_price=True).order_by(Service.name).all()
+    if not services:
+        return 'В момента няма публикувани цени на услуги.'
+    lines = []
+    for s in services:
+        if s.pricing_mode == 'length' and s.price_per_meter_eur is not None:
+            lines.append(f'{s.name}: {s.price_per_meter_eur:g} €/м')
+        else:
+            lines.append(f'{s.name}: {s.price_per_hour_eur:g} €/час')
+    return '\n'.join(lines)
+
+
+@anthropic.beta_tool
+def get_machine_details(name: str) -> str:
+    """Връща спецификации и описание за конкретна машина по име (толерира леки правописни грешки).
+
+    Args:
+        name: Име или част от името на машината.
+    """
+    matches = _fuzzy_match(ServiceMachineCard.query.all(), lambda x: x.title, name, limit=1)
+    if not matches:
+        return f"Не намерих машина с име '{name}'."
+    card = matches[0]
+    lines = [card.title]
+    if card.specs_text:
+        lines.append(card.specs_text.strip())
+    if card.description:
+        lines.append(card.description.strip())
+    return '\n'.join(lines)
+
+
+@anthropic.beta_tool
+def list_material_types() -> str:
+    """Връща възможните типове материали (за филтриране в list_materials)."""
+    return '\n'.join(f'{key} - {label}' for key, label in MATERIAL_TYPE_LABELS.items())
+
+
+@anthropic.beta_tool
+def my_uploads(offset: int = 0) -> str:
+    """Изброява предишните DXF качвания на текущия потребител от личната му библиотека (файл, материал, изчислена цена).
+
+    Args:
+        offset: Колко записа да пропусне - за следваща страница.
+    """
+    q = DxfFile.query.filter_by(user_id=current_user.id).order_by(DxfFile.id.desc())
+    total = q.count()
+    offset = max(0, offset)
+    page_size = 15
+    uploads = q.offset(offset).limit(page_size).all()
+    if not uploads:
+        return 'Нямате качени DXF файлове.' if offset == 0 else 'Няма повече резултати.'
+    lines = [f'{u.filename} - {u.material} - {u.calculated_price:g} €' for u in uploads]
+    if total > offset + len(uploads):
+        lines.append(f'(Показани {offset + 1}-{offset + len(uploads)} от общо {total} - за следващите извикай отново с offset={offset + page_size}.)')
+    return '\n'.join(lines)
+
+
+@anthropic.beta_tool
+def get_upload_details(query: str) -> str:
+    """Връща подробности за конкретно DXF качване на текущия потребител по име на файла (толерира леки правописни грешки).
+
+    Args:
+        query: Част от името на файла.
+    """
+    matches = _fuzzy_match(DxfFile.query.filter_by(user_id=current_user.id).all(), lambda x: x.filename, query, limit=1)
+    if not matches:
+        return f"Не намерих качване с име '{query}'."
+    u = matches[0]
+    return (
+        f'{u.filename}\n'
+        f'Материал: {u.material}\n'
+        f'Размери: {u.width:g} x {u.height:g} мм\n'
+        f'Дължина на рязане: {u.total_length:g} мм\n'
+        f'Цена: {u.calculated_price:g} €'
+    )
+
+
+@anthropic.beta_tool
+def my_profile() -> str:
+    """Връща основната информация за акаунта на текущия логнат потребител."""
+    role_labels = {'regular_user': 'Клиент', 'worker': 'Служител', 'admin': 'Администратор', 'web_designer': 'Уеб дизайнер'}
+    lines = [f'Потребителско име: {current_user.username}', f'Роля: {role_labels.get(current_user.role, current_user.role)}']
+    if current_user.email:
+        verified = 'потвърден' if current_user.email_verified else 'непотвърден'
+        lines.append(f'Имейл: {current_user.email} ({verified})')
+    return '\n'.join(lines)
+
+
+@anthropic.beta_tool
+def get_contact_info() -> str:
+    """Връща адрес, телефон и имейл за контакт с Трафком."""
+    return (
+        'Адреси: ул. „Александър Стамболийски“ 36, гр. Тетевен (офис) и '
+        'ул. „Воловийте“, 5700 гр. Тетевен (производствена база)\n'
+        'Телефон: +359 886 762 276\n'
+        'Имейл: trafcom@trafcombg.com'
+    )
+
+
 CHATBOT_TOOLS = [
     search_catalog, list_services, most_expensive_items,
     list_materials, get_material_details, list_products, get_product_details,
-    my_orders, order_status,
+    my_orders, order_status, order_missing_stock,
+    list_service_prices, get_machine_details, list_material_types,
+    my_uploads, get_upload_details, my_profile, get_contact_info,
+    # Server-side tool - runs in Anthropic's own sandbox, not on this server,
+    # so it never touches the DB/filesystem. Pure computation only (see rule
+    # 4 in CHATBOT_SYSTEM_PROMPT) - unrelated to the read-only site tools above.
+    {'type': 'code_execution_20260521', 'name': 'code_execution'},
 ]
 
 
