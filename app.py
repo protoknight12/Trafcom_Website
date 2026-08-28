@@ -309,8 +309,18 @@ class MaterialPrice(db.Model):
     # throughout the app to handle a blank/unknown group.
     type = db.Column(db.String(30), nullable=False, default='sheets')
     # Free-text manufacturer/variant tag (e.g. "Alcoa", "DC01") - purely
-    # informational, shown alongside display_name where relevant.
+    # informational, shown alongside display_name where relevant. NOT part of
+    # _find_or_create_delivery_target's matching anymore (see notes below) -
+    # a supplier/manufacturer swap alone must reuse the same catalog row.
     brand = db.Column(db.String(100), nullable=True)
+    # Free-text description carried over from a delivery-note line's
+    # "Описание" field (DeliveryNoteItem.notes) when a brand-new material row
+    # is created. Unlike brand, THIS one is part of
+    # _find_or_create_delivery_target's matching - two lines with the same
+    # name/dims/price but a different description are still a distinct batch
+    # (per CLAUDE.md delivery-note task: boss revised the rule so brand no
+    # longer splits a row, but description does).
+    notes = db.Column(db.String(255), nullable=True)
     # Stock on hand, bumped by recording delivery notes (see DeliveryNoteItem
     # / admin_delivery_notes.html) - not editable by hand elsewhere.
     stock_quantity = db.Column(db.Float, nullable=False, default=0.0)
@@ -3681,15 +3691,18 @@ DELIVERY_NOTE_TARGET_MODELS = {'material': MaterialPrice, 'detail': Detail, 'pro
 
 def _find_or_create_delivery_target(item_type, name, brand, width, height, thickness, unit_price, material_key,
                                      cost_per_m2=None, cutting_speed_mm_per_min=None, pierce_rate_per_min=None, components=None,
-                                     material_type='sheets'):
+                                     material_type='sheets', notes=None):
     """
     Resolves one delivery-note line to a catalog row: reuses an existing
     Material/Detail/Product only if every descriptive field matches exactly,
     otherwise creates a brand-new bare-bones row (no DXF geometry / BOM -
-    just what the paper delivery note itself carries). This is deliberate -
-    two lines that differ in even one parameter (brand, a dimension, or
-    price) must never be folded into the same stock count, per the
-    "keep separate items separate" rule (see CLAUDE.md delivery-note task).
+    just what the paper delivery note itself carries). Two lines that differ
+    in name, a dimension, price, or description (notes) must never be folded
+    into the same stock count, per the "keep separate items separate" rule
+    (see CLAUDE.md delivery-note task). brand and quantity do NOT split a
+    row anymore - boss revised the rule: a different manufacturer/supplier
+    tag or a different delivered quantity on an otherwise-identical material
+    is still the same catalog item.
 
     Detail still requires material_key (hard FK, see admin_delete_material's
     docstring) - a bare-bones Detail can skip total_length/pierce_count
@@ -3725,12 +3738,13 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
     """
     name = (name or '').strip()
     brand = (brand or '').strip() or None
+    notes = (notes or '').strip() or None
     price_per_unit = None
 
     if item_type == 'material':
         material_type = material_type if material_type in MATERIAL_TYPE_LABELS else 'sheets'
         existing = MaterialPrice.query.filter_by(
-            display_name=name, brand=brand, sheet_width_mm=width,
+            display_name=name, notes=notes, sheet_width_mm=width,
             sheet_length_mm=height, thickness_mm=thickness, type=material_type
         ).first()
         if existing and unit_price is not None:
@@ -3744,7 +3758,7 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
                 existing = None
         if existing:
             return existing
-        # A line for an EXISTING catalog material whose dims/brand were
+        # A line for an EXISTING catalog material whose dims/description were
         # edited on the delivery note (the real delivered batch differs
         # slightly from the catalog default - see DeliveryNoteItem docstring)
         # carries no pricing of its own from the form; the pricing inputs
@@ -3770,7 +3784,7 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
             key='pending', display_name=name, cost_per_m2=cost_per_m2, price_per_unit=price_per_unit,
             cutting_speed_mm_per_min=cutting_speed_mm_per_min,
             pierce_rate_per_min=pierce_rate_per_min, sheet_width_mm=width, sheet_length_mm=height,
-            thickness_mm=thickness, brand=brand, type=material_type, erp_number=_next_erp_number(),
+            thickness_mm=thickness, brand=brand, notes=notes, type=material_type, erp_number=_next_erp_number(),
         )
         db.session.add(new_row)
         db.session.flush()
@@ -3950,6 +3964,7 @@ def create_delivery_note():
         height = _optional_float('height')
         thickness = _optional_float('thickness')
         brand = (row.get('brand') or '').strip() or None
+        notes = (row.get('notes') or '').strip() or None
         material_key = (row.get('material_key') or '').strip() or None
         cost_per_m2 = _optional_float('cost_per_m2')
         cutting_speed_mm_per_min = _optional_float('cutting_speed_mm_per_min')
@@ -3972,7 +3987,7 @@ def create_delivery_note():
         target = _find_or_create_delivery_target(
             item_type, name, brand, width, height, thickness, unit_price, material_key,
             cost_per_m2=cost_per_m2, cutting_speed_mm_per_min=cutting_speed_mm_per_min, pierce_rate_per_min=pierce_rate_per_min,
-            components=components, material_type=material_type
+            components=components, material_type=material_type, notes=notes
         )
         if not target:
             continue
@@ -3981,7 +3996,7 @@ def create_delivery_note():
         db.session.add(DeliveryNoteItem(
             delivery_note_id=note.id, target_type=item_type, target_id=target.id,
             description_snapshot=description, quantity=quantity, unit_price=unit_price,
-            notes=(row.get('notes') or '').strip() or None,
+            notes=notes,
             width=width, height=height, thickness=thickness, brand=brand,
         ))
         _bump_stock(target, quantity)
