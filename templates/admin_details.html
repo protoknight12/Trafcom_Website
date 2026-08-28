@@ -36,7 +36,7 @@
             </div>
             <div class="form-group">
                 <label for="detail_material">Материал</label>
-                <select id="detail_material" name="material">
+                <select id="detail_material" name="material" class="material-picker">
                     {% include 'partials/material_options.html' %}
                 </select>
             </div>
@@ -156,6 +156,7 @@
 
 <script src="{{ url_for('static', filename='js/table_search.js') }}"></script>
 <script>initTableSearch('adminDetailsSearchInput', 'adminDetailsTableBody');</script>
+<script src="{{ url_for('static', filename='js/material_picker.js') }}"></script>
 <script>
     const ND_SERVICES = {{ services_data|tojson }};
     let ndPendingOps = [];

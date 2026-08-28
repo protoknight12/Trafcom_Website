@@ -25,8 +25,13 @@
     {% endwith %}
 
     <section class="admin-card">
-        <h3>История на движенията: {{ material.display_name }}{% if material.brand %} ({{ material.brand }}){% endif %}</h3>
-        <p class="section-subtitle">Текуща наличност: {{ material.stock_quantity|round(2) }}. Всяко постъпление (от доставчик) и всяко издаване (към клиент), записани през складовите разписки.</p>
+        <h3>История на движенията: {{ format_material_option(material) }}</h3>
+        <p class="section-subtitle">
+            {{ material_type_label(material.type) }} &middot;
+            {{ "%.2f"|format(material.cost_per_m2) }} €/{{ 'м' if material.type in ['rods', 'pipes', 'profiles'] else 'м²' }} &middot;
+            Текуща наличност: {{ material.stock_quantity|round(2) }}.
+            Всяко постъпление (от доставчик) и всяко издаване (към клиент), записани през складовите разписки.
+        </p>
         <p><a href="{{ url_for('storage_materials') }}" class="btn-secondary">&larr; Обратно към материалите</a></p>
 
         {% if movements %}

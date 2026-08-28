@@ -201,7 +201,7 @@
                     <label for="qd_material" style="margin-bottom: 0;">Материал</label>
                     <button type="button" onclick="openQuickMaterialModal('qd_material')" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
                 </div>
-                <select id="qd_material" name="material">
+                <select id="qd_material" name="material" class="material-picker">
                     {% include 'partials/material_options.html' %}
                 </select>
             </div>
@@ -441,6 +441,7 @@
     </div>
 </div>
 
+<script src="{{ url_for('static', filename='js/material_picker.js') }}"></script>
 <script>
     const PRODUCTS = {{ products|tojson }};
     const DETAILS = {{ details|tojson }};

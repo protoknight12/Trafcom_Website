@@ -1,10 +1,18 @@
 {# Expects `materials` (ordered by type, display_name - see MaterialPrice.query.order_by calls)
    in scope. Groups options into <optgroup>s by structural type (sheets/rods/profiles/...)
-   so choosing e.g. "Пръти" narrows the visible list to just that stock form. #}
+   so choosing e.g. "Пръти" narrows the visible list to just that stock form.
+   The data-* attributes let static/js/material_picker.js (see the "material-picker"
+   class added on the consuming <select>) further group same name/dims/type price-lots
+   into one expandable entry instead of a long flat list of near-duplicates - the
+   <select> itself stays flat/unchanged for browsers without JS or that skip the class. #}
 {% for type_key, group in materials|groupby('type') %}
 <optgroup label="{{ material_type_label(type_key) }}">
     {% for material in group %}
-    <option value="{{ material.key }}">{{ format_material_option(material) }}</option>
+    <option value="{{ material.key }}" data-id="{{ material.id }}" data-name="{{ material.display_name }}"
+            data-w="{{ material.sheet_width_mm if material.sheet_width_mm is not none else '' }}"
+            data-h="{{ material.sheet_length_mm if material.sheet_length_mm is not none else '' }}"
+            data-t="{{ material.thickness_mm if material.thickness_mm is not none else '' }}"
+            data-type="{{ material.type }}" data-brand="{{ material.brand or '' }}" data-price="{{ material.cost_per_m2 }}">{{ format_material_option(material) }}</option>
     {% endfor %}
 </optgroup>
 {% endfor %}

@@ -55,7 +55,7 @@
             {% include 'partials/csrf_field.html' %}
             <div class="form-group" style="margin-bottom: 20px;">
                 <label for="material">Материал за изчисление *</label>
-                <select name="material" id="material" required>
+                <select name="material" id="material" required class="material-picker">
                     {% include 'partials/material_options.html' %}
                 </select>
             </div>
@@ -90,6 +90,7 @@
         </form>
     </section>
 </main>
+<script src="{{ url_for('static', filename='js/material_picker.js') }}"></script>
 <script>
     document.querySelector('form[action="{{ url_for("upload") }}"]').addEventListener('submit', function (e) {
         const anyChecked = document.querySelectorAll('input[name="service_ids"]:checked').length > 0;

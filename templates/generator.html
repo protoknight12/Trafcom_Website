@@ -261,7 +261,7 @@
 
             <div class="control-group-title">Изчисляване на цена</div>
             <div class="form-group" style="margin-bottom: 12px;">
-                <select id="in-material" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-color); color: #fff; padding: 8px; border-radius: 4px;">
+                <select id="in-material" class="material-picker" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-color); color: #fff; padding: 8px; border-radius: 4px;">
                     {% include 'partials/material_options.html' %}
                 </select>
             </div>
@@ -300,6 +300,7 @@
     </form>
 </main>
 
+<script src="{{ url_for('static', filename='js/material_picker.js') }}"></script>
 <script>
     const canvas = document.getElementById('genCanvas');
     const ctx = canvas.getContext('2d');

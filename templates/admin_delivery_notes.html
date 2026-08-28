@@ -96,14 +96,8 @@
             <div class="add-item-row">
                 <div class="form-group" id="material_selector">
                     <label for="dn_material_select">Материал *</label>
-                    <select id="dn_material_select">
-                        {% for type_key, group in materials|groupby('type') %}
-                        <optgroup label="{{ material_type_label(type_key) }}">
-                            {% for m in group %}
-                            <option value="{{ m.key }}">{{ format_material_option(m) }}</option>
-                            {% endfor %}
-                        </optgroup>
-                        {% endfor %}
+                    <select id="dn_material_select" class="material-picker">
+                        {% include 'partials/material_options.html' %}
                         <option value="__new__">+ Нов материал...</option>
                     </select>
                     <input type="text" id="dn_material_name_new" placeholder="Име на новия материал" autocomplete="off" style="display: none; margin-top: 8px;">
@@ -162,7 +156,7 @@
                         <button type="button" onclick="openQuickMaterialModal('dn_detail_material_id')" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
                         {% endif %}
                     </div>
-                    <select id="dn_detail_material_id">
+                    <select id="dn_detail_material_id" class="material-picker">
                         {% include 'partials/material_options.html' %}
                     </select>
                 </div>
@@ -263,7 +257,7 @@
                         <label for="qd_material" style="margin-bottom: 0;">Материал</label>
                         <button type="button" onclick="openQuickMaterialModal('qd_material')" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
                     </div>
-                    <select id="qd_material" name="material">
+                    <select id="qd_material" name="material" class="material-picker">
                         {% include 'partials/material_options.html' %}
                     </select>
                 </div>
@@ -412,6 +406,7 @@
 
 </main>
 
+<script src="{{ url_for('static', filename='js/material_picker.js') }}"></script>
 <script>
     const MATERIALS = {{ materials_data|tojson }};
     const DETAILS = {{ details_data|tojson }};
