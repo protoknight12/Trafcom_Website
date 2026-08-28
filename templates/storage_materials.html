@@ -11,6 +11,11 @@
            link color otherwise - unreadable against this dark theme. */
         .data-table a { color: var(--text-main); text-decoration: none; }
         .data-table a:hover { color: var(--accent-primary); text-decoration: underline; }
+        .group-toggle-row { cursor: pointer; }
+        .group-toggle-row .toggle-chevron { display: inline-block; width: 1em; transition: transform 0.15s ease; }
+        .group-toggle-row.expanded .toggle-chevron { transform: rotate(90deg); }
+        .lot-row td:first-child { padding-left: 32px; }
+        .lot-count-badge { opacity: 0.65; font-size: 0.85em; margin-left: 6px; }
     </style>
 </head>
 <body>
@@ -40,7 +45,7 @@
             </div>
         </div>
 
-        {% if materials %}
+        {% if material_groups %}
         <div class="form-group" style="margin-top: 16px; max-width: 360px;">
             <input type="text" id="materialSearchInput" placeholder="Търсене по име, марка, тип...">
         </div>
@@ -59,7 +64,11 @@
                 </tr>
                 </thead>
                 <tbody id="materialsTableBody">
-                {% for material in materials %}
+                {% for group in material_groups %}
+                {% set lots = group.lots %}
+                {% set unit = 'м' if lots[0].type in ['rods', 'pipes', 'profiles'] else 'м²' %}
+                {% if lots|length == 1 %}
+                {% set material = lots[0] %}
                 {% if material.stock_quantity <= 0 %}
                 {% set row_bg = 'rgba(220, 53, 69, 0.12)' %}
                 {% elif material.min_quantity is not none and material.stock_quantity <= material.min_quantity %}
@@ -67,7 +76,6 @@
                 {% else %}
                 {% set row_bg = none %}
                 {% endif %}
-                {% set unit = 'м' if material.type in ['rods', 'pipes', 'profiles'] else 'м²' %}
                 <tr data-search="{{ (format_material_option(material) ~ ' ' ~ material_type_label(material.type)) | lower }}" {% if row_bg %}style="background-color: {{ row_bg }};"{% endif %}>
                     <td><a href="{{ url_for('admin_material_history', material_id=material.id) }}">{{ format_material_option(material) }}</a></td>
                     <td>{{ material_type_label(material.type) }}</td>
@@ -82,9 +90,37 @@
                     <td class="text-right">{{ "%.2f"|format(material.cost_per_m2 * material_available_qty(material)) }} €</td>
                 </tr>
                 {% else %}
+                {#- Several price-lots of the same name/dims/type (see
+                storage_materials() grouping) - one summary row, expandable
+                into each lot's own row underneath. Aggregate fields
+                (label/unit/total_stock/total_value/min_price/max_price/
+                row_bg) are precomputed in storage_materials(). #}
+                {% set ns = namespace(search_parts=[]) %}
+                {% for lot in lots %}{% set ns.search_parts = ns.search_parts + [format_material_option(lot)] %}{% endfor %}
+                {% set group_search = ns.search_parts|join(' ') ~ ' ' ~ material_type_label(lots[0].type) %}
+                <tr class="group-toggle-row" data-search="{{ group_search|lower }}" {% if group.row_bg %}style="background-color: {{ group.row_bg }};"{% endif %}>
+                    <td><span class="toggle-chevron">▶</span>{{ group.label }}<span class="lot-count-badge">{{ lots|length }} партиди</span></td>
+                    <td>{{ material_type_label(lots[0].type) }}</td>
+                    <td class="text-center">{{ group.total_stock|round(2) }}</td>
+                    <td class="text-right">{{ "%.2f"|format(group.min_price) }}–{{ "%.2f"|format(group.max_price) }} €/{{ group.unit }}</td>
+                    <td class="text-right">—</td>
+                    <td class="text-right">{{ "%.2f"|format(group.total_value) }} €</td>
+                </tr>
+                {% for lot in lots %}
+                <tr class="lot-row" data-group-lot hidden>
+                    <td><a href="{{ url_for('admin_material_history', material_id=lot.id) }}">{{ format_material_option(lot) }}</a></td>
+                    <td>{{ material_type_label(lot.type) }}</td>
+                    <td class="text-center">{{ lot.stock_quantity|round(2) }}</td>
+                    <td class="text-right">{{ "%.2f"|format(lot.cost_per_m2) }} €/{{ unit }}</td>
+                    <td class="text-right">{{ "%.2f €"|format(lot.price_per_unit) if lot.price_per_unit is not none else '—' }}</td>
+                    <td class="text-right">{{ "%.2f"|format(lot.cost_per_m2 * material_available_qty(lot)) }} €</td>
+                </tr>
+                {% endfor %}
+                {% endif %}
+                {% else %}
                 <tr><td colspan="6" class="text-center no-data">Няма добавени материали.</td></tr>
                 {% endfor %}
-                {% if materials %}
+                {% if material_groups %}
                 <tr class="search-empty-row" hidden><td colspan="6" class="text-center no-data">Няма съвпадения.</td></tr>
                 {% endif %}
                 </tbody>
@@ -94,6 +130,24 @@
 
 </main>
 <script src="{{ url_for('static', filename='js/table_search.js') }}"></script>
-<script>initTableSearch('materialSearchInput', 'materialsTableBody');</script>
+<script>
+initTableSearch('materialSearchInput', 'materialsTableBody');
+
+// Expand/collapse a multi-lot group's price-lot rows, which immediately
+// follow their .group-toggle-row summary row in the DOM (see
+// storage_materials() grouping) - independent of the search filter above,
+// which only ever hides/shows the summary row, never these.
+document.getElementById('materialsTableBody').addEventListener('click', function (e) {
+    const summaryRow = e.target.closest('.group-toggle-row');
+    if (!summaryRow) return;
+    summaryRow.classList.toggle('expanded');
+    const expanded = summaryRow.classList.contains('expanded');
+    let row = summaryRow.nextElementSibling;
+    while (row && row.classList.contains('lot-row')) {
+        row.hidden = !expanded;
+        row = row.nextElementSibling;
+    }
+});
+</script>
 </body>
 </html>

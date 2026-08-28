@@ -2340,6 +2340,14 @@ def inject_current_year():
     return {'current_year': datetime.now().year}
 
 
+def _format_material_dims(material):
+    """Width/length/thickness as "Wmm, Lmm, Tmm" - "-" per blank slot. Shared
+    by format_material_option (which adds brand/#ID around this) and the
+    storage_materials() group-header label (which doesn't - see there)."""
+    return ', '.join(f"{dim:g}mm" if dim is not None else '-' for dim in
+                      (material.sheet_width_mm, material.sheet_length_mm, material.thickness_mm))
+
+
 def format_material_option(material):
     """
     Standardized display text for every material <select> in the app:
@@ -2351,11 +2359,8 @@ def format_material_option(material):
     skipped for an unsaved/unflushed row (id is still None) rather than
     printing "#None ".
     """
-    parts = [material.brand or '-']
-    for dim in (material.sheet_width_mm, material.sheet_length_mm, material.thickness_mm):
-        parts.append(f"{dim:g}mm" if dim is not None else '-')
     id_prefix = f"#{material.id} " if material.id is not None else ''
-    return f"{id_prefix}{material.display_name} ({', '.join(parts)})"
+    return f"{id_prefix}{material.display_name} ({material.brand or '-'}, {_format_material_dims(material)})"
 
 
 app.jinja_env.globals['get_text'] = get_text
@@ -3380,7 +3385,44 @@ def storage_dashboard():
 @role_required(['admin', 'worker'])
 def storage_materials():
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
-    return render_template('storage_materials.html', materials=materials, active_page='storage')
+    # Group price-lots of "the same" material (name + dims + type - the same
+    # fields _find_or_create_delivery_target matches on minus price/notes)
+    # into one expandable row instead of a flat list of near-duplicates - see
+    # CLAUDE.md delivery-note task. A group of size 1 renders exactly like a
+    # plain row (no expand affordance, no aggregate fields computed); order
+    # preserved from the query above.
+    groups_by_key = {}
+    material_groups = []
+    for material in materials:
+        key = (material.display_name, material.sheet_width_mm, material.sheet_length_mm,
+               material.thickness_mm, material.height_mm, material.type)
+        group = groups_by_key.get(key)
+        if group is None:
+            group = {'lots': []}
+            groups_by_key[key] = group
+            material_groups.append(group)
+        group['lots'].append(material)
+
+    for group in material_groups:
+        lots = group['lots']
+        if len(lots) < 2:
+            continue
+        first = lots[0]
+        group['label'] = f"{first.display_name} ({_format_material_dims(first)})"
+        group['unit'] = 'м' if first.type in ('rods', 'pipes', 'profiles') else 'м²'
+        group['total_stock'] = sum(lot.stock_quantity for lot in lots)
+        group['total_value'] = sum(lot.cost_per_m2 * _material_available_qty(lot) for lot in lots)
+        group['min_price'] = min(lot.cost_per_m2 for lot in lots)
+        group['max_price'] = max(lot.cost_per_m2 for lot in lots)
+        # Worst case across lots, same red/yellow thresholds a plain row uses.
+        if any(lot.stock_quantity <= 0 for lot in lots):
+            group['row_bg'] = 'rgba(220, 53, 69, 0.12)'
+        elif any(lot.min_quantity is not None and lot.stock_quantity <= lot.min_quantity for lot in lots):
+            group['row_bg'] = 'rgba(255, 193, 7, 0.12)'
+        else:
+            group['row_bg'] = None
+
+    return render_template('storage_materials.html', material_groups=material_groups, active_page='storage')
 
 
 @app.route('/storage/requests')
