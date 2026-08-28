@@ -34,6 +34,7 @@
 .mp-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-bottom: 6px; }
 .mp-section-label { padding: 6px 10px 2px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); }
 .mp-row { padding: 7px 10px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+.mp-row[hidden] { display: none; }
 .mp-row:hover, .mp-row.mp-active { background: var(--bg-input); }
 .mp-group-row .mp-chevron { display: inline-block; width: 0.9em; transition: transform 0.15s ease; opacity: 0.7; flex-shrink: 0; }
 .mp-group-row.expanded .mp-chevron { transform: rotate(90deg); }
