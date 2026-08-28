@@ -3,6 +3,7 @@ import os
 import json
 import math
 import re
+import difflib
 import uuid
 import io
 import csv
@@ -104,8 +105,14 @@ login_manager.login_view = 'login'
 limiter = Limiter(get_remote_address, app=app, default_limits=["300 per hour"])
 
 # Unlike SECRET_KEY/DATABASE_URL, this is optional - the site works fine
-# without it, only the chat widget degrades (see api_chat()).
-anthropic_client = anthropic.Anthropic() if os.environ.get('ANTHROPIC_API_KEY') else None
+# without it, only the chat widget degrades (see api_chat()). Some
+# Console-issued keys are "identity-linked" and reject requests unless the
+# target workspace is named explicitly - ANTHROPIC_WORKSPACE_ID is only
+# needed for that key type (Console -> workspace settings URL has the id).
+_anthropic_workspace_id = os.environ.get('ANTHROPIC_WORKSPACE_ID')
+anthropic_client = anthropic.Anthropic(
+    default_headers={'anthropic-workspace-id': _anthropic_workspace_id} if _anthropic_workspace_id else None,
+) if os.environ.get('ANTHROPIC_API_KEY') else None
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 app.config['PRODUCT_IMAGES_FOLDER'] = os.path.join(app.static_folder, 'uploads', 'products')
@@ -8328,10 +8335,10 @@ def admin_offer_print(offer_id):
 # ----------------- CHAT WIDGET -----------------
 # Public FAQ bot for the floating widget in footer.html. Stateless - the
 # browser resends its own running history each turn, nothing is persisted
-# server-side. Deliberately answers from general company info only; real
-# prices come from the DXF calculator (analyze_dxf_geometry/
-# calculate_cnc_price), never from the model, so the prompt forbids guessing
-# one.
+# server-side. Deliberately answers general questions from live DB lookups
+# (see CHATBOT_TOOLS below) rather than a static text blob, but real DXF
+# prices still only ever come from the calculator (analyze_dxf_geometry/
+# calculate_cnc_price) - the prompt forbids the model from guessing one.
 CHATBOT_SYSTEM_PROMPT = """Ти си виртуален асистент на сайта на Трафком ООД - фирма за прецизна ЦПУ (лазерна/CNC) обработка на метал в гр. Тетевен, България, основана през 1997 г.
 
 Основна информация:
@@ -8340,15 +8347,234 @@ CHATBOT_SYSTEM_PROMPT = """Ти си виртуален асистент на с
 - Имейл: trafcom@trafcombg.com
 - Сайтът предлага DXF CNC Калкулатор (клиентът качва DXF чертеж и получава автоматична цена на база площ, дължина на рязане и брой пробождания) и Параметричен Генератор на форми.
 
+Разговаряш само с вписани (логнати) потребители - имаш достъп до инструменти за да провериш реални, актуални данни: каталога на фирмата (материали, детайли, продукти, наличност на склад), машини/услуги, най-скъпи артикули, и собствените поръчки на текущия потребител (my_orders, order_status). Използвай инструментите, вместо да гадаеш, когато въпросът е за нещо, което те биха проверили.
+
 Правила, които спазваш стриктно:
-1. Отговаряй кратко, любезно и на български език.
+1. Отговаряй кратко, любезно и на български език. Никога не използвай emoji.
 2. НИКОГА не измисляй конкретна цена - реалната цена зависи от геометрията на чертежа и се смята автоматично само след качване на DXF файл. За цена винаги насочвай клиента към DXF калкулатора на сайта или към контакт с офиса.
-3. Ако нямаш точна информация по въпрос (наличност, конкретен материал, срокове), кажи го честно и насочи клиента към телефона или имейла по-горе - не измисляй факти.
+3. Ако инструментите не намерят отговор или въпросът е извън тяхната информация (срокове, индивидуални условия), кажи го честно и насочи клиента към телефона или имейла по-горе - не измисляй факти.
 4. Не давай съвети извън темата на фирмата.
-5. Ако въпросът изисква достъп до данни от акаунт на клиент (поръчки, наличности), кажи че все още не можеш да провериш това и насочи клиента да влезе в профила си или се обади в офиса."""
+5. order_status/my_orders винаги връщат само поръчки на текущия потребител - никога не твърди, че виждаш поръчка на друг клиент."""
+
+
+def _fuzzy_match(rows, name_of, query, limit=5, cutoff=0.6):
+    """
+    Ranks rows against a search query - substring hits always win (score
+    1.0), typo'd/misspelled queries fall back to a per-word difflib ratio.
+    Catalog tables are small (tens of rows), so scoring every row in Python
+    on each call is simpler than adding a DB-side fuzzy-search extension
+    (e.g. Postgres pg_trgm) - revisit only if the catalog grows enough that
+    this becomes a real cost.
+    """
+    query_lower = query.lower().strip()
+    scored = []
+    for row in rows:
+        name_lower = name_of(row).lower()
+        if query_lower in name_lower:
+            scored.append((1.0, row))
+            continue
+        best = max(
+            (difflib.SequenceMatcher(None, query_lower, word).ratio() for word in name_lower.split()),
+            default=0.0,
+        )
+        if best >= cutoff:
+            scored.append((best, row))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [row for _, row in scored[:limit]]
+
+
+@anthropic.beta_tool
+def search_catalog(query: str) -> str:
+    """Търси в каталога на Трафком (материали, детайли, продукти) по име или марка - толерира леки правописни грешки - и връща наличност на склад.
+
+    Args:
+        query: Дума или част от име за търсене, напр. "алуминий" или "панел".
+    """
+    query = (query or '').strip()
+    if not query:
+        return 'Няма подадена дума за търсене.'
+    results = []
+    for m in _fuzzy_match(MaterialPrice.query.all(), lambda x: x.display_name, query, limit=5):
+        results.append(f'Материал: {format_material_option(m)} - наличност: {m.stock_quantity:g}')
+    for d in _fuzzy_match(Detail.query.all(), lambda x: x.name, query, limit=5):
+        results.append(f'Детайл: {d.name} - наличност: {d.stock_quantity:g} бр.')
+    for p in _fuzzy_match(Product.query.all(), lambda x: x.name, query, limit=5):
+        results.append(f'Продукт: {p.name} - наличност: {p.stock_quantity:g} бр.')
+    if not results:
+        return f"Няма намерени резултати за '{query}' в каталога."
+    return '\n'.join(results)
+
+
+@anthropic.beta_tool
+def list_services() -> str:
+    """Връща списъка с машините и услугите на Трафком от страница „Услуги“."""
+    cards = ServiceMachineCard.query.filter_by(page='services').all()
+    if not cards:
+        return 'В момента няма въведени услуги.'
+    lines = []
+    for c in cards:
+        desc = (c.description or '').strip()
+        lines.append(f'{c.title}: {desc[:200]}' if desc else c.title)
+    return '\n'.join(lines)
+
+
+@anthropic.beta_tool
+def most_expensive_items(limit: int = 5) -> str:
+    """Връща най-скъпите материали и детайли в каталога, подредени по цена низходящо - за въпроси от типа "кое е най-скъпото нещо на склад".
+
+    Args:
+        limit: Максимален брой резултати за всяка категория (по подразбиране 5, максимум 20).
+    """
+    limit = max(1, min(limit, 20))
+    results = []
+    for m in MaterialPrice.query.order_by(MaterialPrice.cost_per_m2.desc()).limit(limit):
+        results.append(f'Материал: {format_material_option(m)} - {m.cost_per_m2:g} €/м² - наличност: {m.stock_quantity:g}')
+    for d in Detail.query.order_by(Detail.calculated_price.desc()).limit(limit):
+        results.append(f'Детайл: {d.name} - {d.calculated_price:g} € - наличност: {d.stock_quantity:g} бр.')
+    if not results:
+        return 'Няма данни в каталога.'
+    return '\n'.join(results)
+
+
+_PAGE_SIZE = 30
+
+
+@anthropic.beta_tool
+def list_materials(material_type: str = '', offset: int = 0) -> str:
+    """Изброява материалите в каталога, по избор филтрирани по тип - за разглеждане, когато клиентът не знае точното име.
+
+    Args:
+        material_type: По избор - един от: sheets, rods, profiles, pipes, other. Празно за всички типове.
+        offset: Колко записа да пропусне - за следваща страница при повече от 30 резултата.
+    """
+    q = MaterialPrice.query
+    material_type = (material_type or '').strip()
+    if material_type:
+        q = q.filter_by(type=material_type)
+    q = q.order_by(MaterialPrice.display_name)
+    total = q.count()
+    offset = max(0, offset)
+    materials = q.offset(offset).limit(_PAGE_SIZE).all()
+    if not materials:
+        return 'Няма намерени материали от този тип.' if offset == 0 else 'Няма повече резултати.'
+    lines = [f'{format_material_option(m)} - наличност: {m.stock_quantity:g}' for m in materials]
+    if total > offset + len(materials):
+        lines.append(f'(Показани {offset + 1}-{offset + len(materials)} от общо {total} - за следващите извикай отново с offset={offset + _PAGE_SIZE}.)')
+    return '\n'.join(lines)
+
+
+@anthropic.beta_tool
+def get_material_details(name: str) -> str:
+    """Връща пълните характеристики на конкретен материал по име (толерира леки правописни грешки).
+
+    Args:
+        name: Име или част от името на материала.
+    """
+    matches = _fuzzy_match(MaterialPrice.query.all(), lambda x: x.display_name, name, limit=1)
+    if not matches:
+        return f"Не намерих материал с име '{name}'."
+    material = matches[0]
+    return (
+        f'{format_material_option(material)}\n'
+        f'Тип: {MATERIAL_TYPE_LABELS.get(material.type, material.type)}\n'
+        f'Цена: {material.cost_per_m2:g} €/м²\n'
+        f'Наличност: {material.stock_quantity:g}'
+    )
+
+
+@anthropic.beta_tool
+def list_products(offset: int = 0) -> str:
+    """Изброява продуктите в каталога с цена на продажба и наличност.
+
+    Args:
+        offset: Колко записа да пропусне - за следваща страница при повече от 30 резултата.
+    """
+    q = Product.query.order_by(Product.name)
+    total = q.count()
+    offset = max(0, offset)
+    products = q.offset(offset).limit(_PAGE_SIZE).all()
+    if not products:
+        return 'В момента няма въведени продукти.' if offset == 0 else 'Няма повече резултати.'
+    lines = []
+    for p in products:
+        price = calculate_product_pricing(p)['sell_price']
+        lines.append(f'{p.name} - {price:g} € - наличност: {p.stock_quantity:g} бр.')
+    if total > offset + len(products):
+        lines.append(f'(Показани {offset + 1}-{offset + len(products)} от общо {total} - за следващите извикай отново с offset={offset + _PAGE_SIZE}.)')
+    return '\n'.join(lines)
+
+
+@anthropic.beta_tool
+def get_product_details(name: str) -> str:
+    """Връща състава (от какви детайли е направен) и цената на конкретен продукт по име (толерира леки правописни грешки).
+
+    Args:
+        name: Име или част от името на продукта.
+    """
+    matches = _fuzzy_match(Product.query.all(), lambda x: x.name, name, limit=1)
+    if not matches:
+        return f"Не намерих продукт с име '{name}'."
+    product = matches[0]
+    pricing = calculate_product_pricing(product)
+    lines = [f'{product.name} - цена: {pricing["sell_price"]:g} € - наличност: {product.stock_quantity:g} бр.']
+    if product.description:
+        lines.append(product.description.strip())
+    lines.append('Съставни детайли:')
+    for pd in product.product_details:
+        lines.append(f'- {pd.detail.name} x{pd.quantity}')
+    return '\n'.join(lines)
+
+
+@anthropic.beta_tool
+def my_orders(offset: int = 0) -> str:
+    """Изброява собствените поръчки на текущия логнат потребител (номер, статус, дата, обща цена).
+
+    Args:
+        offset: Колко записа да пропусне - за следваща страница при повече от 15 поръчки.
+    """
+    q = Order.query.filter_by(user_id=current_user.id).order_by(Order.created_at.desc())
+    total = q.count()
+    offset = max(0, offset)
+    page_size = 15
+    orders = q.offset(offset).limit(page_size).all()
+    if not orders:
+        return 'Нямате направени поръчки.' if offset == 0 else 'Няма повече резултати.'
+    lines = [
+        f'№ {o.order_number} - {o.status_label} ({o.percent_complete:g}%) - '
+        f'{o.created_at.strftime("%d.%m.%Y")} - {o.total_price:g} €'
+        for o in orders
+    ]
+    if total > offset + len(orders):
+        lines.append(f'(Показани {offset + 1}-{offset + len(orders)} от общо {total} - за следващите извикай отново с offset={offset + page_size}.)')
+    return '\n'.join(lines)
+
+
+@anthropic.beta_tool
+def order_status(order_number: str) -> str:
+    """Връща детайли за конкретна поръчка на текущия логнат потребител по номер - никога на друг клиент.
+
+    Args:
+        order_number: Номерът на поръчката, напр. "2026-0042".
+    """
+    order = Order.query.filter_by(order_number=order_number, user_id=current_user.id).first()
+    if not order:
+        return f"Нямате поръчка с номер '{order_number}'."
+    lines = [f'№ {order.order_number} - {order.status_label} - {order.percent_complete:g}% завършена - {order.total_price:g} €']
+    for item in order.items:
+        item_name = item.product.name if item.product else item.detail.name
+        lines.append(f'- {item_name} x{item.quantity_ordered}')
+    return '\n'.join(lines)
+
+
+CHATBOT_TOOLS = [
+    search_catalog, list_services, most_expensive_items,
+    list_materials, get_material_details, list_products, get_product_details,
+    my_orders, order_status,
+]
 
 
 @app.route('/api/chat', methods=['POST'])
+@login_required
 @limiter.limit('20 per hour')
 def api_chat():
     if anthropic_client is None:
@@ -8375,20 +8601,25 @@ def api_chat():
                 history.append({'role': role, 'content': content})
 
     try:
-        response = anthropic_client.messages.create(
+        runner = anthropic_client.beta.messages.tool_runner(
             model='claude-haiku-4-5',
             max_tokens=1024,
+            max_iterations=4,  # caps tool-call round-trips per message - cost/abuse guard
             system=[{
                 'type': 'text',
                 'text': CHATBOT_SYSTEM_PROMPT,
                 'cache_control': {'type': 'ephemeral'},
             }],
+            tools=CHATBOT_TOOLS,
             messages=history + [{'role': 'user', 'content': user_message}],
         )
+        last = None
+        for message in runner:
+            last = message
     except anthropic.APIError:
         return jsonify({'status': 'error', 'message': 'Възникна грешка при връзката с асистента. Опитайте отново.'}), 502
 
-    reply = next((b.text for b in response.content if b.type == 'text'), '')
+    reply = next((b.text for b in last.content if b.type == 'text'), '') if last else ''
     return jsonify({'status': 'ok', 'reply': reply})
 
 
