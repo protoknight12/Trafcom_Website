@@ -4125,7 +4125,7 @@ def admin_client_delivery_notes():
     details_data = [{'id': d.id, 'name': d.name, 'price': d.total_price, 'stock': d.stock_quantity} for d in details]
     products_data = [{'id': p.id, 'name': p.name, 'price': None, 'stock': p.stock_quantity} for p in products]
     return render_template(
-        'admin_client_delivery_notes.html', clients=clients, notes=notes,
+        'admin_client_delivery_notes.html', clients=clients, notes=notes, materials=materials,
         materials_data=materials_data, details_data=details_data, products_data=products_data,
         active_page='admin_client_delivery_notes'
     )

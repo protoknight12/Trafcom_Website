@@ -153,6 +153,7 @@
             <table class="users-table">
                 <thead>
                 <tr>
+                    <th>ID</th>
                     <th>Материал</th>
                     <th>Марка</th>
                     <th>Тип</th>
@@ -184,6 +185,9 @@
                         <form id="{{ form_id }}" action="{{ url_for('admin_update_material', key=material.key) }}" method="POST">
                             {% include 'partials/csrf_field.html' %}
                         </form>
+                        #{{ material.id }}
+                    </td>
+                    <td>
                         <strong>{{ material.display_name }}</strong>
                     </td>
                     <td><input type="text" name="brand" form="{{ form_id }}" value="{{ material.brand or '' }}"
@@ -260,7 +264,7 @@
                     </td>
                 </tr>
                 {% endfor %}
-                <tr class="search-empty-row" hidden><td colspan="21" class="text-center no-data">Няма съвпадения.</td></tr>
+                <tr class="search-empty-row" hidden><td colspan="22" class="text-center no-data">Няма съвпадения.</td></tr>
                 </tbody>
             </table>
         </div>

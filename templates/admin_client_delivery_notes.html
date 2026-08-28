@@ -70,10 +70,17 @@
             <div class="add-item-row">
                 <div class="form-group" id="material_selector">
                     <label for="cdn_material_select">Материал *</label>
-                    <select id="cdn_material_select">
+                    <select id="cdn_material_select" class="material-picker">
                         <option value="">-- Изберете материал --</option>
-                        {% for m in materials_data %}
-                        <option value="{{ m.id }}" data-price="{{ m.price if m.price is not none else '' }}" data-stock="{{ m.stock if m.stock is not none else 0 }}">{{ m.name }} (наличност: {{ '%g'|format(m.stock or 0) }})</option>
+                        {% for type_key, group in materials|groupby('type') %}
+                        <optgroup label="{{ material_type_label(type_key) }}">
+                            {% for m in group %}
+                            <option value="{{ m.id }}" data-price="" data-stock="{{ m.stock_quantity or 0 }}"
+                                    data-name="{{ m.display_name }}" data-w="{{ m.sheet_width_mm if m.sheet_width_mm is not none else '' }}"
+                                    data-h="{{ m.sheet_length_mm if m.sheet_length_mm is not none else '' }}" data-t="{{ m.thickness_mm if m.thickness_mm is not none else '' }}"
+                                    data-type="{{ m.type }}" data-id="{{ m.id }}" data-brand="{{ m.brand or '' }}">{{ format_material_option(m) }} (наличност: {{ '%g'|format(m.stock_quantity or 0) }})</option>
+                            {% endfor %}
+                        </optgroup>
                         {% endfor %}
                     </select>
                 </div>
@@ -227,6 +234,7 @@
 
 </main>
 
+<script src="{{ url_for('static', filename='js/material_picker.js') }}"></script>
 <script>
     let cdnItems = [];
 

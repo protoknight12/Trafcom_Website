@@ -63,8 +63,10 @@
     }
 
     function buildTree(select) {
-        // sections = optgroups in order, or one implicit section if none exist.
-        const sectionEls = select.querySelectorAll('optgroup');
+        // Sections follow the <select>'s actual top-level child order (not
+        // "all optgroups, then loose options") - a loose leading placeholder
+        // option (e.g. "-- Изберете материал --") must stay first, not get
+        // pushed to the bottom behind every optgroup.
         const sections = [];
         function addSection(label, optionEls) {
             const groups = [];
@@ -91,16 +93,19 @@
                 return Array.prototype.indexOf.call(optionEls, aFirst) - Array.prototype.indexOf.call(optionEls, bFirst);
             }) });
         }
-        if (sectionEls.length) {
-            sectionEls.forEach(function (og) {
-                addSection(og.label, Array.prototype.slice.call(og.querySelectorAll('option')));
-            });
-            // top-level <option>s that aren't inside any optgroup (e.g. "+ Нов материал...")
-            const loose = Array.prototype.slice.call(select.children).filter(function (c) { return c.tagName === 'OPTION'; });
-            if (loose.length) addSection(null, loose);
-        } else {
-            addSection(null, Array.prototype.slice.call(select.querySelectorAll('option')));
+        let looseRun = [];
+        function flushLooseRun() {
+            if (looseRun.length) { addSection(null, looseRun); looseRun = []; }
         }
+        Array.prototype.forEach.call(select.children, function (child) {
+            if (child.tagName === 'OPTGROUP') {
+                flushLooseRun();
+                addSection(child.label, Array.prototype.slice.call(child.querySelectorAll('option')));
+            } else if (child.tagName === 'OPTION') {
+                looseRun.push(child);
+            }
+        });
+        flushLooseRun();
         return sections;
     }
 
@@ -216,11 +221,52 @@
             }
         }
 
+        const PANEL_MAX_HEIGHT = 340; // keep in sync with .mp-panel's max-height above
+        const PANEL_MIN_WIDTH = 320; // wide enough for a price-lot leaf row even when the trigger itself is squeezed into a narrow form column
+
+        // A trigger squeezed into a narrow form column (see admin_details.html's
+        // grid layout) would otherwise force an equally narrow, hard-to-read
+        // panel; a trigger near the bottom of the viewport would otherwise open
+        // a panel that runs off-screen. Both are recomputed on every open since
+        // the trigger's position can change between opens (window resize,
+        // content above it changing height, etc.) - see the "space out the UI"/
+        // "dynamic to avoid clipping" task.
+        function positionPanel() {
+            panel.style.left = '0';
+            panel.style.right = 'auto';
+            panel.style.top = 'calc(100% + 4px)';
+            panel.style.bottom = '';
+            panel.style.width = '';
+
+            const triggerRect = trigger.getBoundingClientRect();
+            const viewportW = document.documentElement.clientWidth;
+            const viewportH = document.documentElement.clientHeight;
+            const width = Math.min(Math.max(triggerRect.width, PANEL_MIN_WIDTH), viewportW - 16);
+            panel.style.width = width + 'px';
+
+            const overflowRight = (triggerRect.left + width) - viewportW + 8;
+            if (overflowRight > 0) panel.style.left = (-overflowRight) + 'px';
+
+            const spaceBelow = viewportH - triggerRect.bottom;
+            const spaceAbove = triggerRect.top;
+            const flipUp = spaceBelow < PANEL_MAX_HEIGHT + 8 && spaceAbove > spaceBelow;
+            if (flipUp) {
+                panel.style.top = 'auto';
+                panel.style.bottom = 'calc(100% + 4px)';
+            }
+            // Neither side may fully fit the usual 340px cap on a short/cramped
+            // viewport - clamp to whichever side was actually picked so the
+            // panel scrolls internally instead of running off-screen.
+            const available = (flipUp ? spaceAbove : spaceBelow) - 12;
+            panel.style.maxHeight = Math.max(120, Math.min(PANEL_MAX_HEIGHT, available)) + 'px';
+        }
+
         function openPanel() {
             if (select.disabled) return;
             searchInput.value = '';
             renderList('');
             panel.hidden = false;
+            positionPanel();
             searchInput.focus();
         }
         function closePanel() { panel.hidden = true; }
