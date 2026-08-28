@@ -3746,6 +3746,16 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
     tag or a different delivered quantity on an otherwise-identical material
     is still the same catalog item.
 
+    For a material restock line specifically, this means several rows can
+    legitimately share identical name/dims/type/notes and differ ONLY by
+    price (that's the whole point of a price-lot). A fields-only lookup
+    can't tell those apart, so when the caller supplies material_key (the
+    admin picked a specific row from the delivery-note dropdown, rather than
+    typing one in via "+ Нов материал..."), that row is resolved directly by
+    key first and used as-is whenever this line's own fields still match it -
+    never re-derived from a fields-only query that could land on a different
+    lookalike lot (the lowest-id one) instead of the one actually selected.
+
     Detail still requires material_key (hard FK, see admin_delete_material's
     docstring) - a bare-bones Detail can skip total_length/pierce_count
     (no DXF was uploaded), but not the material it's cut from.
@@ -3785,10 +3795,31 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
 
     if item_type == 'material':
         material_type = material_type if material_type in MATERIAL_TYPE_LABELS else 'sheets'
-        existing = MaterialPrice.query.filter_by(
-            display_name=name, notes=notes, sheet_width_mm=width,
-            sheet_length_mm=height, thickness_mm=thickness, type=material_type
-        ).first()
+        # A restock line from the delivery-note dropdown carries material_key -
+        # the exact row the admin picked - so trust that directly instead of
+        # re-deriving identity from name/dims/type/notes: several price-lots
+        # of the same material share every one of those fields by design, so
+        # a fields-only lookup can't tell them apart and silently bumps
+        # whichever lot happens to have the lowest id (see CLAUDE.md
+        # delivery-note task - this used to bump the wrong lot entirely).
+        # Only fall through to the fields-only lookup below when there's no
+        # material_key (the "+ Нов материал..." flow, where the only goal is
+        # avoiding an accidental duplicate of an already-typed-in material) or
+        # when the line's own fields no longer match that exact row (the
+        # admin edited dims/description away from the catalog default on this
+        # line - see the "distinct variant row" fallback further down).
+        existing = None
+        if material_key:
+            picked = MaterialPrice.query.filter_by(key=material_key).first()
+            if picked and (picked.display_name, picked.notes, picked.sheet_width_mm,
+                            picked.sheet_length_mm, picked.thickness_mm, picked.type) == \
+                          (name, notes, width, height, thickness, material_type):
+                existing = picked
+        if existing is None and not material_key:
+            existing = MaterialPrice.query.filter_by(
+                display_name=name, notes=notes, sheet_width_mm=width,
+                sheet_length_mm=height, thickness_mm=thickness, type=material_type
+            ).first()
         if existing and unit_price is not None:
             derived_cost_per_m2 = _cost_per_m2_from_unit_price(material_type, unit_price, width, height)
             effective_cost_per_m2 = derived_cost_per_m2 if derived_cost_per_m2 is not None else unit_price

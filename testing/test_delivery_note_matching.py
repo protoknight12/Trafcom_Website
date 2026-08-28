@@ -95,6 +95,32 @@ with app.app_context():
     assert new_lot.price_per_unit == 100.0, "the new row must keep the raw singular price entered on the delivery note"
     assert MaterialPrice.query.count() == 4
 
+    # -- Material: m1 and new_lot are two price-lots of the SAME name/dims/
+    #    brand/notes/type (that's the whole point of a price-lot) - a restock
+    #    line picked from the dropdown carries material_key identifying
+    #    EXACTLY which lot the admin selected, and a blank price (the normal
+    #    routine-restock case) must bump that exact lot, never whichever lot
+    #    a fields-only lookup happens to find first (this used to silently
+    #    bump the wrong lot - see CLAUDE.md delivery-note task) -------------
+    restock_new_lot = _find_or_create_delivery_target('material', 'Ламарина DC01', 'Alcoa', 1000.0, 2000.0, 2.0, None, new_lot.key,
+                                                        cost_per_m2=40.0, cutting_speed_mm_per_min=2.0, pierce_rate_per_min=0.2)
+    assert restock_new_lot.id == new_lot.id, "a restock with material_key must bump exactly the lot that was picked, not the lowest-id lookalike"
+    restock_m1 = _find_or_create_delivery_target('material', 'Ламарина DC01', 'Alcoa', 1000.0, 2000.0, 2.0, None, m1.key,
+                                                   cost_per_m2=40.0, cutting_speed_mm_per_min=2.0, pierce_rate_per_min=0.2)
+    assert restock_m1.id == m1.id, "picking the OTHER lookalike lot must bump that one instead, not new_lot"
+    assert MaterialPrice.query.count() == 4, "neither restock should create a new row"
+
+    # -- Material: a restock line whose material_key row no longer matches
+    #    this line's own dims (the admin edited them away from the catalog
+    #    default) must NOT bump that row - it creates the distinct variant
+    #    row instead (see the "A line for an EXISTING catalog material..."
+    #    fallback below) ------------------------------------------------------
+    edited_variant = _find_or_create_delivery_target('material', 'Ламарина DC01', 'Alcoa', 1200.0, 2000.0, 2.0, None, new_lot.key,
+                                                       cost_per_m2=40.0, cutting_speed_mm_per_min=2.0, pierce_rate_per_min=0.2)
+    db.session.commit()
+    assert edited_variant.id not in (m1.id, new_lot.id), "an edited-dims restock line must create its own distinct row, not bump either lookalike"
+    assert MaterialPrice.query.count() == 5
+
     # -- Material: a brand-new material without full pricing must be refused
     #    rather than silently created with cost_per_m2=0.0 etc. (would
     #    silently produce €0.00 CNC prices everywhere it's later picked) ----
