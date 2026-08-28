@@ -291,6 +291,13 @@ class MaterialPrice(db.Model):
     # linear meter for rods/pipes/profiles) - purely informational like the
     # two price_per_kg_* fields above, not read by the pricing engine.
     weight_kg = db.Column(db.Float, nullable=True)
+    # Price of one whole stock unit (a full sheet, or one whole rod/pipe/
+    # profile length) - informational/catalog-only like price_per_kg_m2/
+    # price_per_kg_m above, not read by calculate_cnc_price()/_material_cost().
+    # admin_materials.html uses it together with the dimension fields to
+    # auto-fill cost_per_m2 (the field pricing actually runs off), but that's
+    # a client-side convenience - cost_per_m2 stays independently editable.
+    price_per_unit = db.Column(db.Float, nullable=True)
     # ERP code (shown as text + Code128 barcode) and internal part code (КД №)
     # printed on production labels - see print_label(). Optional/nullable
     # since older rows won't have them.
@@ -4542,6 +4549,7 @@ def admin_update_material(key):
         price_per_kg_m2 = _parse_optional_float(request.form, 'price_per_kg_m2')
         price_per_kg_m = _parse_optional_float(request.form, 'price_per_kg_m')
         weight_kg = _parse_optional_float(request.form, 'weight_kg')
+        price_per_unit = _parse_optional_float(request.form, 'price_per_unit')
         min_quantity = _parse_optional_float(request.form, 'min_quantity')
         erp_number = _parse_erp_number(request.form)
     except ValueError:
@@ -4572,6 +4580,7 @@ def admin_update_material(key):
     material.price_per_kg_m2 = round(price_per_kg_m2, 2) if price_per_kg_m2 is not None else None
     material.price_per_kg_m = round(price_per_kg_m, 2) if price_per_kg_m is not None else None
     material.weight_kg = round(weight_kg, 2) if weight_kg is not None else None
+    material.price_per_unit = round(price_per_unit, 2) if price_per_unit is not None else None
     material.min_quantity = round(min_quantity, 2) if min_quantity is not None else None
     material.erp_number = erp_number
     material.code_number = request.form.get('code_number', '').strip() or None
@@ -4582,7 +4591,8 @@ def admin_update_material(key):
         'pierce_rate_per_min': 'пробождания/min', 'sheet_length_mm': 'дължинаmm',
         'sheet_width_mm': 'ширина mm', 'thickness_mm': 'дебелина mm', 'height_mm': 'височина mm',
         'price_per_kg_m2': 'цена лв/кг(м²)', 'price_per_kg_m': 'цена лв/кг(м)', 'weight_kg': 'тегло кг',
-        'min_quantity': 'мин. количество', 'erp_number': 'ERP №', 'code_number': 'КД №', 'type': 'тип', 'brand': 'марка',
+        'price_per_unit': 'цена за цяло', 'min_quantity': 'мин. количество', 'erp_number': 'ERP №',
+        'code_number': 'КД №', 'type': 'тип', 'brand': 'марка',
     }))
     db.session.commit()
 
@@ -4619,6 +4629,7 @@ def admin_add_material():
         price_per_kg_m2 = _parse_optional_float(request.form, 'price_per_kg_m2')
         price_per_kg_m = _parse_optional_float(request.form, 'price_per_kg_m')
         weight_kg = _parse_optional_float(request.form, 'weight_kg')
+        price_per_unit = _parse_optional_float(request.form, 'price_per_unit')
         min_quantity = _parse_optional_float(request.form, 'min_quantity')
         erp_number = _parse_erp_number(request.form)
     except ValueError:
@@ -4664,6 +4675,7 @@ def admin_add_material():
         price_per_kg_m2=round(price_per_kg_m2, 2) if price_per_kg_m2 is not None else None,
         price_per_kg_m=round(price_per_kg_m, 2) if price_per_kg_m is not None else None,
         weight_kg=round(weight_kg, 2) if weight_kg is not None else None,
+        price_per_unit=round(price_per_unit, 2) if price_per_unit is not None else None,
         min_quantity=round(min_quantity, 2) if min_quantity is not None else None,
         erp_number=erp_number,
         code_number=request.form.get('code_number', '').strip() or None,

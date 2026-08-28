@@ -80,6 +80,10 @@
                 <label for="new_cost_per_m2" id="new_cost_per_m2_label">Цена на м² плоча (€)</label>
                 <input type="number" id="new_cost_per_m2" step="0.01" min="0" name="cost_per_m2" placeholder="напр. 40.00" required>
             </div>
+            <div class="form-group">
+                <label for="new_price_per_unit" id="new_price_per_unit_label">Цена на цяла плоча (€, незадължително)</label>
+                <input type="number" id="new_price_per_unit" step="0.01" min="0" name="price_per_unit" placeholder="напр. 10.00">
+            </div>
             <div class="form-group" id="new_cutting_speed_mm_per_min_group">
                 <label for="new_cutting_speed_mm_per_min">Скорост на рязане (мм/мин)</label>
                 <input type="number" id="new_cutting_speed_mm_per_min" step="0.01" min="0.01" name="cutting_speed_mm_per_min" placeholder="напр. 1500" required>
@@ -153,6 +157,7 @@
                     <th>Марка</th>
                     <th>Тип</th>
                     <th>{{ material_price_m2_label(type_key) }}</th>
+                    <th>Цена за цяла бройка (€)</th>
                     <th>Скорост на рязане (мм/мин)</th>
                     <th>Време за пробождане (сек)</th>
                     <th>{{ dim_labels[0] or '—' }}</th>
@@ -192,6 +197,10 @@
                     </td>
                     <td><input type="number" step="0.01" min="0" name="cost_per_m2" form="{{ form_id }}"
                                value="{{ '%.2f'|format(material.cost_per_m2) }}" class="material-price-input" required></td>
+                    <td><input type="number" step="0.01" min="0" name="price_per_unit" form="{{ form_id }}"
+                               value="{{ material.price_per_unit if material.price_per_unit is not none else '' }}"
+                               class="material-price-input whole-price-input"
+                               placeholder="напр. 10.00" title="Цена на цяла бройка - при попълване изчислява колоната вляво"></td>
                     {% set no_speed = material.type in ('rods', 'profiles') %}
                     <td><input type="number" step="0.01" min="0.01" name="cutting_speed_mm_per_min" form="{{ form_id }}"
                                value="{{ '%.2f'|format(material.cutting_speed_mm_per_min) if material.cutting_speed_mm_per_min is not none else '' }}"
@@ -251,7 +260,7 @@
                     </td>
                 </tr>
                 {% endfor %}
-                <tr class="search-empty-row" hidden><td colspan="20" class="text-center no-data">Няма съвпадения.</td></tr>
+                <tr class="search-empty-row" hidden><td colspan="21" class="text-center no-data">Няма съвпадения.</td></tr>
                 </tbody>
             </table>
         </div>
@@ -335,7 +344,50 @@
         document.getElementById('new_price_per_kg_m_group').style.display = isLinear ? '' : 'none';
     }
 
-    document.getElementById('new_type').addEventListener('change', applyMaterialDimensionLabels);
+    // price_per_unit (the whole sheet/rod/pipe/profile price) is its own
+    // stored column - separate from cost_per_m2, which is what pricing
+    // actually runs off. Typing it in also auto-fills cost_per_m2 = whole
+    // price / area (or / length for bar stock) from the dimension fields
+    // already on the form/row, as a convenience - cost_per_m2 stays
+    // independently editable by hand too.
+    const WHOLE_UNIT_LABELS = {
+        sheets: 'Цена на цяла плоча (€, незадължително)',
+        rods: 'Цена на целия прът (€, незадължително)',
+        pipes: 'Цена на цялата тръба (€, незадължително)',
+        profiles: 'Цена на целия профил (€, незадължително)',
+        other: 'Цена на цялото парче (€, незадължително)',
+    };
+
+    function computeCostPerM2(type, wholePrice, lengthMm, widthMm) {
+        if (!(wholePrice > 0) || !(lengthMm > 0)) return null;
+        const isLinear = type === 'rods' || type === 'pipes' || type === 'profiles';
+        const amount = isLinear ? (lengthMm / 1000) : ((lengthMm / 1000) * (widthMm / 1000));
+        if (!(amount > 0)) return null;
+        return wholePrice / amount;
+    }
+
+    function wireWholePriceCalc(wholeInput, costInput, lengthInput, widthInput, typeSelect) {
+        function recalc() {
+            const result = computeCostPerM2(
+                typeSelect.value, parseFloat(wholeInput.value), parseFloat(lengthInput.value),
+                widthInput ? parseFloat(widthInput.value) : null);
+            if (result !== null) costInput.value = result.toFixed(2);
+        }
+        wholeInput.addEventListener('input', recalc);
+        lengthInput.addEventListener('input', recalc);
+        if (widthInput) widthInput.addEventListener('input', recalc);
+    }
+
+    wireWholePriceCalc(
+        document.getElementById('new_price_per_unit'), document.getElementById('new_cost_per_m2'),
+        document.getElementById('new_sheet_length_mm'), document.getElementById('new_sheet_width_mm'),
+        document.getElementById('new_type'));
+
+    document.getElementById('new_type').addEventListener('change', function () {
+        applyMaterialDimensionLabels();
+        document.getElementById('new_price_per_unit_label').textContent =
+            WHOLE_UNIT_LABELS[this.value] || WHOLE_UNIT_LABELS.sheets;
+    });
     applyMaterialDimensionLabels();
 
     // Same rod/speed rule for the existing-materials edit rows below, whose
@@ -383,6 +435,16 @@
     }
     document.querySelectorAll('table.users-table select[name="type"]').forEach(function (sel) {
         sel.addEventListener('change', function () { applyRowSpeedVisibility(sel); });
+    });
+
+    document.querySelectorAll('table.users-table tbody tr').forEach(function (row) {
+        const wholeInput = row.querySelector('.whole-price-input');
+        const typeSelect = row.querySelector('select[name="type"]');
+        if (!wholeInput || !typeSelect) return;
+        wireWholePriceCalc(
+            wholeInput, row.querySelector('input[name="cost_per_m2"]'),
+            row.querySelector('input[name="sheet_length_mm"]'), row.querySelector('input[name="sheet_width_mm"]'),
+            typeSelect);
     });
 </script>
 

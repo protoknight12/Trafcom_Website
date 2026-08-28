@@ -54,6 +54,7 @@
                     <th>Тип</th>
                     <th class="text-center">Наличност</th>
                     <th class="text-right">Ед. цена</th>
+                    <th class="text-right">Цена за цяла бройка</th>
                     <th class="text-right">Обща стойност</th>
                 </tr>
                 </thead>
@@ -72,6 +73,7 @@
                     <td>{{ material_type_label(material.type) }}</td>
                     <td class="text-center">{{ material.stock_quantity|round(2) }}</td>
                     <td class="text-right">{{ "%.2f"|format(material.cost_per_m2) }} €/{{ unit }}</td>
+                    <td class="text-right">{{ "%.2f €"|format(material.price_per_unit) if material.price_per_unit is not none else '—' }}</td>
                     {#- Total value = unit price x AVAILABLE quantity (not the raw
                     stock_quantity shown above) - sheet/other stock is a whole-sheet
                     count, not a running m² total, so the real €-value of what's on
@@ -80,10 +82,10 @@
                     <td class="text-right">{{ "%.2f"|format(material.cost_per_m2 * material_available_qty(material)) }} €</td>
                 </tr>
                 {% else %}
-                <tr><td colspan="5" class="text-center no-data">Няма добавени материали.</td></tr>
+                <tr><td colspan="6" class="text-center no-data">Няма добавени материали.</td></tr>
                 {% endfor %}
                 {% if materials %}
-                <tr class="search-empty-row" hidden><td colspan="5" class="text-center no-data">Няма съвпадения.</td></tr>
+                <tr class="search-empty-row" hidden><td colspan="6" class="text-center no-data">Няма съвпадения.</td></tr>
                 {% endif %}
                 </tbody>
             </table>
