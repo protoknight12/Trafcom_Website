@@ -179,7 +179,7 @@
                 <tbody id="materialsTableBody-{{ type_key }}">
                 {% for material in group %}
                 {% set form_id = 'mat-form-' ~ material.id %}
-                <tr data-search="{{ (material.display_name ~ ' ' ~ (material.brand or '') ~ ' ' ~ (material.erp_number or '') ~ ' ' ~ (material.code_number or '')) | lower }}">
+                <tr data-search="{{ ('#' ~ material.id ~ ' ' ~ material.display_name ~ ' ' ~ (material.brand or '') ~ ' ' ~ (material.erp_number or '') ~ ' ' ~ (material.code_number or '')) | lower }}">
                     <td>
                         <form id="{{ form_id }}" action="{{ url_for('admin_update_material', key=material.key) }}" method="POST">
                             {% include 'partials/csrf_field.html' %}

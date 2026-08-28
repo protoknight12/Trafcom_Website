@@ -1,9 +1,10 @@
 """Self-check for format_material_option() - the standardized
-"Name (Brand, Width mm, Length mm, Thickness mm)" text used by every
+"#ID Name (Brand, Width mm, Length mm, Thickness mm)" text used by every
 material <select> in the app. Guards null handling: any of brand/width/
 length/thickness may be blank, in which case that slot shows "-" - the
 option always has all four comma-separated slots, never a shorter or
-missing parenthesized part.
+missing parenthesized part. Also guards the "#ID " prefix itself: present
+when material.id is set, omitted (not "#None ") for an unsaved row.
 
     python -m testing.test_material_option_format
 """
@@ -24,19 +25,22 @@ def _material(**kwargs):
     return MaterialPrice(**defaults)
 
 
-full = _material(brand='Armiko', sheet_width_mm=10, sheet_length_mm=20, thickness_mm=2)
-assert format_material_option(full) == 'Алуминий (Armiko, 10mm, 20mm, 2mm)', format_material_option(full)
+full = _material(id=5, brand='Armiko', sheet_width_mm=10, sheet_length_mm=20, thickness_mm=2)
+assert format_material_option(full) == '#5 Алуминий (Armiko, 10mm, 20mm, 2mm)', format_material_option(full)
 
-no_dims = _material(brand='Armiko')
-assert format_material_option(no_dims) == 'Алуминий (Armiko, -, -, -)', format_material_option(no_dims)
+no_dims = _material(id=5, brand='Armiko')
+assert format_material_option(no_dims) == '#5 Алуминий (Armiko, -, -, -)', format_material_option(no_dims)
 
-no_brand = _material(sheet_width_mm=10, sheet_length_mm=20, thickness_mm=2)
-assert format_material_option(no_brand) == 'Алуминий (-, 10mm, 20mm, 2mm)', format_material_option(no_brand)
+no_brand = _material(id=5, sheet_width_mm=10, sheet_length_mm=20, thickness_mm=2)
+assert format_material_option(no_brand) == '#5 Алуминий (-, 10mm, 20mm, 2mm)', format_material_option(no_brand)
 
-bare = _material()
-assert format_material_option(bare) == 'Алуминий (-, -, -, -)', format_material_option(bare)
+bare = _material(id=5)
+assert format_material_option(bare) == '#5 Алуминий (-, -, -, -)', format_material_option(bare)
 
-partial_dims = _material(brand='Armiko', thickness_mm=2.5)
-assert format_material_option(partial_dims) == 'Алуминий (Armiko, -, -, 2.5mm)', format_material_option(partial_dims)
+partial_dims = _material(id=5, brand='Armiko', thickness_mm=2.5)
+assert format_material_option(partial_dims) == '#5 Алуминий (Armiko, -, -, 2.5mm)', format_material_option(partial_dims)
+
+unsaved = _material()
+assert format_material_option(unsaved) == 'Алуминий (-, -, -, -)', format_material_option(unsaved)
 
 print("ok")

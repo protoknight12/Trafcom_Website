@@ -2005,6 +2005,26 @@ def _material_cost(width, height, material):
     return area_m2 * material.cost_per_m2
 
 
+def _cost_per_m2_from_unit_price(material_type, unit_price, width, height):
+    """
+    Inverse of _material_cost(): given the price of one whole stock unit
+    (what a supplier's delivery note/invoice actually lists for a sheet/rod/
+    pipe/profile) plus its dimensions, derives the €/m² (or €/linear-meter
+    for rods/pipes/profiles) rate calculate_cnc_price() actually prices off -
+    same math as admin_materials.html's client-side whole-price calculator.
+    Returns None when there isn't enough to divide by (missing price or
+    dimensions); callers then fall back to treating unit_price as already
+    being the rate, same as before this existed.
+    """
+    if unit_price is None or not height:
+        return None
+    if material_type in ('rods', 'pipes', 'profiles'):
+        return unit_price / (height / 1000)
+    if not width:
+        return None
+    return unit_price / ((width * height) / 1_000_000)
+
+
 def _detail_material_unit_qty(detail):
     """
     Raw-stock quantity needed for ONE unit of `detail` - m² for sheets/other
@@ -2313,15 +2333,19 @@ def inject_current_year():
 def format_material_option(material):
     """
     Standardized display text for every material <select> in the app:
-    "Name (Brand, Width mm, Length mm, Thickness mm)" - always all four
-    slots, with a "-" placeholder for whichever of brand/width/length/
-    thickness is blank/None, so every option in a dropdown lines up in the
-    same shape regardless of how much data that particular row has.
+    "#ID Name (Brand, Width mm, Length mm, Thickness mm)" - always all four
+    parenthesized slots, with a "-" placeholder for whichever of brand/
+    width/length/thickness is blank/None, so every option in a dropdown
+    lines up in the same shape regardless of how much data that particular
+    row has. The "#ID" prefix (material.id, not erp_number/code_number) is
+    skipped for an unsaved/unflushed row (id is still None) rather than
+    printing "#None ".
     """
     parts = [material.brand or '-']
     for dim in (material.sheet_width_mm, material.sheet_length_mm, material.thickness_mm):
         parts.append(f"{dim:g}mm" if dim is not None else '-')
-    return f"{material.display_name} ({', '.join(parts)})"
+    id_prefix = f"#{material.id} " if material.id is not None else ''
+    return f"{id_prefix}{material.display_name} ({', '.join(parts)})"
 
 
 app.jinja_env.globals['get_text'] = get_text
@@ -3691,9 +3715,17 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
     lots keep separate stock counts. This is what lets the production wizard
     (admin_production_orders()) offer a choice between price lots of what is
     otherwise "the same" material.
+
+    unit_price on a material line is the price of the whole unit received
+    (a full sheet, one rod, etc.) - what a supplier's invoice actually lists
+    - not an already-computed €/m² rate. _cost_per_m2_from_unit_price()
+    derives cost_per_m2 from it using this line's own width/height, and the
+    raw unit_price itself is kept as the new row's price_per_unit (same
+    "singular price" column admin_materials.html edits) - see MaterialPrice.
     """
     name = (name or '').strip()
     brand = (brand or '').strip() or None
+    price_per_unit = None
 
     if item_type == 'material':
         material_type = material_type if material_type in MATERIAL_TYPE_LABELS else 'sheets'
@@ -3701,11 +3733,15 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
             display_name=name, brand=brand, sheet_width_mm=width,
             sheet_length_mm=height, thickness_mm=thickness, type=material_type
         ).first()
-        if existing and unit_price is not None and abs(existing.cost_per_m2 - unit_price) > 0.001:
-            cost_per_m2 = unit_price
-            cutting_speed_mm_per_min = existing.cutting_speed_mm_per_min
-            pierce_rate_per_min = existing.pierce_rate_per_min
-            existing = None
+        if existing and unit_price is not None:
+            derived_cost_per_m2 = _cost_per_m2_from_unit_price(material_type, unit_price, width, height)
+            effective_cost_per_m2 = derived_cost_per_m2 if derived_cost_per_m2 is not None else unit_price
+            if abs(existing.cost_per_m2 - effective_cost_per_m2) > 0.001:
+                price_per_unit = unit_price
+                cost_per_m2 = effective_cost_per_m2
+                cutting_speed_mm_per_min = existing.cutting_speed_mm_per_min
+                pierce_rate_per_min = existing.pierce_rate_per_min
+                existing = None
         if existing:
             return existing
         # A line for an EXISTING catalog material whose dims/brand were
@@ -3731,7 +3767,8 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
             cutting_speed_mm_per_min = None
             pierce_rate_per_min = None
         new_row = MaterialPrice(
-            key='pending', display_name=name, cost_per_m2=cost_per_m2, cutting_speed_mm_per_min=cutting_speed_mm_per_min,
+            key='pending', display_name=name, cost_per_m2=cost_per_m2, price_per_unit=price_per_unit,
+            cutting_speed_mm_per_min=cutting_speed_mm_per_min,
             pierce_rate_per_min=pierce_rate_per_min, sheet_width_mm=width, sheet_length_mm=height,
             thickness_mm=thickness, brand=brand, type=material_type, erp_number=_next_erp_number(),
         )

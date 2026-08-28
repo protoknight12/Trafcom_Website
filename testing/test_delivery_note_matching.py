@@ -51,6 +51,27 @@ with app.app_context():
     assert m3.id != m1.id, "a differing thickness must create a separate material row"
     assert MaterialPrice.query.count() == 2
 
+    # -- Material: a delivery-note line's unit_price is a SINGULAR price (one
+    #    whole 1000x2000mm sheet), not an already-computed €/m² rate - m1 is
+    #    40.0 €/m² over a 2m² sheet, so 80.0 € is the SAME lot (derives back
+    #    to 40.0 €/m²) and must reuse m1, not split into a new row -----------
+    same_lot = _find_or_create_delivery_target('material', 'Ламарина DC01', 'Alcoa', 1000.0, 2000.0, 2.0, 80.0, None,
+                                                 cost_per_m2=40.0, cutting_speed_mm_per_min=2.0, pierce_rate_per_min=0.2)
+    assert same_lot.id == m1.id, "a singular price that derives back to the same €/m² must reuse the existing lot"
+    assert MaterialPrice.query.count() == 2, "matching a singular price must not create a new row"
+
+    # A genuinely different singular price (100.0 € over 2m² = 50.0 €/m²,
+    # not 40.0) must split into a new price-lot row, and that new row must
+    # keep the raw singular price too (price_per_unit), not just the
+    # derived €/m² rate.
+    new_lot = _find_or_create_delivery_target('material', 'Ламарина DC01', 'Alcoa', 1000.0, 2000.0, 2.0, 100.0, None,
+                                                cost_per_m2=40.0, cutting_speed_mm_per_min=2.0, pierce_rate_per_min=0.2)
+    db.session.commit()
+    assert new_lot.id != m1.id, "a singular price that derives to a different €/m² must create a new price-lot row"
+    assert abs(new_lot.cost_per_m2 - 50.0) < 0.001, "cost_per_m2 must be derived from the singular price / area, not the raw singular price"
+    assert new_lot.price_per_unit == 100.0, "the new row must keep the raw singular price entered on the delivery note"
+    assert MaterialPrice.query.count() == 3
+
     # -- Material: a brand-new material without full pricing must be refused
     #    rather than silently created with cost_per_m2=0.0 etc. (would
     #    silently produce €0.00 CNC prices everywhere it's later picked) ----
