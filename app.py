@@ -38,6 +38,7 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 import pyotp
 import qrcode
 import qrcode.image.svg
+import anthropic
 
 # Optional: load a local .env file if python-dotenv is installed, so secrets
 # can be kept out of source control. Safe no-op if the package isn't present.
@@ -101,6 +102,10 @@ login_manager.login_view = 'login'
 # won't be shared across multiple gunicorn/waitress workers. Switch to
 # storage_uri="redis://..." if this ever runs with >1 worker process.
 limiter = Limiter(get_remote_address, app=app, default_limits=["300 per hour"])
+
+# Unlike SECRET_KEY/DATABASE_URL, this is optional - the site works fine
+# without it, only the chat widget degrades (see api_chat()).
+anthropic_client = anthropic.Anthropic() if os.environ.get('ANTHROPIC_API_KEY') else None
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 app.config['PRODUCT_IMAGES_FOLDER'] = os.path.join(app.static_folder, 'uploads', 'products')
@@ -8318,6 +8323,73 @@ def admin_offer_print(offer_id):
     """
     offer = Offer.query.get_or_404(offer_id)
     return render_template('admin_offer_print.html', offer=offer)
+
+
+# ----------------- CHAT WIDGET -----------------
+# Public FAQ bot for the floating widget in footer.html. Stateless - the
+# browser resends its own running history each turn, nothing is persisted
+# server-side. Deliberately answers from general company info only; real
+# prices come from the DXF calculator (analyze_dxf_geometry/
+# calculate_cnc_price), never from the model, so the prompt forbids guessing
+# one.
+CHATBOT_SYSTEM_PROMPT = """Ти си виртуален асистент на сайта на Трафком ООД - фирма за прецизна ЦПУ (лазерна/CNC) обработка на метал в гр. Тетевен, България, основана през 1997 г.
+
+Основна информация:
+- Адреси: ул. „Александър Стамболийски“ 36, гр. Тетевен (офис) и ул. „Воловийте“, 5700 гр. Тетевен (производствена база).
+- Телефон: +359 886 762 276
+- Имейл: trafcom@trafcombg.com
+- Сайтът предлага DXF CNC Калкулатор (клиентът качва DXF чертеж и получава автоматична цена на база площ, дължина на рязане и брой пробождания) и Параметричен Генератор на форми.
+
+Правила, които спазваш стриктно:
+1. Отговаряй кратко, любезно и на български език.
+2. НИКОГА не измисляй конкретна цена - реалната цена зависи от геометрията на чертежа и се смята автоматично само след качване на DXF файл. За цена винаги насочвай клиента към DXF калкулатора на сайта или към контакт с офиса.
+3. Ако нямаш точна информация по въпрос (наличност, конкретен материал, срокове), кажи го честно и насочи клиента към телефона или имейла по-горе - не измисляй факти.
+4. Не давай съвети извън темата на фирмата.
+5. Ако въпросът изисква достъп до данни от акаунт на клиент (поръчки, наличности), кажи че все още не можеш да провериш това и насочи клиента да влезе в профила си или се обади в офиса."""
+
+
+@app.route('/api/chat', methods=['POST'])
+@limiter.limit('20 per hour')
+def api_chat():
+    if anthropic_client is None:
+        return jsonify({'status': 'error', 'message': 'Чатът временно не е достъпен.'}), 503
+
+    data = request.get_json(silent=True) or {}
+    user_message = (data.get('message') or '').strip()
+    if not user_message:
+        return jsonify({'status': 'error', 'message': 'Съобщението е празно.'}), 400
+    if len(user_message) > 1000:
+        return jsonify({'status': 'error', 'message': 'Съобщението е твърде дълго.'}), 400
+
+    # Cap what we trust from the client-supplied history so a malicious
+    # payload can't inflate the request into a huge/expensive one.
+    raw_history = data.get('history')
+    history = []
+    if isinstance(raw_history, list):
+        for entry in raw_history[-10:]:
+            if not isinstance(entry, dict):
+                continue
+            role = entry.get('role')
+            content = (entry.get('content') or '')[:1000]
+            if role in ('user', 'assistant') and content:
+                history.append({'role': role, 'content': content})
+
+    try:
+        response = anthropic_client.messages.create(
+            model='claude-haiku-4-5',
+            max_tokens=1024,
+            system=[{
+                'type': 'text',
+                'text': CHATBOT_SYSTEM_PROMPT,
+                'cache_control': {'type': 'ephemeral'},
+            }],
+            messages=history + [{'role': 'user', 'content': user_message}],
+        )
+    except anthropic.APIError:
+        return jsonify({'status': 'error', 'message': 'Възникна грешка при връзката с асистента. Опитайте отново.'}), 502
+
+    reply = next((b.text for b in response.content if b.type == 'text'), '')
+    return jsonify({'status': 'ok', 'reply': reply})
 
 
 # ----------------- CUSTOM ERROR PAGES -----------------

@@ -19,3 +19,18 @@
     </div>
     <div class="footer-bottom">&copy; {{ current_year }} Трафком ООД. Всички права запазени.</div>
 </footer>
+
+<div id="chatbot-widget">
+    <button id="chatbot-toggle" type="button" aria-label="Отвори чат">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 4h16v12H7l-3 3V4z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+    </button>
+    <div id="chatbot-panel" hidden>
+        <div id="chatbot-header">Асистент на Трафком</div>
+        <div id="chatbot-messages"></div>
+        <form id="chatbot-form">
+            <input type="text" id="chatbot-input" placeholder="Напишете съобщение..." autocomplete="off" maxlength="1000">
+            <button type="submit">➤</button>
+        </form>
+    </div>
+</div>
+<script src="{{ url_for('static', filename='js/chatbot.js') }}"></script>

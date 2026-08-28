@@ -13,3 +13,4 @@ openpyxl
 itsdangerous
 pyotp
 qrcode
+anthropic
