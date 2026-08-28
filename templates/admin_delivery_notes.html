@@ -386,6 +386,7 @@
                         {% for item in note.items %}
                         {#- Format: (item) (brand) x (quantity) (parameters separated by ,) - see CLAUDE.md delivery-note history task #}
                         <div>
+                            {%- if item.target_type == 'material' %}#{{ item.target_id }} {% endif -%}
                             {{ item.description_snapshot }}{% if item.brand %} {{ item.brand }}{% endif %} &times; {{ item.quantity }}
                             {%- set params = [] %}
                             {%- if item.width %}{% set _ = params.append('Ш: ' ~ item.width) %}{% endif %}
