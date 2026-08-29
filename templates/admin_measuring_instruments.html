@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Измервателни инструменти - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">
+            {{ message }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <p><a href="{{ url_for('admin_quality_control') }}">&larr; Обратно към Контрол на качеството</a></p>
+
+    <section class="admin-card">
+        <h3>Добавяне на нов инструмент</h3>
+        <p class="section-subtitle">Измервателни инструменти (шублер, микрометър, CMM ...) за избор при записване на QC измервания.</p>
+        <form action="{{ url_for('admin_add_measuring_instrument') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="new_instrument_name">Име на инструмента</label>
+                <input type="text" id="new_instrument_name" name="name" placeholder="напр. Дигитален шублер 150мм" required autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="new_instrument_accuracy_value">Точност (незадължително)</label>
+                <input type="number" id="new_instrument_accuracy_value" step="any" min="0" name="accuracy_value" placeholder="напр. 0.01">
+            </div>
+            <div class="form-group">
+                <label for="new_instrument_accuracy_unit">Мерна единица</label>
+                <input type="text" id="new_instrument_accuracy_unit" name="accuracy_unit" placeholder="напр. мм" value="мм">
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="new_instrument_description">Описание (незадължително)</label>
+                <textarea id="new_instrument_description" name="description" rows="2" style="width: 100%; padding: 0.6rem 0.75rem; background-color: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm);"></textarea>
+            </div>
+            <button type="submit" class="btn-submit">Добави инструмент</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Инструменти</h3>
+        {% if instruments %}
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Име</th>
+                    <th>Точност</th>
+                    <th>Ед.</th>
+                    <th>Описание</th>
+                    <th class="text-right">Действие</th>
+                    <th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for instrument in instruments %}
+                {% set form_id = 'inst-form-' ~ instrument.id %}
+                <tr>
+                    <td>
+                        <form id="{{ form_id }}" action="{{ url_for('admin_update_measuring_instrument', instrument_id=instrument.id) }}" method="POST">
+                            {% include 'partials/csrf_field.html' %}
+                        </form>
+                        #{{ instrument.id }}
+                    </td>
+                    <td><input type="text" name="name" form="{{ form_id }}" value="{{ instrument.name }}"
+                               class="material-price-input" required></td>
+                    <td><input type="number" step="any" min="0" name="accuracy_value" form="{{ form_id }}"
+                               value="{{ instrument.accuracy_value if instrument.accuracy_value is not none else '' }}"
+                               class="material-price-input" style="width: 90px;" placeholder="напр. 0.01"></td>
+                    <td><input type="text" name="accuracy_unit" form="{{ form_id }}"
+                               value="{{ instrument.accuracy_unit or '' }}"
+                               class="material-price-input" style="width: 70px;" placeholder="мм"></td>
+                    <td><input type="text" name="description" form="{{ form_id }}"
+                               value="{{ instrument.description or '' }}"
+                               class="material-price-input" style="width: 220px;" placeholder="Описание"></td>
+                    <td class="text-right"><button type="submit" form="{{ form_id }}" class="btn-save-price" style="background-color: var(--accent-primary); color: var(--text-main); border: none; border-radius: var(--border-radius-sm); padding: 0.5rem 0.9rem; cursor: pointer; font-weight: 600; font-size: 0.85rem;">Запази</button></td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_delete_measuring_instrument', instrument_id=instrument.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на инструмент &quot;{{ instrument.name|e }}&quot;? Това е възможно само ако няма QC измервания, направени с него.');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма добавени инструменти.</p>
+        {% endif %}
+    </section>
+
+</main>
+
+</body>
+</html>

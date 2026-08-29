@@ -43,6 +43,7 @@
                         <option value="regular_user" selected>Клиент</option>
                         <option value="worker">Служител (цех)</option>
                         <option value="web_designer">Уеб дизайнер</option>
+                        <option value="quality_control">Контрол на качеството</option>
                         <option value="admin">Администратор</option>
                     </select>
                 </div>
@@ -99,6 +100,8 @@
                         <span class="badge badge-worker">Служител</span>
                         {% elif user.role == 'web_designer' %}
                         <span class="badge badge-worker">Уеб дизайнер</span>
+                        {% elif user.role == 'quality_control' %}
+                        <span class="badge badge-pass">Контрол на качеството</span>
                         {% else %}
                         <span class="badge badge-user">Клиент</span>
                         {% endif %}
@@ -114,6 +117,7 @@
                                     <option value="regular_user" {% if user.role == 'regular_user' %}selected{% endif %}>Клиент</option>
                                     <option value="worker" {% if user.role == 'worker' %}selected{% endif %}>Служител</option>
                                     <option value="web_designer" {% if user.role == 'web_designer' %}selected{% endif %}>Уеб дизайнер</option>
+                                    <option value="quality_control" {% if user.role == 'quality_control' %}selected{% endif %}>Контрол на качеството</option>
                                     <option value="admin" {% if user.role == 'admin' %}selected{% endif %}>Администратор</option>
                                 </select>
                                 <button type="submit" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem; border-radius: 4px;">Промени роля</button>

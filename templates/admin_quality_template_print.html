@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Inspection Report of Quality (blank) - {{ target_name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .mir-toolbar {
+            max-width: 1100px;
+            margin: 24px auto 0;
+            padding: 16px 24px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-md);
+            display: flex;
+            justify-content: flex-end;
+        }
+        .mir-sheet {
+            max-width: 1100px;
+            margin: 24px auto 60px;
+            background-color: #ffffff;
+            color: #000000;
+            border: 2px solid #000;
+            box-sizing: border-box;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 0.78rem;
+        }
+        .mir-sheet table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .mir-sheet td, .mir-sheet th {
+            border: 1px solid #000;
+            padding: 4px 6px;
+            vertical-align: middle;
+        }
+        .mir-header-row {
+            display: flex;
+            border-bottom: 2px solid #000;
+        }
+        .mir-company {
+            flex: 1;
+            padding: 10px 14px;
+            border-right: 2px solid #000;
+        }
+        .mir-company .mir-company-name {
+            font-size: 1.3rem;
+            font-weight: 800;
+        }
+        .mir-company .mir-company-line {
+            font-size: 0.72rem;
+            margin-top: 2px;
+        }
+        .mir-title-block {
+            flex: 1.4;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            justify-content: center;
+            padding: 10px 14px;
+        }
+        .mir-title-en {
+            font-size: 1.2rem;
+            font-weight: 800;
+            text-align: right;
+        }
+        .mir-title-bg {
+            font-size: 0.85rem;
+            font-weight: 700;
+            text-align: right;
+        }
+        .mir-label { font-weight: 700; font-size: 0.72rem; }
+        .mir-center { text-align: center; }
+        .mir-blank-line { display: inline-block; min-width: 100%; height: 1.1em; }
+        .mir-checkbox {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border: 1px solid #000;
+            vertical-align: middle;
+            margin-right: 4px;
+        }
+        .mir-section-title {
+            text-align: center;
+            font-weight: 800;
+            background-color: #ffff00;
+            font-size: 0.9rem;
+        }
+        .mir-dim-type { font-weight: 700; font-size: 0.75rem; }
+        .mir-dim-desc { font-size: 0.75rem; color: #333; }
+        .mir-dim-tol { font-size: 0.72rem; color: #555; }
+        .mir-footer-label { font-weight: 700; }
+        .mir-sample-cell { height: 28px; }
+
+        @media print {
+            .navbar, .mir-toolbar, .no-print { display: none !important; }
+            body { background: #fff; }
+            .mir-sheet { margin: 0; box-shadow: none; max-width: 100%; }
+        }
+    </style>
+</head>
+<body>
+<nav class="navbar">
+    <div class="nav-container">
+        <h2>TRAFCOM</h2>
+        <div class="nav-links">
+            <div class="nav-cta-buttons">
+                <a href="{{ url_for('admin_quality_control') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">&larr; Обратно</a>
+            </div>
+        </div>
+    </div>
+</nav>
+
+<div class="mir-toolbar no-print">
+    <button class="btn-submit" style="padding: 12px 24px; font-size: 0.95rem;" onclick="window.print()">Печат / PDF</button>
+</div>
+
+<div class="mir-sheet">
+    <div class="mir-header-row">
+        <div class="mir-company">
+            <div class="mir-company-name">TRAFCOM</div>
+            <div class="mir-company-line">гр. Тетевен, ул. „Александър Стамболийски“ 36</div>
+            <div class="mir-company-line">Тел: +359 886 762 276 &nbsp; Имейл: trafcom@trafcombg.com</div>
+        </div>
+        <div class="mir-title-block">
+            <div class="mir-title-en">INSPECTION REPORT OF QUALITY</div>
+            <div class="mir-title-bg">ДОКЛАД ЗА ИНСПЕКЦИЯ НА КАЧЕСТВОТО</div>
+        </div>
+    </div>
+
+    <table style="margin-top: -2px; border-top: none;">
+        <tr>
+            <td class="mir-label" style="width: 12%;">Drawing No</td>
+            <td style="width: 21%;">{{ template.drawing_no or '' }}</td>
+            <td class="mir-label" style="width: 12%;">Insp. Date</td>
+            <td style="width: 15%;">&nbsp;</td>
+            <td class="mir-label" style="width: 15%;">Delivery Q'ty</td>
+            <td style="width: 12%;">{{ template.batch_size or '' }}{% if template.batch_size %} pcs{% endif %}</td>
+        </tr>
+        <tr>
+            <td class="mir-label">Description</td>
+            <td>{{ target_name }}</td>
+            <td class="mir-label">Order No</td>
+            <td>&nbsp;</td>
+            <td class="mir-label">INSP Q'ty</td>
+            <td>{{ template.sample_size }} pcs</td>
+        </tr>
+    </table>
+
+    <table style="margin-top: -1px;">
+        <tr>
+            <td class="mir-section-title" colspan="{{ 5 + sample_indexes|length + 4 }}">POINT OF INSPECTION</td>
+        </tr>
+        <tr>
+            <th rowspan="2" style="width: 3%;">Item</th>
+            <th rowspan="2" style="width: 16%;">Blue Print Dimension</th>
+            <th style="width: 6%;">Tolerance (-)</th>
+            <th style="width: 6%;">Nominal</th>
+            <th style="width: 6%;">Tolerance (+)</th>
+            {% for i in sample_indexes %}
+            <th style="width: 6%;">NO.{{ i }}</th>
+            {% endfor %}
+            <th colspan="2" style="width: 12%;">Inspection Tool</th>
+            <th colspan="2" style="width: 6%;">Result</th>
+        </tr>
+        <tr>
+            <th></th>
+            <th></th>
+            <th></th>
+            {% for i in sample_indexes %}
+            <th></th>
+            {% endfor %}
+            <th>Instrument</th>
+            <th>Accuracy</th>
+            <th>OK</th>
+            <th>NG</th>
+        </tr>
+        {% for m in template.measurements %}
+        <tr>
+            <td class="mir-center">{{ loop.index }}</td>
+            <td>
+                {% if m.measurement_type %}<div class="mir-dim-type">{{ m.measurement_type }}</div>{% endif %}
+                <div class="mir-dim-desc">{{ m.parameter_name }}{% if m.drawing_ref %} (dwg. #{{ m.drawing_ref }}){% endif %}</div>
+                <div class="mir-dim-tol">+{{ m.tolerance_plus }} / -{{ m.tolerance_minus }}</div>
+            </td>
+            <td class="mir-center">{{ m.nominal_value - m.tolerance_minus }}</td>
+            <td class="mir-center">{{ m.nominal_value }}</td>
+            <td class="mir-center">{{ m.nominal_value + m.tolerance_plus }}</td>
+            {% for i in sample_indexes %}
+            <td class="mir-sample-cell"></td>
+            {% endfor %}
+            <td class="mir-center">{{ m.instrument.name if m.instrument else '' }}</td>
+            <td class="mir-center">{% if m.instrument and m.instrument.accuracy_value is not none %}&plusmn;{{ m.instrument.accuracy_value }}{{ m.instrument.accuracy_unit or '' }}{% endif %}</td>
+            <td></td>
+            <td></td>
+        </tr>
+        {% endfor %}
+    </table>
+
+    <table style="margin-top: -1px;">
+        <tr>
+            <td class="mir-footer-label" style="width: 14%;">Verdict</td>
+            <td style="width: 36%;">
+                <span class="mir-checkbox"></span>Pass
+                &nbsp;&nbsp;
+                <span class="mir-checkbox"></span>Fail
+            </td>
+            <td class="mir-footer-label" style="width: 12%;">Supervisor</td>
+            <td style="width: 19%;">&nbsp;</td>
+            <td class="mir-footer-label" style="width: 7%;">Date</td>
+            <td style="width: 12%;">&nbsp;</td>
+        </tr>
+        <tr>
+            <td class="mir-footer-label">Disposition</td>
+            <td colspan="3">
+                <span class="mir-checkbox"></span>Accept &nbsp;
+                <span class="mir-checkbox"></span>Reject &nbsp;
+                <span class="mir-checkbox"></span>Full insp. &nbsp;
+                <span class="mir-checkbox"></span>Rework &nbsp;
+                <span class="mir-checkbox"></span>Deduction &nbsp;
+                <span class="mir-checkbox"></span>Other
+            </td>
+            <td class="mir-footer-label">Inspector</td>
+            <td>&nbsp;</td>
+        </tr>
+        <tr>
+            <td class="mir-footer-label">Defect reason</td>
+            <td colspan="5" style="height: 32px;">&nbsp;</td>
+        </tr>
+    </table>
+</div>
+
+</body>
+</html>

@@ -406,6 +406,16 @@ button, .btn {
     color: #17a2b8;
     border: 1px solid rgba(23, 162, 184, 0.3);
 }
+.badge-pass {
+    background-color: var(--success-bg);
+    color: var(--success-text);
+    border: 1px solid var(--success-border);
+}
+.badge-fail {
+    background-color: var(--danger-bg);
+    color: var(--danger-text);
+    border: 1px solid var(--danger-border);
+}
 
 /* Session role indicator shown in the navbar (e.g. "СЕСИЯ: АДМИНИСТРАТОР") -
    matches the same pill shape as the .badge classes above, since it's used

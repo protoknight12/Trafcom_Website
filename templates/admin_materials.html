@@ -77,6 +77,10 @@
                 <input type="text" id="new_brand" name="brand" placeholder="напр. Alcoa">
             </div>
             <div class="form-group">
+                <label for="new_notes">Забележка (незадължително)</label>
+                <input type="text" id="new_notes" name="notes" placeholder="напр. само за вътрешна употреба">
+            </div>
+            <div class="form-group">
                 <label for="new_cost_per_m2" id="new_cost_per_m2_label">Цена на м² плоча (€)</label>
                 <input type="number" id="new_cost_per_m2" step="0.01" min="0" name="cost_per_m2" placeholder="напр. 40.00" required>
             </div>
@@ -156,6 +160,7 @@
                     <th>ID</th>
                     <th>Материал</th>
                     <th>Марка</th>
+                    <th>Забележка</th>
                     <th>Тип</th>
                     <th>{{ material_price_m2_label(type_key) }}</th>
                     <th>Цена за цяла бройка (€)</th>
@@ -192,6 +197,8 @@
                     </td>
                     <td><input type="text" name="brand" form="{{ form_id }}" value="{{ material.brand or '' }}"
                                class="material-price-input" placeholder="Марка"></td>
+                    <td><input type="text" name="notes" form="{{ form_id }}" value="{{ material.notes or '' }}"
+                               class="material-price-input" placeholder="Забележка"></td>
                     <td>
                         <select name="type" form="{{ form_id }}" class="material-price-input">
                             {% for type_key2, type_label in MATERIAL_TYPE_LABELS.items() %}
@@ -264,7 +271,7 @@
                     </td>
                 </tr>
                 {% endfor %}
-                <tr class="search-empty-row" hidden><td colspan="22" class="text-center no-data">Няма съвпадения.</td></tr>
+                <tr class="search-empty-row" hidden><td colspan="23" class="text-center no-data">Няма съвпадения.</td></tr>
                 </tbody>
             </table>
         </div>

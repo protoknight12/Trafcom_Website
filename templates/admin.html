@@ -131,6 +131,11 @@
                 <h4>Консумация</h4>
                 <p>Live мониторинг на енергопотреблението.</p>
             </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_quality_control') }}">
+                <div class="hub-count">{{ counts.quality_checks }}</div>
+                <h4>Контрол на качеството</h4>
+                <p>Измервания и анализ на качеството по детайли и продукти.</p>
+            </a>
             <a class="admin-hub-card" href="{{ url_for('admin_content') }}">
                 <h4>Съдържание</h4>
                 <p>Редакция на текстове по публичните страници.</p>

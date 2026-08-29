@@ -149,7 +149,7 @@ class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(50), unique=True, nullable=False)
     password = db.Column(db.String(255), nullable=False)
-    # roles: 'regular_user', 'worker', 'admin', 'web_designer'
+    # roles: 'regular_user', 'worker', 'admin', 'web_designer', 'quality_control'
     role = db.Column(db.String(20), default='regular_user')
     # Nullable so pre-existing accounts don't need a backfill - required
     # going forward at /register since password reset depends on it.
@@ -181,6 +181,11 @@ class User(db.Model, UserMixin):
     def can_edit_content(self):
         """Admins and web designers can redact info pages (machine names, detail names, product text)."""
         return self.role in ('admin', 'web_designer')
+
+    @property
+    def can_manage_quality(self):
+        """Admins and quality-control staff can log/view QC inspections."""
+        return self.role in ('admin', 'quality_control')
 
 
 class ActivityLog(db.Model):
@@ -1434,6 +1439,214 @@ class OfferItem(db.Model):
     @property
     def line_total(self):
         return round((self.quantity or 0) * (self.unit_price or 0), 2)
+
+
+class QualityCheck(db.Model):
+    """
+    Standalone quality-control inspection ("контрол на качеството") - not
+    tied to a specific production batch or order, just a catalog
+    Detail/Product picked at inspection time. Same target_type/target_id
+    convention as DeliveryNoteItem. Holds one or more QualityMeasurement
+    rows (measured value vs nominal +/- tolerance); overall_result is
+    derived from those at creation time (see admin_create_quality_check())
+    and stored so a failed check surfaces in the history table without
+    joining/recomputing every time.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    target_type = db.Column(db.String(20), nullable=False)  # 'detail' / 'product'
+    target_id = db.Column(db.Integer, nullable=False)
+    inspector_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    overall_result = db.Column(db.String(10), nullable=False, default='pass')  # 'pass' / 'fail'
+    notes = db.Column(db.Text, nullable=True)
+    # Whether this inspection was carried out under the ISO 8015 independency
+    # principle - purely a reference/interpretation flag (ISO 8015 has no
+    # tolerance values of its own to compute against), shown as a badge in
+    # the history table.
+    iso8015 = db.Column(db.Boolean, nullable=False, default=False)
+    # Batch/report header fields, matching the shop's paper "Mechanical
+    # Inspection Report" form (see admin_quality_check_print()) - drawing_no
+    # is the part's overall drawing number (distinct from each
+    # QualityMeasurement.drawing_ref, which is that one dimension's
+    # balloon/callout number on the same drawing). sample_size is how many
+    # QualitySample columns every QualityMeasurement on this check has -
+    # fixed per check, same as the paper form's fixed sample columns.
+    drawing_no = db.Column(db.String(50), nullable=True)
+    batch_size = db.Column(db.Integer, nullable=True)
+    sample_size = db.Column(db.Integer, nullable=False, default=1)
+    # Customer/production order number this batch was inspected against -
+    # distinct from drawing_no (the part's drawing) and unrelated to this
+    # app's own Order model (this may not even correspond to a real Order
+    # row - e.g. an external customer PO), so deliberately a free-text
+    # field, not a foreign key.
+    order_no = db.Column(db.String(50), nullable=True)
+    # Comma-joined disposition codes ('accept'/'reject'/'full_inspection'/
+    # 'rework'/'deduction'/'other') - the paper report's checkboxes allow
+    # more than one to be ticked, so this isn't a single enum value.
+    disposition = db.Column(db.String(100), nullable=True)
+    # Separate from inspector_id (who performed the measurements) - the
+    # paper report has a distinct supervisor sign-off line. Free text since
+    # a supervisor need not be a system user account.
+    supervisor_name = db.Column(db.String(100), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    inspector = db.relationship('User')
+    # order_by=id (insertion order) rather than left unordered - the row's
+    # position in this list IS its display sequence number (see the "№"
+    # column on admin_quality_control.html), never stored as its own column
+    # since it's derived purely from list position.
+    measurements = db.relationship(
+        'QualityMeasurement', backref='check', cascade='all, delete-orphan', lazy=True,
+        order_by='QualityMeasurement.id'
+    )
+
+    @property
+    def target_name(self):
+        model = Detail if self.target_type == 'detail' else Product
+        row = db.session.get(model, self.target_id)
+        label = 'Детайл' if self.target_type == 'detail' else 'Продукт'
+        return row.name if row else f'{label} #{self.target_id} (изтрит)'
+
+
+class MeasuringInstrument(db.Model):
+    """
+    Catalog of measuring tools (calipers, micrometers, CMM, ...) admins/QC
+    staff maintain on their own page (admin_measuring_instruments()) and
+    pick per QualityMeasurement row (see instrument_id below) to record
+    which tool a given measurement was taken with. accuracy_value/unit is
+    purely informational/reference (e.g. 0.01 + 'мм') - never read by any
+    pass/fail calculation.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    accuracy_value = db.Column(db.Float, nullable=True)
+    accuracy_unit = db.Column(db.String(20), nullable=True)
+
+    @property
+    def display_label(self):
+        if self.accuracy_value is not None:
+            return f'{self.name} (± {self.accuracy_value:g} {self.accuracy_unit or ""})'.strip()
+        return self.name
+
+
+class QualityMeasurement(db.Model):
+    """
+    One measured dimension row within a QualityCheck (e.g. "φ16c9") -
+    nominal value +/- tolerance vs however many QualitySample readings were
+    taken (QualityCheck.sample_size of them, one per part in the batch) -
+    matches the paper "Mechanical Inspection Report" form's one-row-per-
+    dimension, multiple-sample-columns layout (see
+    admin_quality_check_print()). instrument_id is optional - which
+    MeasuringInstrument (if any) was used for this dimension, picked per-row
+    since different dimensions on the same QualityCheck can legitimately be
+    measured with different tools (e.g. diameter with a caliper, a critical
+    dimension with the CMM).
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    quality_check_id = db.Column(db.Integer, db.ForeignKey('quality_check.id'), nullable=False)
+    parameter_name = db.Column(db.String(100), nullable=False)
+    # Free-text characteristic category (e.g. "Диаметър", "Ъгъл", "Дължина")
+    # - picked from a searchable preset list on the form (see
+    # QC_MEASUREMENT_TYPES in admin_quality_control.html) but not a strict
+    # enum, so a one-off type not on that list can still be typed in.
+    # Purely descriptive/organizational, same as parameter_name - never read
+    # by any tolerance calculation.
+    measurement_type = db.Column(db.String(50), nullable=True)
+    nominal_value = db.Column(db.Float, nullable=False)
+    tolerance_plus = db.Column(db.Float, nullable=False, default=0.0)
+    tolerance_minus = db.Column(db.Float, nullable=False, default=0.0)
+    unit = db.Column(db.String(20), nullable=True)
+    # Free-text reference to the dimension's balloon/callout number on the
+    # technical drawing (e.g. "5" or "A5") - purely a cross-reference back to
+    # the drawing, not used in any calculation.
+    drawing_ref = db.Column(db.String(50), nullable=True)
+    instrument_id = db.Column(db.Integer, db.ForeignKey('measuring_instrument.id'), nullable=True)
+
+    instrument = db.relationship('MeasuringInstrument')
+    samples = db.relationship(
+        'QualitySample', backref='measurement', cascade='all, delete-orphan', lazy=True,
+        order_by='QualitySample.sample_index'
+    )
+
+    @property
+    def is_within_tolerance(self):
+        """A dimension only passes if every recorded sample does - one bad
+        part in the batch fails the whole dimension row."""
+        return bool(self.samples) and all(s.is_within_tolerance for s in self.samples)
+
+    @property
+    def sample_map(self):
+        """{sample_index: QualitySample} - sample_index can have gaps (a
+        blank sample cell is simply skipped, not stored), so callers that
+        need to place samples into fixed report columns (1..sample_size,
+        see admin_quality_check_print.html) look up by index here rather
+        than assuming samples[i-1] lines up positionally."""
+        return {s.sample_index: s for s in self.samples}
+
+
+class QualitySample(db.Model):
+    """One sample's reading for a QualityMeasurement dimension row - sample_index
+    is 1-based, matching the paper form's numbered sample columns (1..sample_size)."""
+    id = db.Column(db.Integer, primary_key=True)
+    quality_measurement_id = db.Column(db.Integer, db.ForeignKey('quality_measurement.id'), nullable=False)
+    sample_index = db.Column(db.Integer, nullable=False)
+    value = db.Column(db.Float, nullable=False)
+
+    @property
+    def is_within_tolerance(self):
+        m = self.measurement
+        return (m.nominal_value - m.tolerance_minus) <= self.value <= (m.nominal_value + m.tolerance_plus)
+
+    @property
+    def deviation(self):
+        return round(self.value - self.measurement.nominal_value, 4)
+
+
+class QualityCheckTemplate(db.Model):
+    """
+    Explicit, admin-curated starting point for admin_create_quality_check() -
+    at most one per Detail/Product (target_type/target_id), created/replaced
+    only when the user clicks "Запиши като темплейт" (see
+    admin_save_quality_template()). Deliberately NOT derived from whatever
+    QualityCheck was most recently submitted for that target - that drifted
+    on every inspection and could leave stale data showing for a target
+    that has never had one of its own (see admin_quality_control.html's
+    loadTemplateForTarget()). Never holds sample values or per-inspection
+    fields (order_no, supervisor_name, notes) - only the reusable structure.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    target_type = db.Column(db.String(20), nullable=False)
+    target_id = db.Column(db.Integer, nullable=False)
+    drawing_no = db.Column(db.String(50), nullable=True)
+    batch_size = db.Column(db.Integer, nullable=True)
+    sample_size = db.Column(db.Integer, nullable=False, default=1)
+    iso8015 = db.Column(db.Boolean, nullable=False, default=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    measurements = db.relationship(
+        'QualityCheckTemplateMeasurement', backref='template', cascade='all, delete-orphan', lazy=True,
+        order_by='QualityCheckTemplateMeasurement.id'
+    )
+
+    __table_args__ = (db.UniqueConstraint('target_type', 'target_id', name='uq_quality_template_target'),)
+
+
+class QualityCheckTemplateMeasurement(db.Model):
+    """One dimension row within a QualityCheckTemplate - same shape as
+    QualityMeasurement minus the sample values, since a template only ever
+    describes structure, never a measurement result."""
+    id = db.Column(db.Integer, primary_key=True)
+    template_id = db.Column(db.Integer, db.ForeignKey('quality_check_template.id'), nullable=False)
+    parameter_name = db.Column(db.String(100), nullable=False)
+    measurement_type = db.Column(db.String(50), nullable=True)
+    nominal_value = db.Column(db.Float, nullable=False)
+    tolerance_plus = db.Column(db.Float, nullable=False, default=0.0)
+    tolerance_minus = db.Column(db.Float, nullable=False, default=0.0)
+    unit = db.Column(db.String(20), nullable=True)
+    drawing_ref = db.Column(db.String(50), nullable=True)
+    instrument_id = db.Column(db.Integer, db.ForeignKey('measuring_instrument.id'), nullable=True)
+
+    instrument = db.relationship('MeasuringInstrument')
 
 
 def _next_offer_number():
@@ -3192,6 +3405,7 @@ def admin_dashboard():
         'deliverers': Deliverer.query.count(),
         'suppliers': Supplier.query.count(),
         'orders': Order.query.count(),
+        'quality_checks': QualityCheck.query.count(),
     }
     return render_template('admin.html', counts=counts, active_page='admin')
 
@@ -4515,7 +4729,7 @@ def admin_create_user():
         return redirect(url_for('admin_users'))
 
     role = request.form.get('role', 'regular_user')
-    if role not in ('regular_user', 'worker', 'admin', 'web_designer'):
+    if role not in ('regular_user', 'worker', 'admin', 'web_designer', 'quality_control'):
         flash('Невалидна роля.', 'danger')
         return redirect(url_for('admin_users'))
 
@@ -4539,7 +4753,7 @@ def admin_update_user_role(user_id):
         return redirect(url_for('admin_users'))
 
     role = request.form.get('role', '')
-    if role not in ('regular_user', 'worker', 'admin', 'web_designer'):
+    if role not in ('regular_user', 'worker', 'admin', 'web_designer', 'quality_control'):
         flash('Невалидна роля.', 'danger')
         return redirect(url_for('admin_users'))
 
@@ -4723,13 +4937,14 @@ def admin_update_material(key):
     material.code_number = request.form.get('code_number', '').strip() or None
     material.type = _parse_material_type(request.form)
     material.brand = request.form.get('brand', '').strip() or None
+    material.notes = request.form.get('notes', '').strip() or None
     log_action(describe_changes(f'материал "{material.display_name}"', material, {
         'cost_per_m2': 'цена лв/м²', 'cutting_speed_mm_per_min': 'ск. рязане mm/min',
         'pierce_rate_per_min': 'пробождания/min', 'sheet_length_mm': 'дължинаmm',
         'sheet_width_mm': 'ширина mm', 'thickness_mm': 'дебелина mm', 'height_mm': 'височина mm',
         'price_per_kg_m2': 'цена лв/кг(м²)', 'price_per_kg_m': 'цена лв/кг(м)', 'weight_kg': 'тегло кг',
         'price_per_unit': 'цена за цяло', 'min_quantity': 'мин. количество', 'erp_number': 'ERP №',
-        'code_number': 'КД №', 'type': 'тип', 'brand': 'марка',
+        'code_number': 'КД №', 'type': 'тип', 'brand': 'марка', 'notes': 'забележка',
     }))
     db.session.commit()
 
@@ -4817,7 +5032,8 @@ def admin_add_material():
         erp_number=erp_number,
         code_number=request.form.get('code_number', '').strip() or None,
         type=material_type,
-        brand=brand
+        brand=brand,
+        notes=request.form.get('notes', '').strip() or None
     )
     db.session.add(new_material)
     db.session.flush()  # assigns new_material.id without a full commit yet
@@ -6732,6 +6948,488 @@ def erp_lookup():
     return redirect(url_for('admin_dashboard'))
 
 
+# ----------------- КОНТРОЛ НА КАЧЕСТВОТО (Quality Control) -----------------
+
+@app.route('/admin/quality')
+@role_required(['admin', 'quality_control'])
+def admin_quality_control():
+    """
+    Standalone QC log: pick a Detail/Product, enter one or more measured
+    parameters against nominal +/- tolerance, get an auto-scored Годен/
+    Негоден result - see QualityCheck/QualityMeasurement. Not tied to a
+    specific production batch or order (deliberately - see the models'
+    docstrings), just a running inspection history filterable below.
+    """
+    result_filter = request.args.get('result', '')
+    query = QualityCheck.query
+    if result_filter in ('pass', 'fail'):
+        query = query.filter_by(overall_result=result_filter)
+    checks = query.order_by(QualityCheck.created_at.desc()).all()
+    details = Detail.query.order_by(Detail.name).all()
+    products = Product.query.order_by(Product.name).all()
+    instruments = MeasuringInstrument.query.order_by(MeasuringInstrument.name).all()
+    return render_template(
+        'admin_quality_control.html', checks=checks, details=details, products=products,
+        instruments=instruments, result_filter=result_filter, active_page='admin_quality_control',
+        edit_check=None, edit_check_data=None
+    )
+
+
+@app.route('/api/quality-template/<target_type>/<int:target_id>')
+@role_required(['admin', 'quality_control'])
+def api_quality_check_template(target_type, target_id):
+    """
+    AJAX endpoint: the QualityCheckTemplate explicitly saved for this
+    Detail/Product (see admin_save_quality_template()), reused as a
+    starting point when it's picked again on admin_quality_control.html -
+    same dimension rows (name, nominal, tolerance, tool) and header fields.
+    Never sample *values*, since a template doesn't have any.
+    """
+    if target_type not in ('detail', 'product'):
+        return jsonify({'status': 'error', 'message': 'Невалиден тип обект.'}), 400
+
+    template = QualityCheckTemplate.query.filter_by(target_type=target_type, target_id=target_id).first()
+    if not template:
+        return jsonify({'status': 'success', 'template': None})
+
+    return jsonify({'status': 'success', 'template': {
+        'drawing_no': template.drawing_no,
+        'batch_size': template.batch_size,
+        'sample_size': template.sample_size,
+        'iso8015': template.iso8015,
+        'measurements': [{
+            'parameter_name': m.parameter_name,
+            'measurement_type': m.measurement_type,
+            'nominal_value': m.nominal_value,
+            'tolerance_plus': m.tolerance_plus,
+            'tolerance_minus': m.tolerance_minus,
+            'unit': m.unit,
+            'drawing_ref': m.drawing_ref,
+            'instrument_id': m.instrument_id,
+        } for m in template.measurements],
+    }})
+
+
+@app.route('/admin/quality/template/save', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_save_quality_template():
+    """
+    AJAX endpoint behind the QC form's "Запиши като темплейт" button - saves
+    (or replaces) the QualityCheckTemplate for whichever Detail/Product is
+    currently selected, from the same header fields + measurement-row
+    arrays as admin_create_quality_check(), minus the sample values (a
+    template has none) and the per-inspection fields (order_no,
+    supervisor_name, notes, disposition) which don't belong on a reusable
+    template.
+    """
+    target_type = request.form.get('target_type', '')
+    target_id_raw = request.form.get('target_id', '')
+    if target_type not in ('detail', 'product') or not target_id_raw.isdigit():
+        return jsonify({'status': 'error', 'message': 'Моля изберете детайл или продукт.'}), 400
+    target_id = int(target_id_raw)
+
+    target_model = Detail if target_type == 'detail' else Product
+    target_row = db.session.get(target_model, target_id)
+    if not target_row:
+        return jsonify({'status': 'error', 'message': 'Избраният детайл/продукт не съществува.'}), 400
+
+    drawing_no = request.form.get('drawing_no', '').strip() or None
+    try:
+        batch_size = _parse_optional_float(request.form, 'batch_size')
+        batch_size = int(batch_size) if batch_size is not None else None
+        sample_size = int(request.form.get('sample_size') or 1)
+    except ValueError:
+        return jsonify({'status': 'error', 'message': 'Размерът на партидата и броят проби трябва да бъдат цели числа.'}), 400
+    if sample_size < 1:
+        return jsonify({'status': 'error', 'message': 'Броят проби трябва да бъде поне 1.'}), 400
+
+    param_names = request.form.getlist('param_name')
+    measurement_types = request.form.getlist('measurement_type')
+    nominal_values = request.form.getlist('nominal_value')
+    tol_plus_values = request.form.getlist('tolerance_plus')
+    tol_minus_values = request.form.getlist('tolerance_minus')
+    units = request.form.getlist('unit')
+    instrument_ids = request.form.getlist('instrument_id')
+    drawing_refs = request.form.getlist('drawing_ref')
+
+    rows = []
+    try:
+        for i, raw_name in enumerate(param_names):
+            name = raw_name.strip()
+            if not name:
+                continue
+            instrument_id_raw = instrument_ids[i] if i < len(instrument_ids) else ''
+            rows.append(QualityCheckTemplateMeasurement(
+                parameter_name=name,
+                measurement_type=(measurement_types[i].strip() if i < len(measurement_types) else '') or None,
+                nominal_value=float(nominal_values[i]),
+                tolerance_plus=float(tol_plus_values[i] or 0),
+                tolerance_minus=float(tol_minus_values[i] or 0),
+                unit=units[i].strip() or None,
+                drawing_ref=(drawing_refs[i].strip() if i < len(drawing_refs) else '') or None,
+                instrument_id=int(instrument_id_raw) if instrument_id_raw.isdigit() else None,
+            ))
+    except (ValueError, IndexError):
+        return jsonify({'status': 'error', 'message': 'Невалидни стойности в измерванията.'}), 400
+
+    if not rows:
+        return jsonify({'status': 'error', 'message': 'Добавете поне едно измерване, преди да запишете темплейт.'}), 400
+
+    template = QualityCheckTemplate.query.filter_by(target_type=target_type, target_id=target_id).first()
+    if not template:
+        template = QualityCheckTemplate(target_type=target_type, target_id=target_id)
+        db.session.add(template)
+
+    template.drawing_no = drawing_no
+    template.batch_size = batch_size
+    template.sample_size = sample_size
+    template.iso8015 = request.form.get('iso8015') == 'on'
+    template.measurements = rows
+    db.session.commit()
+
+    log_action(f'Записан QC темплейт за "{target_row.name}"')
+    return jsonify({'status': 'success', 'message': f'Темплейтът за "{target_row.name}" беше запазен.'})
+
+
+def _parse_quality_check_header(form):
+    """
+    Shared header-field parsing for admin_create_quality_check()/
+    admin_update_quality_check() - target_type/target_id, drawing_no,
+    batch_size, sample_size. Returns (data_dict, None) on success or
+    (None, error_message) on the first problem found.
+    """
+    target_type = form.get('target_type', '')
+    target_id_raw = form.get('target_id', '')
+    if target_type not in ('detail', 'product') or not target_id_raw.isdigit():
+        return None, 'Моля изберете детайл или продукт за проверка.'
+    target_id = int(target_id_raw)
+
+    target_model = Detail if target_type == 'detail' else Product
+    if not db.session.get(target_model, target_id):
+        return None, 'Избраният детайл/продукт не съществува.'
+
+    try:
+        batch_size = _parse_optional_float(form, 'batch_size')
+        batch_size = int(batch_size) if batch_size is not None else None
+        sample_size = int(form.get('sample_size') or 1)
+    except ValueError:
+        return None, 'Размерът на партидата и броят проби трябва да бъдат цели числа.'
+    if sample_size < 1:
+        return None, 'Броят проби трябва да бъде поне 1.'
+
+    return {
+        'target_type': target_type,
+        'target_id': target_id,
+        'drawing_no': form.get('drawing_no', '').strip() or None,
+        'batch_size': batch_size,
+        'sample_size': sample_size,
+    }, None
+
+
+def _build_quality_measurements_from_form(form):
+    """
+    Shared per-row parsing for admin_create_quality_check()/
+    admin_update_quality_check() - builds QualityMeasurement (+ QualitySample)
+    objects from the QC form's parallel array fields (param_name[],
+    measurement_type[], ...). Returns (measurements, None) on success or
+    (None, error_message) on the first validation problem found.
+    """
+    param_names = form.getlist('param_name')
+    measurement_types = form.getlist('measurement_type')
+    nominal_values = form.getlist('nominal_value')
+    tol_plus_values = form.getlist('tolerance_plus')
+    tol_minus_values = form.getlist('tolerance_minus')
+    units = form.getlist('unit')
+    instrument_ids = form.getlist('instrument_id')
+    drawing_refs = form.getlist('drawing_ref')
+
+    measurements = []
+    try:
+        for i, raw_name in enumerate(param_names):
+            name = raw_name.strip()
+            if not name:
+                continue
+            instrument_id_raw = instrument_ids[i] if i < len(instrument_ids) else ''
+            drawing_ref = drawing_refs[i].strip() if i < len(drawing_refs) else ''
+            measurement_type = measurement_types[i].strip() if i < len(measurement_types) else ''
+
+            samples = []
+            for sample_index, raw_value in enumerate(form.getlist(f'sample_row{i}'), start=1):
+                raw_value = raw_value.strip()
+                if raw_value == '':
+                    continue
+                samples.append(QualitySample(sample_index=sample_index, value=float(raw_value)))
+            if not samples:
+                return None, f'Измерване "{name}" няма нито една въведена проба.'
+
+            measurements.append(QualityMeasurement(
+                parameter_name=name,
+                measurement_type=measurement_type or None,
+                nominal_value=float(nominal_values[i]),
+                tolerance_plus=float(tol_plus_values[i] or 0),
+                tolerance_minus=float(tol_minus_values[i] or 0),
+                unit=units[i].strip() or None,
+                instrument_id=int(instrument_id_raw) if instrument_id_raw.isdigit() else None,
+                drawing_ref=drawing_ref or None,
+                samples=samples,
+            ))
+    except (ValueError, IndexError):
+        return None, 'Невалидни стойности в измерванията - проверете дали всички числови полета са попълнени коректно.'
+
+    if not measurements:
+        return None, 'Добавете поне едно измерване.'
+
+    return measurements, None
+
+
+@app.route('/admin/quality/create', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_create_quality_check():
+    header, error = _parse_quality_check_header(request.form)
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('admin_quality_control'))
+
+    measurements, error = _build_quality_measurements_from_form(request.form)
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('admin_quality_control'))
+
+    overall_result = 'pass' if all(m.is_within_tolerance for m in measurements) else 'fail'
+
+    check = QualityCheck(
+        target_type=header['target_type'], target_id=header['target_id'], inspector_id=current_user.id,
+        notes=request.form.get('notes', '').strip() or None, overall_result=overall_result, measurements=measurements,
+        iso8015=request.form.get('iso8015') == 'on',
+        drawing_no=header['drawing_no'], batch_size=header['batch_size'], sample_size=header['sample_size'],
+        order_no=request.form.get('order_no', '').strip() or None,
+        disposition=','.join(request.form.getlist('disposition')) or None,
+        supervisor_name=request.form.get('supervisor_name', '').strip() or None,
+    )
+    db.session.add(check)
+    db.session.commit()
+
+    result_label = 'Годен' if overall_result == 'pass' else 'Негоден'
+    log_action(f'Нова QC проверка на "{check.target_name}" - резултат {result_label}')
+    flash(f'QC проверката беше записана ({result_label}).', 'success' if overall_result == 'pass' else 'danger')
+    return redirect(url_for('admin_quality_control'))
+
+
+@app.route('/admin/quality/<int:check_id>/edit')
+@role_required(['admin', 'quality_control'])
+def admin_edit_quality_check(check_id):
+    """
+    Reuses admin_quality_control.html's "new check" form, pre-filled with an
+    existing QualityCheck's data (including sample values, unlike a
+    QualityCheckTemplate which never has any) - so a data-entry mistake can
+    be fixed without deleting and retyping the whole inspection.
+    """
+    check = QualityCheck.query.get_or_404(check_id)
+    result_filter = request.args.get('result', '')
+    query = QualityCheck.query
+    if result_filter in ('pass', 'fail'):
+        query = query.filter_by(overall_result=result_filter)
+    checks = query.order_by(QualityCheck.created_at.desc()).all()
+    details = Detail.query.order_by(Detail.name).all()
+    products = Product.query.order_by(Product.name).all()
+    instruments = MeasuringInstrument.query.order_by(MeasuringInstrument.name).all()
+
+    edit_check_data = {
+        'id': check.id,
+        'target_type': check.target_type,
+        'target_id': check.target_id,
+        'drawing_no': check.drawing_no,
+        'batch_size': check.batch_size,
+        'sample_size': check.sample_size,
+        'order_no': check.order_no,
+        'supervisor_name': check.supervisor_name,
+        'notes': check.notes,
+        'iso8015': check.iso8015,
+        'disposition': (check.disposition or '').split(',') if check.disposition else [],
+        'measurements': [{
+            'parameter_name': m.parameter_name,
+            'measurement_type': m.measurement_type,
+            'nominal_value': m.nominal_value,
+            'tolerance_plus': m.tolerance_plus,
+            'tolerance_minus': m.tolerance_minus,
+            'unit': m.unit,
+            'drawing_ref': m.drawing_ref,
+            'instrument_id': m.instrument_id,
+            'samples': [
+                (m.sample_map.get(idx).value if m.sample_map.get(idx) else None)
+                for idx in range(1, check.sample_size + 1)
+            ],
+        } for m in check.measurements],
+    }
+
+    return render_template(
+        'admin_quality_control.html', checks=checks, details=details, products=products,
+        instruments=instruments, result_filter=result_filter, active_page='admin_quality_control',
+        edit_check=check, edit_check_data=edit_check_data
+    )
+
+
+@app.route('/admin/quality/<int:check_id>/update', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_update_quality_check(check_id):
+    check = QualityCheck.query.get_or_404(check_id)
+
+    header, error = _parse_quality_check_header(request.form)
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('admin_edit_quality_check', check_id=check_id))
+
+    measurements, error = _build_quality_measurements_from_form(request.form)
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('admin_edit_quality_check', check_id=check_id))
+
+    overall_result = 'pass' if all(m.is_within_tolerance for m in measurements) else 'fail'
+
+    check.target_type = header['target_type']
+    check.target_id = header['target_id']
+    check.notes = request.form.get('notes', '').strip() or None
+    check.overall_result = overall_result
+    check.measurements = measurements
+    check.iso8015 = request.form.get('iso8015') == 'on'
+    check.drawing_no = header['drawing_no']
+    check.batch_size = header['batch_size']
+    check.sample_size = header['sample_size']
+    check.order_no = request.form.get('order_no', '').strip() or None
+    check.disposition = ','.join(request.form.getlist('disposition')) or None
+    check.supervisor_name = request.form.get('supervisor_name', '').strip() or None
+    db.session.commit()
+
+    result_label = 'Годен' if overall_result == 'pass' else 'Негоден'
+    log_action(f'Редактирана QC проверка #{check.id} на "{check.target_name}" - резултат {result_label}')
+    flash(f'QC проверката беше обновена ({result_label}).', 'success' if overall_result == 'pass' else 'danger')
+    return redirect(url_for('admin_quality_control'))
+
+
+@app.route('/admin/quality/<int:check_id>/delete', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_delete_quality_check(check_id):
+    check = QualityCheck.query.get_or_404(check_id)
+    target_name = check.target_name
+    db.session.delete(check)
+    db.session.commit()
+    log_action(f'Изтрита QC проверка на "{target_name}"')
+    flash('QC проверката беше изтрита.', 'success')
+    return redirect(url_for('admin_quality_control'))
+
+
+@app.route('/admin/quality/<int:check_id>/print')
+@role_required(['admin', 'quality_control'])
+def admin_quality_check_print(check_id):
+    """Browser-print view (Ctrl+P to PDF, no server-side PDF library) styled
+    after the shop's paper "Mechanical Inspection Report" form - same
+    pattern as offer.html/protocol.html/certificate.html."""
+    check = QualityCheck.query.get_or_404(check_id)
+    sample_indexes = list(range(1, check.sample_size + 1))
+    return render_template('admin_quality_check_print.html', check=check, sample_indexes=sample_indexes)
+
+
+@app.route('/admin/quality/template/<target_type>/<int:target_id>/print')
+@role_required(['admin', 'quality_control'])
+def admin_quality_template_print(target_type, target_id):
+    """
+    Blank printable inspection sheet from a QualityCheckTemplate - same
+    layout as admin_quality_check_print.html (Blue Print Dimension/
+    Tolerance/Nominal columns filled from the template) but with empty
+    sample/result/verdict cells, meant to be handed to the shop floor and
+    filled in by hand before the readings are typed into a real QC check.
+    """
+    if target_type not in ('detail', 'product'):
+        flash('Невалиден тип обект.', 'danger')
+        return redirect(url_for('admin_quality_control'))
+
+    template = QualityCheckTemplate.query.filter_by(target_type=target_type, target_id=target_id).first()
+    if not template:
+        flash('Няма записан темплейт за избрания детайл/продукт - запишете го първо с "Запиши като темплейт".', 'danger')
+        return redirect(url_for('admin_quality_control'))
+
+    target_model = Detail if target_type == 'detail' else Product
+    target_row = db.session.get(target_model, target_id)
+    target_name = target_row.name if target_row else f'#{target_id}'
+    sample_indexes = list(range(1, template.sample_size + 1))
+    return render_template(
+        'admin_quality_template_print.html', template=template, target_name=target_name, sample_indexes=sample_indexes
+    )
+
+
+@app.route('/admin/quality/instruments')
+@role_required(['admin', 'quality_control'])
+def admin_measuring_instruments():
+    """
+    Catalog page for MeasuringInstrument - the tools picked per row on the
+    QC check form (see admin_quality_control.html). Separate page rather
+    than folded into that form, since the QC page only needs to add one
+    on the fly (see api_quick_create_instrument) while this is the full
+    add/edit/delete view of the catalog.
+    """
+    instruments = MeasuringInstrument.query.order_by(MeasuringInstrument.name).all()
+    return render_template(
+        'admin_measuring_instruments.html', instruments=instruments, active_page='admin_measuring_instruments'
+    )
+
+
+@app.route('/admin/quality/instruments/create', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_add_measuring_instrument():
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Моля въведете име на инструмента.', 'danger')
+        return redirect(url_for('admin_measuring_instruments'))
+
+    accuracy_value = _parse_optional_float(request.form, 'accuracy_value')
+    instrument = MeasuringInstrument(
+        name=name,
+        description=request.form.get('description', '').strip() or None,
+        accuracy_value=accuracy_value,
+        accuracy_unit=request.form.get('accuracy_unit', '').strip() or None,
+    )
+    db.session.add(instrument)
+    db.session.commit()
+    log_action(f'Създаден измервателен инструмент "{name}"')
+    flash(f'Инструментът "{name}" беше добавен успешно.', 'success')
+    return redirect(url_for('admin_measuring_instruments'))
+
+
+@app.route('/admin/quality/instruments/<int:instrument_id>/update', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_update_measuring_instrument(instrument_id):
+    instrument = MeasuringInstrument.query.get_or_404(instrument_id)
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Моля въведете име на инструмента.', 'danger')
+        return redirect(url_for('admin_measuring_instruments'))
+
+    instrument.name = name
+    instrument.description = request.form.get('description', '').strip() or None
+    instrument.accuracy_value = _parse_optional_float(request.form, 'accuracy_value')
+    instrument.accuracy_unit = request.form.get('accuracy_unit', '').strip() or None
+    db.session.commit()
+    log_action(f'Обновен измервателен инструмент "{name}"')
+    flash(f'Инструментът "{name}" беше обновен успешно.', 'success')
+    return redirect(url_for('admin_measuring_instruments'))
+
+
+@app.route('/admin/quality/instruments/<int:instrument_id>/delete', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_delete_measuring_instrument(instrument_id):
+    instrument = MeasuringInstrument.query.get_or_404(instrument_id)
+    if QualityMeasurement.query.filter_by(instrument_id=instrument.id).first():
+        flash(f'Инструментът "{instrument.name}" не може да бъде изтрит - използван е в записани QC измервания.', 'danger')
+        return redirect(url_for('admin_measuring_instruments'))
+
+    name = instrument.name
+    db.session.delete(instrument)
+    db.session.commit()
+    log_action(f'Изтрит измервателен инструмент "{name}"')
+    flash(f'Инструментът "{name}" беше изтрит.', 'success')
+    return redirect(url_for('admin_measuring_instruments'))
+
+
 # ----------------- QUICK-CREATE API ENDPOINTS -----------------
 
 @app.route('/api/quick-create-detail', methods=['POST'])
@@ -7004,6 +7702,43 @@ def api_quick_create_material():
     return jsonify({
         'status': 'success',
         'material': {'key': new_material.key, 'option_text': format_material_option(new_material)}
+    })
+
+
+@app.route('/api/quick-create-instrument', methods=['POST'])
+@login_required
+def api_quick_create_instrument():
+    """
+    AJAX endpoint: create a MeasuringInstrument on the fly from the QC
+    check form's per-measurement instrument picker (admin_quality_control.html),
+    same pattern as api_quick_create_material - avoids leaving that form to
+    go add one on the dedicated admin_measuring_instruments() page first.
+    """
+    if not current_user.can_manage_quality:
+        return jsonify({'status': 'error', 'message': 'Нямате достъп.'}), 403
+
+    name = request.form.get('name', '').strip()
+    if not name:
+        return jsonify({'status': 'error', 'message': 'Моля въведете име на инструмента.'}), 400
+
+    try:
+        accuracy_value = _parse_optional_float(request.form, 'accuracy_value')
+    except ValueError:
+        return jsonify({'status': 'error', 'message': 'Точността трябва да бъде валидно число.'}), 400
+
+    instrument = MeasuringInstrument(
+        name=name,
+        description=request.form.get('description', '').strip() or None,
+        accuracy_value=accuracy_value,
+        accuracy_unit=request.form.get('accuracy_unit', '').strip() or None,
+    )
+    db.session.add(instrument)
+    db.session.commit()
+    log_action(f'Създаден измервателен инструмент "{name}" (бърз избор)')
+
+    return jsonify({
+        'status': 'success',
+        'instrument': {'id': instrument.id, 'option_text': instrument.display_label}
     })
 
 
@@ -8668,7 +9403,7 @@ def get_upload_details(query: str) -> str:
 @anthropic.beta_tool
 def my_profile() -> str:
     """Връща основната информация за акаунта на текущия логнат потребител."""
-    role_labels = {'regular_user': 'Клиент', 'worker': 'Служител', 'admin': 'Администратор', 'web_designer': 'Уеб дизайнер'}
+    role_labels = {'regular_user': 'Клиент', 'worker': 'Служител', 'admin': 'Администратор', 'web_designer': 'Уеб дизайнер', 'quality_control': 'Контрол на качеството'}
     lines = [f'Потребителско име: {current_user.username}', f'Роля: {role_labels.get(current_user.role, current_user.role)}']
     if current_user.email:
         verified = 'потвърден' if current_user.email_verified else 'непотвърден'
