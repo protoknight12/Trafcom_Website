@@ -42,16 +42,40 @@ orders through production tracking. The UI is in Bulgarian.
   `OrderItem`) roll up completion status per-component as production
   reports units produced, driven off frozen recipe snapshots so later
   catalog edits don't retroactively change placed orders.
+- **Production wizard** — separately from order tracking above, plan a
+  standalone "produce N of this Detail" job ahead of demand; it's clamped
+  so it can never drive the chosen material batch's stock negative, and
+  completing/deleting one properly moves (or reverses) real stock.
 - **Delivery notes / stock intake** — recording goods received from a
   `Supplier` bumps stock on the referenced material/detail/product.
+  **Material requests** raise the restock *ask* on the other end, from the
+  storage dashboard, when stock runs low.
 - **Clients & deliverers** — lightweight lookup catalogs (with Bulgarian
   company legal fields — ЕИК, ДДС №, address, МОЛ) an order can reference.
 - **Label printing** — Code128 barcode labels (rendered as inline SVG, no
   external service) for any catalog entry or produced batch.
 - **Role-based access** — `regular_user`, `worker`, `admin`, `web_designer`,
-  with a scoped-down content editor for non-pricing public-page text.
+  with a scoped-down content editor for non-pricing public-page text; new
+  registrations can be locked from `/admin/users` without affecting
+  existing accounts.
+- **Two-factor auth & email verification** — optional per-user TOTP 2FA
+  (QR-code setup, no image file written to disk) and email verification/
+  password-reset links, both signed & time-limited rather than stored as a
+  token column.
+- **Quotes (Offers)** — pre-order quotes with product/detail/text-only
+  lines, an optional whole-quote discount and expiry date, per-line photos,
+  and one click to turn the checked lines into a real `Order`.
 - **Offer / protocol / certificate documents** — browser-print pages
   (Ctrl+P to PDF), no server-side PDF library.
+- **Panel Generator** — a parametric panel/hole-pattern DXF tool (square,
+  hexagon, triangle, rhombus, hex-cluster), with save/reload presets and a
+  server-side (`ezdxf`) export that real CAD software can open cleanly.
+- **AI chat assistant** *(optional)* — a chat widget backed by Claude, with
+  read-only tools to look up catalog items, stock, orders, and prices in
+  plain Bulgarian; degrades to a friendly "unavailable" message if no API
+  key is configured.
+- **Activity log** — every state-changing admin/worker action is recorded
+  (who, what, when), exportable to `.xlsx`.
 - **Missing-stock dashboard** — every open order that doesn't currently have
   enough Detail/Product stock to fulfill it, recomputed live rather than
   stored.
@@ -94,6 +118,13 @@ FLASK_DEBUG=0
 import if either is missing. `.env` is loaded automatically via
 `python-dotenv` and is gitignored.
 
+Everything else in `.env.example` is optional, each feature just degrades
+gracefully without it: `ANTHROPIC_API_KEY` (+ optional
+`ANTHROPIC_WORKSPACE_ID`) powers the AI chat assistant; `SMTP_HOST` /
+`PORT` / `USER` / `PASSWORD` / `FROM` control outgoing password-reset and
+email-verification mail (defaults to a local `localhost:25` transport with
+no auth if unset).
+
 ## Running it
 
 ```bash
@@ -134,26 +165,41 @@ set up the database).
 <summary><a href="https://github.com/protoknight12/Trafcom_Website/tree/main/templates"><code>templates/</code></a> — Jinja2 templates, one per page/route</summary>
 
   - [`about.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/about.html)
+  - [`account.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/account.html)
+  - [`account_2fa_setup.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/account_2fa_setup.html) — TOTP 2FA setup, QR code rendered as inline SVG
   - [`admin.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin.html)
+  - [`admin_client_delivery_note_print.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_client_delivery_note_print.html)
+  - [`admin_client_delivery_notes.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_client_delivery_notes.html)
   - [`admin_clients.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_clients.html)
+  - [`admin_delivery_note_print.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_delivery_note_print.html)
   - [`admin_delivery_notes.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_delivery_notes.html)
   - [`admin_details.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_details.html)
+  - [`admin_generator_presets.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_generator_presets.html) — every user's saved Panel Generator presets
+  - [`admin_log.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_log.html) — activity-log audit trail
+  - [`admin_material_history.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_material_history.html)
   - [`admin_materials.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_materials.html)
   - [`admin_missing_stock.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_missing_stock.html)
+  - [`admin_offer_edit.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_offer_edit.html)
+  - [`admin_offer_print.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_offer_print.html)
+  - [`admin_offers.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_offers.html)
   - [`admin_power.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_power.html)
+  - [`admin_production_orders.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_production_orders.html) — the production wizard (build stock ahead of demand)
   - [`admin_products.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_products.html)
   - [`admin_services.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_services.html) — manage billable `Service` types (EUR/hour rate, linked machines)
   - [`admin_users.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/admin_users.html)
   - [`certificate.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/certificate.html)
   - [`contact.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/contact.html)
   - [`content_editor.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/content_editor.html)
-  - [`dashboard.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/dashboard.html)
   - [`detail_dxf_dashboard.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/detail_dxf_dashboard.html) — per-Detail DXF revision history
   - [`edit_window.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/edit_window.html)
-  - [`generator.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/generator.html)
+  - [`error.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/error.html) — shared template for every custom error page (404/403/429/500)
+  - [`forgot_password.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/forgot_password.html)
+  - [`generator.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/generator.html) — parametric panel/hole-pattern DXF generator
   - [`index.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/index.html)
   - [`label.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/label.html)
+  - [`library.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/library.html) — personal DXF upload library (`/dashboard`)
   - [`login.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/login.html)
+  - [`login_2fa.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/login_2fa.html) — TOTP code prompt for accounts with 2FA enabled
   - [`machines.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/machines.html)
   - [`my_orders.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/my_orders.html)
   - [`offer.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/offer.html)
@@ -162,17 +208,28 @@ set up the database).
   - [`production_report.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/production_report.html)
   - [`protocol.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/protocol.html)
   - [`register.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/register.html)
+  - [`reset_password.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/reset_password.html)
   - [`services.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/services.html)
+  - [`storage_dashboard.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/storage_dashboard.html)
+  - [`storage_details.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/storage_details.html)
+  - [`storage_materials.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/storage_materials.html)
+  - [`storage_products.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/storage_products.html)
+  - [`storage_requests.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/storage_requests.html) — MaterialRequest dashboard (restock asks, separate from DeliveryNote intake)
   - [`upload.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/upload.html)
 
   <details>
   <summary><a href="https://github.com/protoknight12/Trafcom_Website/tree/main/templates/partials"><code>partials/</code></a> — shared chrome (navbar, footer, CSRF field, editable-text blocks)</summary>
 
     - [`navbar.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/partials/navbar.html)
-    - [`footer.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/partials/footer.html)
+    - [`footer.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/partials/footer.html) — also renders the AI chat widget for logged-in users
     - [`editable.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/partials/editable.html)
     - [`csrf_field.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/partials/csrf_field.html)
     - [`material_options.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/partials/material_options.html)
+    - [`legal_fields.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/partials/legal_fields.html) — shared ЕИК/ДДС №/address/МОЛ fields (Client/Deliverer/Supplier)
+    - [`favicon.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/partials/favicon.html)
+    - [`breadcrumbs.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/partials/breadcrumbs.html)
+    - [`local_business_schema.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/partials/local_business_schema.html) — LocalBusiness JSON-LD for the public pages
+    - [`sticky_cta.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/partials/sticky_cta.html) — mobile call/contact bar for anonymous visitors
 
   </details>
 
@@ -230,6 +287,31 @@ set up the database).
   - [`test_shelly_reading_log.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_shelly_reading_log.py)
   - [`test_admin_power_history_gen1.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_admin_power_history_gen1.py)
   - [`test_upload_and_machine_helpers.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_upload_and_machine_helpers.py)
+  - [`test_material_only_detail_pricing.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_material_only_detail_pricing.py)
+  - [`test_material_cost_by_type.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_material_cost_by_type.py)
+  - [`test_length_based_operation_cost.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_length_based_operation_cost.py)
+  - [`test_operations_breakdown_excludes_cutting.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_operations_breakdown_excludes_cutting.py)
+  - [`test_operations_form_novalidate.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_operations_form_novalidate.py)
+  - [`test_production_orders.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_production_orders.py)
+  - [`test_production_order_clamp.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_production_order_clamp.py)
+  - [`test_production_order_delete.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_production_order_delete.py)
+  - [`test_production_stock_bump.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_production_stock_bump.py)
+  - [`test_material_requests.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_material_requests.py)
+  - [`test_offer_generator.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_offer_generator.py)
+  - [`test_offer_create_order.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_offer_create_order.py)
+  - [`test_detail_dxf_cyrillic.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_detail_dxf_cyrillic.py)
+  - [`test_polyline_entity.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_polyline_entity.py)
+  - [`test_generator_dxf_export.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_generator_dxf_export.py)
+  - [`test_generator_presets.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_generator_presets.py)
+  - [`test_storage_materials_thresholds.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_storage_materials_thresholds.py)
+  - [`test_delivery_note_price_split.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_delivery_note_price_split.py)
+  - [`test_service_show_price.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_service_show_price.py)
+  - [`test_activity_log.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_activity_log.py)
+  - [`test_registration_lock.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_registration_lock.py)
+  - [`test_auth_email_2fa.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_auth_email_2fa.py)
+  - [`test_email_verification.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_email_verification.py)
+  - [`test_email_validation.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_email_validation.py)
+  - [`test_error_pages_and_session.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/testing/test_error_pages_and_session.py)
 
 </details>
 

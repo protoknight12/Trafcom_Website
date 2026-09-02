@@ -1,0 +1,6 @@
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+    <a href="{{ url_for('index') }}">Начало</a><span class="breadcrumb-sep">/</span><span class="breadcrumb-current">{{ breadcrumb_label }}</span>
+</nav>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Начало","item":{{ url_for('index', _external=True)|tojson }}},{"@type":"ListItem","position":2,"name":{{ breadcrumb_label|tojson }},"item":{{ request.url|tojson }}}]}
+</script>

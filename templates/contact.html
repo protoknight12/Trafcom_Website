@@ -13,49 +13,60 @@
     <meta property="og:type" content="website">
     <meta property="og:locale" content="bg_BG">
     <meta property="og:site_name" content="Trafcom">
+    <meta property="og:image" content="{{ url_for('static', filename='img/favicon/android-chrome-512x512.png', _external=True) }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
-<body>
+<body class="public-page">
 {% from 'partials/editable.html' import text with context %}
 
 {% include 'partials/navbar.html' %}
+{% include 'partials/local_business_schema.html' %}
 
 <main class="dmg-container">
 
+    {% set breadcrumb_label = 'Контакти' %}
+    {% include 'partials/breadcrumbs.html' %}
+
     <section class="dmg-hero">
-        <div class="hero-tag"><span>01</span> // ВРЪЗКА С НАС</div>
-        <h1 class="hero-title">КОНТАКТИ</h1>
-        <p class="hero-lead">{{ text('contact.hero_lead', 'За запитвания, оферти и въпроси относно механична обработка, лазерно рязане или производство на детайли - свържете се с нас директно.') }}</p>
+        <div class="hero-content">
+            <div class="hero-tag"><span>01</span> // ВРЪЗКА С НАС</div>
+            <h1 class="hero-title">КОНТАКТИ</h1>
+            <p class="hero-lead">{{ text('contact.hero_lead', 'За запитвания, оферти и въпроси относно механична обработка, лазерно рязане или производство на детайли - свържете се с нас директно.') }}</p>
 
-        <div class="info-grid">
-            <div class="info-card">
-                <h3>Административен адрес</h3>
-                <p>{{ text('contact.office_address', 'гр. Тетевен, ул. „Александър Стамболийски“ 36') }}</p>
+            <div class="info-grid">
+                <div class="info-card">
+                    <h3>Административен адрес</h3>
+                    <p>{{ text('contact.office_address', 'гр. Тетевен, ул. „Александър Стамболийски“ 36') }}</p>
+                </div>
+                <div class="info-card">
+                    <h3>Производствена база</h3>
+                    <p>{{ text('contact.production_address', 'ул. „Воловийте“, 5700 гр. Тетевен') }}</p>
+                </div>
+                <div class="info-card">
+                    <h3>Телефон</h3>
+                    <p><a href="tel:+359886762276">+359 886 762 276</a></p>
+                </div>
+                <div class="info-card">
+                    <h3>Имейл</h3>
+                    <p><a href="mailto:trafcom@trafcombg.com">trafcom@trafcombg.com</a></p>
+                </div>
             </div>
-            <div class="info-card">
-                <h3>Производствена база</h3>
-                <p>{{ text('contact.production_address', 'ул. „Воловийте“, 5700 гр. Тетевен') }}</p>
-            </div>
-            <div class="info-card">
-                <h3>Телефон</h3>
-                <p><a href="tel:+359886762276">+359 886 762 276</a></p>
-            </div>
-            <div class="info-card">
-                <h3>Имейл</h3>
-                <p><a href="mailto:trafcom@trafcombg.com">trafcom@trafcombg.com</a></p>
-            </div>
-        </div>
 
-        <div class="map-embed">
-            <iframe
-                src="https://www.google.com/maps?cid=14055931377762775462&output=embed"
-                loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+            <div class="map-embed">
+                <iframe
+                    src="https://www.google.com/maps?cid=14055931377762775462&output=embed"
+                    loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+            </div>
+            <div style="margin-top: 12px;">
+                <a href="https://www.google.com/maps/dir/?api=1&destination=%D1%83%D0%BB.%20%D0%92%D0%BE%D0%BB%D0%BE%D0%B2%D0%B8%D0%B9%D1%82%D0%B5%2C%205700%20%D0%B3%D1%80.%20%D0%A2%D0%B5%D1%82%D0%B5%D0%B2%D0%B5%D0%BD" target="_blank" rel="noopener" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; text-decoration: none; display: inline-block;">Упътвания &rarr;</a>
+            </div>
         </div>
     </section>
 
 </main>
 
 {% include 'partials/footer.html' %}
+{% include 'partials/sticky_cta.html' %}
 
 <script src="{{ url_for('static', filename='js/inline_edit.js') }}"></script>
 </body>

@@ -13,32 +13,41 @@
     <meta property="og:type" content="website">
     <meta property="og:locale" content="bg_BG">
     <meta property="og:site_name" content="Trafcom">
+    <meta property="og:image" content="{{ url_for('static', filename='img/favicon/android-chrome-512x512.png', _external=True) }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
-<body>
+<body class="public-page">
 {% from 'partials/editable.html' import text with context %}
 
 {% include 'partials/navbar.html' %}
+{% include 'partials/local_business_schema.html' %}
 
 <main class="dmg-container">
 
-    <section class="dmg-hero">
-        <div class="hero-tag"><span>01</span> // ИСТОРИЯ НА ФИРМАТА</div>
-        <h1 class="hero-title">ЗА <span class="text-glow">ТРАФКОМ</span> ООД</h1>
-        <p class="hero-lead">{{ text('about.hero_lead', 'Трафком ООД е основана през 1997 г. в гр. Тетевен. Първоначално фирмата произвежда трансформатори и електроника за радиотехника. От 2021 г. разполага с изцяло нов механичен цех (≈ 4 000 m²), чиято основна дейност е механична обработка на детайли.') }}</p>
+    {% set breadcrumb_label = 'За нас' %}
+    {% include 'partials/breadcrumbs.html' %}
 
-        <div class="hero-stats">
-            <div class="stat-item">
-                <span class="stat-num">1997</span>
-                <span class="stat-label">Основана в гр. Тетевен</span>
-            </div>
-            <div class="stat-item">
-                <span class="stat-num">4 000 m²</span>
-                <span class="stat-label">Механичен цех (от 2021 г.)</span>
-            </div>
-            <div class="stat-item">
-                <span class="stat-num">5-осно</span>
-                <span class="stat-label">Фрезоване и струговане</span>
+    <section class="dmg-hero">
+        <div class="hero-content">
+            <div class="hero-tag"><span>01</span> // ИСТОРИЯ НА ФИРМАТА</div>
+            <h1 class="hero-title">ЗА <span class="text-glow">ТРАФКОМ</span> ООД</h1>
+            <p class="hero-lead">{{ text('about.hero_lead', 'Трафком ООД е основана през 1997 г. в гр. Тетевен. Първоначално фирмата произвежда трансформатори и електроника за радиотехника. От 2021 г. разполага с изцяло нов механичен цех (≈ 4 000 m²), чиято основна дейност е механична обработка на детайли.') }}</p>
+
+            <a href="{{ url_for('contact') }}" class="btn-submit hero-cta">Свържете се с нас &rarr;</a>
+
+            <div class="hero-stats">
+                <div class="stat-item">
+                    <span class="stat-num">1997</span>
+                    <span class="stat-label">Основана в гр. Тетевен</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-num">4 000 m²</span>
+                    <span class="stat-label">Механичен цех (от 2021 г.)</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-num">5-осно</span>
+                    <span class="stat-label">Фрезоване и струговане</span>
+                </div>
             </div>
         </div>
     </section>
@@ -59,6 +68,10 @@
             <div class="competency-item">Огъване и формоване на листов материал</div>
             <div class="competency-item">3D измерване и контрол на качеството (CMM)</div>
             <div class="competency-item">3D лазерно сканиране и reverse engineering</div>
+        </div>
+
+        <div style="margin-top: 32px;">
+            <a href="{{ url_for('services') }}" class="btn-submit" style="padding: 12px 24px; border-radius: var(--border-radius-sm); font-weight: 600; text-decoration: none;">Вижте машинния парк &rarr;</a>
         </div>
     </section>
 
@@ -86,6 +99,7 @@
 </main>
 
 {% include 'partials/footer.html' %}
+{% include 'partials/sticky_cta.html' %}
 
 <script src="{{ url_for('static', filename='js/inline_edit.js') }}"></script>
 </body>

@@ -1,0 +1,6 @@
+{% if not current_user.is_authenticated %}
+<div class="sticky-mobile-cta">
+    <a href="tel:+359886762276" class="btn-secondary">📞 Обадете се</a>
+    <a href="{{ url_for('contact') }}" class="btn-submit">Запитване</a>
+</div>
+{% endif %}

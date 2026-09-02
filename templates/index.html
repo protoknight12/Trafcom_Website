@@ -13,12 +13,14 @@
     <meta property="og:type" content="website">
     <meta property="og:locale" content="bg_BG">
     <meta property="og:site_name" content="Trafcom">
+    <meta property="og:image" content="{{ url_for('static', filename='img/favicon/android-chrome-512x512.png', _external=True) }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
-<body>
+<body class="public-page">
 {% from 'partials/editable.html' import text with context %}
 
 {% include 'partials/navbar.html' %}
+{% include 'partials/local_business_schema.html' %}
 
 <main class="dmg-container">
 
@@ -27,6 +29,8 @@
             <div class="hero-tag"><span>01</span> // ОПТИМИЗАЦИЯ НА ПРОИЗВОДСТВОТО</div>
             <h1 class="hero-title">ИНДУСТРИАЛЕН <br><span class="text-glow">ЦПУ ПОРТАЛ</span></h1>
             <p class="hero-lead">{{ text('index.hero_lead', 'Автоматизирано изчисляване на производствени оферти и технически анализ на DXF чертежи. Системата осигурява точност при обработка на детайли и листов материал в реалния машинен парк на Трафком ООД - гр. Тетевен.') }}</p>
+
+            <a href="{{ url_for('contact') }}" class="btn-submit hero-cta">Изпратете запитване &rarr;</a>
 
             <div class="hero-stats">
                 <div class="stat-item">
@@ -124,6 +128,7 @@
 </main>
 
 {% include 'partials/footer.html' %}
+{% include 'partials/sticky_cta.html' %}
 
 <script src="{{ url_for('static', filename='js/inline_edit.js') }}"></script>
 </body>

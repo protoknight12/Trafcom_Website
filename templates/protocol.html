@@ -258,7 +258,7 @@
             <td><strong>{{ product.name }}</strong></td>
             <td class="text-center">
                 {% if product.images %}
-                    <img src="{{ url_for('static', filename='uploads/products/' ~ product.images[0].filename) }}" style="max-width: 120px; max-height: 90px; object-fit: contain; display: block; margin: 0 auto;">
+                    <img src="{{ url_for('static', filename='uploads/products/' ~ product.images[0].filename) }}" alt="{{ product.name }}" style="max-width: 120px; max-height: 90px; object-fit: contain; display: block; margin: 0 auto;">
                 {% else %}
                     <span style="color: #999; font-size: 0.75rem; font-style: italic;">Няма снимка</span>
                 {% endif %}

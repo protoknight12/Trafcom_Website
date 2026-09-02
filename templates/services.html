@@ -13,6 +13,7 @@
     <meta property="og:type" content="website">
     <meta property="og:locale" content="bg_BG">
     <meta property="og:site_name" content="Trafcom">
+    <meta property="og:image" content="{{ url_for('static', filename='img/favicon/android-chrome-512x512.png', _external=True) }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <style>
         .delete-card-btn {
@@ -27,17 +28,25 @@
         }
     </style>
 </head>
-<body>
+<body class="public-page">
 {% from 'partials/editable.html' import text with context %}
 
 {% include 'partials/navbar.html' %}
+{% include 'partials/local_business_schema.html' %}
 
 <main class="dmg-container">
 
+    {% set breadcrumb_label = 'Услуги' %}
+    {% include 'partials/breadcrumbs.html' %}
+
     <section class="dmg-hero">
-        <div class="hero-tag"><span>01</span> // МЕХАНИЧНА ОБРАБОТКА, ЛАЗЕР, ИЗМЕРВАНЕ</div>
-        <h1 class="hero-title">УСЛУГИ И <br><span class="text-glow">МАШИНЕН ПАРК</span></h1>
-        <p class="hero-lead">{{ text('services.hero_lead', 'Високоточна механична обработка на стомани, алуминиеви сплави и цветни метали, 5-осно фрезоване и многоосно струговане, лазерно рязане, огъване на листов материал и пълен контрол на качеството - на собствен машинен парк.') }}</p>
+        <div class="hero-content">
+            <div class="hero-tag"><span>01</span> // МЕХАНИЧНА ОБРАБОТКА, ЛАЗЕР, ИЗМЕРВАНЕ</div>
+            <h1 class="hero-title">УСЛУГИ И <br><span class="text-glow">МАШИНЕН ПАРК</span></h1>
+            <p class="hero-lead">{{ text('services.hero_lead', 'Високоточна механична обработка на стомани, алуминиеви сплави и цветни метали, 5-осно фрезоване и многоосно струговане, лазерно рязане, огъване на листов материал и пълен контрол на качеството - на собствен машинен парк.') }}</p>
+
+            <a href="{{ url_for('contact') }}" class="btn-submit hero-cta">Заявете оферта &rarr;</a>
+        </div>
     </section>
 
     {% for section in machine_sections %}
@@ -186,6 +195,7 @@
 </main>
 
 {% include 'partials/footer.html' %}
+{% include 'partials/sticky_cta.html' %}
 
 <script src="{{ url_for('static', filename='js/inline_edit.js') }}"></script>
 </body>

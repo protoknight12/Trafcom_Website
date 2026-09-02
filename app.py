@@ -406,7 +406,7 @@ def format_cut_dimensions(width, height, material_type):
     regardless of stock type) with vocabulary that matches the material's
     structural form: a rod/pipe's cross-section reads as a diameter, not a
     generic width. Used for Detail rows (admin_details.html) and personal
-    DxfFile upload history (dashboard.html) - both list mixed material types
+    DxfFile upload history (library.html) - both list mixed material types
     in one flat table, so this is a per-row label, not a column header.
     """
     if width is None or height is None:
@@ -3011,7 +3011,7 @@ def sanitize_display_filename(filename):
     Strips characters that could enable HTML/JS injection if this filename
     is later rendered in a template, while preserving the user-visible name
     otherwise. Defense in depth: templates must still escape this value
-    correctly for whatever context they place it in (see dashboard.html's
+    correctly for whatever context they place it in (see library.html's
     data-filename attribute), but a stored value that's already free of
     quotes/angle-brackets/control-chars can't be used to break out of any
     context in the first place.
@@ -3087,7 +3087,7 @@ def dashboard():
     user_uploads = DxfFile.query.filter_by(user_id=current_user.id).order_by(DxfFile.id.desc()).all()
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     services = Service.query.order_by(Service.name).all()
-    return render_template('dashboard.html', uploads=user_uploads, materials=materials, services=services, active_page='dashboard')
+    return render_template('library.html', uploads=user_uploads, materials=materials, services=services, active_page='dashboard')
 
 
 @app.route('/geometry/<int:file_id>')
@@ -7141,7 +7141,14 @@ def delete_dxf_file(file_id):
 def delete_all_dxf_files():
     """Deletes every DXF upload in the current user's own library."""
     try:
-        deleted = DxfFile.query.filter_by(user_id=current_user.id).delete()
+        # Load-then-delete (not a bulk .delete() query) so the ORM also
+        # clears each file's dxf_file_service association rows - a bulk
+        # delete issues a raw DELETE FROM dxf_file and skips that, which
+        # violates the FK when any file is linked to a Service.
+        files = DxfFile.query.filter_by(user_id=current_user.id).all()
+        deleted = len(files)
+        for dxf_file in files:
+            db.session.delete(dxf_file)
         db.session.commit()
         log_action(f'Изтрити {deleted} DXF файл(а) от личната библиотека')
         flash(f'Изтрити бяха {deleted} файл(а) от библиотеката.', 'success')
