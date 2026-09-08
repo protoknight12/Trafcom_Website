@@ -770,24 +770,24 @@ msgid "Плътност: Долу -> Горе"
 msgstr "Density: Bottom to Top"
 
 #: templates/generator.html:247
-msgid "Плътна Зона (%)"
-msgstr "Dense Zone (%)"
+msgid "Плътна Зона (%%)"
+msgstr "Dense Zone (%%)"
 
 #: templates/generator.html:249
 msgid "Крива (Falloff)"
 msgstr "Curve (Falloff)"
 
 #: templates/generator.html:251
-msgid "Празнота (Sparseness %)"
-msgstr "Sparseness (%)"
+msgid "Празнота (Sparseness %%)"
+msgstr "Sparseness (%%)"
 
 #: templates/generator.html:253
-msgid "Разпръскване (Jitter %)"
-msgstr "Jitter (%)"
+msgid "Разпръскване (Jitter %%)"
+msgstr "Jitter (%%)"
 
 #: templates/generator.html:255
-msgid "Горна Случайност (%)"
-msgstr "Top Randomness (%)"
+msgid "Горна Случайност (%%)"
+msgstr "Top Randomness (%%)"
 
 #: templates/generator.html:260
 msgid "Изтегли DXF Модел"

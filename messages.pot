@@ -752,7 +752,7 @@ msgid "Плътност: Долу -> Горе"
 msgstr ""
 
 #: templates/generator.html:247
-msgid "Плътна Зона (%)"
+msgid "Плътна Зона (%%)"
 msgstr ""
 
 #: templates/generator.html:249
@@ -760,15 +760,15 @@ msgid "Крива (Falloff)"
 msgstr ""
 
 #: templates/generator.html:251
-msgid "Празнота (Sparseness %)"
+msgid "Празнота (Sparseness %%)"
 msgstr ""
 
 #: templates/generator.html:253
-msgid "Разпръскване (Jitter %)"
+msgid "Разпръскване (Jitter %%)"
 msgstr ""
 
 #: templates/generator.html:255
-msgid "Горна Случайност (%)"
+msgid "Горна Случайност (%%)"
 msgstr ""
 
 #: templates/generator.html:260
