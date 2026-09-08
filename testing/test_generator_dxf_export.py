@@ -85,3 +85,30 @@ def test_produces_valid_dxf_with_holes(client):
     # 1 border + 1 circle + 1 hexagon + 3 hexcluster rhombi = 6 entities
     assert len(msp) == 6
     assert doc.audit().errors == []
+
+
+def test_produces_valid_dxf_with_slot_holes(client):
+    """The 'slot' hole type (vertical rounded slots, the 'Дъжд' pattern
+    added alongside the honeycomb generator) carries a `length` in addition
+    to `size` (its width) - guards that it's read and turned into a closed,
+    valid polygon rather than silently falling back to a plain circle."""
+    holes = [
+        {'x': 20, 'y': 50, 'size': 6, 'length': 80, 'rot': 0, 'type': 'slot'},
+        {'x': 40, 'y': 50, 'size': 6, 'rot': 0, 'type': 'slot'},  # missing length -> falls back to a circle-sized slot
+    ]
+    res = client.post('/api/generator/dxf', json={'width': 60, 'height': 100, 'holes': holes})
+    assert res.status_code == 200
+
+    doc = ezdxf.read(io.StringIO(res.get_data(as_text=True)))
+    msp = doc.modelspace()
+    # 1 border + 2 slot polygons = 3 entities
+    assert len(msp) == 3
+    assert doc.audit().errors == []
+
+    entities = list(msp)
+    slot_with_length = entities[1].get_points('xy')
+    xs = [p[0] for p in slot_with_length]
+    ys = [p[1] for p in slot_with_length]
+    # width 6 -> radius 3 either side of x=20; length 80 -> caps reach y=10..90
+    assert min(xs) == pytest.approx(17, abs=0.01) and max(xs) == pytest.approx(23, abs=0.01)
+    assert min(ys) == pytest.approx(10, abs=0.01) and max(ys) == pytest.approx(90, abs=0.01)

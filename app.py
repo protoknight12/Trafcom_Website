@@ -4281,12 +4281,35 @@ def api_generator_presets_delete(preset_id):
     return jsonify({'status': 'success'})
 
 
-def _generator_hole_polygon(hole_type, rad):
+def _generator_stadium_loop(r, hl, segments=10):
     """
-    Same shape-outline math as shapeOutlineLoops()/buildDxfString() in
-    templates/generator.html, kept in sync by hand since it's static
-    per-shape geometry (not the randomized layout, which stays client-side).
-    Returns a list of point-loops - more than one only for 'hexcluster'.
+    Point loop for a vertical "stadium"/slot shape (rectangle with two
+    semicircular end caps, width 2r, straight-side half-length hl) - the
+    Python mirror of stadiumLoop() in templates/generator.html. Used for the
+    'slot' hole type (the "Дъжд" pattern's vertical rain-drop-style cuts),
+    polygonized like every other non-circle shape here rather than emitted
+    as true arcs, for consistency with the rest of this function.
+    """
+    pts = [(r, -hl), (r, hl)]
+    for i in range(1, segments):
+        a = math.pi * i / segments
+        pts.append((r * math.cos(a), hl + r * math.sin(a)))
+    pts.append((-r, hl))
+    pts.append((-r, -hl))
+    for i in range(1, segments):
+        a = math.pi + math.pi * i / segments
+        pts.append((r * math.cos(a), -hl + r * math.sin(a)))
+    return pts
+
+
+def _generator_hole_polygon(hole_type, rad, length=None):
+    """
+    Same shape-outline math as shapeOutlineLoops() in templates/generator.html,
+    kept in sync by hand since it's static per-shape geometry (not the
+    randomized layout, which stays client-side). Returns a list of
+    point-loops - more than one only for 'hexcluster'. `length` is only used
+    by 'slot' (the full end-to-end slot length, cap-to-cap; falls back to
+    2*rad - a plain circle - when omitted).
     """
     if hole_type == 'square':
         return [[(-rad, -rad), (rad, -rad), (rad, rad), (-rad, rad)]]
@@ -4296,6 +4319,9 @@ def _generator_hole_polygon(hole_type, rad):
         return [[(0, -rad), (rad * 0.866, rad / 2), (-rad * 0.866, rad / 2)]]
     if hole_type == 'rhombus':
         return [[(0, -rad), (rad / 1.5, 0), (0, rad), (-rad / 1.5, 0)]]
+    if hole_type == 'slot':
+        hl = max(0.0, ((length if length is not None else rad * 2) - rad * 2) / 2)
+        return [_generator_stadium_loop(rad, hl)]
     if hole_type == 'hexcluster':
         shrink = 0.88
         r = rad * 2 / (1 + shrink)
@@ -4342,8 +4368,12 @@ def api_generator_dxf():
         if hole.get('type') == 'circle':
             msp.add_circle((hx, hy), rad)
             continue
+        try:
+            hole_length = float(hole['length']) if hole.get('length') is not None else None
+        except (TypeError, ValueError):
+            hole_length = None
         cos_r, sin_r = math.cos(rot), math.sin(rot)
-        for loop in _generator_hole_polygon(hole.get('type'), rad):
+        for loop in _generator_hole_polygon(hole.get('type'), rad, hole_length):
             pts = [(hx + x * cos_r - y * sin_r, hy + x * sin_r + y * cos_r) for x, y in loop]
             if pts:
                 msp.add_lwpolyline(pts, close=True)

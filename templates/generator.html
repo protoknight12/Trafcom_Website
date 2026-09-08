@@ -140,6 +140,22 @@
             box-shadow: 0 10px 40px rgba(0,0,0,0.5);
             max-width: 90%;
             max-height: 90%;
+            position: relative;
+            z-index: 1;
+        }
+        /* Only goes transparent while a background photo is active (see
+           has-bg-image below) - otherwise the neutral panel color above
+           stays, so nothing changes when no photo is loaded. */
+        canvas.has-bg-image {
+            background: transparent;
+        }
+        .preview-bg-layer {
+            position: absolute;
+            inset: 0;
+            background-size: cover;
+            background-position: center;
+            z-index: 0;
+            display: none;
         }
         .stats-overlay {
             position: absolute;
@@ -215,47 +231,101 @@
             <input type="range" id="in-height" min="100" max="3000" value="1900">
             <div class="slider-row"><span class="slider-label">{{ _('Дебелина (mm)') }}</span><input type="number" class="slider-num" id="num-thickness" min="0.1" max="5" step="0.1" value="2"></div>
             <input type="range" id="in-thickness" min="0.1" max="5" step="0.1" value="2">
-
-            <div class="control-group-title">{{ _('Геометрия (Изберете няколко)') }}</div>
-            <div class="shape-selector" id="shape-selector">
-                <div class="shape-btn active" data-shape="hexagon">Hexagon</div>
-                <div class="shape-btn" data-shape="circle">Circle</div>
-                <div class="shape-btn" data-shape="square">Square</div>
-                <div class="shape-btn" data-shape="triangle">Triangle</div>
-                <div class="shape-btn" data-shape="rhombus">Rhombus</div>
-                <div class="shape-btn" data-shape="hexcluster">Hex Cluster</div>
-            </div>
-
-            <div class="slider-row"><span class="slider-label">{{ _('Макс. Отвор (mm)') }}</span><input type="number" class="slider-num" id="num-cellsize" min="10" max="150" value="72"></div>
-            <input type="range" id="in-cellsize" min="10" max="150" value="72">
-            <div class="slider-row"><span class="slider-label">{{ _('Мин. Отвор (mm)') }}</span><input type="number" class="slider-num" id="num-minsize" min="10" max="150" value="10"></div>
-            <input type="range" id="in-minsize" min="10" max="150" value="10">
-            <div class="slider-row"><span class="slider-label">{{ _('Луфт (Spacing mm)') }}</span><input type="number" class="slider-num" id="num-spacing" min="0.1" max="30" step="0.1" value="6"></div>
-            <input type="range" id="in-spacing" min="0.1" max="30" step="0.1" value="6">
-            <div class="slider-row"><span class="slider-label">{{ _('Ротация (°)') }}</span><input type="number" class="slider-num" id="num-rotation" min="0" max="180" value="0"></div>
-            <input type="range" id="in-rotation" min="0" max="180" value="0">
-            <div class="slider-row"><span class="slider-label">{{ _('Рамка (Border mm)') }}</span><input type="number" class="slider-num" id="num-border" min="0" max="200" value="30"></div>
-            <input type="range" id="in-border" min="0" max="200" value="30">
-
-            <div class="control-group-title">{{ _('Градиент & Органичност') }}</div>
-            <div class="form-group" style="margin-bottom: 12px;">
-                <select id="in-direction" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-color); color: #fff; padding: 8px; border-radius: 4px;">
-                    <option value="top-bottom">{{ _('Плътност: Горе -> Долу') }}</option>
-                    <option value="bottom-top">{{ _('Плътност: Долу -> Горе') }}</option>
+            <div class="slider-row"><span class="slider-label">{{ _('Цвят по RAL') }}</span></div>
+            <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 16px;">
+                <div id="ral-swatch" style="width: 38px; height: 38px; border-radius: 4px; border: 1px solid var(--border-color); flex-shrink: 0; background: #475569;"></div>
+                <select id="in-ralcolor" style="flex: 1; min-width: 0; background: var(--bg-input); border: 1px solid var(--border-color); color: #fff; padding: 8px; border-radius: 4px;">
+                    <option value="">{{ _('По подразбиране (неутрален)') }}</option>
                 </select>
             </div>
-            <div class="slider-row"><span class="slider-label">{{ _('Плътна Зона (%)') }}</span><input type="number" class="slider-num" id="num-densezone" min="0" max="80" value="18"></div>
-            <input type="range" id="in-densezone" min="0" max="80" value="18">
-            <div class="slider-row"><span class="slider-label">{{ _('Крива (Falloff)') }}</span><input type="number" class="slider-num" id="num-falloff" min="0.5" max="6.0" step="0.1" value="2.4"></div>
-            <input type="range" id="in-falloff" min="0.5" max="6.0" step="0.1" value="2.4">
-            <div class="slider-row"><span class="slider-label">{{ _('Празнота (Sparseness %)') }}</span><input type="number" class="slider-num" id="num-sparseness" min="0" max="100" value="92"></div>
-            <input type="range" id="in-sparseness" min="0" max="100" value="92">
-            <div class="slider-row"><span class="slider-label">{{ _('Разпръскване (Jitter %)') }}</span><input type="number" class="slider-num" id="num-jitter" min="0" max="50" value="5"></div>
-            <input type="range" id="in-jitter" min="0" max="50" value="5">
-            <div class="slider-row"><span class="slider-label">{{ _('Горна Случайност (%)') }}</span><input type="number" class="slider-num" id="num-randomness" min="0" max="50" value="8"></div>
-            <input type="range" id="in-randomness" min="0" max="50" value="8">
+
+            <div class="control-group-title">{{ _('Общи') }}</div>
+            <div class="slider-row"><span class="slider-label">{{ _('Рамка (Border mm)') }}</span><input type="number" class="slider-num" id="num-border" min="0" max="200" value="30"></div>
+            <input type="range" id="in-border" min="0" max="200" value="30">
             <div class="slider-row"><span class="slider-label">Random Seed</span><input type="number" class="slider-num" id="num-seed" min="1" max="9999" value="7341"></div>
             <input type="range" id="in-seed" min="1" max="9999" value="7341">
+
+            <div class="control-group-title">{{ _('Тип шарка') }}</div>
+            <div class="shape-selector" id="pattern-mode-selector" style="grid-template-columns: 1fr 1fr 1fr;">
+                <div class="shape-btn active" data-mode="honeycomb">{{ _('Пчелна пита') }}</div>
+                <div class="shape-btn" data-mode="rain">{{ _('Дъжд') }}</div>
+                <div class="shape-btn" data-mode="mosaic">{{ _('Мозайка') }}</div>
+            </div>
+
+            <div id="honeycomb-shape-controls">
+                <div class="control-group-title">{{ _('Геометрия (Изберете няколко)') }}</div>
+                <div class="shape-selector" id="shape-selector">
+                    <div class="shape-btn active" data-shape="hexagon">Hexagon</div>
+                    <div class="shape-btn" data-shape="circle">Circle</div>
+                    <div class="shape-btn" data-shape="square">Square</div>
+                    <div class="shape-btn" data-shape="triangle">Triangle</div>
+                    <div class="shape-btn" data-shape="rhombus">Rhombus</div>
+                    <div class="shape-btn" data-shape="hexcluster">Hex Cluster</div>
+                </div>
+
+                <div class="slider-row"><span class="slider-label">{{ _('Макс. Отвор (mm)') }}</span><input type="number" class="slider-num" id="num-cellsize" min="10" max="150" value="72"></div>
+                <input type="range" id="in-cellsize" min="10" max="150" value="72">
+                <div class="slider-row"><span class="slider-label">{{ _('Мин. Отвор (mm)') }}</span><input type="number" class="slider-num" id="num-minsize" min="10" max="150" value="10"></div>
+                <input type="range" id="in-minsize" min="10" max="150" value="10">
+                <div class="slider-row"><span class="slider-label">{{ _('Луфт (Spacing mm)') }}</span><input type="number" class="slider-num" id="num-spacing" min="0.1" max="30" step="0.1" value="6"></div>
+                <input type="range" id="in-spacing" min="0.1" max="30" step="0.1" value="6">
+                <div class="slider-row"><span class="slider-label">{{ _('Ротация (°)') }}</span><input type="number" class="slider-num" id="num-rotation" min="0" max="180" value="0"></div>
+                <input type="range" id="in-rotation" min="0" max="180" value="0">
+            </div>
+
+            <div id="honeycomb-gradient-controls">
+                <div class="control-group-title">{{ _('Градиент & Органичност') }}</div>
+                <div class="form-group" style="margin-bottom: 12px;">
+                    <select id="in-direction" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-color); color: #fff; padding: 8px; border-radius: 4px;">
+                        <option value="top-bottom">{{ _('Плътност: Горе -> Долу') }}</option>
+                        <option value="bottom-top">{{ _('Плътност: Долу -> Горе') }}</option>
+                    </select>
+                </div>
+                <div class="slider-row"><span class="slider-label">{{ _('Плътна Зона (%%)') }}</span><input type="number" class="slider-num" id="num-densezone" min="0" max="80" value="18"></div>
+                <input type="range" id="in-densezone" min="0" max="80" value="18">
+                <div class="slider-row"><span class="slider-label">{{ _('Крива (Falloff)') }}</span><input type="number" class="slider-num" id="num-falloff" min="0.5" max="6.0" step="0.1" value="2.4"></div>
+                <input type="range" id="in-falloff" min="0.5" max="6.0" step="0.1" value="2.4">
+                <div class="slider-row"><span class="slider-label">{{ _('Празнота (Sparseness %%)') }}</span><input type="number" class="slider-num" id="num-sparseness" min="0" max="100" value="92"></div>
+                <input type="range" id="in-sparseness" min="0" max="100" value="92">
+                <div class="slider-row"><span class="slider-label">{{ _('Разпръскване (Jitter %%)') }}</span><input type="number" class="slider-num" id="num-jitter" min="0" max="50" value="5"></div>
+                <input type="range" id="in-jitter" min="0" max="50" value="5">
+                <div class="slider-row"><span class="slider-label">{{ _('Горна Случайност (%%)') }}</span><input type="number" class="slider-num" id="num-randomness" min="0" max="50" value="8"></div>
+                <input type="range" id="in-randomness" min="0" max="50" value="8">
+            </div>
+
+            <div id="rain-controls" style="display: none;">
+                <div class="control-group-title">{{ _('Дъжд - Прорези') }}</div>
+                <div class="shape-selector" id="rain-orientation-selector">
+                    <div class="shape-btn active" data-orientation="vertical">{{ _('Вертикално') }}</div>
+                    <div class="shape-btn" data-orientation="horizontal">{{ _('Хоризонтално') }}</div>
+                </div>
+                <div class="slider-row"><span class="slider-label">{{ _('Ширина на прорез (mm)') }}</span><input type="number" class="slider-num" id="num-rainwidth" min="2" max="60" value="6"></div>
+                <input type="range" id="in-rainwidth" min="2" max="60" value="6">
+                <div class="slider-row"><span class="slider-label">{{ _('Мин. дължина (mm)') }}</span><input type="number" class="slider-num" id="num-rainminlen" min="5" max="800" value="30"></div>
+                <input type="range" id="in-rainminlen" min="5" max="800" value="30">
+                <div class="slider-row"><span class="slider-label">{{ _('Макс. дължина (mm)') }}</span><input type="number" class="slider-num" id="num-rainmaxlen" min="5" max="1200" value="180"></div>
+                <input type="range" id="in-rainmaxlen" min="5" max="1200" value="180">
+                <div class="slider-row"><span class="slider-label">{{ _('Разст. между колони (mm)') }}</span><input type="number" class="slider-num" id="num-raingap" min="0.5" max="80" step="0.5" value="8"></div>
+                <input type="range" id="in-raingap" min="0.5" max="80" step="0.5" value="8">
+                <div class="slider-row"><span class="slider-label">{{ _('Вертикален луфт (mm)') }}</span><input type="number" class="slider-num" id="num-rainvgap" min="0" max="100" value="6"></div>
+                <input type="range" id="in-rainvgap" min="0" max="100" value="6">
+                <div class="slider-row"><span class="slider-label">{{ _('Плътност (%%)') }}</span><input type="number" class="slider-num" id="num-raindensity" min="10" max="100" value="85"></div>
+                <input type="range" id="in-raindensity" min="10" max="100" value="85">
+                <div class="slider-row"><span class="slider-label">{{ _('Разместване на колони (%%)') }}</span><input type="number" class="slider-num" id="num-rainstagger" min="0" max="100" value="30"></div>
+                <input type="range" id="in-rainstagger" min="0" max="100" value="30">
+            </div>
+
+            <div id="mosaic-controls" style="display: none;">
+                <div class="control-group-title">{{ _('Мозайка - Квадрати') }}</div>
+                <div class="slider-row"><span class="slider-label">{{ _('Макс. квадрат (mm)') }}</span><input type="number" class="slider-num" id="num-mosaicmax" min="20" max="200" value="90"></div>
+                <input type="range" id="in-mosaicmax" min="20" max="200" value="90">
+                <div class="slider-row"><span class="slider-label">{{ _('Мин. квадрат (mm)') }}</span><input type="number" class="slider-num" id="num-mosaicmin" min="5" max="100" value="15"></div>
+                <input type="range" id="in-mosaicmin" min="5" max="100" value="15">
+                <div class="slider-row"><span class="slider-label">{{ _('Луфт между квадрати (mm)') }}</span><input type="number" class="slider-num" id="num-mosaicgap" min="0.5" max="30" step="0.5" value="4"></div>
+                <input type="range" id="in-mosaicgap" min="0.5" max="30" step="0.5" value="4">
+                <div class="slider-row"><span class="slider-label">{{ _('Плътност на запълване (%%)') }}</span><input type="number" class="slider-num" id="num-mosaicdensity" min="10" max="100" value="70"></div>
+                <input type="range" id="in-mosaicdensity" min="10" max="100" value="70">
+            </div>
 
             <button id="btn-download" class="btn-submit" style="width: 100%; margin-top: 20px;">{{ _('Изтегли DXF Модел') }}</button>
 
@@ -279,7 +349,11 @@
             <div class="view-toggle" id="view-toggle">
                 <button type="button" class="view-toggle-btn active" data-view="2d">2D</button>
                 <button type="button" class="view-toggle-btn" data-view="3d">3D</button>
+                <input type="file" id="in-bgimage" accept="image/*" style="display: none;">
+                <button type="button" id="btn-bg-upload" class="view-toggle-btn">{{ _('+ Фон') }}</button>
+                <button type="button" id="btn-bg-clear" class="view-toggle-btn" style="display: none;">{{ _('✕ Фон') }}</button>
             </div>
+            <div class="preview-bg-layer" id="preview-bg-layer"></div>
             <canvas id="genCanvas"></canvas>
             <div class="stats-overlay">
                 <div class="stat-line"><span>{{ _('Панел') }}</span><span id="stat-panel">0 x 0 mm</span></div>
@@ -307,24 +381,223 @@
     let selectedShapes = ['hexagon'];
     let generatedHoles = [];
     let viewMode = '2d';
+    let patternMode = 'honeycomb';
+    let rainOrientation = 'vertical';
 
-    document.querySelectorAll('.view-toggle-btn').forEach(btn => {
+    // RAL Classic reference palette (standard sRGB approximations of the
+    // official powder-coat swatches) - only used to color the preview, this
+    // never reaches the DXF export (cutting geometry has no color).
+    const RAL_COLORS = [
+        { code: '1000', name: 'Green beige', hex: '#BEBD7F' }, { code: '1001', name: 'Beige', hex: '#C2B078' },
+        { code: '1002', name: 'Sand yellow', hex: '#C6A664' }, { code: '1003', name: 'Signal yellow', hex: '#E5BE01' },
+        { code: '1004', name: 'Golden yellow', hex: '#CDA434' }, { code: '1005', name: 'Honey yellow', hex: '#A98307' },
+        { code: '1006', name: 'Maize yellow', hex: '#E4A010' }, { code: '1007', name: 'Daffodil yellow', hex: '#DC9D00' },
+        { code: '1011', name: 'Brown beige', hex: '#8A6642' }, { code: '1012', name: 'Lemon yellow', hex: '#C7B446' },
+        { code: '1013', name: 'Oyster white', hex: '#EAE6CA' }, { code: '1014', name: 'Ivory', hex: '#DFC98A' },
+        { code: '1015', name: 'Light ivory', hex: '#E6D690' }, { code: '1016', name: 'Sulfur yellow', hex: '#EDFF21' },
+        { code: '1017', name: 'Saffron yellow', hex: '#F5D033' }, { code: '1018', name: 'Zinc yellow', hex: '#F8F32B' },
+        { code: '1019', name: 'Grey beige', hex: '#9E9764' }, { code: '1020', name: 'Olive yellow', hex: '#999950' },
+        { code: '1021', name: 'Rape yellow', hex: '#F3DA0B' }, { code: '1023', name: 'Traffic yellow', hex: '#FAD201' },
+        { code: '1024', name: 'Ochre yellow', hex: '#AEA04B' }, { code: '1027', name: 'Curry', hex: '#9D9101' },
+        { code: '1028', name: 'Melon yellow', hex: '#FFCA06' }, { code: '1032', name: 'Broom yellow', hex: '#E2B007' },
+        { code: '1033', name: 'Dahlia yellow', hex: '#F9A800' }, { code: '1034', name: 'Pastel yellow', hex: '#EDAB56' },
+        { code: '1035', name: 'Pearl beige', hex: '#C8A882' }, { code: '1037', name: 'Sun yellow', hex: '#FFC300' },
+        { code: '2000', name: 'Yellow orange', hex: '#ED760E' }, { code: '2001', name: 'Red orange', hex: '#C93C20' },
+        { code: '2002', name: 'Vermilion', hex: '#CB2821' }, { code: '2003', name: 'Pastel orange', hex: '#FF7514' },
+        { code: '2004', name: 'Pure orange', hex: '#F44611' }, { code: '2005', name: 'Luminous orange', hex: '#FF2301' },
+        { code: '2007', name: 'Luminous bright orange', hex: '#FFA420' }, { code: '2008', name: 'Bright red orange', hex: '#F75E25' },
+        { code: '2009', name: 'Traffic orange', hex: '#F54021' }, { code: '2010', name: 'Signal orange', hex: '#D84B20' },
+        { code: '2011', name: 'Deep orange', hex: '#EC7C26' }, { code: '2012', name: 'Salmon orange', hex: '#E55137' },
+        { code: '2013', name: 'Pearl orange', hex: '#9C381F' },
+        { code: '3000', name: 'Flame red', hex: '#AF2B1E' }, { code: '3001', name: 'Signal red', hex: '#A52019' },
+        { code: '3002', name: 'Carmine red', hex: '#A2231D' }, { code: '3003', name: 'Ruby red', hex: '#9B111E' },
+        { code: '3004', name: 'Purple red', hex: '#75151E' }, { code: '3005', name: 'Wine red', hex: '#5E2129' },
+        { code: '3007', name: 'Black red', hex: '#412227' }, { code: '3009', name: 'Oxide red', hex: '#642424' },
+        { code: '3011', name: 'Brown red', hex: '#781F19' }, { code: '3012', name: 'Beige red', hex: '#C1876B' },
+        { code: '3013', name: 'Tomato red', hex: '#A12312' }, { code: '3014', name: 'Antique pink', hex: '#D36E70' },
+        { code: '3015', name: 'Light pink', hex: '#EA899A' }, { code: '3016', name: 'Coral red', hex: '#B32821' },
+        { code: '3017', name: 'Rose', hex: '#E63244' }, { code: '3018', name: 'Strawberry red', hex: '#D53032' },
+        { code: '3020', name: 'Traffic red', hex: '#CC0605' }, { code: '3022', name: 'Salmon pink', hex: '#D95030' },
+        { code: '3024', name: 'Luminous red', hex: '#F80000' }, { code: '3027', name: 'Raspberry red', hex: '#C51D34' },
+        { code: '3028', name: 'Pure red', hex: '#CC0605' }, { code: '3031', name: 'Orient red', hex: '#B32428' },
+        { code: '3032', name: 'Pearl ruby red', hex: '#721422' }, { code: '3033', name: 'Pearl pink', hex: '#B44C43' },
+        { code: '4001', name: 'Red lilac', hex: '#6D3F5B' }, { code: '4002', name: 'Red violet', hex: '#922B3E' },
+        { code: '4003', name: 'Heather violet', hex: '#DE4C8A' }, { code: '4004', name: 'Claret violet', hex: '#641C34' },
+        { code: '4005', name: 'Blue lilac', hex: '#6C4675' }, { code: '4006', name: 'Traffic purple', hex: '#A03472' },
+        { code: '4007', name: 'Purple violet', hex: '#4A192C' }, { code: '4008', name: 'Signal violet', hex: '#924E7D' },
+        { code: '4009', name: 'Pastel violet', hex: '#A18594' }, { code: '4010', name: 'Telemagenta', hex: '#CF3476' },
+        { code: '4011', name: 'Pearl violet', hex: '#8673A1' }, { code: '4012', name: 'Pearl blackberry', hex: '#6C6874' },
+        { code: '5000', name: 'Violet blue', hex: '#354D73' }, { code: '5001', name: 'Green blue', hex: '#1F3438' },
+        { code: '5002', name: 'Ultramarine blue', hex: '#20214F' }, { code: '5003', name: 'Sapphire blue', hex: '#1D1E33' },
+        { code: '5004', name: 'Black blue', hex: '#18171C' }, { code: '5005', name: 'Signal blue', hex: '#1E2460' },
+        { code: '5007', name: 'Brilliant blue', hex: '#3E5F8A' }, { code: '5008', name: 'Grey blue', hex: '#26252D' },
+        { code: '5009', name: 'Azure blue', hex: '#025669' }, { code: '5010', name: 'Gentian blue', hex: '#0E294B' },
+        { code: '5011', name: 'Steel blue', hex: '#231A24' }, { code: '5012', name: 'Light blue', hex: '#3B83BD' },
+        { code: '5013', name: 'Cobalt blue', hex: '#1E213D' }, { code: '5014', name: 'Pigeon blue', hex: '#606E8C' },
+        { code: '5015', name: 'Sky blue', hex: '#2271B3' }, { code: '5017', name: 'Traffic blue', hex: '#063971' },
+        { code: '5018', name: 'Turquoise blue', hex: '#3F888F' }, { code: '5019', name: 'Capri blue', hex: '#1B5583' },
+        { code: '5020', name: 'Ocean blue', hex: '#1D334A' }, { code: '5021', name: 'Water blue', hex: '#256D7B' },
+        { code: '5022', name: 'Night blue', hex: '#252850' }, { code: '5023', name: 'Distant blue', hex: '#49678D' },
+        { code: '5024', name: 'Pastel blue', hex: '#5D9B9B' }, { code: '5025', name: 'Pearl gentian blue', hex: '#2A6478' },
+        { code: '5026', name: 'Pearl night blue', hex: '#102C54' },
+        { code: '6000', name: 'Patina green', hex: '#327662' }, { code: '6001', name: 'Emerald green', hex: '#287233' },
+        { code: '6002', name: 'Leaf green', hex: '#2D572C' }, { code: '6003', name: 'Olive green', hex: '#424632' },
+        { code: '6004', name: 'Blue green', hex: '#1F3A3D' }, { code: '6005', name: 'Moss green', hex: '#2F4538' },
+        { code: '6006', name: 'Grey olive', hex: '#3E3B32' }, { code: '6007', name: 'Bottle green', hex: '#343B29' },
+        { code: '6008', name: 'Brown green', hex: '#39352A' }, { code: '6009', name: 'Fir green', hex: '#31372B' },
+        { code: '6010', name: 'Grass green', hex: '#35682D' }, { code: '6011', name: 'Reseda green', hex: '#587246' },
+        { code: '6012', name: 'Black green', hex: '#343E40' }, { code: '6013', name: 'Reed green', hex: '#6C7156' },
+        { code: '6014', name: 'Yellow olive', hex: '#47402E' }, { code: '6015', name: 'Black olive', hex: '#3B3C36' },
+        { code: '6016', name: 'Turquoise green', hex: '#1E5945' }, { code: '6017', name: 'May green', hex: '#4C9141' },
+        { code: '6018', name: 'Yellow green', hex: '#57A639' }, { code: '6019', name: 'Pastel green', hex: '#BDECB6' },
+        { code: '6020', name: 'Chrome green', hex: '#2E3A23' }, { code: '6021', name: 'Pale green', hex: '#89AC76' },
+        { code: '6022', name: 'Olive drab', hex: '#25221B' }, { code: '6024', name: 'Traffic green', hex: '#308446' },
+        { code: '6025', name: 'Fern green', hex: '#3D642D' }, { code: '6026', name: 'Opal green', hex: '#015D52' },
+        { code: '6027', name: 'Light green', hex: '#84C3BE' }, { code: '6028', name: 'Pine green', hex: '#2C5545' },
+        { code: '6029', name: 'Mint green', hex: '#20603D' }, { code: '6032', name: 'Signal green', hex: '#317F43' },
+        { code: '6033', name: 'Mint turquoise', hex: '#497E76' }, { code: '6034', name: 'Pastel turquoise', hex: '#7FB5B5' },
+        { code: '6037', name: 'Pure green', hex: '#008F39' }, { code: '6038', name: 'Luminous green', hex: '#00BB2D' },
+        { code: '7000', name: 'Squirrel grey', hex: '#78858B' }, { code: '7001', name: 'Silver grey', hex: '#8A9597' },
+        { code: '7002', name: 'Olive grey', hex: '#7E7B52' }, { code: '7003', name: 'Moss grey', hex: '#6C7059' },
+        { code: '7004', name: 'Signal grey', hex: '#969992' }, { code: '7005', name: 'Mouse grey', hex: '#646B63' },
+        { code: '7006', name: 'Beige grey', hex: '#6D6552' }, { code: '7008', name: 'Khaki grey', hex: '#6A5F31' },
+        { code: '7009', name: 'Green grey', hex: '#4D5645' }, { code: '7010', name: 'Tarpaulin grey', hex: '#4C514A' },
+        { code: '7011', name: 'Iron grey', hex: '#434B4D' }, { code: '7012', name: 'Basalt grey', hex: '#4E5754' },
+        { code: '7013', name: 'Brown grey', hex: '#464531' }, { code: '7015', name: 'Slate grey', hex: '#434750' },
+        { code: '7016', name: 'Anthracite grey', hex: '#293133' }, { code: '7021', name: 'Black grey', hex: '#23282B' },
+        { code: '7022', name: 'Umbra grey', hex: '#332F2C' }, { code: '7023', name: 'Concrete grey', hex: '#686C5E' },
+        { code: '7024', name: 'Graphite grey', hex: '#474A51' }, { code: '7026', name: 'Granite grey', hex: '#2F353B' },
+        { code: '7030', name: 'Stone grey', hex: '#8B8C7A' }, { code: '7031', name: 'Blue grey', hex: '#474B4E' },
+        { code: '7032', name: 'Pebble grey', hex: '#B8B799' }, { code: '7033', name: 'Cement grey', hex: '#7D8471' },
+        { code: '7034', name: 'Yellow grey', hex: '#8F8B66' }, { code: '7035', name: 'Light grey', hex: '#D7D7D7' },
+        { code: '7036', name: 'Platinum grey', hex: '#7F7679' }, { code: '7037', name: 'Dusty grey', hex: '#7D7F7D' },
+        { code: '7038', name: 'Agate grey', hex: '#B5B8B1' }, { code: '7039', name: 'Quartz grey', hex: '#6C6960' },
+        { code: '7040', name: 'Window grey', hex: '#9DA1AA' }, { code: '7042', name: 'Traffic grey A', hex: '#8D948D' },
+        { code: '7043', name: 'Traffic grey B', hex: '#4E5451' }, { code: '7044', name: 'Silk grey', hex: '#CAC4B0' },
+        { code: '7045', name: 'Telegrey 1', hex: '#909090' }, { code: '7046', name: 'Telegrey 2', hex: '#82898F' },
+        { code: '7047', name: 'Telegrey 4', hex: '#D0D0D0' }, { code: '7048', name: 'Pearl mouse grey', hex: '#898176' },
+        { code: '8000', name: 'Green brown', hex: '#826C34' }, { code: '8001', name: 'Ochre brown', hex: '#955F20' },
+        { code: '8002', name: 'Signal brown', hex: '#6C3B2A' }, { code: '8003', name: 'Clay brown', hex: '#734222' },
+        { code: '8004', name: 'Copper brown', hex: '#8E402A' }, { code: '8007', name: 'Fawn brown', hex: '#59351F' },
+        { code: '8008', name: 'Olive brown', hex: '#6F4F28' }, { code: '8011', name: 'Nut brown', hex: '#8F4E35' },
+        { code: '8012', name: 'Red brown', hex: '#5A2F27' }, { code: '8014', name: 'Sepia brown', hex: '#382C1E' },
+        { code: '8015', name: 'Chestnut brown', hex: '#633A34' }, { code: '8016', name: 'Mahogany brown', hex: '#4C2B20' },
+        { code: '8017', name: 'Chocolate brown', hex: '#45322E' }, { code: '8019', name: 'Grey brown', hex: '#403A3A' },
+        { code: '8022', name: 'Black brown', hex: '#212121' }, { code: '8023', name: 'Orange brown', hex: '#A65E2E' },
+        { code: '8024', name: 'Beige brown', hex: '#79553D' }, { code: '8025', name: 'Pale brown', hex: '#755C48' },
+        { code: '8028', name: 'Terra brown', hex: '#4E3B31' }, { code: '8029', name: 'Pearl copper', hex: '#763C28' },
+        { code: '9001', name: 'Cream', hex: '#FDF4E3' }, { code: '9002', name: 'Grey white', hex: '#E7EBDA' },
+        { code: '9003', name: 'Signal white', hex: '#F4F4F4' }, { code: '9004', name: 'Signal black', hex: '#282828' },
+        { code: '9005', name: 'Jet black', hex: '#0A0A0A' }, { code: '9006', name: 'White aluminium', hex: '#A5A5A5' },
+        { code: '9007', name: 'Grey aluminium', hex: '#8F8F8F' }, { code: '9010', name: 'Pure white', hex: '#FFFFFF' },
+        { code: '9011', name: 'Graphite black', hex: '#1C1C1C' }, { code: '9016', name: 'Traffic white', hex: '#F6F6F6' },
+        { code: '9017', name: 'Traffic black', hex: '#1E1E1E' }, { code: '9018', name: 'Papyrus white', hex: '#D7D7D7' },
+        { code: '9022', name: 'Pearl light grey', hex: '#9C9C9C' }, { code: '9023', name: 'Pearl dark grey', hex: '#828282' },
+    ];
+
+    (function populateRalSelect() {
+        const select = document.getElementById('in-ralcolor');
+        RAL_COLORS.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c.hex;
+            opt.textContent = `RAL ${c.code} - ${c.name}`;
+            select.appendChild(opt);
+        });
+    })();
+
+    const ralSwatch = document.getElementById('ral-swatch');
+    document.getElementById('in-ralcolor').addEventListener('change', (e) => {
+        ralSwatch.style.background = e.target.value || '#475569';
+        render();
+    });
+
+    /** Additively lightens (positive) or darkens (negative) a hex color by `amount` (-1..1) - used to shade the 3D view's two side walls off the chosen top-face RAL color, same relative shading as the original fixed palette. */
+    function shadeColor(hex, amount) {
+        const num = parseInt(hex.replace('#', ''), 16);
+        const delta = Math.round(255 * amount);
+        const clamp = v => Math.max(0, Math.min(255, v));
+        const r = clamp((num >> 16) + delta);
+        const g = clamp(((num >> 8) & 0xFF) + delta);
+        const b = clamp((num & 0xFF) + delta);
+        return '#' + ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0');
+    }
+
+    document.querySelectorAll('#rain-orientation-selector .shape-btn').forEach(btn => {
         btn.addEventListener('click', () => {
-            viewMode = btn.getAttribute('data-view');
-            document.querySelectorAll('.view-toggle-btn').forEach(b => b.classList.toggle('active', b === btn));
+            rainOrientation = btn.getAttribute('data-orientation');
+            document.querySelectorAll('#rain-orientation-selector .shape-btn').forEach(b => b.classList.toggle('active', b === btn));
             render();
         });
     });
 
-    const inputs = ['width', 'height', 'thickness', 'cellsize', 'minsize', 'spacing', 'rotation', 'border', 'densezone', 'falloff', 'sparseness', 'jitter', 'randomness', 'seed'];
+    function setPatternMode(mode) {
+        patternMode = mode;
+        document.querySelectorAll('#pattern-mode-selector .shape-btn').forEach(b => {
+            b.classList.toggle('active', b.getAttribute('data-mode') === mode);
+        });
+        document.getElementById('honeycomb-shape-controls').style.display = mode === 'honeycomb' ? '' : 'none';
+        document.getElementById('honeycomb-gradient-controls').style.display = mode === 'honeycomb' ? '' : 'none';
+        document.getElementById('rain-controls').style.display = mode === 'rain' ? '' : 'none';
+        document.getElementById('mosaic-controls').style.display = mode === 'mosaic' ? '' : 'none';
+    }
+
+    document.querySelectorAll('#pattern-mode-selector .shape-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            setPatternMode(btn.getAttribute('data-mode'));
+            render();
+        });
+    });
+
+    // Scoped to [data-view] so it doesn't also match the "+ Фон"/"✕ Фон"
+    // buttons below, which share the .view-toggle-btn class purely for
+    // styling but carry no data-view attribute of their own.
+    document.querySelectorAll('.view-toggle-btn[data-view]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            viewMode = btn.getAttribute('data-view');
+            document.querySelectorAll('.view-toggle-btn[data-view]').forEach(b => b.classList.toggle('active', b === btn));
+            render();
+        });
+    });
+
+    // Background photo behind the 2D preview - punches the cut holes fully
+    // transparent (see draw2D) so whatever's loaded here shows through them,
+    // giving a rough "how would this look mounted in front of X" preview.
+    let bgImageDataUrl = null;
+    const bgLayer = document.getElementById('preview-bg-layer');
+    document.getElementById('btn-bg-upload').addEventListener('click', () => {
+        document.getElementById('in-bgimage').click();
+    });
+    document.getElementById('in-bgimage').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+            bgImageDataUrl = reader.result;
+            bgLayer.style.backgroundImage = `url(${bgImageDataUrl})`;
+            document.getElementById('btn-bg-clear').style.display = '';
+            render();
+        };
+        reader.readAsDataURL(file);
+    });
+    document.getElementById('btn-bg-clear').addEventListener('click', () => {
+        bgImageDataUrl = null;
+        bgLayer.style.backgroundImage = '';
+        document.getElementById('btn-bg-clear').style.display = 'none';
+        document.getElementById('in-bgimage').value = '';
+        render();
+    });
+
+    const inputs = ['width', 'height', 'thickness', 'cellsize', 'minsize', 'spacing', 'rotation', 'border', 'densezone', 'falloff', 'sparseness', 'jitter', 'randomness', 'seed',
+        'rainwidth', 'rainminlen', 'rainmaxlen', 'raingap', 'rainvgap', 'raindensity', 'rainstagger',
+        'mosaicmax', 'mosaicmin', 'mosaicgap', 'mosaicdensity'];
 
     // Multi-select Logic
-    document.querySelectorAll('.shape-btn').forEach(btn => {
+    document.querySelectorAll('#shape-selector .shape-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             const shape = e.target.getAttribute('data-shape');
             e.target.classList.toggle('active');
 
-            const activeElements = document.querySelectorAll('.shape-btn.active');
+            const activeElements = document.querySelectorAll('#shape-selector .shape-btn.active');
             if (activeElements.length === 0) {
                 e.target.classList.add('active'); // Задължително поне една форма
                 selectedShapes = [shape];
@@ -411,7 +684,7 @@
         if (selectName && presetsCache[selectName]) select.value = selectName;
     }
     function currentSettings() {
-        const settings = { shapes: selectedShapes.slice(), direction: document.getElementById('in-direction').value };
+        const settings = { shapes: selectedShapes.slice(), direction: document.getElementById('in-direction').value, mode: patternMode, rainOrientation, ralcolor: document.getElementById('in-ralcolor').value };
         inputs.forEach(id => { settings[id] = document.getElementById(`in-${id}`).value; });
         return settings;
     }
@@ -422,12 +695,19 @@
             document.getElementById(`num-${id}`).value = settings[id];
         });
         if (settings.direction) document.getElementById('in-direction').value = settings.direction;
+        document.getElementById('in-ralcolor').value = settings.ralcolor || '';
+        ralSwatch.style.background = settings.ralcolor || '#475569';
         if (settings.shapes && settings.shapes.length) {
             selectedShapes = settings.shapes.slice();
-            document.querySelectorAll('.shape-btn').forEach(btn => {
+            document.querySelectorAll('#shape-selector .shape-btn').forEach(btn => {
                 btn.classList.toggle('active', selectedShapes.includes(btn.getAttribute('data-shape')));
             });
         }
+        rainOrientation = settings.rainOrientation === 'horizontal' ? 'horizontal' : 'vertical';
+        document.querySelectorAll('#rain-orientation-selector .shape-btn').forEach(b => {
+            b.classList.toggle('active', b.getAttribute('data-orientation') === rainOrientation);
+        });
+        setPatternMode(['rain', 'mosaic'].includes(settings.mode) ? settings.mode : 'honeycomb');
         render();
     }
 
@@ -512,8 +792,38 @@
         });
     }
 
-    function drawShapePath(type, r) {
-        if (type === 'circle') {
+    /**
+     * Local-frame point loop for a vertical "stadium"/slot shape (a
+     * rectangle with two semicircular end caps) - width 2r, straight-side
+     * half-length hl, long axis along y. Shared by the 3D outline and the
+     * server-side DXF polygon (see _generator_hole_polygon's Python mirror)
+     * since neither can use a canvas arc primitive.
+     */
+    function stadiumLoop(r, hl, segments) {
+        segments = segments || 10;
+        const pts = [[r, -hl], [r, hl]];
+        for (let i = 1; i < segments; i++) {
+            const a = Math.PI * i / segments;
+            pts.push([r * Math.cos(a), hl + r * Math.sin(a)]);
+        }
+        pts.push([-r, hl], [-r, -hl]);
+        for (let i = 1; i < segments; i++) {
+            const a = Math.PI + Math.PI * i / segments;
+            pts.push([r * Math.cos(a), -hl + r * Math.sin(a)]);
+        }
+        return pts;
+    }
+
+    function drawShapePath(type, r, length) {
+        if (type === 'slot') {
+            const hl = Math.max(0, ((length !== undefined ? length : r * 2) - r * 2) / 2);
+            ctx.moveTo(r, -hl);
+            ctx.lineTo(r, hl);
+            ctx.arc(0, hl, r, 0, Math.PI, false);
+            ctx.lineTo(-r, -hl);
+            ctx.arc(0, -hl, r, Math.PI, 2 * Math.PI, false);
+            ctx.closePath();
+        } else if (type === 'circle') {
             ctx.arc(0, 0, r, 0, Math.PI * 2);
         } else if (type === 'square') {
             ctx.rect(-r, -r, r * 2, r * 2);
@@ -550,8 +860,12 @@
      * "Линеен сряз" stat actually reflects what gets cut, instead of always
      * reading 0.00 m regardless of the generated pattern.
      */
-    function shapePerimeter(type, size) {
+    function shapePerimeter(type, size, length) {
         const r = size / 2;
+        if (type === 'slot') {
+            const straight = Math.max(0, (length !== undefined ? length : size) - size);
+            return 2 * straight + Math.PI * size;
+        }
         if (type === 'circle') {
             return 2 * Math.PI * r;
         }
@@ -589,8 +903,12 @@
      * below is a linear transform of real vertices (turning a circle into an
      * ellipse), not something a canvas arc/rect primitive can do.
      */
-    function shapeOutlineLoops(type, size) {
+    function shapeOutlineLoops(type, size, length) {
         const r = size / 2;
+        if (type === 'slot') {
+            const hl = Math.max(0, ((length !== undefined ? length : size) - size) / 2);
+            return [stadiumLoop(r, hl)];
+        }
         if (type === 'circle') {
             const pts = [];
             const segments = 16; // fewer facets than the 2D ctx.arc() - keeps per-edge tube walls from getting busy
@@ -624,6 +942,180 @@
      * same pattern.
      */
     function generateHoles() {
+        if (patternMode === 'rain') return generateRainHoles();
+        if (patternMode === 'mosaic') return generateMosaicHoles();
+        return generateHoneycombHoles();
+    }
+
+    /**
+     * "Мозайка" layout: random-sequential-adsorption packing of squares of
+     * varying size - repeatedly try a random size+position, keep it only if
+     * it doesn't overlap (with a `gap` margin) anything already placed,
+     * give up after too many consecutive misses. This is what naturally
+     * produces the reference look (loose clusters of many small squares
+     * around a few large ones, uneven coverage) without any explicit
+     * cluster/gradient logic - it just falls out of the packing process.
+     * Reuses the existing 'square' shape end to end (drawShapePath,
+     * shapePerimeter, the DXF export) - no new shape math needed, only the
+     * placement algorithm is new. A uniform grid buckets already-placed
+     * squares so each candidate only checks nearby neighbors instead of
+     * the whole list - without it this degrades to O(n^2) and stutters
+     * once a few hundred squares are placed.
+     */
+    function generateMosaicHoles() {
+        const W = parseFloat(document.getElementById('in-width').value);
+        const H = parseFloat(document.getElementById('in-height').value);
+        const border = parseFloat(document.getElementById('in-border').value);
+        const maxSize = parseFloat(document.getElementById('in-mosaicmax').value);
+        const minSize = Math.min(parseFloat(document.getElementById('in-mosaicmin').value), maxSize);
+        const gap = parseFloat(document.getElementById('in-mosaicgap').value);
+        const densityPct = parseFloat(document.getElementById('in-mosaicdensity').value) / 100;
+        const seed = parseInt(document.getElementById('in-seed').value);
+
+        const rand = mulberry32(seed);
+        generatedHoles = [];
+        let totalCutLength = 2 * (W + H);
+
+        const minX = border, maxX = W - border, minY = border, maxY = H - border;
+        const areaW = maxX - minX, areaH = maxY - minY;
+        if (areaW <= 0 || areaH <= 0 || maxSize <= 0 || minSize <= 0) {
+            return { W, H, holes: generatedHoles, totalCutLength };
+        }
+
+        const cellSize = maxSize + gap + 1;
+        const grid = new Map();
+        const placed = [];
+        function cellKey(cx, cy) { return cx + ',' + cy; }
+        function hasOverlap(x, y, half) {
+            const cx = Math.floor(x / cellSize), cy = Math.floor(y / cellSize);
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dy = -1; dy <= 1; dy++) {
+                    const arr = grid.get(cellKey(cx + dx, cy + dy));
+                    if (!arr) continue;
+                    for (const idx of arr) {
+                        const p = placed[idx];
+                        const sep = half + p.half + gap;
+                        if (Math.abs(x - p.x) < sep && Math.abs(y - p.y) < sep) return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        const areaAttempts = Math.max(200, Math.round((areaW * areaH) / (minSize * minSize) * densityPct));
+        const maxConsecutiveFails = Math.max(80, Math.round(300 * densityPct));
+        const maxTries = Math.min(areaAttempts * 4, 30000);
+        let fails = 0, tries = 0;
+
+        while (fails < maxConsecutiveFails && tries < maxTries) {
+            tries++;
+            // t*t biases toward smaller squares - a few large "anchors" with
+            // many small ones filling the gaps around them, like the reference.
+            const t = rand();
+            const size = minSize + (maxSize - minSize) * t * t;
+            const half = size / 2;
+            if (areaW < size || areaH < size) { fails++; continue; }
+
+            const x = minX + half + rand() * (areaW - size);
+            const y = minY + half + rand() * (areaH - size);
+            if (hasOverlap(x, y, half)) { fails++; continue; }
+
+            const idx = placed.length;
+            placed.push({ x, y, half });
+            const cx = Math.floor(x / cellSize), cy = Math.floor(y / cellSize);
+            const key = cellKey(cx, cy);
+            if (!grid.has(key)) grid.set(key, []);
+            grid.get(key).push(idx);
+
+            fails = 0;
+            generatedHoles.push({ x, y, size, rot: 0, type: 'square' });
+            totalCutLength += shapePerimeter('square', size);
+        }
+
+        return { W, H, holes: generatedHoles, totalCutLength };
+    }
+
+    /**
+     * "Дъжд" layout: slot shapes stacked in straight columns (or, when
+     * rainOrientation is 'horizontal', rows), each slot's length randomized
+     * between minLen/maxLen with a random gap before the next one - unlike
+     * the honeycomb grid above, this never hex-packs. Works in an abstract
+     * "flow axis" P (the direction slots grow along and stack in) and
+     * "cross axis" S (the direction successive columns/rows step across) -
+     * vertical mode maps P->Y, S->X exactly like the original column-only
+     * version; horizontal just swaps that mapping and rotates each slot 90°
+     * (the 'slot' shape's own local frame always has its long axis on Y, so
+     * rot=90° is what turns it sideways - draw2D/draw3D/the DXF export
+     * already rotate generically, no changes needed there).
+     */
+    function generateRainHoles() {
+        const W = parseFloat(document.getElementById('in-width').value);
+        const H = parseFloat(document.getElementById('in-height').value);
+        const border = parseFloat(document.getElementById('in-border').value);
+        const slotWidth = parseFloat(document.getElementById('in-rainwidth').value);
+        const minLen = parseFloat(document.getElementById('in-rainminlen').value);
+        const maxLen = Math.max(minLen, parseFloat(document.getElementById('in-rainmaxlen').value));
+        const colGap = parseFloat(document.getElementById('in-raingap').value);
+        const vGap = parseFloat(document.getElementById('in-rainvgap').value);
+        const density = parseFloat(document.getElementById('in-raindensity').value) / 100;
+        const stagger = parseFloat(document.getElementById('in-rainstagger').value) / 100;
+        const seed = parseInt(document.getElementById('in-seed').value);
+        const horizontal = rainOrientation === 'horizontal';
+
+        const rand = mulberry32(seed);
+        generatedHoles = [];
+        let totalCutLength = 2 * (W + H);
+
+        const panelP = horizontal ? W : H; // flow axis extent (slots grow along this)
+        const panelS = horizontal ? H : W; // cross axis extent (columns/rows step across this)
+
+        const startS = border + slotWidth / 2;
+        const endS = panelS - border - slotWidth / 2;
+        const startP = border;
+        const endP = panelP - border;
+        const colStep = slotWidth + colGap;
+
+        if (endS < startS || endP <= startP || slotWidth <= 0 || colStep <= 0) {
+            return { W, H, holes: generatedHoles, totalCutLength };
+        }
+
+        // Center the columns/rows across the available cross-axis span, same
+        // reasoning as the honeycomb grid's row centering - stepping from a
+        // fixed edge would leave the leftover margin stranded on one side.
+        const availableS = endS - startS;
+        const count = Math.max(0, Math.floor(availableS / colStep));
+        const leftover = availableS - count * colStep;
+        const firstS = startS + leftover / 2;
+        const rot = horizontal ? Math.PI / 2 : 0;
+
+        for (let c = 0; c <= count; c++) {
+            const s = firstS + c * colStep;
+            let p = startP + rand() * stagger * maxLen;
+
+            while (p < endP) {
+                const remaining = endP - p;
+                if (remaining < minLen) break;
+
+                if (rand() > density) {
+                    const gap = minLen + rand() * (maxLen - minLen);
+                    p += gap + vGap;
+                    continue;
+                }
+
+                const len = Math.min(remaining, minLen + rand() * (maxLen - minLen));
+                const cp = p + len / 2;
+                const x = horizontal ? cp : s;
+                const y = horizontal ? s : cp;
+                generatedHoles.push({ x, y, size: slotWidth, length: len, rot, type: 'slot' });
+                totalCutLength += shapePerimeter('slot', slotWidth, len);
+                p += len + vGap;
+            }
+        }
+
+        return { W, H, holes: generatedHoles, totalCutLength };
+    }
+
+    function generateHoneycombHoles() {
         const W = parseFloat(document.getElementById('in-width').value);
         const H = parseFloat(document.getElementById('in-height').value);
         const maxSize = parseFloat(document.getElementById('in-cellsize').value);
@@ -758,19 +1250,30 @@
         canvas.width = W * drawScale;
         canvas.height = H * drawScale;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = '#475569';
+        ctx.fillStyle = document.getElementById('in-ralcolor').value || '#475569';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = '#0b0c10';
+
+        // With a background photo loaded, the canvas itself goes transparent
+        // (see .has-bg-image) and holes are erased with destination-out
+        // instead of filled dark - that punches them fully transparent so
+        // the photo layer behind the canvas shows through, rather than
+        // just painting a dark color over it. Without a photo, behavior is
+        // unchanged: holes are a plain dark fill.
+        const punchThrough = canvas.classList.contains('has-bg-image');
+        ctx.globalCompositeOperation = punchThrough ? 'destination-out' : 'source-over';
+        ctx.fillStyle = punchThrough ? '#000' : '#0b0c10';
 
         holes.forEach(h => {
             ctx.save();
             ctx.translate(h.x * drawScale, h.y * drawScale);
             ctx.rotate(h.rot);
             ctx.beginPath();
-            drawShapePath(h.type, (h.size * drawScale) / 2);
+            drawShapePath(h.type, (h.size * drawScale) / 2, h.length !== undefined ? h.length * drawScale : undefined);
             ctx.fill();
             ctx.restore();
         });
+
+        ctx.globalCompositeOperation = 'source-over';
     }
 
     // ponytail: fixed 30deg isometric angle rather than a user-orbitable
@@ -834,15 +1337,23 @@
         // face. The front corner is (W,H,0): with this projection, screen-Y
         // grows with (x+y), so the corner that maximizes x+y is the one
         // closest to the viewer (bottom of the diamond on screen), not (0,0).
-        fillPoly([pt(W, H, 0), pt(W, 0, 0), pt(W, 0, T), pt(W, H, T)], '#4b525f');
-        fillPoly([pt(W, H, 0), pt(0, H, 0), pt(0, H, T), pt(W, H, T)], '#5b6472');
+        // With a RAL color chosen, that becomes the top face's color and the
+        // two side walls are shaded darker off it, same relative darkness as
+        // the original fixed palette; with nothing chosen the original
+        // fixed colors are unchanged.
+        const ralHex = document.getElementById('in-ralcolor').value;
+        const topColor = ralHex || '#94a1b8';
+        const wallColor1 = ralHex ? shadeColor(ralHex, -0.32) : '#4b525f';
+        const wallColor2 = ralHex ? shadeColor(ralHex, -0.24) : '#5b6472';
+        fillPoly([pt(W, H, 0), pt(W, 0, 0), pt(W, 0, T), pt(W, H, T)], wallColor1);
+        fillPoly([pt(W, H, 0), pt(0, H, 0), pt(0, H, T), pt(W, H, T)], wallColor2);
 
         // Top face
-        fillPoly([pt(0, 0, T), pt(W, 0, T), pt(W, H, T), pt(0, H, T)], '#94a1b8');
+        fillPoly([pt(0, 0, T), pt(W, 0, T), pt(W, H, T), pt(0, H, T)], topColor);
 
         // Holes - flat dark cutouts on the top face.
         holes.forEach(h => {
-            shapeOutlineLoops(h.type, h.size).forEach(loop => {
+            shapeOutlineLoops(h.type, h.size, h.length).forEach(loop => {
                 if (!loop.length) return;
                 const worldPts = rotateTranslatePts(loop, h.rot, h.x, h.y);
                 fillPoly(worldPts.map(([x, y]) => pt(x, y, T)), '#0a0b0e');
@@ -852,6 +1363,13 @@
 
     function render() {
         const layout = generateHoles();
+        // The background photo only makes sense against the flat 2D view -
+        // the 3D block would just show it bleeding out around the panel's
+        // silhouette instead of through the holes - so it's only shown, and
+        // the canvas only goes transparent, while viewMode is '2d'.
+        const showBg = viewMode === '2d' && !!bgImageDataUrl;
+        canvas.classList.toggle('has-bg-image', showBg);
+        bgLayer.style.display = showBg ? 'block' : 'none';
         if (viewMode === '3d') draw3D(layout); else draw2D(layout);
         document.getElementById('stat-panel').innerText = `${layout.W} x ${layout.H} mm`;
         document.getElementById('stat-holes').innerText = layout.holes.length;
