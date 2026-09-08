@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Вътрешни одити - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .badge-in-progress {
+            background-color: rgba(23, 162, 184, 0.15);
+            color: #17a2b8;
+            border: 1px solid rgba(23, 162, 184, 0.3);
+        }
+        .result-filter-links a { margin-right: 12px; }
+        .result-filter-links a.active-filter { font-weight: 700; text-decoration: underline; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    {% if current_user.is_admin or current_user.role == 'quality_control' %}
+    <section class="admin-card">
+        <h3>Нов вътрешен одит</h3>
+        <p class="section-subtitle">ISO 9001 §9.2 - планиране на вътрешен одит; констатациите се добавят по-късно в самия одит.</p>
+        <form action="{{ url_for('admin_add_audit') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group" style="width: 100%;">
+                <label for="new_scope">Обхват на одита</label>
+                <input type="text" id="new_scope" name="scope" required placeholder="напр. Производствен процес - лазерно рязане" style="width: 100%;">
+            </div>
+            <div class="form-group">
+                <label for="new_auditor_id">Одитор</label>
+                <select id="new_auditor_id" name="auditor_id">
+                    <option value="">-- няма --</option>
+                    {% for u in users %}
+                    <option value="{{ u.id }}">{{ u.username }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="new_planned_date">Планирана дата</label>
+                <input type="date" id="new_planned_date" name="planned_date">
+            </div>
+            <button type="submit" class="btn-submit">Създай одит</button>
+        </form>
+    </section>
+    {% endif %}
+
+    <section class="admin-card">
+        <h3>Одити</h3>
+
+        <div class="result-filter-links">
+            <a href="{{ url_for('admin_audits') }}" class="{{ 'active-filter' if not status_filter }}">Всички</a>
+            {% for key, label in statuses.items() %}
+            <a href="{{ url_for('admin_audits', status=key) }}" class="{{ 'active-filter' if status_filter == key }}">{{ label }}</a>
+            {% endfor %}
+        </div>
+
+        {% if audits %}
+        <div class="table-responsive" style="margin-top: 1rem;">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>№</th>
+                    <th>Обхват</th>
+                    <th>Одитор</th>
+                    <th>Планирана дата</th>
+                    <th>Дата на провеждане</th>
+                    <th>Статус</th>
+                    <th>Констатации</th>
+                    <th class="text-right">Действие</th>
+                    <th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for audit in audits %}
+                <tr>
+                    <td><strong>{{ audit.audit_no }}</strong></td>
+                    <td style="max-width: 280px;">{{ audit.scope }}</td>
+                    <td>{{ audit.auditor.username if audit.auditor else '—' }}</td>
+                    <td>{{ audit.planned_date.strftime('%d.%m.%Y') if audit.planned_date else '—' }}</td>
+                    <td>{{ audit.actual_date.strftime('%d.%m.%Y') if audit.actual_date else '—' }}</td>
+                    <td>
+                        {% if audit.status == 'completed' %}
+                        <span class="badge badge-pass">{{ audit.status_label }}</span>
+                        {% elif audit.status == 'in_progress' %}
+                        <span class="badge badge-in-progress">{{ audit.status_label }}</span>
+                        {% else %}
+                        <span class="badge badge-user">{{ audit.status_label }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ audit.findings|length }}</td>
+                    <td class="text-right">
+                        <a href="{{ url_for('admin_edit_audit', audit_id=audit.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Отвори</a>
+                    </td>
+                    <td class="text-right">
+                        {% if current_user.is_admin or current_user.role == 'quality_control' %}
+                        <form action="{{ url_for('admin_delete_audit', audit_id=audit.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на &quot;{{ audit.audit_no }}&quot;? Ще се изтрият и всички негови констатации.');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма одити{{ ' с този статус' if status_filter else '' }}.</p>
+        {% endif %}
+    </section>
+
+</main>
+
+</body>
+</html>

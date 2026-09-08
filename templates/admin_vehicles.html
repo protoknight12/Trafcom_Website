@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Автомобилно стопанство - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .deadline-pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 0.82rem; font-weight: 600; white-space: nowrap; }
+        .deadline-pill.ok { background-color: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); }
+        .deadline-pill.warning { background-color: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.4); }
+        .deadline-pill.expired { background-color: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.4); }
+        .deadline-pill.unset { background-color: rgba(148, 163, 184, 0.12); color: var(--text-muted); border: 1px solid var(--border-color); }
+        .deadline-cell { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
+        .deadline-date { font-size: 0.75rem; color: var(--text-muted); }
+        .installments-checkbox-group { display: flex; align-items: center; }
+        .installments-checkbox-group label { display: flex; align-items: center; gap: 8px; font-weight: 400; cursor: pointer; }
+        .installments-block { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border-color); display: flex; flex-direction: column; gap: 3px; }
+        .installments-block-title { font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+        .installment-row { display: block; }
+        .installment-label { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; cursor: pointer; white-space: nowrap; }
+        .installment-label.is-due { color: #f59e0b; font-weight: 600; }
+        .installment-label.is-overdue { color: #ef4444; font-weight: 600; }
+        .installment-label.is-paid { color: var(--text-muted); text-decoration: line-through; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Нов автомобил</h3>
+        <p class="section-subtitle">Добавете фирмен автомобил и датите на изтичане на застраховка (ГО), винетка и технически преглед. Предупреждение се показва в менюто 15 дни преди изтичане и продължава да се показва всеки ден след това, докато датата не се обнови.</p>
+        <form action="{{ url_for('admin_add_vehicle') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="new_v_name">Име на автомобила</label>
+                <input type="text" id="new_v_name" name="name" required placeholder="напр. Служебен бус 1">
+            </div>
+            <div class="form-group">
+                <label for="new_v_plate">Регистрационен номер</label>
+                <input type="text" id="new_v_plate" name="license_plate" required placeholder="напр. РА1234АВ">
+            </div>
+            <div class="form-group">
+                <label for="new_v_brand">Марка</label>
+                <input type="text" id="new_v_brand" name="brand" placeholder="напр. Ford">
+            </div>
+            <div class="form-group">
+                <label for="new_v_model">Модел</label>
+                <input type="text" id="new_v_model" name="model" placeholder="напр. Transit">
+            </div>
+            <div class="form-group">
+                <label for="new_v_vin">Рама (VIN)</label>
+                <input type="text" id="new_v_vin" name="vin" placeholder="по избор">
+            </div>
+            <div class="form-group">
+                <label for="new_v_responsible">Отговорник</label>
+                <input type="text" id="new_v_responsible" name="responsible_name" placeholder="по избор">
+            </div>
+            <div class="form-group">
+                <label for="new_v_insurance">Застраховка (ГО) - валидна до</label>
+                <input type="date" id="new_v_insurance" name="insurance_expiry">
+            </div>
+            <div class="form-group installments-checkbox-group">
+                <label for="new_v_installments">
+                    <input type="checkbox" id="new_v_installments" name="insurance_installments" value="1">
+                    Изплаща се на вноски (тримесечно)
+                </label>
+            </div>
+            <div class="form-group">
+                <label for="new_v_vignette">Винетка - валидна до</label>
+                <input type="date" id="new_v_vignette" name="vignette_expiry">
+            </div>
+            <div class="form-group">
+                <label for="new_v_inspection">Технически преглед - валиден до</label>
+                <input type="date" id="new_v_inspection" name="inspection_expiry">
+            </div>
+            <div class="form-group" style="flex-basis: 100%;">
+                <label for="new_v_notes">Забележка</label>
+                <textarea id="new_v_notes" name="notes" rows="2"></textarea>
+            </div>
+            <button type="submit" class="btn-submit">Добави автомобил</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Автомобили</h3>
+        {% if vehicles %}
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Автомобил</th>
+                    <th>Рег. номер</th>
+                    <th>Отговорник</th>
+                    <th>Застраховка (ГО)</th>
+                    <th>Винетка</th>
+                    <th>Технически преглед</th>
+                    <th class="text-right">Действие</th>
+                    <th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for v in vehicles %}
+                <tr>
+                    <td><strong>{{ v.name }}</strong>{% if v.brand or v.model %}<br><span class="text-small text-muted">{{ v.brand }} {{ v.model }}</span>{% endif %}</td>
+                    <td>{{ v.license_plate }}</td>
+                    <td class="text-small text-muted">{{ v.responsible_name or '—' }}</td>
+                    {% for d in v.deadlines %}
+                    <td>
+                        <div class="deadline-cell">
+                            <span class="deadline-pill {{ d.status }}">
+                                {% if d.status == 'unset' %}няма дата
+                                {% elif d.status == 'expired' %}изтекла от {{ -d.days }} дни
+                                {% elif d.status == 'warning' %}остават {{ d.days }} дни
+                                {% else %}валидна
+                                {% endif %}
+                            </span>
+                            {% if d.date %}<span class="deadline-date">{{ d.date.strftime('%d.%m.%Y') }}</span>{% endif %}
+                        </div>
+                        {% if loop.index0 == 0 and v.insurance_installments %}
+                        <div class="installments-block">
+                            <span class="installments-block-title">Вноски</span>
+                            {% for row in v.installment_rows %}
+                            <form action="{{ url_for('admin_vehicle_installment_toggle', vehicle_id=v.id) }}" method="POST" class="installment-row">
+                                {% include 'partials/csrf_field.html' %}
+                                <input type="hidden" name="due_date" value="{{ row.due_date.isoformat() }}">
+                                <label class="installment-label {% if row.paid %}is-paid{% elif row.status == 'expired' %}is-overdue{% elif row.status == 'warning' %}is-due{% endif %}">
+                                    <input type="checkbox" onchange="this.form.submit()" {% if row.paid %}checked{% endif %}>
+                                    {{ row.due_date.strftime('%d.%m.%Y') }}
+                                </label>
+                            </form>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </td>
+                    {% endfor %}
+                    <td class="text-right">
+                        <a href="{{ url_for('edit_vehicle_window', vehicle_id=v.id) }}" onclick="window.open(this.href, 'editVehicle', 'width=480,height=640'); return false;" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
+                    </td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_delete_vehicle', vehicle_id=v.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на автомобил &quot;{{ v.name|e }}&quot;?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма добавени автомобили.</p>
+        {% endif %}
+    </section>
+
+</main>
+</body>
+</html>

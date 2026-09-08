@@ -94,6 +94,7 @@
                 <tr>
                     <th>Име</th>
                     <th>Тип</th>
+                    <th>Помещение</th>
                     <th>Статус</th>
                     <th>Последна поддръжка</th>
                     {% if current_user.is_staff %}
@@ -114,6 +115,7 @@
                         {% endif %}
                     </td>
                     <td>{{ m.machine_type or '-' }}</td>
+                    <td>{{ m.room.building.name + ' / ' + m.room.name if m.room else '—' }}</td>
                     <td>
                         {% if m.status == 'idle' %}
                         <span class="machine-status-badge status-idle">Свободна</span>
@@ -151,7 +153,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="{{ 4 + (1 if current_user.is_staff else 0) + (1 if current_user.is_admin else 0) }}" class="text-center no-data">Няма добавени машини.</td>
+                    <td colspan="{{ 5 + (1 if current_user.is_staff else 0) + (1 if current_user.is_admin else 0) }}" class="text-center no-data">Няма добавени машини.</td>
                 </tr>
                 {% endfor %}
                 </tbody>

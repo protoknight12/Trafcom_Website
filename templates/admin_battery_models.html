@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Модели батерии - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px;">
+            <h3 style="margin:0;">Модели батерии</h3>
+            <a href="{{ url_for('new_battery_model_window') }}" onclick="window.open(this.href, 'newBatteryModel', 'width=520,height=680'); return false;" class="btn-submit" style="padding: 8px 16px; font-size: 0.85rem; text-decoration:none;">+ Нов модел</a>
+        </div>
+        <p class="section-subtitle">Каталог с технически характеристики на батерийните модули - при добавяне на батерия в stack се избира модел от този списък вместо ръчно въвеждане на напрежение/капацитет.</p>
+
+        {% if models %}
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Име</th>
+                    <th>Производител</th>
+                    <th>V / Ah</th>
+                    <th>kWh</th>
+                    <th>Цикли</th>
+                    <th>Защита</th>
+                    <th class="text-right">Действие</th>
+                    <th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for m in models %}
+                <tr>
+                    <td><strong>{{ m.name }}</strong></td>
+                    <td class="text-small text-muted">{{ m.manufacturer }}</td>
+                    <td class="text-small text-muted">{{ m.nominal_voltage_v }}V / {{ m.capacity_ah }}Ah</td>
+                    <td class="text-small text-muted">{{ m.energy_kwh if m.energy_kwh is not none else '—' }}</td>
+                    <td class="text-small text-muted">{{ m.cycle_life or '—' }}</td>
+                    <td class="text-small text-muted">{{ m.protection_rating or '—' }}</td>
+                    <td class="text-right">
+                        <a href="{{ url_for('edit_battery_model_window', model_id=m.id) }}" onclick="window.open(this.href, 'editBatteryModel', 'width=520,height=680'); return false;" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
+                    </td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_delete_battery_model', model_id=m.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на модел &quot;{{ m.name|e }}&quot;?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма добавени модели батерии.</p>
+        {% endif %}
+    </section>
+
+</main>
+</body>
+</html>

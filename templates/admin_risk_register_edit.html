@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>{{ entry.title }} - Регистър на риска - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .capa-textarea {
+            width: 100%;
+            padding: 0.6rem 0.75rem;
+            background-color: var(--bg-input);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-sm);
+        }
+        .badge-risk-medium {
+            background-color: rgba(245, 158, 11, 0.15);
+            color: #f59e0b;
+            border: 1px solid rgba(245, 158, 11, 0.35);
+        }
+        .risk-score-box {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            background-color: var(--bg-input);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-sm);
+            padding: 10px 16px;
+            margin-top: 8px;
+        }
+        .risk-score-box .risk-score-value {
+            font-size: 1.4rem;
+            font-weight: 700;
+        }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    {% set readonly = not (current_user.is_admin or current_user.role == 'quality_control') %}
+
+    <section class="admin-card">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px;">
+            <h3 style="margin: 0;">{{ entry.title }}</h3>
+            <a href="{{ url_for('admin_risk_register') }}" class="text-small">&larr; Обратно към регистъра</a>
+        </div>
+        <p class="section-subtitle">Идентифициран на {{ entry.identified_date.strftime('%d.%m.%Y') }}{% if entry.created_by %} от {{ entry.created_by.username }}{% endif %}.</p>
+
+        <div class="risk-score-box">
+            <span>Вероятност {{ entry.likelihood }} &times; Въздействие {{ entry.impact }} = </span>
+            <span class="risk-score-value">{{ entry.risk_score }}</span>
+            {% if entry.risk_level == 'high' %}
+            <span class="badge badge-fail">{{ entry.risk_level_label }}</span>
+            {% elif entry.risk_level == 'medium' %}
+            <span class="badge badge-risk-medium">{{ entry.risk_level_label }}</span>
+            {% else %}
+            <span class="badge badge-pass">{{ entry.risk_level_label }}</span>
+            {% endif %}
+        </div>
+
+        <form action="{{ url_for('admin_update_risk_entry', entry_id=entry.id) }}" method="POST" class="admin-form" style="margin-top: 1.25rem;">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group" style="width: 100%;">
+                <label for="title">Заглавие</label>
+                <input type="text" id="title" name="title" value="{{ entry.title }}" required {{ 'readonly' if readonly }} style="width: 100%;">
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="description">Описание</label>
+                <textarea id="description" name="description" rows="2" class="capa-textarea" {{ 'readonly' if readonly }}>{{ entry.description or '' }}</textarea>
+            </div>
+            <div class="form-group">
+                <label for="risk_type">Вид</label>
+                <select id="risk_type" name="risk_type" {{ 'disabled' if readonly }}>
+                    {% for key, label in risk_types.items() %}
+                    <option value="{{ key }}" {% if entry.risk_type == key %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="category">Категория</label>
+                <select id="category" name="category" {{ 'disabled' if readonly }}>
+                    {% for key, label in categories.items() %}
+                    <option value="{{ key }}" {% if entry.category == key %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="likelihood">Вероятност (1-5)</label>
+                <select id="likelihood" name="likelihood" {{ 'disabled' if readonly }}>
+                    {% for n in range(1, 6) %}
+                    <option value="{{ n }}" {% if entry.likelihood == n %}selected{% endif %}>{{ n }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="impact">Въздействие (1-5)</label>
+                <select id="impact" name="impact" {{ 'disabled' if readonly }}>
+                    {% for n in range(1, 6) %}
+                    <option value="{{ n }}" {% if entry.impact == n %}selected{% endif %}>{{ n }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="owner_id">Отговорник</label>
+                <select id="owner_id" name="owner_id" {{ 'disabled' if readonly }}>
+                    <option value="">-- няма --</option>
+                    {% for u in users %}
+                    <option value="{{ u.id }}" {% if entry.owner_id == u.id %}selected{% endif %}>{{ u.username }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="identified_date">Дата на идентифициране</label>
+                <input type="date" id="identified_date" name="identified_date" value="{{ entry.identified_date.strftime('%Y-%m-%d') }}" required {{ 'readonly' if readonly }}>
+            </div>
+            <div class="form-group">
+                <label for="review_date">Следващ преглед</label>
+                <input type="date" id="review_date" name="review_date" value="{{ entry.review_date.strftime('%Y-%m-%d') if entry.review_date else '' }}" {{ 'readonly' if readonly }}>
+            </div>
+            <div class="form-group">
+                <label for="status">Статус</label>
+                <select id="status" name="status" {{ 'disabled' if readonly }}>
+                    {% for key, label in statuses.items() %}
+                    <option value="{{ key }}" {% if entry.status == key %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="mitigation_action">Действие за намаляване/оползотворяване</label>
+                <textarea id="mitigation_action" name="mitigation_action" rows="2" class="capa-textarea" {{ 'readonly' if readonly }}>{{ entry.mitigation_action or '' }}</textarea>
+            </div>
+
+            {% if not readonly %}
+            <button type="submit" class="btn-submit">Запази промените</button>
+            {% endif %}
+        </form>
+
+        <div style="margin-top: 1.25rem;">
+            <strong>CAPA: </strong>
+            {% if entry.capa %}
+            <a href="{{ url_for('admin_edit_capa', capa_id=entry.capa.id) }}">{{ entry.capa.capa_no }}</a>
+            {% elif not readonly %}
+            <a href="{{ url_for('admin_capa', prefill_problem=entry.title, prefill_source='Регистър на риска - ' ~ entry.risk_type_label, from_risk_entry_id=entry.id) }}" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Отвори CAPA</a>
+            {% else %}—{% endif %}
+        </div>
+    </section>
+
+</main>
+
+</body>
+</html>

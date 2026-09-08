@@ -14,3 +14,6 @@ itsdangerous
 pyotp
 qrcode
 anthropic
+paho-mqtt
+pymodbus
+flask-babel

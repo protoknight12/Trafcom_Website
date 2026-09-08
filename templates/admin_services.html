@@ -125,6 +125,22 @@
                 <input type="text" id="new_service_description" name="description" placeholder="показва се на страница Услуги">
             </div>
             <div class="form-group">
+                <label for="new_service_name_en">Име (EN, незадължително)</label>
+                <input type="text" id="new_service_name_en" name="name_en" autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="new_service_name_de">Име (DE, незадължително)</label>
+                <input type="text" id="new_service_name_de" name="name_de" autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="new_service_description_en">Описание (EN, незадължително)</label>
+                <input type="text" id="new_service_description_en" name="description_en">
+            </div>
+            <div class="form-group">
+                <label for="new_service_description_de">Описание (DE, незадължително)</label>
+                <input type="text" id="new_service_description_de" name="description_de">
+            </div>
+            <div class="form-group">
                 <label><input type="checkbox" name="show_price" checked> Показвай цената на страница /services</label>
             </div>
             <button type="submit" class="btn-submit">Добави услуга</button>
@@ -172,6 +188,8 @@
                             {% include 'partials/csrf_field.html' %}
                         </form>
                         <input type="text" name="name" form="{{ form_id }}" value="{{ service.name }}" class="service-price-input" style="width: 160px;" required>
+                        <input type="text" name="name_en" form="{{ form_id }}" value="{{ service.name_en or '' }}" class="service-price-input" style="width: 160px; margin-top: 4px;" placeholder="EN">
+                        <input type="text" name="name_de" form="{{ form_id }}" value="{{ service.name_de or '' }}" class="service-price-input" style="width: 160px; margin-top: 4px;" placeholder="DE">
                     </td>
                     <td>
                         <select name="machine_type" form="{{ form_id }}" class="service-price-input">
@@ -205,8 +223,14 @@
                                class="service-price-input" id="meter-{{ form_id }}"
                                style="display: {% if service.pricing_mode == 'length' %}inline-block{% else %}none{% endif %};">
                     </td>
-                    <td><input type="text" name="description" form="{{ form_id }}" value="{{ service.description or '' }}"
-                               class="service-price-input" style="width: 180px;" placeholder="Описание"></td>
+                    <td>
+                        <input type="text" name="description" form="{{ form_id }}" value="{{ service.description or '' }}"
+                               class="service-price-input" style="width: 180px;" placeholder="Описание">
+                        <input type="text" name="description_en" form="{{ form_id }}" value="{{ service.description_en or '' }}"
+                               class="service-price-input" style="width: 180px; margin-top: 4px;" placeholder="EN">
+                        <input type="text" name="description_de" form="{{ form_id }}" value="{{ service.description_de or '' }}"
+                               class="service-price-input" style="width: 180px; margin-top: 4px;" placeholder="DE">
+                    </td>
                     <td class="text-center"><input type="checkbox" name="show_price" form="{{ form_id }}" {% if service.show_price %}checked{% endif %}></td>
                     <td class="text-right"><button type="submit" form="{{ form_id }}" class="btn-save-price">Запази</button></td>
                     <td class="text-right">

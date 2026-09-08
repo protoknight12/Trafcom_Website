@@ -1,0 +1,1134 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Покрив - соларни панели - TRAFCOM</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        /* Satellite photo sits BEHIND the panel grid (not a separate embed) -
+           .roof-map-stage clips a satellite iframe sized well beyond its own
+           box so panning/rotating/scaling it (via the controls below) never
+           reveals empty corners, while .roof-grid-layer stacks on top at a
+           higher z-index. The grid's own cells are opaque (real panels block
+           the roof under them) but the 4-5px gaps between cells/rows let the
+           satellite photo show through for alignment - see updateSatTransform(). */
+        .roof-map-stage { position: relative; overflow: hidden; border-radius: var(--border-radius-sm); border: 1px solid var(--border-color); background-color: var(--bg-input); }
+        .roof-sat-bg {
+            position: absolute; top: 50%; left: 50%; width: 180%; height: 180%;
+            pointer-events: none; transform-origin: center center;
+        }
+        .roof-sat-bg iframe { width: 100%; height: 100%; border: 0; pointer-events: none; display: block; }
+        .roof-map-stage.sat-edit-mode .roof-sat-bg { cursor: grab; pointer-events: auto; }
+        .roof-map-stage.sat-edit-mode.dragging .roof-sat-bg { cursor: grabbing; }
+        /* .roof-map-stage itself is a plain block (width:auto = its
+           container's fixed width, doesn't grow with content) so at high
+           zoom the now-wider rows of cells would otherwise wrap onto extra
+           lines or get clipped by the stage's own overflow:hidden (needed
+           to clip the oversized satellite layer) - scroll horizontally
+           instead, independently of that outer clip. */
+        .roof-grid-layer { position: relative; z-index: 2; padding: 16px; overflow-x: auto; }
+        /* While aligning the map, the grid (even its empty gaps - a plain
+           div's whole box is hit-testable, not just its painted pixels) sits
+           on top in z-order and would otherwise catch every real mouse
+           event before it reaches .roof-sat-bg below, making the drag
+           listener there unreachable by anything but a synthetic dispatched
+           event. Suspend panel-cell interaction while actively dragging the
+           map so the whole stage area, not just the thin gaps, can pan it. */
+        .roof-map-stage.sat-edit-mode .roof-grid-layer { pointer-events: none; }
+        .sat-toolbar {
+            display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+            margin-bottom: 16px; padding: 10px 12px; background-color: var(--bg-input);
+            border: 1px solid var(--border-color); border-radius: var(--border-radius-sm);
+        }
+        .sat-toolbar label { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--text-muted); }
+        .sat-toolbar input[type="range"] { width: 110px; }
+        .sat-toolbar .sat-val { color: var(--text-main); font-weight: 600; min-width: 3.5em; display: inline-block; }
+        .roof-legend { display: flex; flex-wrap: wrap; gap: 16px; margin: 10px 0 18px 0; font-size: 0.85rem; color: var(--text-muted); }
+        .roof-legend span { display: inline-flex; align-items: center; gap: 6px; }
+        .roof-legend .swatch { width: 16px; height: 16px; border-radius: 3px; display: inline-block; }
+        .roof-toolbar {
+            display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+            margin-bottom: 16px; padding: 10px 12px; background-color: var(--bg-input);
+            border: 1px solid var(--border-color); border-radius: var(--border-radius-sm);
+        }
+        .roof-toolbar select { padding: 5px 8px; background-color: var(--bg-surface); color: var(--text-main); border: 1px solid var(--border-color); border-radius: 4px; }
+        .zoom-controls { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+        .zoom-controls button { width: 28px; height: 28px; padding: 0; font-weight: 700; }
+        .zoom-controls .zoom-level { min-width: 3.2em; text-align: center; font-size: 0.8rem; color: var(--text-muted); }
+        /* Slope 2's title moved below its own grid (see slope_title() usage
+           further down) instead of above it, so this margin is now the
+           ONLY gap between the two slopes' grids - kept small since they're
+           really just the two adjacent halves of one physical roof. */
+        .roof-slope { margin-bottom: 4px; }
+        .roof-slope-title { font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .roof-slope-dims { font-size: 0.78rem; color: var(--text-muted); font-weight: 400; }
+        .roof-slope-dims.panel-model-badge { cursor: help; border-bottom: 1px dotted var(--text-muted); }
+        .roof-slope-dims.sun-readout { color: #fbbf24; font-weight: 600; }
+        /* Sunlight simulation - a repeating light/dark band overlay whose
+           angle matches the sun's on-screen direction (azimuth, adjusted
+           into the same rotated frame as the compass/map - see
+           updateSunSimulation()) and whose opacity tracks the cosine-law
+           irradiance factor for that slope's assumed tilt/facing (12deg,
+           270/90deg - user-confirmed, not measured). Sits ABOVE the panel
+           grid (unlike the satellite photo, which sits behind it) so the
+           "light" visibly falls across the panels rather than only peeking
+           through the gaps. pointer-events:none keeps selection/tooltips
+           working underneath. */
+        /* width:fit-content - .roof-cells is nowrap (see above) and can be
+           wider than this block's "normal" auto width (which would just
+           inherit the fixed page column width and NOT grow to match a
+           wider/zoomed row), which left .slope-sun-rays (sized off THIS
+           box below) covering only part of a wide/zoomed row. Shrinking
+           this wrapper to its actual content width fixes that at any zoom
+           level, any row width. */
+        .roof-grid-sun-wrap { position: relative; width: fit-content; }
+        .slope-sun-rays {
+            position: absolute; inset: -6px; z-index: 3; pointer-events: none;
+            border-radius: 4px; opacity: 0; transition: opacity 0.4s ease;
+            overflow: hidden;
+        }
+        /* Sized well beyond the wrap and rotated as a whole (JS sets the
+           rotate() angle) so the band pattern always fully covers the box
+           regardless of angle, and the background-position keyframe below -
+           always animating along this element's own LOCAL vertical axis -
+           correctly sweeps along the rotated angle rather than fighting it.
+           Band thickness/spacing scale with --roof-zoom (same variable the
+           panel cells use) so the light bands stay proportional to the
+           panels instead of a fixed pixel size that looks too thin/dense
+           once the cells are bigger. */
+        .slope-sun-rays-inner {
+            position: absolute; top: 50%; left: 50%; width: 250%; height: 250%;
+            transform-origin: center center;
+            background-image: repeating-linear-gradient(0deg,
+                rgba(255,196,64,0.65) 0 calc(3px * var(--roof-zoom, 1)),
+                transparent calc(3px * var(--roof-zoom, 1)) calc(34px * var(--roof-zoom, 1)));
+            animation: sun-ray-sweep 3.5s linear infinite;
+        }
+        @keyframes sun-ray-sweep { from { background-position: 0 0; } to { background-position: 0 calc(68px * var(--roof-zoom, 1)); } }
+        /* Zoom scales the cell/gap sizes via one CSS variable (set on
+           #roofMapStage, inherited down) rather than a transform - the
+           whole flex layout reflows at its real new size, so the page just
+           grows/shrinks normally (no scroll-viewport bookkeeping needed,
+           unlike the factory maps' percent-positioned canvases). */
+        .roof-grid { display: flex; flex-direction: column; gap: calc(2px * var(--roof-zoom, 1)); user-select: none; }
+        .roof-row { display: flex; align-items: center; gap: calc(2px * var(--roof-zoom, 1)); }
+        .roof-row-label {
+            width: 30px; flex-shrink: 0; font-size: 0.7rem; color: var(--text-muted);
+            cursor: pointer; text-align: center; border-radius: 4px; padding: 2px 0;
+        }
+        .roof-row-label:hover { background-color: var(--bg-input); color: var(--text-main); }
+        /* nowrap - each .roof-cells is one real physical row (labeled Р1,
+           Р2...); wrapping it onto extra lines when zoomed would make one
+           row visually look like two. See .roof-grid-layer's overflow-x
+           above - it scrolls horizontally instead. */
+        .roof-cells { display: flex; gap: calc(2px * var(--roof-zoom, 1)); flex-wrap: nowrap; }
+        /* Each cell reads as a small PV module: a landscape rectangle with
+           a grid of cell-lines (4x2) drawn via layered background
+           gradients on top of whichever fill color .str-N sets, plus a
+           frame-like double border. Cheaper than an SVG/icon per cell (172
+           of them) while still unmistakably "solar panel" shaped.
+           46x23 = 2.0:1, matching the real TWMND-72HD575/595 module's own
+           2278x1134mm frame (2278/1134 = 2.01:1) - see SolarPanelModel in
+           app.py - rather than an arbitrary shape. */
+        .panel-cell {
+            position: relative;
+            width: calc(46px * var(--roof-zoom, 1)); height: calc(23px * var(--roof-zoom, 1)); border-radius: 2px; cursor: pointer;
+            background-color: var(--bg-input);
+            background-image:
+                repeating-linear-gradient(to right, rgba(0,0,0,0.35) 0 1px, transparent 1px 25%),
+                repeating-linear-gradient(to bottom, rgba(0,0,0,0.35) 0 1px, transparent 1px 50%);
+            border: 2px solid var(--border-color);
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,0.15);
+            transition: transform 0.1s ease;
+        }
+        .panel-cell:hover { transform: scale(1.12); z-index: 5; }
+        .panel-cell.selected { outline: 2px solid #fff; outline-offset: 1px; }
+        /* Translucent tint over every panel of a tracker (in that tracker's
+           own --mppt-color, set in updateMpptBorders()) so the 4 groups
+           read as distinct zones at a glance, not just via the panels'
+           own fill color - brightens on hover across the WHOLE tracker
+           (see the mouseenter/mouseleave handlers below), not just the one
+           panel under the cursor, so you can see a tracker's full extent. */
+        .panel-cell.tracker-mask::before {
+            content: '';
+            position: absolute; inset: 0;
+            background-color: var(--mppt-color);
+            opacity: 0.28;
+            border-radius: 1px;
+            pointer-events: none;
+            transition: opacity 0.15s ease;
+        }
+        .panel-cell.tracker-mask.tracker-highlight::before { opacity: 0.75; }
+        /* Arriving from a tracker's node on the main map (?inverter=&mppt=,
+           see applyFocusFromUrl()) dims every panel outside that tracker so
+           it stands out at a glance instead of relying on hover. */
+        .panel-cell.focus-dim { opacity: 0.25; }
+        .panel-cell.focus-bright { transform: scale(1.08); z-index: 3; }
+        /* 4 MPPT trackers x 2 strings each - each tracker gets its own hue,
+           the 2 strings sharing it are a lighter/darker pair of that hue
+           (see SolarPanel's docstring in app.py for why the tracker's one
+           live reading is shared by both strings, not split). */
+        .panel-cell.str-1 { background-color: #5fd0e0; border-color: #5fd0e0; }
+        .panel-cell.str-2 { background-color: #0e6b7a; border-color: #0e6b7a; }
+        .panel-cell.str-3 { background-color: #6ee7b7; border-color: #6ee7b7; }
+        .panel-cell.str-4 { background-color: #0a7a56; border-color: #0a7a56; }
+        .panel-cell.str-5 { background-color: #fbbf24; border-color: #fbbf24; }
+        .panel-cell.str-6 { background-color: #b8790a; border-color: #b8790a; }
+        .panel-cell.str-7 { background-color: #c8a2fa; border-color: #c8a2fa; }
+        .panel-cell.str-8 { background-color: #7c3aed; border-color: #7c3aed; }
+        /* Thick edge where the neighboring panel belongs to a different
+           MPPT tracker (or none) - draws a box around each tracker's group
+           of panels in that tracker's own accent color (--mppt-color, set
+           per-cell in updateMpptBorders()), so all 4 trackers are
+           distinguishable by outline alone even before hovering for the
+           string number. Placed after .str-N above so its border-*-color
+           wins the cascade there too (same specificity, later rule)
+           instead of blending into the panel's own fill color. */
+        .panel-cell.mppt-b-left { border-left-width: 4px; border-left-color: var(--mppt-color, var(--text-main)); }
+        .panel-cell.mppt-b-right { border-right-width: 4px; border-right-color: var(--mppt-color, var(--text-main)); }
+        .panel-cell.mppt-b-top { border-top-width: 4px; border-top-color: var(--mppt-color, var(--text-main)); }
+        .panel-cell.mppt-b-bottom { border-bottom-width: 4px; border-bottom-color: var(--mppt-color, var(--text-main)); }
+        .roof-tooltip {
+            position: fixed; z-index: 100; background-color: var(--bg-surface);
+            border: 1px solid var(--accent-primary); border-radius: var(--border-radius-sm);
+            padding: 8px 10px; font-size: 0.8rem; box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+            pointer-events: none; display: none;
+        }
+        .roof-tooltip .rt-row { display: flex; justify-content: space-between; gap: 12px; color: var(--text-muted); }
+        .roof-tooltip .rt-row span { color: var(--text-main); }
+
+        .solar-analysis { margin-top: 30px; padding-top: 22px; border-top: 1px solid var(--border-color); }
+        .solar-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 20px; }
+        .solar-summary-card { background-color: var(--bg-input); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); padding: 12px 14px; }
+        .solar-summary-card .ssc-title { font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+        .solar-summary-card .ssc-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+        .solar-summary-card .ssc-power { font-size: 1.4rem; font-weight: 700; color: var(--accent-primary); margin-bottom: 6px; }
+        .solar-summary-card .ssc-row { display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--text-muted); }
+        .solar-summary-card .ssc-row span { color: var(--text-main); }
+        .solar-summary-card.offline .ssc-power { color: var(--text-muted); }
+
+        .solar-sun-block {
+            display: flex; align-items: center; gap: 24px; flex-wrap: wrap;
+            background-color: var(--bg-input); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm);
+            padding: 14px 18px; margin-bottom: 20px;
+        }
+        .sun-compass { width: 200px; height: 200px; flex-shrink: 0; }
+        .sc-ring { fill: none; stroke: var(--border-color); stroke-width: 1.5; }
+        .sc-ring-mid { fill: none; stroke: var(--border-color); stroke-width: 1; stroke-dasharray: 2 3; opacity: 0.6; }
+        .sc-axis { stroke: var(--border-color); stroke-width: 1; stroke-dasharray: 2 3; opacity: 0.6; }
+        .sc-path { stroke: #fbbf24; stroke-width: 1.5; stroke-dasharray: 4 3; opacity: 0.75; }
+        .sc-label { fill: var(--text-muted); font-size: 11px; text-anchor: middle; }
+        .sc-sun { fill: #fbbf24; stroke: #f59e0b; stroke-width: 1.5; filter: drop-shadow(0 0 5px #fbbf24); background-color: #fbbf24; }
+        .sc-mark-rise { fill: #6ee7b7; stroke: #0a7a56; stroke-width: 1; background-color: #6ee7b7; }
+        .sc-mark-set { fill: #c8a2fa; stroke: #7c3aed; stroke-width: 1; background-color: #c8a2fa; }
+        .sun-info { flex: 1; min-width: 200px; }
+        .sun-clock { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 10px; font-variant-numeric: tabular-nums; }
+        .sun-info .ssc-row { display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-muted); padding: 3px 0; max-width: 260px; }
+        .sun-info .ssc-row span { color: var(--text-main); font-weight: 600; }
+        .sun-legend { display: flex; gap: 14px; margin-top: 10px; font-size: 0.78rem; color: var(--text-muted); flex-wrap: wrap; }
+        .sun-legend .sc-swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 4px; vertical-align: middle; }
+        .solar-chart-block { background-color: var(--bg-input); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); padding: 12px 14px; margin-bottom: 20px; }
+        .solar-chart-header { display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 8px; }
+        .solar-chart-header span:last-child { color: var(--text-main); font-weight: 700; }
+        .solar-spark-canvas { width: 100%; height: 90px; display: block; }
+
+        .solar-compare { display: flex; flex-direction: column; gap: 14px; }
+        .solar-compare-row .scr-label { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 6px; }
+        .solar-compare-row .scr-bar-line { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+        .solar-compare-row .scr-bar-name { width: 130px; flex-shrink: 0; font-size: 0.78rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .solar-compare-row .scr-bar-track { flex: 1; height: 14px; background-color: var(--bg-input); border-radius: 4px; overflow: hidden; }
+        .solar-compare-row .scr-bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
+        .solar-compare-row .scr-bar-value { width: 70px; flex-shrink: 0; text-align: right; font-size: 0.78rem; font-weight: 700; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px;">
+            <h3 style="margin: 0;">Покрив - соларни панели</h3>
+            <a href="{{ url_for('admin_power') }}" id="backLink" class="text-small">&larr; Назад</a>
+        </div>
+        <p class="section-subtitle">
+            Покрив 56 x 13 м, два ската - всеки инвертор захранва своя скат (86 панела, 5 реда).
+            Всеки инвертор има 4 MPPT тракера, всеки тракер комбинира 2 стринга (общо 8 стринга на инвертор) -
+            тракерът мери само общ ток за двата си стринга, затова живата мощност по-долу е споделена между тях, не разделена.
+            Редакцията е заключена - отключете за да избирате панели (клик или клик-и-провлачване) и да присвоявате стрингове.
+        </p>
+
+        <div class="sat-toolbar">
+            <button type="button" id="satEditBtn" class="btn-secondary">🧭 Премести/завърти картата</button>
+            <span id="satEditHint" class="text-small" style="display:none;">Влачете картата с мишката за позициониране.</span>
+            <label id="satRotateLabel" style="display:none;">Завъртане
+                <input type="range" id="satRotate" min="-180" max="180" step="0.5" value="0">
+                <span class="sat-val" id="satRotateVal">0&deg;</span>
+            </label>
+            <label id="satScaleLabel" style="display:none;">Мащаб
+                <input type="range" id="satScale" min="0.5" max="3" step="0.01" value="1">
+                <span class="sat-val" id="satScaleVal">100%</span>
+            </label>
+            <label id="satOpacityLabel" style="display:none;">Прозрачност
+                <input type="range" id="satOpacity" min="0.1" max="1" step="0.05" value="0.85">
+                <span class="sat-val" id="satOpacityVal">85%</span>
+            </label>
+            <button type="button" id="satFixBtn" class="btn-submit" style="display:none;">📌 Фиксирай</button>
+            <button type="button" id="satResetBtn" class="btn-secondary" style="display:none;">Нулирай</button>
+            <a href="https://www.google.com/maps?q={{ site_lat }},{{ site_lon }}&z=20&t=k" target="_blank" rel="noopener" class="text-small" style="margin-left:auto;">Отвори в Google Maps &rarr;</a>
+        </div>
+
+        <div class="roof-legend">
+            <span><span class="swatch" style="background-color: var(--bg-input); border: 1px solid var(--border-color);"></span> Без стринг</span>
+            <span><span class="swatch str-1" style="background-color:#5fd0e0;"></span> MPPT1 &middot; стринг 1</span>
+            <span><span class="swatch str-2" style="background-color:#0e6b7a;"></span> стринг 2</span>
+            <span><span class="swatch str-3" style="background-color:#6ee7b7;"></span> MPPT2 &middot; стринг 3</span>
+            <span><span class="swatch str-4" style="background-color:#0a7a56;"></span> стринг 4</span>
+            <span><span class="swatch str-5" style="background-color:#fbbf24;"></span> MPPT3 &middot; стринг 5</span>
+            <span><span class="swatch str-6" style="background-color:#b8790a;"></span> стринг 6</span>
+            <span><span class="swatch str-7" style="background-color:#c8a2fa;"></span> MPPT4 &middot; стринг 7</span>
+            <span><span class="swatch str-8" style="background-color:#7c3aed;"></span> стринг 8</span>
+        </div>
+
+        <div class="roof-toolbar">
+            <button type="button" id="unlockBtn" class="btn-secondary">🔓 Отключи за редакция</button>
+            <button type="button" id="clearFocusBtn" class="btn-secondary" style="display:none;">Покажи всички панели</button>
+            <span id="editHint" class="text-small" style="display:none;">Редакцията е отключена - избирайте панели.</span>
+            <span id="selectedCount" class="text-small" style="display:none;">Няма избрани панели</span>
+            <select id="stringSelect" style="display:none;">
+                <option value="1">Стринг 1 (MPPT1)</option>
+                <option value="2">Стринг 2 (MPPT1)</option>
+                <option value="3">Стринг 3 (MPPT2)</option>
+                <option value="4">Стринг 4 (MPPT2)</option>
+                <option value="5">Стринг 5 (MPPT3)</option>
+                <option value="6">Стринг 6 (MPPT3)</option>
+                <option value="7">Стринг 7 (MPPT4)</option>
+                <option value="8">Стринг 8 (MPPT4)</option>
+                <option value="">-- без стринг --</option>
+            </select>
+            <button type="button" id="applyBtn" class="btn-submit" style="display:none;" disabled>💾 Запиши</button>
+            <button type="button" id="clearSelectionBtn" class="btn-secondary" style="display:none;" disabled>Изчисти избора</button>
+            <button type="button" id="selectUnassignedBtn" class="btn-secondary" style="display:none;">Избери без стринг</button>
+            <button type="button" id="lockBtn" class="btn-secondary" style="display:none;">Заключи</button>
+            <span id="roofTiltDisplay" class="text-small">Наклон на скатовете: <span id="roofTiltDisplayVal">12</span>&deg;</span>
+            <label id="roofTiltLabel" style="display:none;">Наклон на скатовете
+                <input type="number" id="roofTiltInput" min="0" max="60" step="0.5" value="12" style="width:4.5em;">&deg;
+            </label>
+            <div class="zoom-controls">
+                <button type="button" id="roofZoomOutBtn" class="btn-secondary" title="Намали">&minus;</button>
+                <span class="zoom-level" id="roofZoomLevelLabel">100%</span>
+                <button type="button" id="roofZoomInBtn" class="btn-secondary" title="Увеличи">+</button>
+                <button type="button" id="roofZoomResetBtn" class="btn-secondary" title="Нулирай мащаба">100%</button>
+            </div>
+        </div>
+
+        <form id="assignForm" action="{{ url_for('admin_solar_roof_assign') }}" method="POST" style="display:none;">
+            {% include 'partials/csrf_field.html' %}
+            <div id="assignFormFields"></div>
+        </form>
+
+        {% if inverters %}
+        <div class="roof-map-stage" id="roofMapStage">
+            <div class="roof-sat-bg" id="roofSatBg">
+                <!-- Deliberately NOT the "?q=...&output=embed" shorthand - that
+                     redirects through a path tagged origin=mfe which Google
+                     serves with X-Frame-Options: SAMEORIGIN, silently blocking
+                     it from rendering in anyone else's iframe (confirmed via a
+                     direct fetch of that exact redirect). This /maps/embed?pb=
+                     form is the same underlying page without that redirect, so
+                     it has no framing restriction. -->
+                <iframe src="https://www.google.com/maps/embed?pb=!1m4!2m1!1s{{ site_lat }},{{ site_lon }}!5e1!6i20"
+                        loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+            </div>
+            <div class="roof-grid-layer">
+        {% macro slope_title(inv) %}
+            <div class="roof-slope-title">
+                {{ inv.name }}
+                <span class="roof-slope-dims">56 x 6.5 м &middot; {{ panels_by_inverter[inv.id]|length }} панела</span>
+                {% if inv.panel_model %}
+                <span class="roof-slope-dims panel-model-badge"
+                      title="{{ inv.panel_model.manufacturer }} &middot; {{ inv.panel_model.cell_type }}&#10;Voc {{ inv.panel_model.voc_v }}V &middot; Isc {{ inv.panel_model.isc_a }}A &middot; Vmp {{ inv.panel_model.vmp_v }}V &middot; Imp {{ inv.panel_model.imp_a }}A&#10;Ефективност {{ inv.panel_model.efficiency_pct }}% &middot; Тегло {{ inv.panel_model.weight_kg }}кг &middot; Дебелина {{ inv.panel_model.thickness_mm|int }}мм&#10;Темп. коеф. Pmax {{ inv.panel_model.temp_coeff_pmax_pct }}%/&deg;C &middot; Макс. системно напрежение {{ inv.panel_model.max_system_voltage_v|int }}V&#10;{{ inv.panel_model.junction_box }} &middot; {{ inv.panel_model.glass_type }}">
+                    📋 {{ inv.panel_model.name }} &middot; {{ inv.panel_model.rated_power_w|int }}W &middot; {{ inv.panel_model.length_mm|int }}&times;{{ inv.panel_model.width_mm|int }}мм
+                </span>
+                {% endif %}
+                <span class="roof-slope-dims">
+                    MPPT1: <span class="slope-power" data-inv="{{ inv.id }}" data-str="1">—</span> &middot;
+                    MPPT2: <span class="slope-power" data-inv="{{ inv.id }}" data-str="3">—</span> &middot;
+                    MPPT3: <span class="slope-power" data-inv="{{ inv.id }}" data-str="5">—</span> &middot;
+                    MPPT4: <span class="slope-power" data-inv="{{ inv.id }}" data-str="7">—</span>
+                </span>
+                <span class="roof-slope-dims sun-readout" data-inv="{{ inv.id }}">☀ —</span>
+            </div>
+        {% endmacro %}
+        {% for inv in inverters %}
+        <div class="roof-slope" data-inverter-id="{{ inv.id }}">
+            {% if loop.index0 == 0 %}{{ slope_title(inv) }}{% endif %}
+            <div class="roof-grid-sun-wrap">
+                <div class="slope-sun-rays" data-inv="{{ inv.id }}"><div class="slope-sun-rays-inner"></div></div>
+                <div class="roof-grid">
+                    {% set rows = {} %}
+                    {% for p in panels_by_inverter[inv.id] %}
+                        {% if rows.update({p.row: (rows.get(p.row, []) + [p])}) %}{% endif %}
+                    {% endfor %}
+                    {% for row_num in rows.keys()|sort %}
+                    <div class="roof-row" data-row="{{ row_num }}">
+                        <div class="roof-row-label" data-row-select="{{ row_num }}">Р{{ row_num }}</div>
+                        <div class="roof-cells">
+                            {% for p in rows[row_num] %}
+                            <div class="panel-cell {% if p.string_number %}str-{{ p.string_number }}{% endif %}"
+                                 data-id="{{ p.id }}" data-row="{{ p.row }}" data-col="{{ p.col }}"
+                                 data-string="{{ p.string_number or '' }}"></div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% if loop.index0 == 1 %}{{ slope_title(inv) }}{% endif %}
+        </div>
+        {% endfor %}
+            </div>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма добавени Solis инвертори.</p>
+        {% endif %}
+
+        <div class="roof-tooltip" id="roofTooltip"></div>
+
+        {% if inverters %}
+        <div class="solar-analysis">
+            <h4 style="margin-bottom: 4px;">Анализ на слънцегреенето</h4>
+            <p class="section-subtitle" style="margin-top: 0;">Обобщена генерация по инвертор - живо, от двата ската заедно.</p>
+
+            <div class="solar-summary-grid" id="solarSummaryCards"></div>
+
+            <div class="solar-sun-block">
+                <svg viewBox="0 0 220 220" class="sun-compass" id="sunCompass">
+                    <circle cx="110" cy="110" r="100" class="sc-ring"></circle>
+                    <circle cx="110" cy="110" r="66.6" class="sc-ring-mid"></circle>
+                    <circle cx="110" cy="110" r="33.3" class="sc-ring-mid"></circle>
+                    <!-- Rotated as one group to match the satellite map's own
+                         "Завъртане" setting below (see setCompassRotation())
+                         so N/E/S/W and the sun/sunrise/sunset dots point the
+                         same screen direction as the aligned satellite photo,
+                         not true screen-up. Each label carries its own
+                         counter-rotation (rotate(-theta) around its own
+                         anchor point) so its position orbits with the group
+                         while the glyph itself stays upright. -->
+                    <g id="compassRotateGroup">
+                        <line x1="110" y1="10" x2="110" y2="210" class="sc-axis"></line>
+                        <line x1="10" y1="110" x2="210" y2="110" class="sc-axis"></line>
+                        <polyline id="sunPathLine" class="sc-path" fill="none" style="display:none;"></polyline>
+                        <circle id="sunriseMark" cx="0" cy="0" r="4.5" class="sc-mark sc-mark-rise" style="display:none;"></circle>
+                        <circle id="sunsetMark" cx="0" cy="0" r="4.5" class="sc-mark sc-mark-set" style="display:none;"></circle>
+                        <circle id="sunDot" cx="110" cy="110" r="8" class="sc-sun" style="display:none;"></circle>
+                        <text id="compassLabelN" x="110" y="20" class="sc-label">С</text>
+                        <text id="compassLabelE" x="198" y="114" class="sc-label">И</text>
+                        <text id="compassLabelS" x="110" y="204" class="sc-label">Ю</text>
+                        <text id="compassLabelW" x="22" y="114" class="sc-label">З</text>
+                    </g>
+                </svg>
+                <div class="sun-info">
+                    <div class="ssc-title" style="margin-bottom:2px;">Позиция на слънцето сега</div>
+                    <div class="sun-clock" id="sunClock">—</div>
+                    <div id="sunInfo"></div>
+                    <div class="sun-legend">
+                        <span><span class="sc-swatch sc-sun"></span> Слънце сега</span>
+                        <span><span class="sc-swatch sc-mark-rise"></span> Изгрев</span>
+                        <span><span class="sc-swatch sc-mark-set"></span> Залез</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="solar-chart-block">
+                <div class="solar-chart-header">
+                    <span>Обща моментна PV мощност (двата инвертора)</span>
+                    <span id="solarSparkValue">— W</span>
+                </div>
+                <canvas id="solarSpark" class="solar-spark-canvas"></canvas>
+            </div>
+
+            <div class="solar-compare" id="solarCompare"></div>
+        </div>
+        {% endif %}
+    </section>
+
+</main>
+
+<script>
+(function () {
+    var selected = {};  // panelId -> true
+    var cells = Array.from(document.querySelectorAll('.panel-cell'));
+    var selectedCountEl = document.getElementById('selectedCount');
+    var applyBtn = document.getElementById('applyBtn');
+    var clearBtn = document.getElementById('clearSelectionBtn');
+    var stringSelect = document.getElementById('stringSelect');
+    var tooltip = document.getElementById('roofTooltip');
+    var unlockBtn = document.getElementById('unlockBtn');
+    var lockBtn = document.getElementById('lockBtn');
+    var editHint = document.getElementById('editHint');
+    var selectUnassignedBtn = document.getElementById('selectUnassignedBtn');
+
+    function updateToolbar() {
+        var n = Object.keys(selected).length;
+        selectedCountEl.textContent = n ? (n + ' избрани панела') : 'Няма избрани панели';
+        applyBtn.disabled = n === 0;
+        clearBtn.disabled = n === 0;
+    }
+
+    // Locked by default - a stray click/drag can't select or reassign
+    // anything until explicitly unlocked (see admin_factory_map_overview.html
+    // for the same pattern on the electrical maps).
+    var editMode = false;
+    function clearSelection() {
+        cells.forEach(function (cell) { setCellSelected(cell, false); });
+    }
+    function setEditMode(on) {
+        editMode = on;
+        unlockBtn.style.display = on ? 'none' : '';
+        [editHint, selectedCountEl, stringSelect, applyBtn, clearBtn, selectUnassignedBtn, lockBtn, roofTiltLabel].forEach(function (el) {
+            el.style.display = on ? '' : 'none';
+        });
+        roofTiltDisplay.style.display = on ? 'none' : '';
+        if (!on) clearSelection();
+    }
+    unlockBtn.addEventListener('click', function () { setEditMode(true); });
+    lockBtn.addEventListener('click', function () { setEditMode(false); });
+
+    // Outlines each MPPT tracker's block of panels with a thick border in
+    // that tracker's own color - a tracker is 2 strings (1&2, 3&4, 5&6,
+    // 7&8), see SolarPanel's docstring in app.py. Compares each assigned
+    // panel against its row/col neighbors *within the same slope* (an
+    // inverter's panels never border the other inverter's) and thickens
+    // whichever side faces a different tracker (unassigned neighbors count
+    // as a boundary too, but only the assigned side draws the line - an
+    // unassigned panel never gets a colored border of its own).
+    var MPPT_COLORS = {1: '#22d3ee', 2: '#4ade80', 3: '#fbbf24', 4: '#c084fc'};
+    function mpptGroup(cell) {
+        var str = parseInt(cell.getAttribute('data-string'), 10);
+        return str ? Math.ceil(str / 2) : 0;
+    }
+    // Raises every panel of a tracker to full mask opacity together when
+    // hovering any one of them, so the whole group reads as "this is one
+    // tracker" rather than only the single panel under the cursor.
+    function setTrackerHighlight(cell, on) {
+        var group = mpptGroup(cell);
+        if (!group) return;
+        var slope = cell.closest('.roof-slope');
+        slope.querySelectorAll('.panel-cell.tracker-mask').forEach(function (other) {
+            if (mpptGroup(other) === group) other.classList.toggle('tracker-highlight', on);
+        });
+    }
+    function updateMpptBorders() {
+        document.querySelectorAll('.roof-slope').forEach(function (slope) {
+            var byRowCol = {};
+            slope.querySelectorAll('.panel-cell').forEach(function (cell) {
+                var row = cell.getAttribute('data-row'), col = cell.getAttribute('data-col');
+                byRowCol[row + ':' + col] = cell;
+            });
+            slope.querySelectorAll('.panel-cell').forEach(function (cell) {
+                var row = parseInt(cell.getAttribute('data-row'), 10);
+                var col = parseInt(cell.getAttribute('data-col'), 10);
+                var group = mpptGroup(cell);
+                if (!group) {
+                    cell.classList.remove('mppt-b-left', 'mppt-b-right', 'mppt-b-top', 'mppt-b-bottom', 'tracker-mask', 'tracker-highlight');
+                    cell.style.removeProperty('--mppt-color');
+                    return;
+                }
+                cell.style.setProperty('--mppt-color', MPPT_COLORS[group]);
+                cell.classList.add('tracker-mask');
+                var left = byRowCol[row + ':' + (col - 1)];
+                var right = byRowCol[row + ':' + (col + 1)];
+                var top = byRowCol[(row - 1) + ':' + col];
+                var bottom = byRowCol[(row + 1) + ':' + col];
+                cell.classList.toggle('mppt-b-left', !left || mpptGroup(left) !== group);
+                cell.classList.toggle('mppt-b-right', !right || mpptGroup(right) !== group);
+                cell.classList.toggle('mppt-b-top', !top || mpptGroup(top) !== group);
+                cell.classList.toggle('mppt-b-bottom', !bottom || mpptGroup(bottom) !== group);
+            });
+        });
+    }
+
+    function toggleCell(cell) {
+        var id = cell.getAttribute('data-id');
+        if (selected[id]) {
+            delete selected[id];
+            cell.classList.remove('selected');
+        } else {
+            selected[id] = true;
+            cell.classList.add('selected');
+        }
+        updateToolbar();
+    }
+    function setCellSelected(cell, on) {
+        var id = cell.getAttribute('data-id');
+        if (on === !!selected[id]) return;
+        if (on) { selected[id] = true; cell.classList.add('selected'); }
+        else { delete selected[id]; cell.classList.remove('selected'); }
+        updateToolbar();
+    }
+
+    // Press on one panel and drag to select every panel the cursor passes
+    // over (like painting) - starting on an already-selected panel instead
+    // drags a de-selection, so the same gesture also works to shrink a
+    // selection. A plain click (no movement) is just this with one cell.
+    var dragging = false;
+    var dragSelectOn = true;
+
+    cells.forEach(function (cell) {
+        cell.addEventListener('mousedown', function (e) {
+            if (e.button !== 0 || !editMode) return;
+            dragging = true;
+            dragSelectOn = !selected[cell.getAttribute('data-id')];
+            setCellSelected(cell, dragSelectOn);
+            e.preventDefault();  // avoid native text/image drag selection
+        });
+        cell.addEventListener('mouseenter', function (e) {
+            if (dragging && editMode) setCellSelected(cell, dragSelectOn);
+            var strNum = cell.getAttribute('data-string');
+            var slope = cell.closest('.roof-slope');
+            var invId = slope.getAttribute('data-inverter-id');
+            var html = '<div class="rt-row">Позиция <span>Ред ' + cell.getAttribute('data-row') + ', №' + cell.getAttribute('data-col') + '</span></div>';
+            if (strNum) {
+                var mppt = Math.ceil(strNum / 2);
+                var panelCount = slope.querySelectorAll('.panel-cell[data-string="' + strNum + '"]').length;
+                var trackerStrings = [mppt * 2 - 1, mppt * 2];
+                var trackerCount = trackerStrings.reduce(function (sum, s) {
+                    return sum + slope.querySelectorAll('.panel-cell[data-string="' + s + '"]').length;
+                }, 0);
+                var reading = lastStringData[invId + '-' + strNum];
+                html += '<div class="rt-row">Стринг <span>' + strNum + ' (MPPT' + mppt + ')</span></div>' +
+                    '<div class="rt-row">Панели в стринга <span>' + panelCount + '</span></div>' +
+                    '<div class="rt-row">Общо панели в MPPT' + mppt + ' <span>' + trackerCount + '</span></div>';
+                html += reading
+                    ? '<div class="rt-row">Напрежение (MPPT' + mppt + ') <span>' + reading.voltage.toFixed(1) + ' V</span></div>' +
+                      '<div class="rt-row">Ток (MPPT' + mppt + ') <span>' + reading.current.toFixed(1) + ' A</span></div>' +
+                      '<div class="rt-row">Мощност (MPPT' + mppt + ') <span>' + reading.power + ' W</span></div>'
+                    : '<div class="rt-row">Живи данни <span>няма връзка</span></div>';
+            } else {
+                html += '<div class="rt-row">Стринг <span>няма</span></div>';
+            }
+            // Same cosine-law figure driving the ray overlay/slope readout
+            // (see updateSunSimulation()) - shown per-panel too since every
+            // panel on this slope shares the one tilt/facing assumption.
+            if (lastSun) {
+                var irr = irradianceFactor(lastSun.azimuth, lastSun.altitude, slopeFacingDeg(invId), getRoofTiltDeg());
+                html += '<div class="rt-row">Покритие от слънчева радиация <span>' +
+                    (lastSun.altitude <= 0 ? 'няма (нощ)' : Math.round(irr.factor * 100) + '%') + '</span></div>';
+            }
+            tooltip.innerHTML = html;
+            tooltip.style.display = 'block';
+            setTrackerHighlight(cell, true);
+        });
+        cell.addEventListener('mousemove', function (e) {
+            tooltip.style.left = (e.clientX + 14) + 'px';
+            tooltip.style.top = (e.clientY + 12) + 'px';
+        });
+        cell.addEventListener('mouseleave', function () {
+            tooltip.style.display = 'none';
+            setTrackerHighlight(cell, false);
+        });
+    });
+    document.addEventListener('mouseup', function () { dragging = false; });
+
+    document.querySelectorAll('.roof-row-label').forEach(function (label) {
+        label.addEventListener('click', function () {
+            if (!editMode) return;
+            var slope = label.closest('.roof-slope');
+            var row = label.getAttribute('data-row-select');
+            slope.querySelectorAll('.panel-cell[data-row="' + row + '"]').forEach(toggleCell);
+        });
+    });
+
+    document.getElementById('selectUnassignedBtn').addEventListener('click', function () {
+        cells.forEach(function (cell) {
+            if (!cell.getAttribute('data-string') && !selected[cell.getAttribute('data-id')]) toggleCell(cell);
+        });
+    });
+
+    clearBtn.addEventListener('click', function () {
+        cells.forEach(function (cell) {
+            if (selected[cell.getAttribute('data-id')]) toggleCell(cell);
+        });
+    });
+
+    applyBtn.addEventListener('click', function () {
+        var ids = Object.keys(selected);
+        if (!ids.length) return;
+        var form = document.getElementById('assignForm');
+        var fields = document.getElementById('assignFormFields');
+        fields.innerHTML = '';
+        ids.forEach(function (id) {
+            var inp = document.createElement('input');
+            inp.type = 'hidden'; inp.name = 'panel_ids'; inp.value = id;
+            fields.appendChild(inp);
+        });
+        var strInp = document.createElement('input');
+        strInp.type = 'hidden'; strInp.name = 'string_number'; strInp.value = stringSelect.value;
+        fields.appendChild(strInp);
+        form.submit();
+    });
+
+    // --- Live per-string power legend ---
+    var lastStringData = {};  // "invId-stringNum" -> {voltage, current, power, mppt}
+
+    // --- Solar generation analysis (bottom section) - reuses the same
+    // 10s poll as the per-string legend above instead of a second fetch
+    // loop, since admin_solar_roof_data() already returns both in one call.
+    var solarSummaryCards = document.getElementById('solarSummaryCards');
+    var solarCompare = document.getElementById('solarCompare');
+    var solarSpark = document.getElementById('solarSpark');
+    var solarSparkValue = document.getElementById('solarSparkValue');
+    var solarHistory = [];
+    var SOLAR_HISTORY_MAX = 60;
+    var INV_COLORS = ['#22d3ee', '#fbbf24', '#6ee7b7', '#c084fc'];
+    var invIdsInOrder = Array.from(document.querySelectorAll('.roof-slope')).map(function (s) { return s.getAttribute('data-inverter-id'); });
+    function invColor(invId) {
+        var idx = invIdsInOrder.indexOf(invId);
+        return INV_COLORS[idx >= 0 ? idx % INV_COLORS.length : 0];
+    }
+    function drawSolarSpark(points) {
+        // Rolling line of combined PV power. Kept as a plain canvas on
+        // purpose, same approach as drawSpark() in admin_power.html - no
+        // charting library.
+        var ctx = solarSpark.getContext('2d');
+        var w = solarSpark.width = solarSpark.clientWidth;
+        var h = solarSpark.height = solarSpark.clientHeight;
+        ctx.clearRect(0, 0, w, h);
+        if (points.length < 2) return;
+        var max = Math.max.apply(null, points.concat([1])) * 1.15;
+        var x = function (i) { return (i / (points.length - 1)) * w; };
+        var y = function (v) { return h - (v / max) * (h - 8) - 4; };
+        ctx.beginPath();
+        points.forEach(function (v, i) { i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)); });
+        ctx.strokeStyle = '#fbbf24';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    }
+    function renderSolarSummary(inverters) {
+        solarSummaryCards.innerHTML = Object.keys(inverters).map(function (id) {
+            var inv = inverters[id];
+            var dot = '<span class="ssc-dot" style="background-color:' + invColor(id) + '"></span>';
+            if (!inv.online) {
+                return '<div class="solar-summary-card offline"><div class="ssc-title">' + dot + inv.name + '</div><div class="ssc-power">няма връзка</div></div>';
+            }
+            return '<div class="solar-summary-card">' +
+                '<div class="ssc-title">' + dot + inv.name + '</div>' +
+                '<div class="ssc-power">' + inv.power + ' W</div>' +
+                '<div class="ssc-row">Днес <span>' + inv.today_kwh.toFixed(1) + ' kWh</span></div>' +
+                '<div class="ssc-row">Вчера <span>' + inv.yesterday_kwh.toFixed(1) + ' kWh</span></div>' +
+                '<div class="ssc-row">Този месец <span>' + inv.month_kwh.toFixed(1) + ' kWh</span></div>' +
+                '<div class="ssc-row">От началото <span>' + inv.total_kwh.toFixed(1) + ' kWh</span></div>' +
+                '</div>';
+        }).join('');
+    }
+    function renderSolarCompare(inverters) {
+        var periods = [{ key: 'today_kwh', label: 'Днес' }, { key: 'yesterday_kwh', label: 'Вчера' }, { key: 'month_kwh', label: 'Този месец' }];
+        var onlineIds = Object.keys(inverters).filter(function (id) { return inverters[id].online; });
+        if (!onlineIds.length) { solarCompare.innerHTML = ''; return; }
+        solarCompare.innerHTML = periods.map(function (period) {
+            var max = Math.max.apply(null, onlineIds.map(function (id) { return inverters[id][period.key]; }).concat([0.001]));
+            var bars = onlineIds.map(function (id) {
+                var inv = inverters[id];
+                var val = inv[period.key];
+                var pct = Math.max(2, Math.round((val / max) * 100));
+                return '<div class="scr-bar-line">' +
+                    '<span class="scr-bar-name">' + inv.name + '</span>' +
+                    '<div class="scr-bar-track"><div class="scr-bar-fill" style="width:' + pct + '%;background-color:' + invColor(id) + '"></div></div>' +
+                    '<span class="scr-bar-value">' + val.toFixed(1) + ' kWh</span>' +
+                    '</div>';
+            }).join('');
+            return '<div class="solar-compare-row"><div class="scr-label">' + period.label + '</div>' + bars + '</div>';
+        }).join('');
+    }
+
+    // Sun-position compass - a polar sky-dome projection (center = zenith,
+    // ring edge = horizon, angle = compass bearing) rather than a plain
+    // side-view arc, so both azimuth AND altitude read off the one dot at a
+    // glance. Sunrise/sunset markers sit on the ring itself (altitude 0).
+    var sunDot = document.getElementById('sunDot');
+    var sunriseMark = document.getElementById('sunriseMark');
+    var sunsetMark = document.getElementById('sunsetMark');
+    var sunInfo = document.getElementById('sunInfo');
+
+    // Live date/time readout above the compass - ticks on its own 1s timer
+    // (the browser's local clock) rather than only refreshing on the 10s
+    // data poll, so it reads as an actual clock instead of a stale
+    // timestamp. Purely a "as of when" label for the sun position below it,
+    // not itself used in any calculation (that already happened server-side
+    // in _sun_position()).
+    var sunClock = document.getElementById('sunClock');
+    var CLOCK_MONTHS = ['януари', 'февруари', 'март', 'април', 'май', 'юни', 'юли', 'август', 'септември', 'октомври', 'ноември', 'декември'];
+    function tickSunClock() {
+        var d = new Date();
+        var pad = function (n) { return String(n).padStart(2, '0'); };
+        sunClock.textContent = d.getDate() + ' ' + CLOCK_MONTHS[d.getMonth()] + ' ' + d.getFullYear() + 'г., ' +
+            pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    }
+    tickSunClock();
+    setInterval(tickSunClock, 1000);
+
+    // Keeps the compass rose in sync with the satellite map's own rotation
+    // (the "Завъртане" slider below, persisted under SAT_STORAGE_KEY) so N
+    // points the same screen direction as true North does on the aligned
+    // photo, instead of always pointing screen-up - see the map's
+    // applySat(), which calls this live while dragging, plus the read here
+    // for the initial page load (before that block below has even run).
+    var COMPASS_LABELS = [
+        { id: 'compassLabelN', x: 110, y: 20 }, { id: 'compassLabelE', x: 198, y: 114 },
+        { id: 'compassLabelS', x: 110, y: 204 }, { id: 'compassLabelW', x: 22, y: 114 },
+    ];
+    function setCompassRotation(theta) {
+        var group = document.getElementById('compassRotateGroup');
+        if (!group) return;
+        group.setAttribute('transform', 'rotate(' + theta + ' 110 110)');
+        COMPASS_LABELS.forEach(function (lbl) {
+            var el = document.getElementById(lbl.id);
+            if (el) el.setAttribute('transform', 'rotate(' + (-theta) + ' ' + lbl.x + ' ' + lbl.y + ')');
+        });
+    }
+    (function initCompassRotation() {
+        try {
+            var raw = localStorage.getItem('trafcom_roof_sat_transform');
+            setCompassRotation(raw ? (JSON.parse(raw).rotate || 0) : 0);
+        } catch (e) {}
+    })();
+
+    function compassXY(azimuthDeg, altitudeDeg) {
+        var R = 100, cx = 110, cy = 110;
+        var r = R * (1 - Math.max(0, Math.min(90, altitudeDeg)) / 90);
+        var rad = azimuthDeg * Math.PI / 180;
+        return { x: cx + r * Math.sin(rad), y: cy - r * Math.cos(rad) };
+    }
+    function placeOnCompass(el, azimuthDeg, altitudeDeg) {
+        var p = compassXY(azimuthDeg, altitudeDeg);
+        el.setAttribute('cx', p.x);
+        el.setAttribute('cy', p.y);
+    }
+    var sunPathLine = document.getElementById('sunPathLine');
+    function renderSunCompass(sun) {
+        if (sun.altitude > -0.833) {
+            placeOnCompass(sunDot, sun.azimuth, sun.altitude);
+            sunDot.style.display = '';
+        } else {
+            sunDot.style.display = 'none';
+        }
+        if (sun.sunrise) { placeOnCompass(sunriseMark, sun.sunrise.azimuth, 0); sunriseMark.style.display = ''; }
+        if (sun.sunset) { placeOnCompass(sunsetMark, sun.sunset.azimuth, 0); sunsetMark.style.display = ''; }
+        if (sun.path && sun.path.length > 1) {
+            sunPathLine.setAttribute('points', sun.path.map(function (p) {
+                var xy = compassXY(p.azimuth, p.altitude);
+                return xy.x + ',' + xy.y;
+            }).join(' '));
+            sunPathLine.style.display = '';
+        } else {
+            sunPathLine.style.display = 'none';
+        }
+        sunInfo.innerHTML =
+            '<div class="ssc-row">Статус <span>' + (sun.is_day ? 'Ден' : 'Нощ') + '</span></div>' +
+            '<div class="ssc-row">Азимут <span>' + sun.azimuth.toFixed(1) + '&deg;</span></div>' +
+            '<div class="ssc-row">Височина над хоризонта <span>' + sun.altitude.toFixed(1) + '&deg;</span></div>' +
+            '<div class="ssc-row">Изгрев <span>' + (sun.sunrise ? sun.sunrise.time : '—') + '</span></div>' +
+            '<div class="ssc-row">Залез <span>' + (sun.sunset ? sun.sunset.time : '—') + '</span></div>';
+    }
+
+    // Sunlight-on-panels simulation - a per-slope light-band overlay (see
+    // .slope-sun-rays/-inner CSS) whose angle follows the sun's azimuth
+    // (adjusted into the same rotated screen frame as the map/compass) and
+    // whose opacity tracks the standard cosine-law irradiance factor for a
+    // tilted flat plate: cos(theta) = cos(tilt)*sin(altitude) +
+    // sin(tilt)*cos(altitude)*cos(sun_azimuth - panel_azimuth). Tilt and
+    // facing direction are the user's own estimates (first slope on screen
+    // faces West/270deg, second faces East/90deg, a standard duo-pitch
+    // roof) - not measured, so treat the numbers as indicative, not a
+    // certified yield calculation. Tilt itself is editable - lives in the
+    // panel toolbar above (roofTiltInput/-Label/-Display) gated by the SAME
+    // editMode lock as string assignment, rather than always-open, since
+    // it's a physical setting worth protecting from a stray edit the same
+    // way panel assignments are. Persisted client-side (localStorage), same
+    // as the map alignment - a one-time calibration, not shared team data.
+    var ROOF_TILT_STORAGE_KEY = 'trafcom_roof_tilt_deg';
+    var roofTiltInput = document.getElementById('roofTiltInput');
+    var roofTiltLabel = document.getElementById('roofTiltLabel');
+    var roofTiltDisplay = document.getElementById('roofTiltDisplay');
+    var roofTiltDisplayVal = document.getElementById('roofTiltDisplayVal');
+    function getRoofTiltDeg() {
+        var v = parseFloat(roofTiltInput.value);
+        return isFinite(v) ? v : 12;
+    }
+    (function initRoofTilt() {
+        try {
+            var raw = localStorage.getItem(ROOF_TILT_STORAGE_KEY);
+            if (raw !== null) roofTiltInput.value = raw;
+        } catch (e) {}
+        roofTiltDisplayVal.textContent = roofTiltInput.value;
+    })();
+    roofTiltInput.addEventListener('input', function () {
+        try { localStorage.setItem(ROOF_TILT_STORAGE_KEY, roofTiltInput.value); } catch (e) {}
+        roofTiltDisplayVal.textContent = roofTiltInput.value;
+        if (lastSun) updateSunSimulation(lastSun);
+    });
+
+    // --- Zoom (view-only) - scales the panel cells/gaps via the
+    // --roof-zoom CSS variable (see .panel-cell/.roof-grid/etc.), which the
+    // flex layout reflows at its real new size, unlike the factory maps'
+    // percent-positioned canvases (no scroll-viewport bookkeeping needed
+    // here - the page just grows/shrinks normally).
+    var roofMapStage = document.getElementById('roofMapStage');
+    var roofZoomLevel = 1;
+    var roofZoomLevelLabel = document.getElementById('roofZoomLevelLabel');
+    function setRoofZoom(z) {
+        roofZoomLevel = Math.max(0.5, Math.min(2.5, z));
+        if (roofMapStage) roofMapStage.style.setProperty('--roof-zoom', roofZoomLevel);
+        roofZoomLevelLabel.textContent = Math.round(roofZoomLevel * 100) + '%';
+        // Satellite backdrop isn't sized by --roof-zoom (it's an iframe,
+        // not flex layout) - re-apply its own transform so the page zoom
+        // multiplies into its scale too (see applySat() below), keeping it
+        // in step with the panel grid instead of holding still.
+        if (typeof applySat === 'function') applySat();
+    }
+    var roofZoomInBtn = document.getElementById('roofZoomInBtn');
+    var roofZoomOutBtn = document.getElementById('roofZoomOutBtn');
+    var roofZoomResetBtn = document.getElementById('roofZoomResetBtn');
+    if (roofZoomInBtn) {
+        roofZoomInBtn.addEventListener('click', function () { setRoofZoom(roofZoomLevel + 0.15); });
+        roofZoomOutBtn.addEventListener('click', function () { setRoofZoom(roofZoomLevel - 0.15); });
+        roofZoomResetBtn.addEventListener('click', function () { setRoofZoom(1); });
+        document.addEventListener('wheel', function (e) {
+            if (!e.ctrlKey || !roofMapStage || !roofMapStage.contains(e.target)) return;
+            e.preventDefault();
+            setRoofZoom(roofZoomLevel - e.deltaY * 0.001);
+        }, { passive: false });
+    }
+
+    function slopeFacingDeg(invId) {
+        var idx = invIdsInOrder.indexOf(invId);
+        return idx === 1 ? 90 : 270;
+    }
+    function irradianceFactor(sunAzimuthDeg, sunAltitudeDeg, panelAzimuthDeg, panelTiltDeg) {
+        if (sunAltitudeDeg <= 0) return { factor: 0, incidenceDeg: 90 };
+        var rad = Math.PI / 180;
+        var alt = sunAltitudeDeg * rad, tilt = panelTiltDeg * rad;
+        var azDiff = (sunAzimuthDeg - panelAzimuthDeg) * rad;
+        var cosTheta = Math.cos(tilt) * Math.sin(alt) + Math.sin(tilt) * Math.cos(alt) * Math.cos(azDiff);
+        cosTheta = Math.max(-1, Math.min(1, cosTheta));
+        return { factor: Math.max(0, cosTheta), incidenceDeg: Math.acos(cosTheta) * 180 / Math.PI };
+    }
+    function currentMapRotationDeg() {
+        try {
+            var raw = localStorage.getItem('trafcom_roof_sat_transform');
+            return raw ? (JSON.parse(raw).rotate || 0) : 0;
+        } catch (e) { return 0; }
+    }
+    var lastSun = null;
+    function updateSunSimulation(sun) {
+        if (!sun) return;
+        lastSun = sun;
+        var screenAngle = sun.azimuth + currentMapRotationDeg();
+        invIdsInOrder.forEach(function (id) {
+            var facing = slopeFacingDeg(id);
+            var r = irradianceFactor(sun.azimuth, sun.altitude, facing, getRoofTiltDeg());
+            var outer = document.querySelector('.slope-sun-rays[data-inv="' + id + '"]');
+            var inner = outer && outer.querySelector('.slope-sun-rays-inner');
+            if (outer && inner) {
+                outer.style.opacity = sun.altitude > 0 ? (0.12 + r.factor * 0.8).toFixed(2) : 0;
+                inner.style.transform = 'translate(-50%, -50%) rotate(' + screenAngle + 'deg)';
+            }
+            var readout = document.querySelector('.sun-readout[data-inv="' + id + '"]');
+            if (readout) {
+                readout.textContent = sun.altitude <= 0
+                    ? '☀ няма пряка светлина (нощ)'
+                    : '☀ ' + Math.round(r.factor * 100) + '% огряване · ъгъл на падане ' + Math.round(r.incidenceDeg) + '°';
+            }
+        });
+    }
+
+    function pollStrings() {
+        fetch('{{ url_for("admin_solar_roof_data") }}')
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                lastStringData = data.strings;
+                document.querySelectorAll('.slope-power').forEach(function (el) {
+                    var info = data.strings[el.getAttribute('data-inv') + '-' + el.getAttribute('data-str')];
+                    el.textContent = info ? (info.power + ' W') : '—';
+                });
+                if (solarSummaryCards && data.inverters) {
+                    renderSolarSummary(data.inverters);
+                    renderSolarCompare(data.inverters);
+                    var totalPower = Object.keys(data.inverters).reduce(function (sum, id) {
+                        var inv = data.inverters[id];
+                        return sum + (inv.online ? inv.power : 0);
+                    }, 0);
+                    solarHistory.push(totalPower);
+                    if (solarHistory.length > SOLAR_HISTORY_MAX) solarHistory.shift();
+                    solarSparkValue.textContent = totalPower + ' W';
+                    drawSolarSpark(solarHistory);
+                }
+                if (data.sun) { renderSunCompass(data.sun); updateSunSimulation(data.sun); }
+            })
+            .catch(function () {});
+    }
+    pollStrings();
+    setInterval(pollStrings, 10000);
+    updateMpptBorders();
+
+    // Arriving from a tracker's node on the main map (?inverter=<ModbusDevice
+    // id>&mppt=<1-4>, see admin_factory_map_overview.html's PV node click
+    // handler) - keeps that exact tracker's panels bright and dims every
+    // other panel on the roof, on both slopes, so it's obvious at a glance
+    // which physical modules that tracker corresponds to.
+    var clearFocusBtn = document.getElementById('clearFocusBtn');
+    function clearFocus() {
+        cells.forEach(function (cell) { cell.classList.remove('focus-dim', 'focus-bright'); });
+        clearFocusBtn.style.display = 'none';
+    }
+    function applyFocusFromUrl() {
+        var params = new URLSearchParams(window.location.search);
+        var invId = params.get('inverter');
+        var mppt = params.get('mppt');
+        if (!invId || !mppt) return;
+        cells.forEach(function (cell) {
+            var slope = cell.closest('.roof-slope');
+            var isFocused = slope.getAttribute('data-inverter-id') === invId && mpptGroup(cell) === parseInt(mppt, 10);
+            cell.classList.toggle('focus-bright', isFocused);
+            cell.classList.toggle('focus-dim', !isFocused);
+        });
+        clearFocusBtn.style.display = '';
+    }
+    clearFocusBtn.addEventListener('click', clearFocus);
+    applyFocusFromUrl();
+
+    // --- Satellite background alignment (rotate/pan/scale/opacity) ---
+    // Persisted client-side only (localStorage) - this is a personal visual
+    // aid for orienting the abstract panel grid against the real roof photo,
+    // not shared data other admins need synced, so no DB table/migration
+    // for it. pointer-events on the iframe itself stay off at all times
+    // (see .roof-sat-bg CSS) - dragging always repositions our own wrapper
+    // transform, never Google's internal map, so the "camera" set by the
+    // q=/z= URL params never drifts out from under the saved alignment.
+    var SAT_STORAGE_KEY = 'trafcom_roof_sat_transform';
+    var satStage = document.getElementById('roofMapStage');
+    var satBg = document.getElementById('roofSatBg');
+    if (satStage && satBg) {
+        var satEditBtn = document.getElementById('satEditBtn');
+        var satFixBtn = document.getElementById('satFixBtn');
+        var satResetBtn = document.getElementById('satResetBtn');
+        var satRotate = document.getElementById('satRotate');
+        var satScale = document.getElementById('satScale');
+        var satOpacity = document.getElementById('satOpacity');
+        var satRotateVal = document.getElementById('satRotateVal');
+        var satScaleVal = document.getElementById('satScaleVal');
+        var satOpacityVal = document.getElementById('satOpacityVal');
+        var satControlEls = [document.getElementById('satEditHint'), document.getElementById('satRotateLabel'),
+            document.getElementById('satScaleLabel'), document.getElementById('satOpacityLabel'), satFixBtn, satResetBtn];
+
+        // scaleX/scaleY was a brief experiment (independent stretch) that
+        // turned out not to be needed - back to one uniform "Мащаб". Still
+        // read an old scaleX (if that shape is what's in localStorage) as
+        // this value's fallback so nothing saved during that experiment
+        // just vanishes.
+        var DEFAULT_SAT = { rotate: 0, scale: 1, opacity: 0.85, x: 0, y: 0 };
+        function loadSat() {
+            try {
+                var raw = localStorage.getItem(SAT_STORAGE_KEY);
+                if (!raw) return Object.assign({}, DEFAULT_SAT);
+                var parsed = JSON.parse(raw);
+                if (parsed.scale === undefined && parsed.scaleX !== undefined) {
+                    parsed.scale = parsed.scaleX;
+                }
+                return Object.assign({}, DEFAULT_SAT, parsed);
+            } catch (e) {
+                return Object.assign({}, DEFAULT_SAT);
+            }
+        }
+        var sat = loadSat();
+
+        function applySat() {
+            // sat.scale is the user's own manual fit; roofZoomLevel is the
+            // page-wide zoom control (setRoofZoom() above) - multiplying
+            // them means zooming the whole roof view scales the satellite
+            // photo right along with the panel grid, on top of whatever
+            // fit the user dialed in, rather than the photo holding still
+            // while only the grid grows/shrinks around it.
+            var combinedScale = sat.scale * (typeof roofZoomLevel === 'number' ? roofZoomLevel : 1);
+            satBg.style.transform = 'translate(-50%, -50%) translate(' + sat.x + 'px, ' + sat.y + 'px) ' +
+                'rotate(' + sat.rotate + 'deg) scale(' + combinedScale + ')';
+            satBg.style.opacity = sat.opacity;
+            satRotate.value = sat.rotate;
+            satScale.value = sat.scale;
+            satOpacity.value = sat.opacity;
+            satRotateVal.textContent = sat.rotate + '°';
+            satScaleVal.textContent = Math.round(sat.scale * 100) + '%';
+            satOpacityVal.textContent = Math.round(sat.opacity * 100) + '%';
+            setCompassRotation(sat.rotate);
+            if (lastSun) updateSunSimulation(lastSun);
+        }
+        applySat();
+
+        var satEditMode = false;
+        function setSatEditMode(on) {
+            satEditMode = on;
+            satStage.classList.toggle('sat-edit-mode', on);
+            satEditBtn.style.display = on ? 'none' : '';
+            satControlEls.forEach(function (el) { el.style.display = on ? '' : 'none'; });
+        }
+        satEditBtn.addEventListener('click', function () { setSatEditMode(true); });
+        satFixBtn.addEventListener('click', function () {
+            try { localStorage.setItem(SAT_STORAGE_KEY, JSON.stringify(sat)); } catch (e) {}
+            setSatEditMode(false);
+        });
+        satResetBtn.addEventListener('click', function () {
+            sat = Object.assign({}, DEFAULT_SAT);
+            applySat();
+            try { localStorage.removeItem(SAT_STORAGE_KEY); } catch (e) {}
+        });
+
+        satRotate.addEventListener('input', function () { sat.rotate = parseFloat(satRotate.value); applySat(); });
+        satScale.addEventListener('input', function () { sat.scale = parseFloat(satScale.value); applySat(); });
+        satOpacity.addEventListener('input', function () { sat.opacity = parseFloat(satOpacity.value); applySat(); });
+
+        // Drag-to-pan - only active in edit mode (see .roof-sat-bg's
+        // pointer-events toggle in CSS, gated by .sat-edit-mode).
+        var dragStart = null;
+        satBg.addEventListener('mousedown', function (e) {
+            if (!satEditMode) return;
+            dragStart = { mouseX: e.clientX, mouseY: e.clientY, x: sat.x, y: sat.y };
+            satStage.classList.add('dragging');
+            e.preventDefault();
+        });
+        document.addEventListener('mousemove', function (e) {
+            if (!dragStart) return;
+            sat.x = dragStart.x + (e.clientX - dragStart.mouseX);
+            sat.y = dragStart.y + (e.clientY - dragStart.mouseY);
+            applySat();
+        });
+        document.addEventListener('mouseup', function () {
+            dragStart = null;
+            satStage.classList.remove('dragging');
+        });
+    }
+
+    // "Назад" goes to wherever actually linked here (a tracker's focus link
+    // from Главна карта, the admin hub, ...) instead of always Консумация -
+    // falls back to that when there's no same-origin referrer.
+    var backLink = document.getElementById('backLink');
+    if (backLink && document.referrer && document.referrer.indexOf(window.location.origin) === 0) {
+        backLink.href = document.referrer;
+    }
+})();
+</script>
+
+</body>
+</html>

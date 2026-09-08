@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Преглед от ръководството - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    {% if current_user.is_admin or current_user.role == 'quality_control' %}
+    <section class="admin-card">
+        <h3>Нов преглед от ръководството</h3>
+        <p class="section-subtitle">ISO 9001 §9.3 - при създаване се записва снимка на текущите CAPA/одит/калибриране данни; входовете и решенията се попълват след това в самия преглед.</p>
+        <form action="{{ url_for('admin_add_management_review') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="new_review_date">Дата на прегледа</label>
+                <input type="date" id="new_review_date" name="review_date" required>
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="new_participants">Участници</label>
+                <input type="text" id="new_participants" name="participants" placeholder="напр. admin, yosko" style="width: 100%;">
+            </div>
+            <button type="submit" class="btn-submit">Създай преглед</button>
+        </form>
+    </section>
+    {% endif %}
+
+    <section class="admin-card">
+        <h3>Прегледи</h3>
+
+        {% if reviews %}
+        <div class="table-responsive" style="margin-top: 1rem;">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Дата</th>
+                    <th>Участници</th>
+                    <th>Отворени CAPA</th>
+                    <th>Просрочени CAPA</th>
+                    <th>Несъответствия от одит</th>
+                    <th>Просрочени калибрирания</th>
+                    <th>Решения</th>
+                    <th class="text-right">Действие</th>
+                    <th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for review in reviews %}
+                <tr>
+                    <td><strong>{{ review.review_date.strftime('%d.%m.%Y') }}</strong></td>
+                    <td>{{ review.participants or '—' }}</td>
+                    <td>{{ review.snapshot_open_capa_count }}</td>
+                    <td>{{ review.snapshot_overdue_capa_count }}</td>
+                    <td>{{ review.snapshot_audit_nonconformity_count }}</td>
+                    <td>{{ review.snapshot_overdue_calibration_count }}</td>
+                    <td>{{ review.actions|length }}</td>
+                    <td class="text-right">
+                        <a href="{{ url_for('admin_edit_management_review', review_id=review.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Отвори</a>
+                    </td>
+                    <td class="text-right">
+                        {% if current_user.is_admin or current_user.role == 'quality_control' %}
+                        <form action="{{ url_for('admin_delete_management_review', review_id=review.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на прегледа от {{ review.review_date.strftime('%d.%m.%Y') }}? Ще се изтрият и всичките му решения/действия.');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма прегледи от ръководството.</p>
+        {% endif %}
+    </section>
+
+</main>
+
+</body>
+</html>

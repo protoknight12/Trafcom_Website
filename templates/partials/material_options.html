@@ -8,7 +8,7 @@
 {% for type_key, group in materials|groupby('type') %}
 <optgroup label="{{ material_type_label(type_key) }}">
     {% for material in group %}
-    <option value="{{ material.key }}" data-id="{{ material.id }}" data-name="{{ material.display_name }}"
+    <option value="{{ material.key }}" data-id="{{ material.id }}" data-name="{{ localized(material, 'display_name') }}"
             data-w="{{ material.sheet_width_mm if material.sheet_width_mm is not none else '' }}"
             data-h="{{ material.sheet_length_mm if material.sheet_length_mm is not none else '' }}"
             data-t="{{ material.thickness_mm if material.thickness_mm is not none else '' }}"

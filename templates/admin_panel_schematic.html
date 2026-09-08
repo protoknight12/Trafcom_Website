@@ -1,0 +1,2515 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Схема на {{ panel.name }} - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        /* Zoom widens/narrows .schematic-canvas's own real width% inside this
+           scrollable viewport - same technique as admin_factory_map_overview.html
+           (every card/wire is positioned in percent of the canvas, so a real
+           width change keeps everything correctly aligned at any zoom level
+           with no extra recalculation needed anywhere else). */
+        .schematic-zoom-viewport { overflow: auto; border-radius: var(--border-radius-md); }
+        .schematic-canvas {
+            position: relative;
+            /* Fixed PIXEL width, never a % of the container - explicit ask:
+               "трябва да е статична картинката ... елементите с връзките да
+               не се ресайзват и разместват" (a browser window resize must
+               never move anything). JS sets the real value (from the
+               background photo's own natural size, or this default) and
+               zoom multiplies it - see setZoom()/applyBgAspectRatio(). If
+               the viewport is narrower than this, .schematic-zoom-viewport
+               scrolls instead of shrinking the canvas. */
+            width: 900px;
+            aspect-ratio: 16 / 9; /* overridden by JS to match the background photo's own ratio, once one exists - see applyBgAspectRatio() */
+            min-height: 420px;
+            background-color: var(--bg-input);
+            background-image:
+                linear-gradient(to right, var(--border-color) 1px, transparent 1px),
+                linear-gradient(to bottom, var(--border-color) 1px, transparent 1px);
+            background-size: 5% 5%;
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-md);
+            overflow: hidden;
+            touch-action: none;
+        }
+        .schematic-canvas.edit-mode .pcomp-card { cursor: grab; }
+        .schematic-canvas.edit-mode .pcomp-card:active { cursor: grabbing; }
+        .schematic-canvas.connect-mode .pcomp-card { cursor: crosshair; }
+        .zoom-controls { display: flex; align-items: center; gap: 4px; }
+        .zoom-controls button { width: 28px; height: 28px; padding: 0; font-weight: 700; }
+        .zoom-controls .zoom-level { min-width: 3.2em; text-align: center; font-size: 0.8rem; color: var(--text-muted); }
+        /* Reference photo backdrop (see ElectricalPanel.schematic_bg_*) -
+           sits behind the SVG/component layer (appended first into the
+           canvas), draggable only while edit-mode is on. Its width is set
+           by JS as a fraction of the canvas's own current width (see
+           SCHEMATIC_BG_MARGIN/applyBgScale()), so "плюс маргин" (a visible
+           border around the photo) holds at scale=1 regardless of zoom. */
+        .schematic-bg-img {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            user-select: none;
+            /* opacity is set inline per-panel (ElectricalPanel.schematic_bg_opacity) */
+            z-index: 0;
+        }
+        /* Needs edit-mode AND its own separate bg-unlocked toggle - moving
+           the backdrop photo is locked independently of moving/adding
+           elements, since dragging elements around used to sometimes grab
+           and drag the photo underneath by mistake ("при местене на
+           елементи някой път стават грешки и меся картинката"). */
+        .schematic-canvas.edit-mode.bg-unlocked .schematic-bg-img { pointer-events: auto; cursor: grab; }
+        .schematic-canvas.edit-mode.bg-unlocked .schematic-bg-img:active { cursor: grabbing; }
+        /* Above .pcomp-card (z-index 2) on purpose - a wire whose routed
+           path happens to pass near/under an unrelated component must still
+           read clearly, never hidden behind that component's card
+           ("връзките... не зад него"). Still pointer-events:none (only
+           .pcomp-terminal circles, which live inside each card's own icon,
+           not here, need clicks), so this never blocks dragging/clicking
+           a card underneath. */
+        .wires-svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 3; }
+        /* Bright + a dark halo so a thin wire still reads clearly against a
+           busy reference photo underneath, not just against the plain grid
+           background. */
+        .pwire-line { stroke: #fde047; stroke-width: 2.4; fill: none; filter: drop-shadow(0 0 1.5px #000) drop-shadow(0 0 1.5px #000); }
+        .pwire-three_phase { stroke-width: 3.2; }
+        .pwire-single_phase { stroke-width: 2; stroke-dasharray: 6 3; }
+        /* Non-power connection kinds - explicit ask: "още видове връзки:
+           modbus, ethernet, current transformer". Structurally these are
+           all plain single wires (see PANEL_WIRE_PHASE_TYPES in app.py),
+           only their color/dash pattern differs so they read as data/
+           sensing links rather than an actual power conductor. */
+        .pwire-modbus { stroke: #22d3ee; stroke-width: 2; stroke-dasharray: 2 2; }
+        .pwire-ethernet { stroke: #3b82f6; stroke-width: 2; stroke-dasharray: 5 2; }
+        .pwire-ct { stroke: #c084fc; stroke-width: 2; stroke-dasharray: 1 3; }
+        /* Fixed phase-color convention for a three-phase bundle's 3 wires
+           (poles 1/2/3 - see redrawWires()'s PHASE_RANK/PHASE_STEP_PX,
+           which also keeps them running tight next to each other as one
+           ribbon): 1-yellow, 2-green, 3-red. A single-phase wire tapped off
+           one of these poles (see wirePhasePole() below) gets the SAME
+           color class, just dashed via .pwire-single_phase's own
+           stroke-dasharray - "монофазните приемат цвета на линията за
+           която са вързани но с пунктир". */
+        .pwire-pole-1 { stroke: #fde047; }
+        .pwire-pole-2 { stroke: #22c55e; }
+        .pwire-pole-3 { stroke: #ef4444; }
+        /* Junction dot at each wire endpoint - same color convention as the
+           line itself, via `fill` (the .pwire-line/.pwire-pole-* rules
+           above are all `stroke`, meaningless on a filled dot). */
+        .pwire-dot { fill: #fde047; stroke: none; filter: drop-shadow(0 0 1.5px #000) drop-shadow(0 0 1.5px #000); }
+        .pwire-dot.pwire-pole-1 { fill: #fde047; }
+        .pwire-dot.pwire-pole-2 { fill: #22c55e; }
+        .pwire-dot.pwire-pole-3 { fill: #ef4444; }
+        .pwire-dot.pwire-modbus { fill: #22d3ee; }
+        .pwire-dot.pwire-ethernet { fill: #3b82f6; }
+        .pwire-dot.pwire-ct { fill: #c084fc; }
+        /* Where two DIFFERENT wires' paths cross on screen - neutral since
+           they rarely share a phase color. */
+        .pwire-crossing-dot { fill: #f8fafc; stroke: #0f172a; stroke-width: 1; }
+        /* A wire whose OTHER end lives on a different panel's own canvas has
+           nothing to draw a real line to there - this marks the end of its
+           stub instead ("да мога да връзвам... към обекти в други табла"),
+           clickable through to that panel's schematic. Just a small empty
+           box by default (several of these at once would otherwise clutter
+           the edge with overlapping text - "слагай малки кутийки... без
+           надписи") - the full "goes to X" text lives in a tooltip child
+           span, shown only on hover (see .pwire-remote-label-tooltip). */
+        .pwire-remote-label {
+            position: absolute;
+            display: block;
+            width: 14px;
+            height: 14px;
+            /* Grows DOWNWARD from its point, i.e. INTO the canvas - the
+               point itself already sits right at the top edge, so growing
+               further up/outward would push almost the whole box past
+               Y=0, clipped away by the canvas's own overflow:hidden
+               ("квадратчетата на края да се виждат целите, външния край
+               да е залепен за края на схемата" - the box's OUTER edge
+               must land flush against the canvas edge, not float past it). */
+            transform: translate(-50%, 0);
+            background: var(--bg-surface);
+            border: 1.5px solid currentColor;
+            border-radius: 3px;
+            z-index: 20;
+            text-decoration: none;
+            color: var(--text-main);
+        }
+        /* Bottom-edge box: same reasoning, mirrored - grows UPWARD (into
+           the canvas) from its point at the bottom edge. */
+        .pwire-remote-label.pwire-remote-label-down { transform: translate(-50%, -100%); }
+        .pwire-remote-label.pwire-pole-1 { border-color: #fde047; }
+        .pwire-remote-label.pwire-pole-2 { border-color: #22c55e; }
+        .pwire-remote-label.pwire-pole-3 { border-color: #ef4444; }
+        .pwire-remote-label.pwire-modbus { border-color: #22d3ee; }
+        .pwire-remote-label.pwire-ethernet { border-color: #3b82f6; }
+        .pwire-remote-label.pwire-ct { border-color: #c084fc; }
+        /* One shared box for all 3 poles of a three-phase bundle (their
+           lines converge into it) - explicit ask: "когато е външна
+           трифазна връзка показвай един квадрат за всички линии" - a bit
+           bigger and neutral-bordered rather than one specific pole color. */
+        .pwire-remote-label.pwire-remote-label-bundle { width: 18px; height: 18px; border-width: 2px; }
+        .pwire-remote-label-tooltip {
+            position: absolute;
+            left: 50%;
+            top: 100%;
+            margin-top: 4px;
+            transform: translateX(-50%);
+            background: var(--bg-surface);
+            border: 1px solid currentColor;
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: 0.68rem;
+            white-space: nowrap;
+            color: var(--text-main);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.1s;
+        }
+        /* Box sits at the TOP edge by default, so its tooltip opens
+           downward (into the canvas) - a "down" box sits at the BOTTOM
+           edge instead, so its tooltip must open upward, or it would be
+           clipped by the canvas's own overflow:hidden. */
+        .pwire-remote-label-down .pwire-remote-label-tooltip { top: auto; bottom: 100%; margin-top: 0; margin-bottom: 4px; }
+        .pwire-remote-label:hover .pwire-remote-label-tooltip { opacity: 1; }
+        .pcomp-card {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            user-select: none;
+            text-align: center;
+            z-index: 2;
+        }
+        /* Locked (default) = pure viewing, no cursor affordances suggesting
+           anything is clickable/draggable - see setLocked() below. */
+        .schematic-canvas.edit-mode .pcomp-card { cursor: pointer; }
+        .schematic-canvas:not(.edit-mode) .pcomp-card { cursor: default; }
+        .pcomp-card.dragging { z-index: 10; }
+        .pcomp-card.wire-start .pcomp-outline { stroke: var(--accent-primary); stroke-width: 2.5; }
+        /* Search result highlight - explicit ask: "когато го намери да
+           започне да мига няколко пъти и да фокусира него". A pulsing
+           outline around the whole card, a few cycles, then JS removes the
+           class (see searchAndFocusElement()). */
+        @keyframes pcomp-search-blink {
+            0%, 100% { outline-color: transparent; }
+            50% { outline-color: #fbbf24; }
+        }
+        .pcomp-card.pcomp-search-highlight {
+            outline: 4px solid transparent;
+            outline-offset: 6px;
+            border-radius: 8px;
+            animation: pcomp-search-blink 0.5s ease-in-out 4;
+        }
+        /* Quick delete - a small red X pinned to the card's own top-right
+           corner, only shown/usable while unlocked (same rule as resize) -
+           explicit ask: "направи изтриване на елемент, като сложиш малко
+           червено X отгоре, да пита преди да изтрие" (confirm() before
+           the actual delete, see the click handler below). */
+        .pcomp-delete-btn {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            width: 18px;
+            height: 18px;
+            line-height: 16px;
+            padding: 0;
+            font-size: 0.85rem;
+            font-weight: 700;
+            border-radius: 50%;
+            border: 1.5px solid #ef4444;
+            background: var(--bg-surface);
+            color: #ef4444;
+            cursor: pointer;
+            z-index: 5;
+        }
+        .pcomp-delete-btn:hover { background: #ef4444; color: #fff; }
+        /* Per-element resize - only shown/usable while unlocked (see
+           setEditMode()), same "locked = view only" rule as everything
+           else on this page. */
+        .pcomp-resize { display: flex; gap: 2px; margin-bottom: 2px; }
+        .pcomp-resize-btn {
+            width: 16px; height: 16px; line-height: 1; padding: 0; font-size: 0.7rem; font-weight: 700;
+            border-radius: 3px; border: 1px solid var(--border-color); background: var(--bg-surface); color: var(--text-main); cursor: pointer;
+        }
+        .pcomp-resize-btn:hover { border-color: var(--accent-primary); color: var(--accent-primary); }
+        .pcomp-svg-wrap { filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35)); }
+        .pcomp-outline { fill: var(--bg-surface); stroke: var(--text-muted); stroke-width: 1.5; }
+        .pcomp-outline-main_breaker { stroke: #ef4444; }
+        .pcomp-outline-breaker { stroke: #38bdf8; }
+        .pcomp-outline-fuse { stroke: #f97316; }
+        .pcomp-outline-rcd { stroke: #a78bfa; }
+        .pcomp-outline-contactor { stroke: #14b8a6; }
+        .pcomp-outline-busbar { stroke: #94a3b8; }
+        .pcomp-outline-terminal { stroke: #10b981; }
+        .pcomp-outline-meter { stroke: #06b6d4; }
+        .pcomp-outline-ethernet_switch { stroke: #0ea5e9; }
+        .pcomp-outline-modbus_gateway { stroke: #0891b2; }
+        .pcomp-outline-schrack_urna { stroke: #f43f5e; }
+        .pcomp-outline-smart_meter_3p { stroke: #0d9488; }
+        .pcomp-outline-time_relay { stroke: #eab308; }
+        .pcomp-terminal { fill: var(--bg-surface); stroke: currentColor; stroke-width: 1.4; }
+        .schematic-canvas.connect-mode .pcomp-terminal { pointer-events: auto; cursor: crosshair; }
+        .schematic-canvas.connect-mode .pcomp-terminal:hover { fill: currentColor; opacity: 0.6; }
+        .pcomp-terminal.wire-start { fill: var(--accent-primary); stroke: var(--accent-primary); }
+        .pcomp-pole-num { fill: currentColor; font-weight: 700; }
+        .pcomp-glyph { stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; fill: none; }
+        .pcomp-glyph-fill { fill: currentColor; opacity: 0.55; }
+        /* Re-parented into their own overlay layer above everything, right
+           below whichever card they belong to - see updateLabelOverlays().
+           position:absolute here (rather than .pcomp-card's own flex flow)
+           is what keeps them from inflating the card's own bounding box
+           ("да не участват в маргините на елементите"). */
+        .pcomp-label-overlay {
+            position: absolute;
+            transform: translate(-50%, 0);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            z-index: 20;
+            pointer-events: none;
+        }
+        /* Hover tooltip with an element's own parameters - explicit ask:
+           "за всеки елемент да има тоолтип с параметрите му" (the
+           connections list was tried too but dropped - "става много
+           голямо"). Shown/hidden via JS on the card's own mouseenter/
+           mouseleave (see the click/drag section below) rather than a
+           plain CSS :hover, since it lives in the same always-on-top
+           overlay layer as the name label, not nested inside the (lower
+           z-index) card itself. */
+        .pcomp-info-tooltip {
+            position: absolute;
+            transform: translate(-50%, 0);
+            z-index: 25;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 0.72rem;
+            line-height: 1.45;
+            max-width: 240px;
+            white-space: normal;
+            text-align: left;
+            color: var(--text-main);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.1s;
+        }
+        .pcomp-info-tooltip.pcomp-info-tooltip-visible { opacity: 1; }
+        .pcomp-info-tooltip-title { font-weight: 700; margin-bottom: 2px; }
+        .pcomp-info-tooltip-divider { border-top: 1px solid var(--border-color); margin: 4px 0; }
+        .pcomp-info-tooltip-notes { font-style: italic; color: var(--text-muted); }
+        /* A busy reference photo underneath makes plain text unreadable -
+           same reasoning as .pwire-remote-label's own background. */
+        .pcomp-name, .pcomp-sub, .pcomp-feeds {
+            background: var(--bg-surface); border-radius: 3px; padding: 0 4px; line-height: 1.5;
+        }
+        .pcomp-name { font-weight: 700; font-size: 0.78rem; margin-top: 4px; max-width: 130px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .pcomp-sub { font-size: 0.68rem; color: var(--text-muted); }
+        .pcomp-feeds { font-size: 0.68rem; color: var(--accent-primary); max-width: 130px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .pcomp-badge-legend {
+            display: inline-block; width: 14px; height: 14px; border-radius: 3px;
+            border: 1.5px solid currentColor; vertical-align: -2px; margin-right: 4px;
+        }
+        .schematic-legend { display: flex; flex-wrap: wrap; gap: 10px 16px; margin: 10px 0 14px 0; font-size: 0.78rem; color: var(--text-muted); }
+        .wire-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border-color); font-size: 0.85rem; }
+        .wire-row:last-of-type { border-bottom: none; }
+        .wire-row .wire-phase { font-size: 0.7rem; color: var(--text-muted); margin-left: 6px; }
+        .bg-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+        .bg-toolbar input[type="number"] { width: 90px; }
+        .locked-only-hint { font-size: 0.82rem; color: var(--text-muted); font-style: italic; }
+
+        /* Auto-generated one-line diagram ("добави под схемата нова
+           еднолинейна схема") - a simplified topology tree derived from the
+           components/wires above, NOT another draggable canvas: every
+           coordinate is computed by renderOneLineDiagram() in JS, so this
+           is purely a read-only overview, always in sync with the real
+           schematic since it has no state of its own. */
+        .oneline-scroll { overflow-x: auto; padding: 4px 4px 14px 4px; }
+        .oneline-canvas { position: relative; margin: 0 auto; }
+        .oneline-wires-svg { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
+        .oneline-edge-label { font-size: 9px; fill: var(--text-muted); }
+        .oneline-node { position: absolute; width: 120px; margin-left: -60px; text-align: center; }
+        .oneline-icon { display: flex; justify-content: center; }
+        .oneline-name { font-weight: 700; font-size: 0.72rem; margin-top: 2px; overflow-wrap: anywhere; }
+        .oneline-sub { font-size: 0.66rem; color: var(--text-muted); }
+        .oneline-sub-external { color: var(--accent-primary); }
+        .oneline-leaf {
+            border: 1px dashed var(--border-color); border-radius: 6px; padding: 5px 6px;
+            background: var(--bg-input); font-size: 0.68rem;
+        }
+        .oneline-leaf.oneline-leaf-remote { color: var(--accent-primary); border-style: dotted; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px;">
+            <h3 style="margin:0;">Схема на &quot;{{ panel.name }}&quot;</h3>
+            <a href="{{ url_for('admin_panels') }}" class="text-small">&larr; Всички табла</a>
+        </div>
+        <p class="section-subtitle">Вътрешна еднолинейна схема на таблото - предпазители, шини, клеми и т.н., подредени на DIN шина. Заключено = само разглеждане. Отключете за да местите елементи/снимката, свързвате или редактирате.</p>
+
+        <div class="schematic-legend">
+            {% set used_types = components|map(attribute='component_type')|unique|list %}
+            {% for key, label in component_types.items() %}
+            {% if key in used_types %}
+            <span><span class="pcomp-badge-legend" style="color: {{ {'main_breaker':'#ef4444','breaker':'#38bdf8','fuse':'#f97316','rcd':'#a78bfa','contactor':'#14b8a6','busbar':'#94a3b8','terminal':'#10b981','meter':'#06b6d4','ethernet_switch':'#0ea5e9','modbus_gateway':'#0891b2','schrack_urna':'#f43f5e','smart_meter_3p':'#0d9488','time_relay':'#eab308'}[key] }};"></span>{{ label }}</span>
+            {% endif %}
+            {% endfor %}
+        </div>
+
+        <div class="map-toolbar">
+            <button type="button" id="unlockBtn" class="btn-secondary">🔓 Отключи за редакция</button>
+            <button type="button" id="saveBtn" class="btn-submit" style="display:none;">💾 Запази местоположенията</button>
+            <button type="button" id="lockBtn" class="btn-secondary" style="display:none;">🔒 Заключи</button>
+            <button type="button" id="cancelBtn" class="btn-secondary" style="display:none;">Откажи</button>
+            <button type="button" id="connectBtn" class="btn-secondary" style="display:none;">🔗 Свързване</button>
+            <select id="phaseTypeSelect" style="display:none;">
+                {% for key, label in phase_types.items() %}
+                <option value="{{ key }}">{{ label }}</option>
+                {% endfor %}
+            </select>
+            <span id="editHint" class="text-small" style="display:none;">Отключено - влачете елементи/снимката, после запазете.</span>
+            <span id="connectHint" class="text-small" style="display:none;">Кликнете кръгче (полюс) на първия, после на втория елемент за да ги свържете.</span>
+            <span id="lockedHint" class="locked-only-hint">Заключено - само разглеждане.</span>
+            <div class="element-search" style="margin-left:auto; display:flex; align-items:center; gap:6px;">
+                <input type="text" id="elementSearchInput" placeholder="Търси елемент..." class="text-small" style="width:160px;">
+                <button type="button" id="elementSearchBtn" class="btn-secondary" title="Търси и фокусирай">🔍</button>
+            </div>
+            <div class="zoom-controls">
+                <button type="button" id="zoomOutBtn" class="btn-secondary" title="Намали">&minus;</button>
+                <span class="zoom-level" id="zoomLevelLabel">100%</span>
+                <button type="button" id="zoomInBtn" class="btn-secondary" title="Увеличи">+</button>
+                <button type="button" id="zoomResetBtn" class="btn-secondary" title="Нулирай мащаба">100%</button>
+            </div>
+            <div class="zoom-controls" id="marginControls" style="display:none;" title="Размер на схемата (маргини около подложката)">
+                <button type="button" id="marginOutBtn" class="btn-secondary" title="Намали схемата">&minus;</button>
+                <span class="zoom-level">Схема</span>
+                <button type="button" id="marginInBtn" class="btn-secondary" title="Увеличи схемата">+</button>
+            </div>
+        </div>
+
+        <div class="bg-toolbar" id="remoteConnectBar" style="display:none;">
+            <span class="text-small">Свържи с елемент от друго табло:</span>
+            <select id="remotePanelSelect">
+                <option value="">Табло...</option>
+                {% for p in other_panels %}
+                <option value="{{ p.id }}">{{ p.name }}</option>
+                {% endfor %}
+            </select>
+            <select id="remoteComponentSelect" disabled><option value="">Елемент...</option></select>
+            <select id="remoteSideSelect" disabled>
+                <option value="in">вход</option>
+                <option value="out">изход</option>
+                <option value="tap">извод</option>
+            </select>
+            <select id="remotePoleSelect" disabled style="display:none;"></select>
+            <button type="button" id="remoteConnectSubmitBtn" class="btn-submit" disabled>Свържи</button>
+        </div>
+
+        <div class="bg-toolbar" id="bgToolbar" style="display:none;">
+            <form action="{{ url_for('admin_upload_panel_background', panel_id=panel.id) }}" method="POST" enctype="multipart/form-data" style="display:flex; align-items:center; gap:8px;">
+                {% include 'partials/csrf_field.html' %}
+                <input type="file" name="image" accept="image/png,image/jpeg,image/webp,image/gif" required>
+                <button type="submit" class="btn-secondary">{{ 'Смени снимката' if panel.schematic_bg_filename else 'Качи снимка за подложка' }}</button>
+            </form>
+            {% if panel.schematic_bg_filename %}
+            <button type="button" id="bgLockToggleBtn" class="btn-secondary">🔓 Отключи местенето на подложката</button>
+            <span id="bgLockedHint" class="text-small">Подложката е заключена - местенето на елементи няма да я премести случайно.</span>
+            <label class="text-small">Мащаб на снимката
+                <input type="number" id="bgScaleInput" min="5" max="1000" step="5" value="{{ (panel.schematic_bg_scale * 100) | round | int }}" disabled>%
+            </label>
+            <label class="text-small">Прозрачност
+                <input type="range" id="bgOpacityInput" min="0" max="100" step="5" value="{{ (panel.schematic_bg_opacity * 100) | round | int }}">
+                <span id="bgOpacityLabel">{{ (panel.schematic_bg_opacity * 100) | round | int }}%</span>
+            </label>
+            <form action="{{ url_for('admin_delete_panel_background', panel_id=panel.id) }}" method="POST"
+                  onsubmit="return confirm('Премахване на снимката за подложка?');">
+                {% include 'partials/csrf_field.html' %}
+                <button type="submit" class="btn-delete">Премахни снимката</button>
+            </form>
+            {% endif %}
+        </div>
+
+        <div class="schematic-zoom-viewport" id="schematicZoomViewport">
+        <div class="schematic-canvas" id="schematicCanvas">
+            <svg class="wires-svg" id="wiresSvg"></svg>
+            {% if panel.schematic_bg_filename %}
+            <img class="schematic-bg-img" id="schematicBgImg"
+                 src="{{ url_for('static', filename='uploads/panel_backgrounds/' ~ panel.schematic_bg_filename) }}"
+                 data-scale="{{ panel.schematic_bg_scale }}"
+                 style="left: {{ panel.schematic_bg_pos_x }}%; top: {{ panel.schematic_bg_pos_y }}%; opacity: {{ panel.schematic_bg_opacity }};" alt="">
+            {% endif %}
+            {% for c in components %}
+            <div class="pcomp-card" data-id="{{ c.id }}" data-type="{{ c.component_type }}" data-poles="{{ c.poles or 1 }}"
+                 data-scale="{{ c.scale }}" data-edit-url="{{ url_for('edit_panel_component_window', component_id=c.id) }}"
+                 style="left: {{ c.pos_x if c.pos_x is not none else (15 + (loop.index0 % 5) * 18) }}%; top: {{ c.pos_y if c.pos_y is not none else (20 + (loop.index0 // 5) * 22) }}%;">
+                <button type="button" class="pcomp-delete-btn" style="display:none;" title="Изтрий елемента"
+                        data-delete-url="{{ url_for('admin_delete_panel_component', component_id=c.id) }}" data-name="{{ c.name }}">&times;</button>
+                <div class="pcomp-resize" style="display:none;">
+                    <button type="button" class="pcomp-resize-btn" data-delta="-0.1" title="Намали">&minus;</button>
+                    <button type="button" class="pcomp-resize-btn" data-delta="0.1" title="Увеличи">+</button>
+                </div>
+                <div class="pcomp-svg-wrap"></div>
+                <div class="pcomp-name">{{ c.name }}</div>
+                <div class="pcomp-sub">{% if c.rated_current_a %}{{ c.rated_current_a }}A{% endif %}{% if c.poles %} &middot; {{ c.poles }}P{% endif %}</div>
+                {% if c.feeds_label %}<div class="pcomp-feeds">&rarr; {{ c.feeds_label }}</div>{% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        </div>
+        {% if not components %}
+        <p class="no-data text-center">Няма добавени елементи в тази схема - отключете за редакция и добавете първия по-долу.</p>
+        {% endif %}
+    </section>
+
+    {% if components %}
+    <section class="admin-card">
+        <h3>Еднолинейна схема (обобщена)</h3>
+        <p class="section-subtitle">
+            Опростена еднолинейна схема, генерирана автоматично от елементите и връзките по-горе - за разлика от
+            подробната схема (DIN шина, реална подредба), тук всяка връзка, дори трифазна, е показана с една линия.
+            Само за преглед - за да я промените, редактирайте елементите/връзките в схемата по-горе.
+        </p>
+        <div class="oneline-scroll">
+            <div class="oneline-canvas" id="oneLineCanvas">
+                <svg class="oneline-wires-svg" id="oneLineWiresSvg"></svg>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
+    <section class="admin-card" id="newComponentSection" style="display:none;">
+        <h3>Нов елемент</h3>
+        <form action="{{ url_for('admin_add_panel_component', panel_id=panel.id) }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label>Име</label>
+                <input type="text" name="name" required placeholder="напр. Предпазител 3" style="width: 160px;">
+            </div>
+            <div class="form-group">
+                <label>Тип</label>
+                <select name="component_type" style="width: 180px;">
+                    {% for key, label in component_types.items() %}
+                    <option value="{{ key }}" {% if key == 'breaker' %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Номинален ток (A)</label>
+                <input type="text" name="rated_current_a" placeholder="напр. 16" style="width: 100px;">
+            </div>
+            <div class="form-group">
+                <label>Брой полюси</label>
+                <input type="text" name="poles" placeholder="напр. 3" style="width: 90px;">
+            </div>
+            <div class="form-group">
+                <label>Производител (по избор)</label>
+                <input type="text" name="manufacturer" style="width: 140px;">
+            </div>
+            <div class="form-group">
+                <label>Модел (по избор)</label>
+                <input type="text" name="model" style="width: 140px;">
+            </div>
+            <div class="form-group">
+                <label>Захранва</label>
+                <select name="feeds_target" style="width: 220px;">
+                    {% for opt in feeds_options %}
+                    <option value="{{ opt.value }}">{{ opt.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label>Бележки (по избор)</label>
+                <input type="text" name="notes" style="width: 100%;">
+            </div>
+            <button type="submit" class="btn-submit">Добави елемент</button>
+        </form>
+    </section>
+
+    {% if wires %}
+    <section class="admin-card">
+        <h3>Връзки</h3>
+        <div id="wireEditPanel" class="bg-toolbar" style="display:none;"></div>
+        <div id="wiresList">
+            {% for w in wires %}
+            {% set side_labels = {'in': 'вход', 'out': 'изход', 'tap': 'извод'} %}
+            <div class="wire-row" data-wire-row="{{ w.id }}"
+                 data-wire-id="{{ w.id }}" data-phase="{{ w.phase_type }}"
+                 data-from-id="{{ w.from_component_id }}" data-from-pole="{{ w.from_pole }}" data-from-side="{{ w.from_side }}" data-from-desc="{{ w.from_component.name }}{% if w.from_component.panel_id != panel.id %} ({{ w.from_component.panel.name }}){% endif %} (п.{{ w.from_pole }}, {{ side_labels.get(w.from_side, w.from_side) }})"
+                 data-to-id="{{ w.to_component_id }}" data-to-pole="{{ w.to_pole }}" data-to-side="{{ w.to_side }}" data-to-desc="{{ w.to_component.name }}{% if w.to_component.panel_id != panel.id %} ({{ w.to_component.panel.name }}){% endif %} (п.{{ w.to_pole }}, {{ side_labels.get(w.to_side, w.to_side) }})">
+                <span>{{ w.from_component.name }}{% if w.from_component.panel_id != panel.id %} <em>({{ w.from_component.panel.name }})</em>{% endif %} (п.{{ w.from_pole }}, {{ side_labels.get(w.from_side, w.from_side) }}) &mdash;
+                    {{ w.to_component.name }}{% if w.to_component.panel_id != panel.id %} <em>({{ w.to_component.panel.name }})</em>{% endif %} (п.{{ w.to_pole }}, {{ side_labels.get(w.to_side, w.to_side) }})
+                    <span class="wire-phase">({{ phase_types.get(w.phase_type, w.phase_type) }})</span></span>
+                <span>
+                    <button type="button" class="btn-secondary pwire-edit-btn" style="padding: 4px 10px; font-size: 0.78rem; display:none;">Редактирай</button>
+                    <button type="button" class="btn-delete pwire-delete-btn" style="padding: 4px 10px; font-size: 0.78rem; display:none;" onclick="deleteWire({{ w.id }})">Изтрий</button>
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+</main>
+
+<script>
+(function () {
+    var canvas = document.getElementById('schematicCanvas');
+    if (!canvas) return;
+    var svg = document.getElementById('wiresSvg');
+    var cards = Array.from(document.querySelectorAll('.pcomp-card'));
+    var editMode = false;
+    var bgLocked = true;  // separate from editMode - see window.setBgLocked() below
+    var connectMode = false;
+    var dirty = {};
+
+    // --- Realistic-ish outline icon per component, sized by pole count so
+    // same-type components visually "line up" side by side like real DIN-
+    // rail modules - each pole gets its own numbered line/load terminal
+    // circle (explicit ask: "полюсите да имат кръгове" + "всеки полюс да си
+    // е номериран сам за себе си"). Not IEC-exact symbols, just enough of a
+    // silhouette (breaker lever, fuse cartridge, RCD test button, contactor
+    // coil, busbar bar, terminal post, meter dial) to read at a glance.
+    // scale just changes the outer <svg>'s width/height while the viewBox
+    // (and every coordinate below) stays at the base MODULE_W/BODY_H units -
+    // SVG stretches the whole icon (including terminal circles) to fit
+    // proportionally, so this one line is the entire per-element resize
+    // feature; nothing else here needs to know about scale at all.
+    var MODULE_W = 30, BODY_H = 56;
+    // Real Schrack URNA0345 terminal block, transcribed from the
+    // manufacturer's own labeled diagram the user provided (top row: A1/A2
+    // supply, N/L1/L2/L3 measuring input, then 3 changeover relay output
+    // groups 11-12-14/21-22-24/31-32-34; bottom row: 4 digital-input groups,
+    // each a common "⊥" terminal plus its I1..I5 signal terminal) -
+    // fixed layout, not a scalable N-pole rail item, so it ignores the
+    // component's own `poles` field entirely and gets its own builder
+    // instead of the generic per-module loop below.
+    var SCHRACK_URNA_TOP = [
+        {n: 'A1', g: 0}, {n: 'A2', g: 0},
+        {n: 'N', g: 1}, {n: 'L1', g: 1}, {n: 'L2', g: 1}, {n: 'L3', g: 1},
+        {n: '11', g: 2}, {n: '12', g: 2}, {n: '14', g: 2},
+        {n: '21', g: 3}, {n: '22', g: 3}, {n: '24', g: 3},
+        {n: '31', g: 4}, {n: '32', g: 4}, {n: '34', g: 4},
+    ];
+    var SCHRACK_URNA_TOP_LABELS = ['Supply', 'Messeingang', 'Relais 1', 'Relais 2', 'Relais 3'];
+    var SCHRACK_URNA_RELAY_GROUPS = [2, 3, 4];
+    var SCHRACK_URNA_BOTTOM = [
+        {n: '⊥', g: 0}, {n: 'I1', g: 0},
+        {n: '⊥', g: 1}, {n: 'I2', g: 1},
+        {n: '⊥', g: 2}, {n: 'I3', g: 2},
+        {n: '⊥', g: 3}, {n: 'I4', g: 3}, {n: 'I5', g: 3},
+    ];
+    var SCHRACK_URNA_BOTTOM_LABELS = ['Dig 1', 'Dig 2', 'Dig 3', 'Dig 4+5'];
+    function groupSpans(items, colW) {
+        var spans = [];
+        items.forEach(function (it, i) {
+            if (!spans[it.g]) spans[it.g] = {start: i, end: i};
+            spans[it.g].end = i;
+        });
+        return spans.map(function (s) { return {x0: s.start * colW, x1: (s.end + 1) * colW}; });
+    }
+    function schrackUrnaIconSvg(scale) {
+        var w = SCHRACK_URNA_TOP.length * 24, h = 104;
+        var topColW = w / SCHRACK_URNA_TOP.length, bottomColW = w / SCHRACK_URNA_BOTTOM.length;
+        var parts = [];
+        parts.push('<rect x="1.5" y="1.5" width="' + (w - 3) + '" height="' + (h - 3) + '" rx="5" class="pcomp-outline pcomp-outline-schrack_urna"/>');
+        parts.push('<line x1="3" y1="32" x2="' + (w - 3) + '" y2="32" class="pcomp-glyph pcomp-outline-schrack_urna"/>');
+        parts.push('<line x1="3" y1="' + (h - 32) + '" x2="' + (w - 3) + '" y2="' + (h - 32) + '" class="pcomp-glyph pcomp-outline-schrack_urna"/>');
+
+        var topSpans = groupSpans(SCHRACK_URNA_TOP, topColW);
+        SCHRACK_URNA_TOP.forEach(function (t, i) {
+            var cx = topColW * i + topColW / 2;
+            parts.push('<circle cx="' + cx + '" cy="16" r="3" class="pcomp-terminal pcomp-outline-schrack_urna" data-pole="' + (i + 1) + '" data-side="tap"/>');
+            parts.push('<text x="' + cx + '" y="9" text-anchor="middle" font-size="6.5" class="pcomp-pole-num pcomp-outline-schrack_urna">' + t.n + '</text>');
+        });
+        topSpans.forEach(function (s, gi) {
+            var cx = (s.x0 + s.x1) / 2;
+            parts.push('<text x="' + cx + '" y="27" text-anchor="middle" font-size="6" class="pcomp-pole-num pcomp-outline-schrack_urna">' + (SCHRACK_URNA_TOP_LABELS[gi] || '') + '</text>');
+            if (SCHRACK_URNA_RELAY_GROUPS.indexOf(gi) !== -1) {
+                parts.push('<line x1="' + (s.x0 + 6) + '" y1="' + (h / 2 + 8) + '" x2="' + (s.x0 + 6) + '" y2="' + (h / 2 - 4) + '" class="pcomp-glyph pcomp-outline-schrack_urna"/>');
+                parts.push('<line x1="' + (s.x0 + 6) + '" y1="' + (h / 2 + 8) + '" x2="' + (s.x1 - 10) + '" y2="' + (h / 2 - 2) + '" class="pcomp-glyph pcomp-outline-schrack_urna"/>');
+            }
+            if (gi > 0) parts.push('<line x1="' + s.x0 + '" y1="4" x2="' + s.x0 + '" y2="' + (h - 4) + '" class="pcomp-glyph pcomp-outline-schrack_urna" stroke-dasharray="2 2"/>');
+        });
+
+        // Simplified front panel - LCD + the two status LEDs flanking it.
+        parts.push('<rect x="' + (w / 2 - 22) + '" y="' + (h / 2 - 8) + '" width="44" height="16" rx="1.5" class="pcomp-glyph pcomp-outline-schrack_urna"/>');
+        parts.push('<circle cx="' + (w / 2 - 32) + '" cy="' + (h / 2) + '" r="2.4" class="pcomp-glyph-fill pcomp-outline-schrack_urna"/>');
+        parts.push('<circle cx="' + (w / 2 + 32) + '" cy="' + (h / 2) + '" r="2.4" class="pcomp-glyph-fill pcomp-outline-schrack_urna"/>');
+
+        var bottomSpans = groupSpans(SCHRACK_URNA_BOTTOM, bottomColW);
+        SCHRACK_URNA_BOTTOM.forEach(function (t, i) {
+            var cx = bottomColW * i + bottomColW / 2;
+            parts.push('<circle cx="' + cx + '" cy="' + (h - 16) + '" r="3" class="pcomp-terminal pcomp-outline-schrack_urna" data-pole="' + (SCHRACK_URNA_TOP.length + i + 1) + '" data-side="tap"/>');
+            parts.push('<text x="' + cx + '" y="' + (h - 4) + '" text-anchor="middle" font-size="6.5" class="pcomp-pole-num pcomp-outline-schrack_urna">' + t.n + '</text>');
+        });
+        bottomSpans.forEach(function (s, gi) {
+            var cx = (s.x0 + s.x1) / 2;
+            parts.push('<text x="' + cx + '" y="' + (h - 27) + '" text-anchor="middle" font-size="6" class="pcomp-pole-num pcomp-outline-schrack_urna">' + (SCHRACK_URNA_BOTTOM_LABELS[gi] || '') + '</text>');
+            if (gi > 0) parts.push('<line x1="' + s.x0 + '" y1="' + (h - 32) + '" x2="' + s.x0 + '" y2="' + (h - 4) + '" class="pcomp-glyph pcomp-outline-schrack_urna" stroke-dasharray="2 2"/>');
+        });
+
+        var s = scale || 1;
+        return '<svg width="' + (w * s) + '" height="' + (h * s) + '" viewBox="0 0 ' + w + ' ' + h + '" xmlns="http://www.w3.org/2000/svg">' + parts.join('') + '</svg>';
+    }
+
+    // Remaining types whose ports are all equivalent taps in a single row
+    // (like a busbar) rather than paired in/out terminals per module - an
+    // Ethernet switch's ports are all the same, a Modbus/Ethernet gateway's
+    // terminal block + RJ45 aren't an in/out pair either.
+    var TAP_STYLE_TYPES = ['busbar', 'ethernet_switch', 'modbus_gateway'];
+    function componentIconSvg(type, poles, scale) {
+        if (type === 'schrack_urna') return schrackUrnaIconSvg(scale);
+        var n = Math.max(1, poles || 1);
+        if (type === 'busbar') n = Math.max(n, 3);  // a busbar reads as a rail spanning several positions, not one module
+        var tapStyle = TAP_STYLE_TYPES.indexOf(type) !== -1;
+        var w = n * MODULE_W, h = BODY_H;
+        var parts = [];
+        parts.push('<rect x="1.5" y="1.5" width="' + (w - 3) + '" height="' + (h - 3) + '" rx="5" class="pcomp-outline pcomp-outline-' + type + '"/>');
+        for (var i = 0; i < n; i++) {
+            var cx = MODULE_W * i + MODULE_W / 2;
+            if (!tapStyle) {
+                parts.push('<circle cx="' + cx + '" cy="7" r="3.6" class="pcomp-terminal pcomp-outline-' + type + '" data-pole="' + (i + 1) + '" data-side="in"/>');
+                parts.push('<circle cx="' + cx + '" cy="' + (h - 7) + '" r="3.6" class="pcomp-terminal pcomp-outline-' + type + '" data-pole="' + (i + 1) + '" data-side="out"/>');
+                parts.push('<text x="' + cx + '" y="' + (h / 2 + 2.5) + '" text-anchor="middle" font-size="8" class="pcomp-pole-num pcomp-outline-' + type + '">' + (i + 1) + '</text>');
+            }
+            if (type === 'breaker' || type === 'main_breaker' || type === 'rcd') {
+                parts.push('<line x1="' + cx + '" y1="' + (h - 16) + '" x2="' + (cx + 8) + '" y2="18" class="pcomp-glyph pcomp-outline-' + type + '"/>');
+            } else if (type === 'fuse') {
+                parts.push('<rect x="' + (cx - 5) + '" y="16" width="10" height="' + (h - 32) + '" rx="4" class="pcomp-glyph-fill pcomp-outline-' + type + '"/>');
+            } else if (type === 'terminal') {
+                parts.push('<line x1="' + cx + '" y1="12" x2="' + cx + '" y2="' + (h - 12) + '" class="pcomp-glyph pcomp-outline-' + type + '"/>');
+            } else if (type === 'time_relay') {
+                parts.push('<line x1="' + cx + '" y1="' + (h - 16) + '" x2="' + (cx + 8) + '" y2="18" class="pcomp-glyph pcomp-outline-' + type + '"/>');
+            }
+        }
+        if (type === 'rcd') {
+            parts.push('<circle cx="' + (w / 2) + '" cy="' + (h / 2) + '" r="6" class="pcomp-glyph pcomp-outline-' + type + '"/>');
+        } else if (type === 'contactor') {
+            parts.push('<rect x="7" y="' + (h / 2 - 9) + '" width="' + (w - 14) + '" height="18" rx="3" class="pcomp-glyph-fill pcomp-outline-' + type + '"/>');
+        } else if (type === 'time_relay') {
+            // A clock face (like a coil, but a timer, not a contactor) -
+            // outline circle + two hands, centered in the body.
+            var trR = 8;
+            parts.push('<circle cx="' + (w / 2) + '" cy="' + (h / 2) + '" r="' + trR + '" class="pcomp-glyph pcomp-outline-' + type + '"/>');
+            parts.push('<line x1="' + (w / 2) + '" y1="' + (h / 2) + '" x2="' + (w / 2) + '" y2="' + (h / 2 - trR * 0.6) + '" class="pcomp-glyph pcomp-outline-' + type + '"/>');
+            parts.push('<line x1="' + (w / 2) + '" y1="' + (h / 2) + '" x2="' + (w / 2 + trR * 0.5) + '" y2="' + (h / 2) + '" class="pcomp-glyph pcomp-outline-' + type + '"/>');
+        } else if (type === 'meter' || type === 'smart_meter_3p') {
+            var r = Math.min(w, h) / 2 - 6;
+            parts.push('<circle cx="' + (w / 2) + '" cy="' + (h / 2) + '" r="' + r + '" class="pcomp-glyph pcomp-outline-' + type + '"/>');
+            parts.push('<line x1="' + (w / 2) + '" y1="' + (h / 2) + '" x2="' + (w / 2 + r * 0.6) + '" y2="' + (h / 2 - r * 0.5) + '" class="pcomp-glyph pcomp-outline-' + type + '"/>');
+            if (type === 'smart_meter_3p') {
+                // The "smart" part - one extra RS-485/Modbus comms tap,
+                // separate from its real in/out power pole pairs above.
+                parts.push('<circle cx="' + (w / 2) + '" cy="' + (h - 7) + '" r="3" class="pcomp-terminal pcomp-outline-' + type + '" data-pole="1" data-side="tap"/>');
+            }
+        } else if (tapStyle) {
+            for (var j = 0; j < n; j++) {
+                var jx = MODULE_W * j + MODULE_W / 2;
+                if (type === 'ethernet_switch') {
+                    // A square RJ45-style port, not a round pole circle -
+                    // every port is equivalent, no in/out direction.
+                    parts.push('<rect x="' + (jx - 3.6) + '" y="' + (h / 2 - 3.6) + '" width="7.2" height="7.2" class="pcomp-terminal pcomp-outline-' + type + '" data-pole="' + (j + 1) + '" data-side="tap"/>');
+                } else {
+                    parts.push('<circle cx="' + jx + '" cy="' + (h / 2) + '" r="3" class="pcomp-terminal pcomp-outline-' + type + '" data-pole="' + (j + 1) + '" data-side="tap"/>');
+                }
+                parts.push('<text x="' + jx + '" y="' + (h / 2 - 10) + '" text-anchor="middle" font-size="7" class="pcomp-pole-num pcomp-outline-' + type + '">' + (j + 1) + '</text>');
+            }
+            if (type === 'busbar') {
+                parts.push('<rect x="3" y="' + (h / 2 - 5) + '" width="' + (w - 6) + '" height="10" class="pcomp-glyph-fill pcomp-outline-' + type + '"/>');
+            } else if (type === 'ethernet_switch') {
+                // A little "board" - a plain filled bar low in the body,
+                // clear of the port row above it.
+                parts.push('<rect x="7" y="' + (h - 16) + '" width="' + (w - 14) + '" height="7" rx="2" class="pcomp-glyph-fill pcomp-outline-' + type + '"/>');
+            } else if (type === 'modbus_gateway') {
+                // Two arrows pointing at each other - protocol conversion.
+                var gcx = w / 2;
+                parts.push('<line x1="' + (gcx - 10) + '" y1="16" x2="' + (gcx + 10) + '" y2="16" class="pcomp-glyph pcomp-outline-' + type + '"/>');
+                parts.push('<line x1="' + (gcx + 10) + '" y1="16" x2="' + (gcx + 5) + '" y2="12" class="pcomp-glyph pcomp-outline-' + type + '"/>');
+                parts.push('<line x1="' + (gcx - 10) + '" y1="' + (h - 16) + '" x2="' + (gcx + 10) + '" y2="' + (h - 16) + '" class="pcomp-glyph pcomp-outline-' + type + '"/>');
+                parts.push('<line x1="' + (gcx - 10) + '" y1="' + (h - 16) + '" x2="' + (gcx - 5) + '" y2="' + (h - 12) + '" class="pcomp-glyph pcomp-outline-' + type + '"/>');
+            }
+        }
+        var s = scale || 1;
+        return '<svg width="' + (w * s) + '" height="' + (h * s) + '" viewBox="0 0 ' + w + ' ' + h + '" xmlns="http://www.w3.org/2000/svg">' + parts.join('') + '</svg>';
+    }
+    function renderCardIcon(card) {
+        var wrap = card.querySelector('.pcomp-svg-wrap');
+        var ownScale = parseFloat(card.getAttribute('data-scale')) || 1;
+        // zoomLevel is declared further below (var hoisting makes it exist,
+        // just still undefined) the first time this runs at initial page
+        // load, before setZoom() has ever run - "|| 1" covers that.
+        wrap.innerHTML = componentIconSvg(
+            card.getAttribute('data-type'), parseInt(card.getAttribute('data-poles'), 10), ownScale * (zoomLevel || 1)
+        );
+    }
+    cards.forEach(renderCardIcon);
+
+    // Name/rating/"feeds" text is re-parented out of each .pcomp-card into
+    // its own overlay layer, appended directly to the canvas instead of
+    // staying nested inside the card - explicit ask: "надписите на всички
+    // елементи да са най-отгоре [над всичко] и да не участват в маргините
+    // на елементите". A card's own DOM subtree sits BELOW .wires-svg on
+    // purpose (a wire must never hide behind a card's body), which would
+    // otherwise trap this text behind any wire that happens to cross near
+    // it too; moving it out lets it use its own high z-index instead. It
+    // also stops being in-flow content of the card, so it no longer
+    // inflates the card's own bounding box that otherCardBoxesPx() uses
+    // for routing clearance. Purely informational (not interactive), so
+    // pointer-events stay off - clicks fall through to whatever is
+    // underneath, same as empty canvas space.
+    var labelOverlays = {};
+    cards.forEach(function (card) {
+        var id = card.getAttribute('data-id');
+        var overlay = document.createElement('div');
+        overlay.className = 'pcomp-label-overlay';
+        ['pcomp-name', 'pcomp-sub', 'pcomp-feeds'].forEach(function (cls) {
+            var el = card.querySelector('.' + cls);
+            if (el) overlay.appendChild(el);
+        });
+        canvas.appendChild(overlay);
+        // Hover tooltip (own parameters only - connections made it too
+        // long, dropped per explicit ask) - content filled in by
+        // buildComponentTooltip() further down; only its position-tracking
+        // lives here.
+        var tooltip = document.createElement('div');
+        tooltip.className = 'pcomp-info-tooltip';
+        canvas.appendChild(tooltip);
+        labelOverlays[id] = {el: overlay, card: card, tooltip: tooltip};
+        card.addEventListener('mouseenter', function () { tooltip.classList.add('pcomp-info-tooltip-visible'); });
+        card.addEventListener('mouseleave', function () { tooltip.classList.remove('pcomp-info-tooltip-visible'); });
+    });
+    function updateLabelOverlays() {
+        var canvasRect = canvas.getBoundingClientRect();
+        Object.keys(labelOverlays).forEach(function (id) {
+            var o = labelOverlays[id];
+            var iconRect = (o.card.querySelector('.pcomp-svg-wrap') || o.card).getBoundingClientRect();
+            var cx = (iconRect.left + iconRect.right) / 2 - canvasRect.left;
+            o.el.style.left = cx + 'px';
+            o.el.style.top = (iconRect.bottom - canvasRect.top) + 'px';
+            var labelRect = o.el.getBoundingClientRect();
+            o.tooltip.style.left = cx + 'px';
+            o.tooltip.style.top = (labelRect.bottom - canvasRect.top + 4) + 'px';
+        });
+    }
+
+    // --- Zoom (view-only, allowed regardless of lock state) ---
+    // Canvas size is a fixed PIXEL value the whole time, never a % of the
+    // container/window - see .schematic-canvas's own CSS comment.
+    // baseCanvasWidthPx is the "natural" size (the photo's own width once
+    // one loads, or this placeholder); zoom just multiplies it. Only the
+    // zoom controls/ctrl+wheel or a new photo upload ever change it - a
+    // plain browser window resize cannot, which is the whole point
+    // ("статична картинката ... да не се ресайзват и разместват").
+    var baseCanvasWidthPx = 900;
+    var zoomLevel = 1;
+    // The visible margin frame around the backdrop photo (see
+    // applyCanvasSize() below) - a fixed base amount ("плюс маргин") plus
+    // however many extra steps the user has dialed in with the +/-
+    // "маргини" buttons. marginSteps resets on reload, same as zoomLevel -
+    // it's a view control, not a saved panel property.
+    var SCHEMATIC_BG_MARGIN = 0.08;
+    var MARGIN_STEP = 0.05;
+    var marginSteps = 0;
+    var zoomViewport = document.getElementById('schematicZoomViewport');
+    var zoomLevelLabel = document.getElementById('zoomLevelLabel');
+    // Canvas size is DERIVED from the photo's own current rendered size
+    // (base size * zoom * the photo's own scale input) plus the margin
+    // frame around it - so scaling the photo up always grows the canvas to
+    // keep the whole photo visible instead of clipping its edges at the
+    // canvas's own fixed boundary ("при мащабиране на подложката не я
+    // отрязвай отстрани а разширявай схемата"). With no photo yet, the
+    // canvas is just the base/zoom size plus margin.
+    function applyCanvasSize() {
+        var marginFrac = Math.max(0.02, Math.min(0.45, SCHEMATIC_BG_MARGIN + marginSteps * MARGIN_STEP));
+        var photoScale = (bgImg && typeof currentBgScale === 'number') ? currentBgScale : 1;
+        var photoWidthPx = baseCanvasWidthPx * zoomLevel * photoScale;
+        canvas.style.width = (photoWidthPx / (1 - 2 * marginFrac)) + 'px';
+        if (bgImg) bgImg.style.width = photoWidthPx + 'px';
+    }
+    function setZoom(z) {
+        zoomLevel = Math.max(0.5, Math.min(3, z));
+        applyCanvasSize();
+        zoomLevelLabel.textContent = Math.round(zoomLevel * 100) + '%';
+        cards.forEach(renderCardIcon);  // elements scale with the view too, not just their positions - "при увеличаване мащабирай и елементите"
+        redrawWires();  // wire points are real pixels now, not "%" - see redrawWires()'s own comment
+    }
+    document.getElementById('zoomInBtn').addEventListener('click', function () { setZoom(zoomLevel + 0.15); });
+    document.getElementById('zoomOutBtn').addEventListener('click', function () { setZoom(zoomLevel - 0.15); });
+    document.getElementById('zoomResetBtn').addEventListener('click', function () { setZoom(1); });
+    function setMarginSteps(n) {
+        marginSteps = Math.max(0, Math.min(6, n));
+        applyCanvasSize();
+        redrawWires();
+    }
+    var marginInBtn = document.getElementById('marginInBtn');
+    var marginOutBtn = document.getElementById('marginOutBtn');
+    if (marginInBtn) marginInBtn.addEventListener('click', function () { setMarginSteps(marginSteps + 1); });
+    if (marginOutBtn) marginOutBtn.addEventListener('click', function () { setMarginSteps(marginSteps - 1); });
+    zoomViewport.addEventListener('wheel', function (e) {
+        if (!e.ctrlKey) return;
+        e.preventDefault();
+        setZoom(zoomLevel - e.deltaY * 0.001);
+    }, {passive: false});
+
+    // Components living on a DIFFERENT panel's own canvas ("да мога да
+    // връзвам... към обекти в други табла") have no local terminal circle to
+    // draw a real line to - fromRemote/toRemote (computed server-side,
+    // relative to THIS page's own panel.id) tells redrawWires() to draw a
+    // short labeled stub toward that other panel instead of a real 2-point
+    // line - see the remote-wire branch below.
+    var WIRES = [
+        {% for w in wires %}{id: {{ w.id }}, fromId: '{{ w.from_component_id }}', fromPole: {{ w.from_pole }}, fromSide: '{{ w.from_side }}',
+          fromRemote: {{ (w.from_component.panel_id != panel.id) | tojson }}, fromPanelId: {{ w.from_component.panel_id }}, fromPanelName: {{ w.from_component.panel.name | tojson }}, fromName: {{ w.from_component.name | tojson }},
+          toId: '{{ w.to_component_id }}', toPole: {{ w.to_pole }}, toSide: '{{ w.to_side }}',
+          toRemote: {{ (w.to_component.panel_id != panel.id) | tojson }}, toPanelId: {{ w.to_component.panel_id }}, toPanelName: {{ w.to_component.panel.name | tojson }}, toName: {{ w.to_component.name | tojson }},
+          phaseType: '{{ w.phase_type }}', line: null},
+        {% endfor %}
+    ];
+    // Other panels' own components, for the "Свържи с елемент от друго
+    // табло" picker - small enough app-wide to embed directly rather than
+    // an extra AJAX round trip per panel choice.
+    var OTHER_PANELS_DATA = {{ other_panels_data | tojson }};
+    // Per-element hover tooltip data (name/type/rating/notes/feeds) - see
+    // buildComponentTooltip() below. Connections aren't included here;
+    // they're derived from WIRES itself (already covers cross-panel ones).
+    var COMPONENTS_DATA = {{ components_meta | tojson }};
+
+    // Identifies one physical terminal (component+pole+side) - two wire-ends
+    // with the same key ARE the same point, used by the crossing-dot pass
+    // in redrawWires() below.
+    function terminalKey(id, pole, side) { return id + '|' + pole + '|' + side; }
+
+    function cardCenter(id) {
+        var card = document.querySelector('.pcomp-card[data-id="' + id + '"]');
+        return card ? {x: parseFloat(card.style.left), y: parseFloat(card.style.top)} : null;
+    }
+
+    // Where a specific numbered terminal circle actually sits on screen
+    // right now, as a canvas-relative percentage - same getBoundingClientRect
+    // conversion used elsewhere in this app for badges/ports that move with
+    // their card (see portBadgeCenter() in admin_factory_map_overview.html).
+    // Falls back to the card's own center if the terminal isn't found (e.g.
+    // an old wire referencing a pole number the component no longer has).
+    function terminalPosition(componentId, pole, side) {
+        var circle = document.querySelector(
+            '.pcomp-card[data-id="' + componentId + '"] .pcomp-terminal[data-pole="' + pole + '"][data-side="' + side + '"]'
+        );
+        if (!circle) return cardCenter(componentId);
+        var circleRect = circle.getBoundingClientRect();
+        var canvasRect = canvas.getBoundingClientRect();
+        if (!canvasRect.width || !canvasRect.height) return cardCenter(componentId);
+        return {
+            x: ((circleRect.left + circleRect.width / 2) - canvasRect.left) / canvasRect.width * 100,
+            y: ((circleRect.top + circleRect.height / 2) - canvasRect.top) / canvasRect.height * 100,
+        };
+    }
+
+    // Orthogonal (horizontal+vertical only, no diagonals) routing: exit the
+    // FROM terminal vertically, run one horizontal leg, arrive at the TO
+    // terminal vertically - a 3-point bend, same convention as a ladder/
+    // one-line diagram. The vertical stub at EACH end must always point
+    // OUTWARD from that terminal's own component ("in" terminals live at
+    // the top of the icon so they exit upward, "out"/"tap" live at the
+    // bottom so they exit downward) - explicit ask: "изводите от полюсите
+    // винаги да излизат навън от елемента вертикално" - never toward
+    // wherever the bend happens to be, which could dip back over the
+    // component's own body.
+    //
+    // A three-phase wire's bend height also gets a small FIXED per-pole
+    // extension (pole 1/2/3 -> rank 0/1/2, always FURTHER outward, never a
+    // raw +/- pixel offset that could point the "wrong" way and collapse
+    // two poles onto the same height once clamped) so the 3 wires of one
+    // connection always run tight next to each other as a ribbon, colored
+    // by a fixed convention (1 жълто, 2 зелено, 3 червено).
+    //
+    // When one terminal feeds/receives several DIFFERENT same-direction
+    // connections (a real fan-out, e.g. one breaker's "in" side wired
+    // straight to 3 other breakers' "in" sides), those all share ONE common
+    // bus line (vertical stub + horizontal run) instead of each getting its
+    // own separate parallel line - explicit ask: "когато има общи изводи да
+    // направиш общи линии вертикални и хоризонтални и правиш визуалните
+    // връзки към най-близкото място на общата линия" - see the hub-building
+    // block at the top of redrawWires() below.
+    var PHASE_RANK = {1: 0, 2: 1, 3: 2};
+    var PHASE_STEP_PX = 16;
+    function componentPoles(id) {
+        var card = document.querySelector('.pcomp-card[data-id="' + id + '"]');
+        return card ? parseInt(card.getAttribute('data-poles'), 10) || 1 : 1;
+    }
+    // Which phase (1/2/3, or null) a single-phase wire's color should
+    // follow - explicit ask: "монофазните приемат цвета на линията за
+    // която са вързани". A monophase tap's OWN pole number on a 1-pole
+    // load (e.g. a single-pole breaker) means nothing phase-wise; whichever
+    // end sits on a real >=3-pole component (a busbar, a 3-pole breaker/
+    // contactor) IS the actual phase conductor it's tapped from. If both
+    // ends qualify (rare), the "from" end wins, same as a three_phase
+    // wire's own convention.
+    function wirePhasePole(w) {
+        if (w.phaseType !== 'three_phase' && w.phaseType !== 'single_phase') return null;  // modbus/ethernet/ct keep their own fixed color
+        if (PHASE_RANK.hasOwnProperty(w.fromPole) && componentPoles(w.fromId) >= 3) return w.fromPole;
+        if (PHASE_RANK.hasOwnProperty(w.toPole) && componentPoles(w.toId) >= 3) return w.toPole;
+        return null;
+    }
+    // Minimum visible length (px) of the vertical stub at EACH end, so a
+    // wire between two terminals at (nearly) the same height still clearly
+    // exits/enters vertically before turning, instead of reading as one
+    // flat horizontal line with no visible connection point.
+    var MIN_STUB_PX = 14;
+    var OBSTACLE_PAD_PX = 6;  // clearance kept outside a card's own box
+
+    // "in" terminals sit at the top of the icon, everything else (out/tap)
+    // at the bottom - see componentIconSvg(). -1 = must exit upward
+    // (smaller Y), +1 = must exit downward (larger Y).
+    function exitDir(side) { return side === 'in' ? -1 : 1; }
+    // Keeps y on the allowed side of `limit` for that direction (never lets
+    // an obstacle nudge or a phase offset push a bend back past the point
+    // where it would stop counting as "outward" for its own terminal).
+    function clampOutward(y, limit, dir) { return dir < 0 ? Math.min(y, limit) : Math.max(y, limit); }
+
+    // Every OTHER card's on-screen box right now (canvas-relative px) -
+    // used to route the horizontal leg around them ("линиите... извън
+    // очертанията на елементите"), never straight over/through one.
+    function otherCardBoxesPx(excludeIds) {
+        var canvasRect = canvas.getBoundingClientRect();
+        return cards
+            .filter(function (c) { return excludeIds.indexOf(c.getAttribute('data-id')) === -1; })
+            .map(function (c) {
+                // The ICON's own box only - the name/sub/feeds text below it
+                // no longer counts toward what a wire must route around
+                // ("надписите... да не участват в маргините на елементите"),
+                // now that they're a separate overlay layer (see
+                // updateLabelOverlays()) rather than in-flow card content.
+                var r = (c.querySelector('.pcomp-svg-wrap') || c).getBoundingClientRect();
+                return {left: r.left - canvasRect.left, right: r.right - canvasRect.left, top: r.top - canvasRect.top, bottom: r.bottom - canvasRect.top};
+            });
+    }
+
+    // Finds the nearest point to `value` that lies outside EVERY given
+    // [lo,hi] interval - merges overlapping/touching intervals first so a
+    // point boxed in by several adjacent obstacles jumps clear of the whole
+    // chain in one go, instead of bouncing between two neighboring
+    // obstacles that individually look escapable but together leave no
+    // gap (a single-obstacle-at-a-time nudge would oscillate forever
+    // between them and never actually get clear).
+    function clearOfIntervals(value, intervals, extraPx) {
+        if (!intervals.length) return value;
+        var sorted = intervals.slice().sort(function (a, b) { return a[0] - b[0]; });
+        var merged = [sorted[0].slice()];
+        for (var i = 1; i < sorted.length; i++) {
+            var last = merged[merged.length - 1];
+            if (sorted[i][0] <= last[1]) last[1] = Math.max(last[1], sorted[i][1]);
+            else merged.push(sorted[i].slice());
+        }
+        for (var j = 0; j < merged.length; j++) {
+            if (value >= merged[j][0] && value <= merged[j][1]) {
+                // extraPx pushes further past whichever edge was picked (in
+                // the SAME escape direction) - without it, every pole of a
+                // three-phase tap detouring around the same obstacle would
+                // land on the exact same edge and read as one single line
+                // ("всички линии от връзката... са една върху друга").
+                return (value - merged[j][0] <= merged[j][1] - value)
+                    ? merged[j][0] - (extraPx || 0)
+                    : merged[j][1] + (extraPx || 0);
+            }
+        }
+        return value;  // already clear of everything
+    }
+
+    // Nudges a horizontal leg (at height y, spanning xMin..xMax) clear of
+    // every obstacle box it would otherwise cross straight through - picks
+    // whichever side (above/below the whole merged obstacle chain) needs
+    // the smaller move ("линиите... извън очертанията на елементите").
+    function nudgeBendY(y, xMin, xMax, obstacles, extraPx) {
+        var intervals = [];
+        obstacles.forEach(function (b) {
+            if (b.right < xMin || b.left > xMax) return;  // no horizontal overlap with this card
+            intervals.push([b.top - OBSTACLE_PAD_PX, b.bottom + OBSTACLE_PAD_PX]);
+        });
+        return clearOfIntervals(y, intervals, extraPx);
+    }
+
+    // Mirror of nudgeBendY for a short VERTICAL tap (spanning yMin..yMax at
+    // some x) dropping from a shared bus down/up to one specific terminal -
+    // nudges sideways instead of up/down ("когато има обекти заобикаляй ги
+    // по най-краткия път" for the individual tap, separate from the bus's
+    // own obstacle pass which only covers its horizontal run).
+    function nudgeVerticalX(x, yMin, yMax, obstacles, extraPx) {
+        var intervals = [];
+        obstacles.forEach(function (b) {
+            if (b.bottom < yMin || b.top > yMax) return;  // no vertical overlap with this card
+            intervals.push([b.left - OBSTACLE_PAD_PX, b.right + OBSTACLE_PAD_PX]);
+        });
+        return clearOfIntervals(x, intervals, extraPx);
+    }
+
+    // Only handles one horizontal + one vertical segment, which is all our
+    // VHV routing ever produces - two segments of the same orientation are
+    // treated as parallel (no crossing marked).
+    function segCrossing(segA, segB) {
+        var aHoriz = segA[0][1] === segA[1][1];
+        var bHoriz = segB[0][1] === segB[1][1];
+        if (aHoriz === bHoriz) return null;
+        var h = aHoriz ? segA : segB, v = aHoriz ? segB : segA;
+        var hy = h[0][1], hx1 = Math.min(h[0][0], h[1][0]), hx2 = Math.max(h[0][0], h[1][0]);
+        var vx = v[0][0], vy1 = Math.min(v[0][1], v[1][1]), vy2 = Math.max(v[0][1], v[1][1]);
+        if (vx > hx1 + 0.5 && vx < hx2 - 0.5 && hy > vy1 + 0.5 && hy < vy2 - 0.5) return [vx, hy];
+        return null;
+    }
+
+    var SIDE_LABELS = {in: 'вход', out: 'изход', tap: 'извод'};
+
+    // Fills in one card's hover tooltip - its own parameters plus a plain-
+    // language line per wire touching it (local or cross-panel) - explicit
+    // ask: "за всеки елемент да има тоолтип с параметрите му и описание на
+    // връзките на елемента". Built once here (WIRES/COMPONENTS_DATA are
+    // static for the page's lifetime, no need to rebuild on every hover).
+    // Uses textContent throughout (never innerHTML) since names/notes are
+    // free-text user input.
+    function buildComponentTooltip(id) {
+        var meta = COMPONENTS_DATA[id];
+        var container = labelOverlays[id] && labelOverlays[id].tooltip;
+        if (!meta || !container) return;
+        function addLine(text, cls) {
+            var d = document.createElement('div');
+            if (cls) d.className = cls;
+            d.textContent = text;
+            container.appendChild(d);
+        }
+        addLine(meta.name, 'pcomp-info-tooltip-title');
+        addLine(meta.type + (meta.poles ? ' · ' + meta.poles + 'P' : ''));
+        if (meta.rated_current_a) addLine('Ном. ток: ' + meta.rated_current_a + ' A');
+        var mm = [meta.manufacturer, meta.model].filter(Boolean).join(' ');
+        if (mm) addLine(mm);
+        if (meta.feeds_label) addLine('→ ' + meta.feeds_label);
+        if (meta.notes) addLine(meta.notes, 'pcomp-info-tooltip-notes');
+    }
+    Object.keys(labelOverlays).forEach(buildComponentTooltip);
+
+    // --- Element search: find by name, scroll it into view, blink it a
+    // few times - explicit ask: "трябва да имам търсене на елемент в
+    // схемата, когато го намери да започне да мига няколко пъти и да
+    // фокусира него". Works regardless of lock state - it's a navigation
+    // aid, not an edit action. ---
+    var elementSearchInput = document.getElementById('elementSearchInput');
+    var elementSearchBtn = document.getElementById('elementSearchBtn');
+    function searchAndFocusElement() {
+        var q = (elementSearchInput.value || '').trim().toLowerCase();
+        if (!q) return;
+        var match = cards.find(function (c) {
+            var meta = COMPONENTS_DATA[c.getAttribute('data-id')];
+            return meta && meta.name.toLowerCase().indexOf(q) !== -1;
+        });
+        if (!match) { alert('Няма елемент с това име.'); return; }
+        match.scrollIntoView({behavior: 'smooth', block: 'center', inline: 'center'});
+        match.classList.remove('pcomp-search-highlight');
+        void match.offsetWidth;  // restart the animation if the same element is searched again
+        match.classList.add('pcomp-search-highlight');
+        setTimeout(function () { match.classList.remove('pcomp-search-highlight'); }, 2200);
+    }
+    elementSearchBtn.addEventListener('click', searchAndFocusElement);
+    elementSearchInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); searchAndFocusElement(); }
+    });
+
+    // Extra edge-distance between two DIFFERENT remote connections that
+    // share the same local component+side ("когато има повече от една
+    // връзка на извод добавяй квадрат за всяка връзка").
+    var REMOTE_LANE_STEP_PX = 26;
+    // Persisted per connection-key across redraws (positions move, but the
+    // label/tooltip DOM elements themselves should be reused, same idea as
+    // w.line/w.dots).
+    var remoteGroupEls = {};
+
+    // A wire whose other end lives on a different panel's own schematic has
+    // nothing local to draw a real line to there - explicit ask: "да мога
+    // да връзвам... към обекти в други табла... когато отбележа изводите да
+    // мога да избирам обект". Draws a labeled stub from the LOCAL terminal
+    // all the way to the canvas edge, same "nearest edge" convention as the
+    // factory overview map's own cross-room links.
+    //
+    // Grouped by (local component+side, remote component+side) so all 3
+    // poles of one three-phase bundle to the SAME remote target share a
+    // single box, their 3 lines converging into it, instead of 3 separate
+    // boxes ("когато е външна трифазна връзка показвай един квадрат за
+    // всички линии"). A component+side with several DIFFERENT remote
+    // connections (bundled or solo) gets one box PER connection, spaced
+    // apart along the edge so they never overlap.
+    function renderRemoteConnections(svgRect) {
+        var groups = {};
+        WIRES.forEach(function (w) {
+            if (!w.fromRemote && !w.toRemote) return;
+            var remoteIsFrom = w.fromRemote;
+            var localId = remoteIsFrom ? w.toId : w.fromId;
+            var localSide = remoteIsFrom ? w.toSide : w.fromSide;
+            var remoteCompId = remoteIsFrom ? w.fromId : w.toId;
+            var remoteSide = remoteIsFrom ? w.fromSide : w.toSide;
+            var key = localId + '|' + localSide + '|' + remoteCompId + '|' + remoteSide;
+            (groups[key] = groups[key] || {localId: localId, localSide: localSide, members: []}).members.push(w);
+        });
+        var laneCounters = {};
+        var keys = Object.keys(groups).sort();
+        keys.forEach(function (key) {
+            var g = groups[key];
+            var tKey = g.localId + '|' + g.localSide;
+            g.laneIndex = laneCounters[tKey] || 0;
+            laneCounters[tKey] = g.laneIndex + 1;
+        });
+        var seen = {};
+        keys.forEach(function (key) {
+            seen[key] = true;
+            renderRemoteGroup(key, groups[key], svgRect);
+        });
+        Object.keys(remoteGroupEls).forEach(function (key) {
+            if (seen[key]) return;
+            var els = remoteGroupEls[key];
+            if (els.label.parentNode) els.label.parentNode.removeChild(els.label);
+            delete remoteGroupEls[key];
+        });
+    }
+
+    function renderRemoteGroup(key, group, svgRect) {
+        var dir = exitDir(group.localSide);
+        var isBundle = group.members.length > 1;
+        var positions = group.members.map(function (w) {
+            var remoteIsFrom = w.fromRemote;
+            var localPole = remoteIsFrom ? w.toPole : w.fromPole;
+            var localSide = remoteIsFrom ? w.toSide : w.fromSide;
+            var pos = terminalPosition(group.localId, localPole, localSide);
+            return pos ? {w: w, x: pos.x / 100 * svgRect.width, y: pos.y / 100 * svgRect.height} : null;
+        }).filter(Boolean);
+        if (!positions.length) return;
+        var boxX = positions.reduce(function (sum, p) { return sum + p.x; }, 0) / positions.length;
+        // Lane separation must step INWARD (away from the edge), never
+        // further toward it - the edge itself is already the outermost
+        // allowed value (clamped below), so pushing further "outward" for
+        // lane 1, 2... just clamps straight back to lane 0's own position,
+        // silently collapsing every connection past the first onto the
+        // exact same point (confirmed on real data: two separate "Бекъп"
+        // connections landing on the identical pixel - "проверявай хубаво
+        // изводите... back/main има свързани две неща").
+        // 5px, not 2 - leaves room for the junction dot's own radius (3px)
+        // so it isn't clipped by the canvas's overflow:hidden either.
+        var edgeBase = dir < 0 ? 5 : svgRect.height - 5;
+        var edgeY = Math.max(5, Math.min(svgRect.height - 5, edgeBase - dir * (group.laneIndex * REMOTE_LANE_STEP_PX)));
+        var ys = positions.map(function (p) { return p.y; }).concat([edgeY]);
+        boxX = nudgeVerticalX(boxX, Math.min.apply(null, ys), Math.max.apply(null, ys), otherCardBoxesPx([group.localId]));
+
+        positions.forEach(function (p) {
+            var w = p.w, pts;
+            if (Math.abs(boxX - p.x) < 0.5) {
+                pts = [[p.x, p.y], [p.x, edgeY]];
+            } else {
+                // Exit outward minimally first (same rule as everywhere
+                // else - "изводите... винаги да излизат навън от елемента
+                // вертикално"), then jog to the shared box's column and
+                // ride it straight to the edge.
+                var nearY = p.y + dir * MIN_STUB_PX;
+                pts = [[p.x, p.y], [p.x, nearY], [boxX, nearY], [boxX, edgeY]];
+            }
+            if (!w.line) {
+                w.line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+                var cls = 'pwire-line pwire-' + w.phaseType;
+                var wp = wirePhasePole(w);
+                if (wp !== null) cls += ' pwire-pole-' + wp;
+                w.line.setAttribute('class', cls);
+                w.line.setAttribute('fill', 'none');
+                svg.appendChild(w.line);
+            }
+            w.line.setAttribute('points', pts.map(function (pt) { return pt[0] + ',' + pt[1]; }).join(' '));
+            if (!w.dots) {
+                w.dots = [0, 1].map(function () {
+                    var c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                    c.setAttribute('r', 3);
+                    c.setAttribute('class', w.line.getAttribute('class').replace('pwire-line', 'pwire-dot'));
+                    svg.appendChild(c);
+                    return c;
+                });
+            }
+            w.dots[0].setAttribute('cx', p.x); w.dots[0].setAttribute('cy', p.y);
+            w.dots[1].setAttribute('cx', boxX); w.dots[1].setAttribute('cy', edgeY);
+        });
+
+        if (!remoteGroupEls[key]) {
+            var label = document.createElement('a');
+            var tooltip = document.createElement('span');
+            tooltip.className = 'pwire-remote-label-tooltip';
+            label.appendChild(tooltip);
+            canvas.appendChild(label);
+            remoteGroupEls[key] = {label: label, tooltip: tooltip};
+        }
+        var els = remoteGroupEls[key];
+        var first = group.members[0];
+        var remoteIsFrom0 = first.fromRemote;
+        var remotePanelId = remoteIsFrom0 ? first.fromPanelId : first.toPanelId;
+        var remotePanelName = remoteIsFrom0 ? first.fromPanelName : first.toPanelName;
+        var remoteName = remoteIsFrom0 ? first.fromName : first.toName;
+        var remotePole = remoteIsFrom0 ? first.fromPole : first.toPole;
+        var remoteSide = remoteIsFrom0 ? first.fromSide : first.toSide;
+        var labelCls = 'pwire-remote-label' + (dir > 0 ? ' pwire-remote-label-down' : '') + (isBundle ? ' pwire-remote-label-bundle' : '');
+        if (!isBundle) {
+            var wp0 = wirePhasePole(first);
+            if (wp0 !== null) {
+                labelCls += ' pwire-pole-' + wp0;
+            } else if (first.phaseType !== 'single_phase') {
+                labelCls += ' pwire-' + first.phaseType;
+            }
+        }
+        els.label.className = labelCls;
+        els.label.href = '/admin/panels/' + remotePanelId + '/schematic';
+        els.tooltip.textContent = isBundle
+            ? '→ ' + remotePanelName + ': ' + remoteName + ' (трифазна)'
+            : '→ ' + remotePanelName + ': ' + remoteName + ' (п.' + remotePole + ', ' + (SIDE_LABELS[remoteSide] || remoteSide) + ')';
+        els.label.style.left = boxX + 'px';
+        els.label.style.top = edgeY + 'px';
+    }
+
+    var crossingDots = [];
+    function redrawWires() {
+        // Unlike <line>'s x1/y1/x2/y2 (which are <length> and accept "50%"),
+        // <polyline>'s points attribute is a plain list of unitless numbers -
+        // percentages there silently fail to parse (getBBox() comes back
+        // empty), which is why these wires drew nothing at all. Convert to
+        // real pixels against the SVG's own current box instead.
+        var svgRect = svg.getBoundingClientRect();
+        if (!svgRect.width || !svgRect.height) return;
+        updateLabelOverlays();
+
+        // --- Bus hubs: when 2+ wires share the exact same terminal (same
+        // component+pole+side) AND need to exit in the same direction, they
+        // draw ONE common vertical+horizontal bus line from that terminal
+        // instead of each computing its own separate bend - explicit ask:
+        // "когато има общи изводи да направиш общи линии вертикални и
+        // хоризонтални". Every such wire then just taps into this shared
+        // line at its own X (the "най-близкото място" - nearest point).
+        // Rebuilt every redraw since positions move; keyed by terminalKey().
+        var hubBusY = {};
+        (function () {
+            var groups = {};
+            WIRES.forEach(function (w) {
+                var fromDir = exitDir(w.fromSide), toDir = exitDir(w.toSide);
+                if (fromDir !== toDir) return;  // only aligned-direction pairs can share a bus
+                var fromKey = terminalKey(w.fromId, w.fromPole, w.fromSide);
+                (groups[fromKey] = groups[fromKey] || []).push({ownId: w.fromId, ownPole: w.fromPole, ownSide: w.fromSide, otherId: w.toId, otherPole: w.toPole, otherSide: w.toSide, dir: fromDir, phaseType: w.phaseType});
+                var toKey = terminalKey(w.toId, w.toPole, w.toSide);
+                (groups[toKey] = groups[toKey] || []).push({ownId: w.toId, ownPole: w.toPole, ownSide: w.toSide, otherId: w.fromId, otherPole: w.fromPole, otherSide: w.fromSide, dir: toDir, phaseType: w.phaseType});
+            });
+            Object.keys(groups).forEach(function (key) {
+                var members = groups[key];
+                if (members.length < 2) return;  // solo terminal - no bus needed, handled by the plain per-wire routing below
+                var ownPos = terminalPosition(members[0].ownId, members[0].ownPole, members[0].ownSide);
+                if (!ownPos) return;
+                var dir = members[0].dir;
+                var ownYPx = ownPos.y / 100 * svgRect.height, ownXPx = ownPos.x / 100 * svgRect.width;
+                var phaseExtra = members[0].phaseType === 'three_phase' ? (PHASE_RANK[members[0].ownPole] || 0) * PHASE_STEP_PX : 0;
+                // Sized for the terminal's OWN nearest requirement only -
+                // NOT reconciled against every member's own far end. A hub
+                // can have members at wildly different distances (e.g. a
+                // nearby single-phase tap AND an unrelated three-phase run
+                // that happens to land on the same terminal); pulling the
+                // WHOLE shared bus out to match whichever member reaches
+                // farthest would drag every OTHER member's tap along with
+                // it for no reason of its own - explicit ask: "монофазните
+                // връзки да се връзват в най-близката точка на линията".
+                // Any one member that genuinely needs more reach than this
+                // gets its own extra stretch later, per wire (see
+                // busYForThis below), without moving this shared value.
+                var limit = ownYPx + dir * (MIN_STUB_PX + phaseExtra);
+                var xs = [ownXPx];
+                var excludeIds = [members[0].ownId];
+                members.forEach(function (m) {
+                    var otherPos = terminalPosition(m.otherId, m.otherPole, m.otherSide);
+                    if (!otherPos) return;
+                    xs.push(otherPos.x / 100 * svgRect.width);
+                    if (excludeIds.indexOf(m.otherId) === -1) excludeIds.push(m.otherId);
+                });
+                var minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);
+                limit = nudgeBendY(limit, minX, maxX, otherCardBoxesPx(excludeIds), phaseExtra);
+                limit = clampOutward(limit, ownYPx + dir * MIN_STUB_PX, dir);
+                hubBusY[key] = Math.max(2, Math.min(svgRect.height - 2, limit));
+            });
+        })();
+
+        renderRemoteConnections(svgRect);
+
+        var allSegments = [];  // {w, seg: [[x,y],[x,y]]} across every wire, for the crossing-dot pass below
+        WIRES.forEach(function (w) {
+            if (w.fromRemote || w.toRemote) return;
+            var from = terminalPosition(w.fromId, w.fromPole, w.fromSide);
+            var to = terminalPosition(w.toId, w.toPole, w.toSide);
+            if (!from || !to) return;
+            if (!w.line) {
+                w.line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+                var cls = 'pwire-line pwire-' + w.phaseType;
+                var wp = wirePhasePole(w);
+                if (wp !== null) cls += ' pwire-pole-' + wp;
+                w.line.setAttribute('class', cls);
+                w.line.setAttribute('fill', 'none');
+                svg.appendChild(w.line);
+            }
+            var fromXPx = from.x / 100 * svgRect.width, toXPx = to.x / 100 * svgRect.width;
+            var fromYPx = from.y / 100 * svgRect.height, toYPx = to.y / 100 * svgRect.height;
+            var fromDir = exitDir(w.fromSide), toDir = exitDir(w.toSide);
+            var fromHubKey = terminalKey(w.fromId, w.fromPole, w.fromSide);
+            var toHubKey = terminalKey(w.toId, w.toPole, w.toSide);
+            var fromHub = hubBusY.hasOwnProperty(fromHubKey);
+            var toHub = hubBusY.hasOwnProperty(toHubKey);
+            var pts;
+            if (fromHub || toHub) {
+                // One of this wire's own ends already sits on a shared bus
+                // (built above), sized for the hub terminal's own nearest
+                // requirement. If both ends happen to be hubs (rare), the
+                // FROM one wins - one shared level is enough, a second bend
+                // for no benefit would just add clutter.
+                var busY = fromHub ? hubBusY[fromHubKey] : hubBusY[toHubKey];
+                var tapX = fromHub ? toXPx : fromXPx, tapY = fromHub ? toYPx : fromYPx;
+                var tapDir = fromHub ? toDir : fromDir;
+                // Only THIS wire's own other end can push its own junction
+                // point further out than the shared bus - never the other
+                // way around, so an unrelated far-reaching sibling can't
+                // drag a nearby one's tap along with it ("монофазните
+                // връзки да се връзват в най-близката точка на линията").
+                var tapLimit = tapY + tapDir * MIN_STUB_PX;
+                var busYForThis = clampOutward(busY, tapLimit, tapDir);
+                // The short tap between the bus and this specific terminal
+                // gets its own obstacle check ("когато има обекти
+                // заобикаляй ги по най-краткия път") - the hub's own pass
+                // above only cleared the horizontal run, not this vertical
+                // drop, which a target sitting directly under/over an
+                // unrelated card could still cross. tapPhaseExtra keeps a
+                // detouring three-phase bundle's 3 poles from all landing
+                // on the exact same detour line ("всички линии от връзката
+                // ... са една върху друга").
+                var tapPhaseExtra = w.phaseType === 'three_phase' ? (PHASE_RANK[w.fromPole] || 0) * PHASE_STEP_PX : 0;
+                var nudgedX = nudgeVerticalX(tapX, Math.min(busYForThis, tapY), Math.max(busYForThis, tapY), otherCardBoxesPx([w.fromId, w.toId]), tapPhaseExtra);
+                var tapPts;
+                if (Math.abs(nudgedX - tapX) < 0.5) {
+                    tapPts = [[tapX, busYForThis], [tapX, tapY]];
+                } else {
+                    // Approach the target from the OUTWARD side only (same
+                    // rule as everywhere else: "изводите... винаги да
+                    // излизат навън от елемента вертикално") - e.g. for an
+                    // "in" terminal (tapDir -1/up) nearY must be ABOVE tapY,
+                    // never below/into the component's own row. Also carries
+                    // its own phase-rank step, same as nudgedX above -
+                    // without it every pole's final horizontal jog would
+                    // land at the same height and overlap there too
+                    // ("хоризонталните над ап8 се припокриват").
+                    var nearY = tapY + tapDir * (MIN_STUB_PX + tapPhaseExtra);
+                    tapPts = [[nudgedX, busYForThis], [nudgedX, nearY], [tapX, nearY], [tapX, tapY]];
+                }
+                pts = fromHub
+                    ? [[fromXPx, fromYPx], [fromXPx, busYForThis]].concat(tapPts)
+                    : tapPts.slice().reverse().concat([[toXPx, busYForThis], [toXPx, toYPx]]);
+            } else if (fromDir === toDir) {
+                // Solo connection, same direction (both "in"/up or both
+                // "out"-"tap"/down) - one shared bend beyond both terminals'
+                // own limits (with phase-rank, for a lone three-phase pair
+                // not part of any fan-out) satisfies both ends.
+                var fromPhaseExtra = w.phaseType === 'three_phase' ? (PHASE_RANK[w.fromPole] || 0) * PHASE_STEP_PX : 0;
+                var toPhaseExtra = w.phaseType === 'three_phase' ? (PHASE_RANK[w.toPole] || 0) * PHASE_STEP_PX : 0;
+                var fromLimit = fromYPx + fromDir * (MIN_STUB_PX + fromPhaseExtra);
+                var toLimit = toYPx + toDir * (MIN_STUB_PX + toPhaseExtra);
+                var segXMin = Math.min(fromXPx, toXPx), segXMax = Math.max(fromXPx, toXPx);
+                var obstacles = otherCardBoxesPx([w.fromId, w.toId]);
+                var limit = fromDir < 0 ? Math.min(fromLimit, toLimit) : Math.max(fromLimit, toLimit);
+                var bendY = nudgeBendY(limit, segXMin, segXMax, obstacles);
+                bendY = clampOutward(bendY, limit, fromDir);
+                bendY = Math.max(2, Math.min(svgRect.height - 2, bendY));
+                pts = [[fromXPx, fromYPx], [fromXPx, bendY], [toXPx, bendY], [toXPx, toYPx]];
+            } else {
+                var fromPlainLimit = fromYPx + fromDir * MIN_STUB_PX;
+                var toPlainLimit = toYPx + toDir * MIN_STUB_PX;
+                var segXMin2 = Math.min(fromXPx, toXPx), segXMax2 = Math.max(fromXPx, toXPx);
+                var obstacles2 = otherCardBoxesPx([w.fromId, w.toId]);
+                if ((fromDir < 0 ? fromPlainLimit : toPlainLimit) >= (fromDir < 0 ? toPlainLimit : fromPlainLimit)) {
+                    // Opposite directions (one "in", one "out"/"tap") - a
+                    // single bend works whenever there's room between the
+                    // two limits (the common "feeds the one below/above it"
+                    // case). Phase-rank is a signed nudge off the midpoint,
+                    // clamped back into that same range, rather than fed
+                    // into the range itself (it's identical on both ends
+                    // for one bundle, which would otherwise cancel out and
+                    // collapse all 3 poles onto one height).
+                    var upperBound = fromDir < 0 ? fromPlainLimit : toPlainLimit;
+                    var lowerBound = fromDir < 0 ? toPlainLimit : fromPlainLimit;
+                    var phaseSignedPx = w.phaseType === 'three_phase' ? (PHASE_RANK[w.fromPole] - 1) * PHASE_STEP_PX : 0;
+                    var bendY2 = (lowerBound + upperBound) / 2 + phaseSignedPx;
+                    bendY2 = nudgeBendY(bendY2, segXMin2, segXMax2, obstacles2);
+                    bendY2 = Math.max(lowerBound, Math.min(upperBound, bendY2));
+                    bendY2 = Math.max(2, Math.min(svgRect.height - 2, bendY2));
+                    pts = [[fromXPx, fromYPx], [fromXPx, bendY2], [toXPx, bendY2], [toXPx, toYPx]];
+                } else {
+                    // Not enough room for one shared bend without breaking
+                    // one end's own outward exit - dog-leg instead: each
+                    // terminal exits outward on its own, joined by a short
+                    // jog halfway across.
+                    var exitFromY = Math.max(2, Math.min(svgRect.height - 2, fromPlainLimit));
+                    var exitToY = Math.max(2, Math.min(svgRect.height - 2, toPlainLimit));
+                    var midX = (fromXPx + toXPx) / 2;
+                    exitFromY = clampOutward(nudgeBendY(exitFromY, Math.min(fromXPx, midX), Math.max(fromXPx, midX), obstacles2), fromPlainLimit, fromDir);
+                    exitToY = clampOutward(nudgeBendY(exitToY, Math.min(midX, toXPx), Math.max(midX, toXPx), obstacles2), toPlainLimit, toDir);
+                    pts = [[fromXPx, fromYPx], [fromXPx, exitFromY], [midX, exitFromY], [midX, exitToY], [toXPx, exitToY], [toXPx, toYPx]];
+                }
+            }
+            w.line.setAttribute('points', pts.map(function (p) { return p[0] + ',' + p[1]; }).join(' '));
+            for (var i = 0; i < pts.length - 1; i++) allSegments.push({w: w, seg: [pts[i], pts[i + 1]]});
+            // Small filled dot at each end, in the wire's own color - marks
+            // exactly where this connection lands (explicit ask: "отбелязвай
+            // с кръгче където се свързват линиите"), separate from the
+            // component's own terminal circle underneath.
+            if (!w.dots) {
+                w.dots = [0, 1].map(function () {
+                    var c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                    c.setAttribute('r', 3);
+                    c.setAttribute('class', w.line.getAttribute('class').replace('pwire-line', 'pwire-dot'));
+                    svg.appendChild(c);
+                    return c;
+                });
+            }
+            w.dots[0].setAttribute('cx', fromXPx);
+            w.dots[0].setAttribute('cy', fromYPx);
+            w.dots[1].setAttribute('cx', toXPx);
+            w.dots[1].setAttribute('cy', toYPx);
+        });
+
+        // Same dot, also where two DIFFERENT wires' paths actually cross on
+        // screen - but ONLY when those two wires share a common pole at one
+        // of their own endpoints (same component+pole+side on either wire),
+        // i.e. they're genuinely the same electrical node passing through
+        // that point - not just two unrelated wires whose routes happen to
+        // overlap visually elsewhere on the canvas. terminalKey() is shared
+        // with TERMINAL_GROUPS above.
+        function shareTerminal(wA, wB) {
+            var aEnds = [terminalKey(wA.fromId, wA.fromPole, wA.fromSide), terminalKey(wA.toId, wA.toPole, wA.toSide)];
+            var bEnds = [terminalKey(wB.fromId, wB.fromPole, wB.fromSide), terminalKey(wB.toId, wB.toPole, wB.toSide)];
+            return aEnds.some(function (e) { return bEnds.indexOf(e) !== -1; });
+        }
+        var found = [];
+        for (var i = 0; i < allSegments.length; i++) {
+            for (var j = i + 1; j < allSegments.length; j++) {
+                if (allSegments[i].w === allSegments[j].w) continue;
+                if (!shareTerminal(allSegments[i].w, allSegments[j].w)) continue;
+                var pt = segCrossing(allSegments[i].seg, allSegments[j].seg);
+                if (pt) found.push(pt);
+            }
+        }
+        while (crossingDots.length < found.length) {
+            var c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            c.setAttribute('r', 3);
+            c.setAttribute('class', 'pwire-crossing-dot');
+            svg.appendChild(c);
+            crossingDots.push(c);
+        }
+        crossingDots.forEach(function (dot, idx) {
+            if (idx < found.length) {
+                dot.setAttribute('cx', found[idx][0]);
+                dot.setAttribute('cy', found[idx][1]);
+                dot.style.display = '';
+            } else {
+                dot.style.display = 'none';
+            }
+        });
+    }
+    setZoom(1);  // establishes the static base canvas width now that WIRES exists; also runs the first redrawWires()
+
+    function csrfBody(extra) {
+        var fd = new FormData();
+        fd.append('csrf_token', window.CSRF_TOKEN);
+        for (var k in extra) fd.append(k, extra[k]);
+        return fd;
+    }
+
+    // --- Master lock: EVERYTHING that changes data (drag, connect, add
+    // element, background upload/scale/drag, edit popup) requires this to
+    // be unlocked first - locked (default) is pure viewing. Zoom is exempt,
+    // it's a view control. ---
+    var unlockBtn = document.getElementById('unlockBtn');
+    var saveBtn = document.getElementById('saveBtn');
+    var lockBtn = document.getElementById('lockBtn');
+    var cancelBtn = document.getElementById('cancelBtn');
+    var editHint = document.getElementById('editHint');
+    var lockedHint = document.getElementById('lockedHint');
+    var connectBtn = document.getElementById('connectBtn');
+    var phaseTypeSelect = document.getElementById('phaseTypeSelect');
+    var bgToolbar = document.getElementById('bgToolbar');
+    var marginControls = document.getElementById('marginControls');
+    var newComponentSection = document.getElementById('newComponentSection');
+    // Adding an element/wire, deleting a wire, or uploading a background all
+    // reload the whole page - remember "still editing" across that reload so
+    // it doesn't silently re-lock on the user ("след направяна промяна не
+    // заключвай автоматично"). Scoped per panel so editing one panel doesn't
+    // auto-unlock a different one. Cleared explicitly on Cancel/Lock, since
+    // those ARE a deliberate "stop editing".
+    var EDIT_STORAGE_KEY = 'schematicEdit_{{ panel.id }}';
+    function rememberEditMode(on) {
+        try {
+            if (on) sessionStorage.setItem(EDIT_STORAGE_KEY, '1');
+            else sessionStorage.removeItem(EDIT_STORAGE_KEY);
+        } catch (e) {}
+    }
+    function setEditMode(on) {
+        editMode = on;
+        if (!on) setConnectMode(false);
+        // Background lock always resets to locked/safe on entering edit
+        // mode - it's a separate toggle from editMode itself, not remembered
+        // across an edit session the way editMode is.
+        if (on && window.setBgLocked) window.setBgLocked(true);
+        rememberEditMode(on);
+        canvas.classList.toggle('edit-mode', on);
+        unlockBtn.style.display = on ? 'none' : '';
+        saveBtn.style.display = on ? '' : 'none';
+        lockBtn.style.display = on ? '' : 'none';
+        cancelBtn.style.display = on ? '' : 'none';
+        editHint.style.display = on ? '' : 'none';
+        lockedHint.style.display = on ? 'none' : '';
+        connectBtn.style.display = on ? '' : 'none';
+        bgToolbar.style.display = on ? '' : 'none';
+        marginControls.style.display = on ? '' : 'none';
+        newComponentSection.style.display = on ? '' : 'none';
+        document.querySelectorAll('.pwire-delete-btn').forEach(function (btn) { btn.style.display = on ? '' : 'none'; });
+        document.querySelectorAll('.pwire-edit-btn').forEach(function (btn) { btn.style.display = on ? '' : 'none'; });
+        document.querySelectorAll('.pcomp-resize').forEach(function (el) { el.style.display = on ? 'flex' : 'none'; });
+        document.querySelectorAll('.pcomp-delete-btn').forEach(function (el) { el.style.display = on ? '' : 'none'; });
+        if (!on && typeof closeWireEditPanel === 'function') closeWireEditPanel();
+    }
+    unlockBtn.addEventListener('click', function () { setEditMode(true); });
+    cancelBtn.addEventListener('click', function () { rememberEditMode(false); location.reload(); });
+    try {
+        if (sessionStorage.getItem(EDIT_STORAGE_KEY) === '1') setEditMode(true);
+    } catch (e) {}
+
+    // Shared by the Save button AND every action that navigates/reloads the
+    // page (new element, new wire, background upload) - a dragged position
+    // only lives in `dirty` until explicitly saved, so without this, adding
+    // an element or wire right after dragging silently threw the drag away
+    // and the component snapped back ("се разместват").
+    function flushDirtyPositions() {
+        var ids = Object.keys(dirty);
+        if (!ids.length) return Promise.resolve();
+        return Promise.all(ids.map(function (id) {
+            var url = id === 'bg'
+                ? '{{ url_for("admin_update_panel_background_transform", panel_id=panel.id) }}'
+                : '/admin/panel-components/' + id + '/position';
+            return fetch(url, {method: 'POST', body: csrfBody({pos_x: dirty[id].x.toFixed(2), pos_y: dirty[id].y.toFixed(2)})});
+        })).then(function () { dirty = {}; });
+    }
+    // Save just flushes pending drags and keeps editing - it no longer
+    // re-locks on its own ("не заключвай автоматично"). Lock (below) is the
+    // explicit "done editing" action.
+    saveBtn.addEventListener('click', function () {
+        if (!Object.keys(dirty).length) return;
+        saveBtn.disabled = true;
+        flushDirtyPositions().then(function () {
+            saveBtn.disabled = false;
+        }).catch(function () {
+            saveBtn.disabled = false;
+            alert('Възникна грешка при запис. Опитайте отново.');
+        });
+    });
+    lockBtn.addEventListener('click', function () {
+        lockBtn.disabled = true;
+        flushDirtyPositions().then(function () {
+            lockBtn.disabled = false;
+            setEditMode(false);
+        }).catch(function () {
+            lockBtn.disabled = false;
+            alert('Възникна грешка при запис. Опитайте отново.');
+        });
+    });
+    // Any plain form on this page (new element, background upload/delete)
+    // navigates the page away - flush pending drags first so they're not
+    // lost, same reasoning as createWireBundle() below.
+    document.querySelectorAll('#newComponentSection form, #bgToolbar form').forEach(function (form) {
+        form.addEventListener('submit', function (e) {
+            if (!Object.keys(dirty).length) return;
+            e.preventDefault();
+            flushDirtyPositions().then(function () { form.submit(); });
+        });
+    });
+
+    // --- Background photo: canvas frames it (plus margin) + drag (position) + scale input ---
+    var bgImg = document.getElementById('schematicBgImg');
+    if (bgImg) {
+        var currentBgScale = parseFloat(bgImg.getAttribute('data-scale')) || 1;
+        function applyBgAspectRatio() {
+            if (bgImg.naturalWidth && bgImg.naturalHeight) {
+                canvas.style.aspectRatio = bgImg.naturalWidth + ' / ' + bgImg.naturalHeight;
+                // Static base width now tracks the photo's OWN pixel size
+                // (clamped to a sane range) instead of the 900px placeholder,
+                // so 100% zoom shows it close to its real size.
+                baseCanvasWidthPx = Math.max(500, Math.min(1400, bgImg.naturalWidth));
+            }
+            // setZoom() re-applies width (from the now-correct
+            // baseCanvasWidthPx), background scale AND redrawWires()
+            // together - needed because this can fire AFTER the page's
+            // initial setZoom(1) call (image load is async even when
+            // cached), so the canvas/photo/wires must all re-sync here.
+            setZoom(zoomLevel);
+        }
+        if (bgImg.complete && bgImg.naturalWidth) {
+            applyBgAspectRatio();
+        } else {
+            bgImg.addEventListener('load', applyBgAspectRatio);
+        }
+
+        var bgScaleInput = document.getElementById('bgScaleInput');
+        if (bgScaleInput) {
+            bgScaleInput.addEventListener('change', function () {
+                if (!editMode || bgLocked) return;
+                currentBgScale = Math.max(0.05, (parseFloat(bgScaleInput.value) || 100) / 100);
+                applyCanvasSize();  // canvas grows/shrinks to fit the rescaled photo instead of clipping it
+                redrawWires();
+                fetch('{{ url_for("admin_update_panel_background_transform", panel_id=panel.id) }}', {
+                    method: 'POST', body: csrfBody({scale: currentBgScale})
+                }).catch(function () {});
+            });
+        }
+        // Fading the photo in/out is a viewing aid, not a placement change,
+        // so it's NOT gated by bgLocked - only editMode (can't be triggered
+        // by an accidental drag the way position/scale could).
+        var bgOpacityInput = document.getElementById('bgOpacityInput');
+        var bgOpacityLabel = document.getElementById('bgOpacityLabel');
+        if (bgOpacityInput) {
+            bgOpacityInput.addEventListener('input', function () {
+                if (!editMode) return;
+                var opacity = Math.max(0, Math.min(100, parseInt(bgOpacityInput.value, 10) || 0)) / 100;
+                bgImg.style.opacity = opacity;
+                bgOpacityLabel.textContent = Math.round(opacity * 100) + '%';
+            });
+            bgOpacityInput.addEventListener('change', function () {
+                if (!editMode) return;
+                var opacity = Math.max(0, Math.min(100, parseInt(bgOpacityInput.value, 10) || 0)) / 100;
+                fetch('{{ url_for("admin_update_panel_background_transform", panel_id=panel.id) }}', {
+                    method: 'POST', body: csrfBody({opacity: opacity})
+                }).catch(function () {});
+            });
+        }
+        // Locked (default whenever edit mode turns on) independently of
+        // editMode itself - explicit ask: "корекцията местенето и
+        // увеличаването на подложката да се заключва отделно от
+        // добавянето на елементите", since dragging elements around used
+        // to sometimes grab and drag the photo underneath by mistake.
+        var bgLockToggleBtn = document.getElementById('bgLockToggleBtn');
+        var bgLockedHint = document.getElementById('bgLockedHint');
+        window.setBgLocked = function (on) {
+            bgLocked = on;
+            canvas.classList.toggle('bg-unlocked', !on);
+            if (bgScaleInput) bgScaleInput.disabled = on;
+            if (bgLockToggleBtn) bgLockToggleBtn.textContent = on ? '🔓 Отключи местенето на подложката' : '🔒 Заключи подложката';
+            if (bgLockedHint) bgLockedHint.style.display = on ? '' : 'none';
+        };
+        if (bgLockToggleBtn) bgLockToggleBtn.addEventListener('click', function () { window.setBgLocked(!bgLocked); });
+        (function () {
+            var dragging = false;
+            function pointerToPercent(clientX, clientY) {
+                var rect = canvas.getBoundingClientRect();
+                return {
+                    x: Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100)),
+                    y: Math.max(0, Math.min(100, ((clientY - rect.top) / rect.height) * 100)),
+                };
+            }
+            function onMove(e) {
+                if (!dragging) return;
+                var point = e.touches ? e.touches[0] : e;
+                var pos = pointerToPercent(point.clientX, point.clientY);
+                bgImg.style.left = pos.x + '%';
+                bgImg.style.top = pos.y + '%';
+            }
+            function onUp(e) {
+                if (!dragging) return;
+                dragging = false;
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                document.removeEventListener('touchmove', onMove);
+                document.removeEventListener('touchend', onUp);
+                var point = (e.changedTouches && e.changedTouches[0]) || e;
+                var pos = pointerToPercent(point.clientX, point.clientY);
+                bgImg.style.left = pos.x + '%';
+                bgImg.style.top = pos.y + '%';
+                dirty.bg = {x: pos.x, y: pos.y};
+            }
+            bgImg.addEventListener('mousedown', function (e) {
+                if (!editMode || bgLocked) return;
+                dragging = true;
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+                document.addEventListener('touchmove', onMove, {passive: false});
+                document.addEventListener('touchend', onUp);
+                e.preventDefault();
+            });
+            bgImg.addEventListener('touchstart', function (e) {
+                if (!editMode || bgLocked) return;
+                dragging = true;
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+                document.addEventListener('touchmove', onMove, {passive: false});
+                document.addEventListener('touchend', onUp);
+            }, {passive: false});
+        })();
+    }
+
+    // --- Toolbar: connect (wire-drawing) mode - only reachable unlocked.
+    // Selection happens on terminal circles (pole + in/out/tap), not the
+    // component as a whole. A single_phase pick is one circle -> one wire.
+    // A three_phase pick bundles poles 1+2+3 of whichever side you clicked -
+    // both ends must be >=3-pole components (server re-checks this too) -
+    // and creates all 3 pole-to-pole wires (1-1, 2-2, 3-3) in one go. ---
+    var connectHint = document.getElementById('connectHint');
+    var connectFromTerminal = null;  // {id, side, poles: [...]}
+    function terminalCircle(compId, pole, side) {
+        return document.querySelector('.pcomp-card[data-id="' + compId + '"] .pcomp-terminal[data-pole="' + pole + '"][data-side="' + side + '"]');
+    }
+    function highlightSelection(sel, on) {
+        sel.poles.forEach(function (p) {
+            var c = terminalCircle(sel.id, p, sel.side);
+            if (c) c.classList.toggle('wire-start', on);
+        });
+    }
+    function clearWireStart() {
+        if (connectFromTerminal) highlightSelection(connectFromTerminal, false);
+        connectFromTerminal = null;
+        remoteConnectBar.style.display = 'none';
+        resetRemoteConnectForm();
+    }
+    function setConnectMode(on) {
+        connectMode = on;
+        clearWireStart();
+        canvas.classList.toggle('connect-mode', on);
+        connectHint.style.display = on ? '' : 'none';
+        phaseTypeSelect.style.display = (on && editMode) ? '' : 'none';
+        connectBtn.textContent = on ? '✕ Спри свързването' : '🔗 Свързване';
+    }
+    connectBtn.addEventListener('click', function () {
+        if (!editMode) return;
+        setConnectMode(!connectMode);
+    });
+
+    function selectionForTerminal(circle) {
+        var card = circle.closest('.pcomp-card');
+        var compId = card.getAttribute('data-id');
+        var side = circle.getAttribute('data-side');
+        var pole = parseInt(circle.getAttribute('data-pole'), 10);
+        var totalPoles = parseInt(card.getAttribute('data-poles'), 10) || 1;
+        if (phaseTypeSelect.value === 'three_phase') {
+            if (side === 'tap') { alert('Трифазна връзка не важи за изводи на шина - изберете монофазна.'); return null; }
+            if (totalPoles < 3) { alert('Този елемент няма поне 3 полюса - изберете монофазна връзка или друг елемент.'); return null; }
+            return {id: compId, side: side, poles: [1, 2, 3]};
+        }
+        return {id: compId, side: side, poles: [pole]};
+    }
+
+    function createWireBundle(from, to) {
+        // Flush any pending drag first (see flushDirtyPositions()'s comment) -
+        // this reloads the page right after, which would otherwise discard it.
+        flushDirtyPositions().then(function () {
+            return Promise.all(from.poles.map(function (pole, idx) {
+                return fetch('{{ url_for("admin_add_panel_wire", panel_id=panel.id) }}', {
+                    method: 'POST', body: csrfBody({
+                        from_component_id: from.id, from_pole: pole, from_side: from.side,
+                        to_component_id: to.id, to_pole: to.poles[idx], to_side: to.side,
+                        phase_type: phaseTypeSelect.value,
+                    })
+                }).then(function (r) { return r.json(); });
+            }));
+        }).then(function (results) {
+            var errors = results.map(function (d) { return d.error; }).filter(Boolean);
+            if (errors.length) alert(errors.join('\n'));
+            location.reload();  // simplest way to also refresh the "Връзки" list below
+        }).catch(function () { alert('Грешка при създаване на връзка.'); });
+    }
+    // --- Cross-panel connect: once a first (local) terminal is picked, this
+    // finishes the wire to a component on a DIFFERENT panel's own schematic
+    // instead of clicking a second local terminal - explicit ask: "да мога
+    // да връзвам... към обекти в други табла... да мога да избирам обект".
+    // Shown/hidden together with connectFromTerminal itself.
+    var remoteConnectBar = document.getElementById('remoteConnectBar');
+    var remotePanelSelect = document.getElementById('remotePanelSelect');
+    var remoteComponentSelect = document.getElementById('remoteComponentSelect');
+    var remoteSideSelect = document.getElementById('remoteSideSelect');
+    var remotePoleSelect = document.getElementById('remotePoleSelect');
+    var remoteConnectSubmitBtn = document.getElementById('remoteConnectSubmitBtn');
+    function resetRemoteConnectForm() {
+        remotePanelSelect.value = '';
+        remoteComponentSelect.innerHTML = '<option value="">Елемент...</option>';
+        remoteComponentSelect.disabled = true;
+        remoteSideSelect.disabled = true;
+        remotePoleSelect.innerHTML = '';
+        remotePoleSelect.style.display = 'none';
+        remotePoleSelect.disabled = true;
+        remoteConnectSubmitBtn.disabled = true;
+    }
+    function updateRemotePoleOptions() {
+        var opt = remoteComponentSelect.selectedOptions[0];
+        var poles = opt ? parseInt(opt.getAttribute('data-poles'), 10) || 1 : 1;
+        if (phaseTypeSelect.value === 'three_phase') {
+            remotePoleSelect.style.display = 'none';
+            remotePoleSelect.disabled = true;
+            return;
+        }
+        remotePoleSelect.innerHTML = '';
+        for (var i = 1; i <= poles; i++) {
+            var o = document.createElement('option');
+            o.value = i;
+            o.textContent = 'полюс ' + i;
+            remotePoleSelect.appendChild(o);
+        }
+        remotePoleSelect.style.display = '';
+        remotePoleSelect.disabled = false;
+    }
+    remotePanelSelect.addEventListener('change', function () {
+        var data = OTHER_PANELS_DATA[remotePanelSelect.value];
+        remoteComponentSelect.innerHTML = '<option value="">Елемент...</option>';
+        if (data) {
+            data.components.forEach(function (c) {
+                var opt = document.createElement('option');
+                opt.value = c.id;
+                opt.textContent = c.name + ' (' + c.poles + 'P)';
+                opt.setAttribute('data-poles', c.poles);
+                remoteComponentSelect.appendChild(opt);
+            });
+        }
+        remoteComponentSelect.disabled = !data;
+        remoteSideSelect.disabled = true;
+        remotePoleSelect.style.display = 'none';
+        remoteConnectSubmitBtn.disabled = true;
+    });
+    remoteComponentSelect.addEventListener('change', function () {
+        var has = !!remoteComponentSelect.value;
+        remoteSideSelect.disabled = !has;
+        if (has) updateRemotePoleOptions();
+        remoteConnectSubmitBtn.disabled = !has;
+    });
+    remoteSideSelect.addEventListener('change', updateRemotePoleOptions);
+    remoteConnectSubmitBtn.addEventListener('click', function () {
+        if (!connectFromTerminal || !remoteComponentSelect.value) return;
+        var opt = remoteComponentSelect.selectedOptions[0];
+        var poles = parseInt(opt.getAttribute('data-poles'), 10) || 1;
+        var side = remoteSideSelect.value;
+        var selection;
+        if (phaseTypeSelect.value === 'three_phase') {
+            if (side === 'tap') { alert('Трифазна връзка не важи за изводи на шина - изберете монофазна.'); return; }
+            if (poles < 3) { alert('Избраният елемент няма поне 3 полюса - изберете монофазна връзка или друг елемент.'); return; }
+            selection = {id: remoteComponentSelect.value, side: side, poles: [1, 2, 3]};
+        } else {
+            selection = {id: remoteComponentSelect.value, side: side, poles: [parseInt(remotePoleSelect.value, 10) || 1]};
+        }
+        if (connectFromTerminal.poles.length !== selection.poles.length) {
+            alert('Изберете съвместими полюси - трифазно към трифазно, монофазно към монофазно.');
+            return;
+        }
+        var from = connectFromTerminal;
+        clearWireStart();
+        createWireBundle(from, selection);
+    });
+
+    window.deleteWire = function (wireId) {
+        if (!editMode) return;
+        if (!confirm('Изтриване на връзката?')) return;
+        fetch('/admin/panel-wires/' + wireId + '/delete', {method: 'POST', body: csrfBody({})})
+            .then(function () { location.reload(); })
+            .catch(function () { alert('Грешка при изтриване.'); });
+    };
+
+    // Terminal-circle clicks - the actual pole+side selection for wiring.
+    // Attached once (delegated on the canvas) since circles are injected
+    // dynamically per card via componentIconSvg().
+    canvas.addEventListener('mousedown', function (e) {
+        if (connectMode && e.target.classList && e.target.classList.contains('pcomp-terminal')) {
+            e.stopPropagation();
+            e.preventDefault();
+        }
+    });
+    canvas.addEventListener('click', function (e) {
+        if (!editMode || !connectMode) return;
+        var circle = e.target.closest ? e.target.closest('.pcomp-terminal') : null;
+        if (!circle) return;
+        e.stopPropagation();
+        var selection = selectionForTerminal(circle);
+        if (!selection) return;
+        if (!connectFromTerminal) {
+            connectFromTerminal = selection;
+            highlightSelection(selection, true);
+            remoteConnectBar.style.display = '';
+        } else if (connectFromTerminal.id === selection.id && connectFromTerminal.side === selection.side
+            && connectFromTerminal.poles.join(',') === selection.poles.join(',')) {
+            clearWireStart();
+        } else if (connectFromTerminal.poles.length !== selection.poles.length) {
+            alert('Изберете съвместими полюси - трифазно към трифазно, монофазно към монофазно.');
+        } else {
+            var from = connectFromTerminal;
+            clearWireStart();
+            createWireBundle(from, selection);
+        }
+    });
+
+    // --- Per-element resize (+/-) - independent of every other component's
+    // own scale, see PanelComponent.scale's docstring. ---
+    cards.forEach(function (card) {
+        var id = card.getAttribute('data-id');
+        card.querySelectorAll('.pcomp-resize-btn').forEach(function (btn) {
+            btn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+            btn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                if (!editMode) return;
+                var current = parseFloat(card.getAttribute('data-scale')) || 1;
+                var next = Math.max(0.4, Math.min(3, current + parseFloat(btn.getAttribute('data-delta'))));
+                card.setAttribute('data-scale', next);
+                renderCardIcon(card);
+                redrawWires();
+                fetch('/admin/panel-components/' + id + '/scale', {method: 'POST', body: csrfBody({scale: next})})
+                    .catch(function () {});
+            });
+        });
+    });
+
+    // --- Quick delete (red X) - confirm() first, then a real form POST
+    // (the route redirects with a flash message, same as every other
+    // plain-form admin action, not AJAX/JSON) - explicit ask: "направи
+    // изтриване на елемент, като сложиш малко червено X отгоре, да пита
+    // преди да изтрие". ---
+    cards.forEach(function (card) {
+        var deleteBtn = card.querySelector('.pcomp-delete-btn');
+        if (!deleteBtn) return;
+        deleteBtn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+        deleteBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            if (!editMode) return;
+            var name = deleteBtn.getAttribute('data-name');
+            if (!confirm('Изтриване на елемент "' + name + '"? Всички негови връзки също ще бъдат изтрити.')) return;
+            flushDirtyPositions().then(function () {
+                var form = document.createElement('form');
+                form.method = 'POST';
+                form.action = deleteBtn.getAttribute('data-delete-url');
+                var csrf = document.createElement('input');
+                csrf.type = 'hidden';
+                csrf.name = 'csrf_token';
+                csrf.value = window.CSRF_TOKEN;
+                form.appendChild(csrf);
+                document.body.appendChild(form);
+                form.submit();
+            });
+        });
+    });
+
+    // --- Wire retarget: "редактиране на връзките... смяна на целта" - lets
+    // one end (from or to) of an EXISTING wire be redirected to a different
+    // component/pole/side (this panel or another one), in place, instead of
+    // deleting the wire and drawing a new one. Editing works per pole-wire
+    // row (a three-phase bundle's 3 rows are edited one at a time). ---
+    var wireEditPanel = document.getElementById('wireEditPanel');
+    var wireEditState = null;  // {wireId, phase, from:{id,pole,side,desc}, to:{...}}
+    function localTargetComponents() {
+        return Object.keys(COMPONENTS_DATA).map(function (id) {
+            var m = COMPONENTS_DATA[id];
+            return {id: id, name: m.name, poles: m.poles || 1};
+        }).sort(function (a, b) { return a.name.localeCompare(b.name); });
+    }
+    window.closeWireEditPanel = function () {
+        wireEditState = null;
+        if (!wireEditPanel) return;
+        wireEditPanel.style.display = 'none';
+        wireEditPanel.innerHTML = '';
+    };
+    function renderWireEditSummary() {
+        var s = wireEditState;
+        wireEditPanel.innerHTML = '';
+        var info = document.createElement('span');
+        info.className = 'text-small';
+        info.textContent = 'Редактиране: ' + s.from.desc + ' — ' + s.to.desc;
+        wireEditPanel.appendChild(info);
+        ['from', 'to'].forEach(function (end) {
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn-secondary';
+            btn.textContent = 'Смени "' + (end === 'from' ? 'От' : 'До') + '"';
+            btn.addEventListener('click', function () { renderWireEditPicker(end); });
+            wireEditPanel.appendChild(btn);
+        });
+        var cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'btn-secondary';
+        cancel.textContent = 'Затвори';
+        cancel.addEventListener('click', window.closeWireEditPanel);
+        wireEditPanel.appendChild(cancel);
+    }
+    function renderWireEditPicker(end) {
+        var s = wireEditState;
+        wireEditPanel.innerHTML = '';
+        var label = document.createElement('span');
+        label.className = 'text-small';
+        label.textContent = 'Нова цел за "' + (end === 'from' ? 'От' : 'До') + '":';
+        wireEditPanel.appendChild(label);
+
+        var panelSelect = document.createElement('select');
+        var localOpt = document.createElement('option');
+        localOpt.value = 'local';
+        localOpt.textContent = 'Това табло';
+        panelSelect.appendChild(localOpt);
+        Object.keys(OTHER_PANELS_DATA).forEach(function (pid) {
+            var opt = document.createElement('option');
+            opt.value = pid;
+            opt.textContent = OTHER_PANELS_DATA[pid].name;
+            panelSelect.appendChild(opt);
+        });
+        wireEditPanel.appendChild(panelSelect);
+
+        var componentSelect = document.createElement('select');
+        wireEditPanel.appendChild(componentSelect);
+
+        var sideSelect = document.createElement('select');
+        ['in', 'out', 'tap'].forEach(function (sv) {
+            var opt = document.createElement('option');
+            opt.value = sv;
+            opt.textContent = SIDE_LABELS[sv];
+            sideSelect.appendChild(opt);
+        });
+        wireEditPanel.appendChild(sideSelect);
+
+        var poleSelect = document.createElement('select');
+        wireEditPanel.appendChild(poleSelect);
+
+        function populatePoles() {
+            var opt = componentSelect.selectedOptions[0];
+            var poles = opt ? parseInt(opt.getAttribute('data-poles'), 10) || 1 : 1;
+            if (s.phase === 'three_phase') {
+                poleSelect.style.display = 'none';
+                return;
+            }
+            poleSelect.innerHTML = '';
+            for (var i = 1; i <= poles; i++) {
+                var o = document.createElement('option');
+                o.value = i;
+                o.textContent = 'полюс ' + i;
+                poleSelect.appendChild(o);
+            }
+            poleSelect.style.display = '';
+        }
+        function populateComponents() {
+            var list = panelSelect.value === 'local' ? localTargetComponents() : OTHER_PANELS_DATA[panelSelect.value].components;
+            componentSelect.innerHTML = '';
+            list.forEach(function (c) {
+                var opt = document.createElement('option');
+                opt.value = c.id;
+                opt.textContent = c.name + ' (' + c.poles + 'P)';
+                opt.setAttribute('data-poles', c.poles);
+                componentSelect.appendChild(opt);
+            });
+            populatePoles();
+        }
+        panelSelect.addEventListener('change', populateComponents);
+        componentSelect.addEventListener('change', populatePoles);
+        populateComponents();
+
+        var saveBtn = document.createElement('button');
+        saveBtn.type = 'button';
+        saveBtn.className = 'btn-submit';
+        saveBtn.textContent = 'Запази';
+        saveBtn.addEventListener('click', function () {
+            var poles = parseInt(componentSelect.selectedOptions[0].getAttribute('data-poles'), 10) || 1;
+            if (s.phase === 'three_phase' && poles < 3) {
+                alert('Трифазна връзка изисква елемент с поне 3 полюса.');
+                return;
+            }
+            var pole = s.phase === 'three_phase' ? s[end].pole : (parseInt(poleSelect.value, 10) || 1);
+            saveBtn.disabled = true;
+            fetch('/admin/panel-wires/' + s.wireId + '/retarget', {
+                method: 'POST',
+                body: csrfBody({end: end, component_id: componentSelect.value, pole: pole, side: sideSelect.value}),
+            }).then(function (r) { return r.json(); }).then(function (data) {
+                if (data.error) { alert(data.error); saveBtn.disabled = false; return; }
+                location.reload();
+            }).catch(function () { alert('Грешка при запис.'); saveBtn.disabled = false; });
+        });
+        wireEditPanel.appendChild(saveBtn);
+
+        var back = document.createElement('button');
+        back.type = 'button';
+        back.className = 'btn-secondary';
+        back.textContent = 'Назад';
+        back.addEventListener('click', renderWireEditSummary);
+        wireEditPanel.appendChild(back);
+    }
+    document.querySelectorAll('.pwire-edit-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            if (!editMode) return;
+            var row = btn.closest('.wire-row');
+            wireEditState = {
+                wireId: row.getAttribute('data-wire-id'),
+                phase: row.getAttribute('data-phase'),
+                from: {id: row.getAttribute('data-from-id'), pole: parseInt(row.getAttribute('data-from-pole'), 10), side: row.getAttribute('data-from-side'), desc: row.getAttribute('data-from-desc')},
+                to: {id: row.getAttribute('data-to-id'), pole: parseInt(row.getAttribute('data-to-pole'), 10), side: row.getAttribute('data-to-side'), desc: row.getAttribute('data-to-desc')},
+            };
+            wireEditPanel.style.display = 'flex';
+            renderWireEditSummary();
+        });
+    });
+
+    // --- Drag / click per card - both require unlocked (locked = view only) ---
+    cards.forEach(function (card) {
+        var dragging = false, moved = false;
+        var id = card.getAttribute('data-id');
+
+        function pointerToPercent(clientX, clientY) {
+            var rect = canvas.getBoundingClientRect();
+            var x = ((clientX - rect.left) / rect.width) * 100;
+            var y = ((clientY - rect.top) / rect.height) * 100;
+            return {x: Math.max(0, Math.min(100, x)), y: Math.max(0, Math.min(100, y))};
+        }
+        function onMove(e) {
+            if (!dragging) return;
+            moved = true;
+            var point = e.touches ? e.touches[0] : e;
+            var pos = pointerToPercent(point.clientX, point.clientY);
+            card.style.left = pos.x + '%';
+            card.style.top = pos.y + '%';
+            redrawWires();
+        }
+        function onUp(e) {
+            if (!dragging) return;
+            dragging = false;
+            card.classList.remove('dragging');
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            document.removeEventListener('touchmove', onMove);
+            document.removeEventListener('touchend', onUp);
+            var point = (e.changedTouches && e.changedTouches[0]) || e;
+            var pos = pointerToPercent(point.clientX, point.clientY);
+            card.style.left = pos.x + '%';
+            card.style.top = pos.y + '%';
+            dirty[id] = {x: pos.x, y: pos.y};
+            redrawWires();
+        }
+        function onDown(e) {
+            if (!editMode || connectMode) return;
+            dragging = true;
+            moved = false;
+            card.classList.add('dragging');
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+            document.addEventListener('touchmove', onMove, {passive: false});
+            document.addEventListener('touchend', onUp);
+            e.preventDefault();
+        }
+        card.addEventListener('mousedown', onDown);
+        card.addEventListener('touchstart', onDown, {passive: false});
+
+        card.addEventListener('click', function () {
+            if (!editMode) return;  // locked = view only, no popup either
+            if (moved) return;
+            // In connect mode, only a specific terminal circle counts as a
+            // selection (see the delegated canvas click handler above) -
+            // clicking elsewhere on the card body does nothing.
+            if (connectMode) return;
+            window.open(card.getAttribute('data-edit-url'), 'editComponent', 'width=480,height=640');
+        });
+    });
+
+    // --- Auto-generated one-line diagram ("добави под схемата нова
+    // еднолинейна схема") -------------------------------------------------
+    // Purely derived from WIRES/COMPONENTS_DATA (already built above for the
+    // real schematic) plus each .pcomp-card's data-type/data-poles - no new
+    // backend data, no state of its own, re-laid-out from scratch on every
+    // page load. Direction of power flow per wire is inferred from
+    // from_side/to_side ('out'/a 'tap' feeding an 'in' is upstream->
+    // downstream), NOT from which end was clicked first when the wire was
+    // drawn - see wireUpDown() below.
+    var oneLineCanvas = document.getElementById('oneLineCanvas');
+    if (oneLineCanvas) {
+        var OL_NODE_W = 120, OL_GAP_X = 26, OL_LEVEL_H = 130, OL_TOP_PAD = 16, OL_CONNECT_DROP = 92;
+        var THIS_PANEL_ID = {{ panel.id }};
+        var THIS_PANEL_PARENT_ID = {{ panel.parent_panel_id | tojson }};
+
+        function panelParentId(panelId) {
+            if (panelId === THIS_PANEL_ID) return THIS_PANEL_PARENT_ID;
+            var p = OTHER_PANELS_DATA[panelId];
+            return p ? p.parent_panel_id : null;
+        }
+
+        function wireUpDown(w) {
+            // upSide/downSide carry the REAL pole side ('in'/'out'/'tap')
+            // each end was actually wired on, all the way through to
+            // rendering - explicit ask: "спазвай полюсите на устройствата
+            // вход изход". This is kept independent of the up/down guess
+            // itself (below): even in the rare ambiguous fallback (e.g. two
+            // 'in' sides tied together), the connector still lands on
+            // whichever pole the wire is ACTUALLY drawn on, never a generic
+            // fixed offset - see olNodeGeometry()/poleY().
+            var fromEnd = {upId: w.fromId, upSide: w.fromSide, upRemote: w.fromRemote, upLabel: w.fromPanelName + ': ' + w.fromName,
+                           downId: w.toId, downSide: w.toSide, downRemote: w.toRemote, downLabel: w.toPanelName + ': ' + w.toName};
+            var toEnd = {upId: w.toId, upSide: w.toSide, upRemote: w.toRemote, upLabel: w.toPanelName + ': ' + w.toName,
+                         downId: w.fromId, downSide: w.fromSide, downRemote: w.fromRemote, downLabel: w.fromPanelName + ': ' + w.fromName};
+            // Crossing panels: the real distribution hierarchy
+            // (ElectricalPanel.parent_panel_id, same field the "Захранва се
+            // от" column on /admin/panels reads) is a far more reliable
+            // signal than which wire side got clicked first - important
+            // because a feeder cable is often drawn 'in'-to-'in' (each
+            // panel's OWN incoming main breaker terminal), which is
+            // structurally ambiguous and would otherwise fall through to an
+            // arbitrary guess below.
+            if (w.fromRemote || w.toRemote) {
+                var remotePanelId = w.fromRemote ? w.fromPanelId : w.toPanelId;
+                if (panelParentId(THIS_PANEL_ID) === remotePanelId) {
+                    // The other panel feeds THIS panel -> its end is upstream.
+                    return w.fromRemote ? fromEnd : toEnd;
+                }
+                if (panelParentId(remotePanelId) === THIS_PANEL_ID) {
+                    // THIS panel feeds the other panel -> the local end is upstream.
+                    return w.fromRemote ? toEnd : fromEnd;
+                }
+                // Sibling panels with no direct parent/child link - fall through
+                // to the side-based guess below, same as a same-panel wire.
+            }
+            // 'out' (load side) or a 'tap' feeding an 'in' (line side) is the
+            // upstream end; falls back to fromId->toId as stored when both
+            // ends are the same kind (e.g. tap-to-tap, two busbars) since
+            // there's then no other signal for which end is the source.
+            if (w.fromSide === 'out' || (w.fromSide === 'tap' && w.toSide === 'in')) return fromEnd;
+            if (w.toSide === 'out' || (w.toSide === 'tap' && w.fromSide === 'in')) return toEnd;
+            return fromEnd;
+        }
+
+        function buildOneLineNodes() {
+            var nodes = {};
+            document.querySelectorAll('.pcomp-card').forEach(function (card) {
+                var id = card.getAttribute('data-id');
+                var meta = COMPONENTS_DATA[id] || {};
+                var nameEl = card.querySelector('.pcomp-name');
+                nodes[id] = {
+                    id: id, type: card.getAttribute('data-type'),
+                    poles: parseInt(card.getAttribute('data-poles'), 10) || 1,
+                    name: meta.name || (nameEl ? nameEl.textContent : ('#' + id)),
+                    rated: meta.rated_current_a, feedsLabel: meta.feeds_label,
+                };
+            });
+            return nodes;
+        }
+
+        // Builds the forest of trees to draw: every LOCAL component appears
+        // EXACTLY once (never silently dropped, even if unconnected or part
+        // of a cycle - see the trailing "leftover" pass), children come from
+        // local downstream wires, dangling ends become small leaf boxes
+        // (feeds_label for a machine/panel/device this element powers, or a
+        // dashed stub for a wire crossing to another panel's own schematic).
+        function buildOneLineForest(nodes) {
+            var childrenOf = {}, incomingLocal = {}, incomingExternalLabel = {}, externalChildrenOf = {};
+            WIRES.forEach(function (w) {
+                var d = wireUpDown(w);
+                var upLocal = !!nodes[d.upId], downLocal = !!nodes[d.downId];
+                if (upLocal && downLocal) {
+                    // A three_phase connection is 3 separate PanelWire rows
+                    // (one per pole) - a one-line diagram collapses that back
+                    // into ONE drawn line per real connection, so only the
+                    // first pole reaching a given downstream component adds
+                    // an edge; the other 2 are the same logical link (same
+                    // upSide/downSide pair anyway, since all 3 poles of one
+                    // three_phase connection share the same 2 terminal sides).
+                    var kids = childrenOf[d.upId] = childrenOf[d.upId] || [];
+                    if (!kids.some(function (c) { return c.downId === d.downId; })) {
+                        kids.push({downId: d.downId, phaseType: w.phaseType, upSide: d.upSide, downSide: d.downSide});
+                    }
+                    (incomingLocal[d.downId] = incomingLocal[d.downId] || []).push(d.upId);
+                } else if (upLocal && !downLocal) {
+                    var extKids = externalChildrenOf[d.upId] = externalChildrenOf[d.upId] || [];
+                    if (!extKids.some(function (c) { return c.label === d.downLabel; })) {
+                        extKids.push({label: d.downLabel, phaseType: w.phaseType, upSide: d.upSide});
+                    }
+                } else if (!upLocal && downLocal) {
+                    incomingExternalLabel[d.downId] = d.upLabel;
+                }
+            });
+            var visited = {};
+            function buildSubtree(id) {
+                if (visited[id]) return null;
+                visited[id] = true;
+                var node = nodes[id];
+                var kids = (childrenOf[id] || []).map(function (c) {
+                    var sub = buildSubtree(c.downId);
+                    if (sub) { sub.edgePhaseType = c.phaseType; sub.edgeUpSide = c.upSide; sub.edgeDownSide = c.downSide; }
+                    return sub;
+                }).filter(Boolean);
+                (externalChildrenOf[id] || []).forEach(function (c) {
+                    kids.push({synthetic: 'remote', label: c.label, edgePhaseType: c.phaseType, edgeUpSide: c.upSide, children: []});
+                });
+                if (!kids.length && node.feedsLabel) {
+                    // Not a real wire (feeds_machine_id/feeds_panel_id/
+                    // feeds_modbus_device_id is a separate, optional manual
+                    // link - see PanelComponent.feeds_label) - the natural
+                    // pole for "this breaker's downstream load" is its own
+                    // 'out' side.
+                    kids.push({synthetic: 'feeds', label: node.feedsLabel, edgeUpSide: 'out', children: []});
+                }
+                return {id: id, node: node, children: kids, incomingExternalLabel: incomingExternalLabel[id] || null};
+            }
+            var rootIds = Object.keys(nodes).filter(function (id) { return !incomingLocal[id]; });
+            if (!rootIds.length) rootIds = Object.keys(nodes);
+            rootIds.sort(function (a, b) {
+                var ma = nodes[a].type === 'main_breaker', mb = nodes[b].type === 'main_breaker';
+                if (ma !== mb) return ma ? -1 : 1;
+                return nodes[a].name.localeCompare(nodes[b].name, 'bg');
+            });
+            var trees = rootIds.map(buildSubtree).filter(Boolean);
+            Object.keys(nodes).forEach(function (id) {
+                if (!visited[id]) { var t = buildSubtree(id); if (t) trees.push(t); }
+            });
+            return trees;
+        }
+
+        function olWidth(t) {
+            if (!t.children || !t.children.length) { t._w = OL_NODE_W; return t._w; }
+            var w = -OL_GAP_X;
+            t.children.forEach(function (c) { w += olWidth(c) + OL_GAP_X; });
+            t._w = Math.max(OL_NODE_W, w);
+            return t._w;
+        }
+        function olLayout(t, x0, depth, flat) {
+            t._depth = depth;
+            t._y = OL_TOP_PAD + depth * OL_LEVEL_H;
+            if (!t.children || !t.children.length) {
+                t._x = x0 + t._w / 2;
+                flat.push(t);
+                return;
+            }
+            var total = -OL_GAP_X;
+            t.children.forEach(function (c) { total += c._w + OL_GAP_X; });
+            var cx = x0 + (t._w - total) / 2;
+            t.children.forEach(function (c) {
+                olLayout(c, cx, depth + 1, flat);
+                cx += c._w + OL_GAP_X;
+            });
+            t._x = x0 + t._w / 2;
+            flat.push(t);
+        }
+
+        function olEscape(s) {
+            var d = document.createElement('div');
+            d.textContent = s == null ? '' : String(s);
+            return d.innerHTML;
+        }
+
+        // Real terminal geometry for a node's icon, in the SAME coordinate
+        // system componentIconSvg() itself draws in (in-poles at cy=7,
+        // out-poles at cy=h-7, tap-poles - busbar/ethernet_switch/
+        // modbus_gateway, no in/out distinction - at cy=h/2, h=BODY_H) so a
+        // connector line lands on the actual drawn pole circle instead of a
+        // generic offset - explicit ask: "спазвай полюсите на устройствата
+        // вход изход".
+        function olNodeGeometry(n) {
+            if (n.type === 'schrack_urna') {
+                // Fixed non-scaled two-row terminal layout (see
+                // schrackUrnaIconSvg()), not a module-count-scaled body -
+                // single_phase-only, approximate with its own mid-height.
+                return {poleCountForIcon: n.poles || 1, iconScale: 0.5, inY: 10, outY: 30, tapY: 20};
+            }
+            var poleCountForIcon = n.type === 'busbar' ? Math.min(n.poles || 3, 8) : Math.min(n.poles || 1, 4);
+            var iconScale = Math.min(0.55, 100 / (Math.max(1, poleCountForIcon) * MODULE_W));
+            var h = BODY_H * iconScale;
+            return {poleCountForIcon: poleCountForIcon, iconScale: iconScale, inY: 7 * iconScale, outY: h - 7 * iconScale, tapY: h / 2};
+        }
+        function olPoleY(geom, side) {
+            if (side === 'out') return geom.outY;
+            if (side === 'tap') return geom.tapY;
+            return geom.inY;  // 'in', and the same default for a synthetic edge with no real side
+        }
+
+        function renderOneLineDiagram() {
+            var nodes = buildOneLineNodes();
+            var ids = Object.keys(nodes);
+            var wiresSvg = document.getElementById('oneLineWiresSvg');
+            if (!ids.length) {
+                oneLineCanvas.style.height = '0';
+                wiresSvg.innerHTML = '';
+                return;
+            }
+            var trees = buildOneLineForest(nodes);
+            var flat = [], cursorX = 0, maxDepth = 0;
+            trees.forEach(function (t) {
+                olWidth(t);
+                olLayout(t, cursorX, 0, flat);
+                cursorX += t._w + OL_GAP_X * 2;
+                maxDepth = Math.max(maxDepth, t._depth);
+            });
+            flat.forEach(function (t) { maxDepth = Math.max(maxDepth, t._depth); });
+            var totalWidth = Math.max(OL_NODE_W, cursorX - OL_GAP_X * 2);
+            var totalHeight = OL_TOP_PAD + (maxDepth + 1) * OL_LEVEL_H + 10;
+            oneLineCanvas.style.width = totalWidth + 'px';
+            oneLineCanvas.style.height = totalHeight + 'px';
+            wiresSvg.setAttribute('width', totalWidth);
+            wiresSvg.setAttribute('height', totalHeight);
+            wiresSvg.setAttribute('viewBox', '0 0 ' + totalWidth + ' ' + totalHeight);
+
+            var svgParts = [];
+            oneLineCanvas.querySelectorAll('.oneline-node').forEach(function (el) { el.remove(); });
+            var EDGE_LABELS = {modbus: 'RS485', ethernet: 'ETH', ct: 'CT'};
+            var DASHED_EDGE_TYPES = {modbus: 1, ethernet: 1, ct: 1};
+
+            function walk(t, parent) {
+                // Real node's own pole geometry, computed up front so both
+                // the incoming edge (uses its downSide) and the outgoing
+                // ones to its children (use their own upSide against THIS
+                // geometry) land on the actual terminal position - a
+                // synthetic leaf (feeds_label/remote stub) has no real
+                // poles, so its own incoming edge just enters at a small
+                // fixed offset near its top.
+                var geom = t.synthetic ? null : olNodeGeometry(t.node);
+                if (parent) {
+                    var y1 = parent._y + (parent._geom ? olPoleY(parent._geom, t.edgeUpSide) : OL_CONNECT_DROP);
+                    var y2 = t._y + (geom ? olPoleY(geom, t.edgeDownSide) : 10);
+                    var midY = y1 + (y2 - y1) / 2;
+                    var dashed = t.edgePhaseType && DASHED_EDGE_TYPES[t.edgePhaseType];
+                    svgParts.push('<path d="M' + parent._x + ',' + y1 + ' V' + midY + ' H' + t._x + ' V' + y2 + '" '
+                        + 'class="oneline-edge"' + (dashed ? ' stroke-dasharray="4 3"' : '') + ' fill="none" stroke="var(--border-color)" stroke-width="1.5"/>');
+                    if (t.edgePhaseType && EDGE_LABELS[t.edgePhaseType]) {
+                        svgParts.push('<text x="' + (t._x + 4) + '" y="' + (midY - 3) + '" class="oneline-edge-label">' + EDGE_LABELS[t.edgePhaseType] + '</text>');
+                    }
+                }
+                t._geom = geom;
+                var div = document.createElement('div');
+                div.className = 'oneline-node';
+                div.style.left = t._x + 'px';
+                div.style.top = t._y + 'px';
+                if (t.synthetic === 'feeds' || t.synthetic === 'remote') {
+                    div.innerHTML = '<div class="oneline-leaf' + (t.synthetic === 'remote' ? ' oneline-leaf-remote' : '') + '">'
+                        + (t.synthetic === 'remote' ? '&#8674; ' : '&rarr; ') + olEscape(t.label) + '</div>';
+                } else {
+                    var n = t.node;
+                    var subParts = [];
+                    if (n.rated) subParts.push(n.rated + 'A');
+                    if (n.poles) subParts.push(n.poles + 'P');
+                    var html = '<div class="oneline-icon">' + componentIconSvg(n.type, geom.poleCountForIcon, geom.iconScale) + '</div>'
+                        + '<div class="oneline-name">' + olEscape(n.name) + '</div>';
+                    if (subParts.length) html += '<div class="oneline-sub">' + olEscape(subParts.join(' · ')) + '</div>';
+                    if (t.incomingExternalLabel) html += '<div class="oneline-sub oneline-sub-external">&#8676; ' + olEscape(t.incomingExternalLabel) + '</div>';
+                    div.innerHTML = html;
+                }
+                oneLineCanvas.appendChild(div);
+                (t.children || []).forEach(function (c) { walk(c, t); });
+            }
+            trees.forEach(function (t) { walk(t, null); });
+            wiresSvg.innerHTML = svgParts.join('');
+        }
+
+        renderOneLineDiagram();
+    }
+})();
+</script>
+</body>
+</html>

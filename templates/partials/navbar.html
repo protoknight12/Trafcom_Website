@@ -2,72 +2,154 @@
     <div class="nav-container">
         <a href="{{ url_for('index') }}" class="nav-logo-link"><h2 class="nav-logo">TRAFCOM</h2></a>
 
-        <button class="nav-toggle" id="navToggle" aria-label="Отвори менюто" aria-expanded="false">
+        {% if current_user.is_authenticated and request.path.startswith('/admin') %}
+        {% set safe_referrer = request.referrer if request.referrer and request.referrer.startswith(request.host_url) else None %}
+        <a href="{{ safe_referrer or url_for('admin_dashboard') }}" class="nav-admin-back"
+           style="color: var(--text-muted); font-size: 0.85rem; text-decoration: none; white-space: nowrap; margin-left: 4px;"
+           title="Назад към предишната страница">&larr; Назад</a>
+        {% endif %}
+
+        <button class="nav-toggle" id="navToggle" aria-label="{{ _('Отвори менюто') }}" aria-expanded="false">
             <span></span><span></span><span></span>
         </button>
 
         <div class="nav-links" id="navLinks">
             <div class="nav-section-links">
                 <div class="dropdown">
-                    <a class="dropdown-trigger {{ 'active-nav-link' if active_page in ['generator', 'upload'] else '' }}" href="#" tabindex="0" onclick="event.preventDefault()">Приложения <span class="dropdown-arrow">▼</span></a>
+                    <a class="dropdown-trigger {{ 'active-nav-link' if active_page in ['generator', 'upload'] else '' }}" href="#" tabindex="0" onclick="event.preventDefault()">{{ _('Приложения') }} <span class="dropdown-arrow">▼</span></a>
                     <div class="dropdown-content">
-                        <a href="{{ url_for('upload') }}">DXF CNC Калкулатор</a>
-                        <a href="{{ url_for('generator') }}">Параметричен Генератор</a>
+                        <a href="{{ url_for('upload') }}">{{ _('DXF CNC Калкулатор') }}</a>
+                        <a href="{{ url_for('generator') }}">{{ _('Параметричен Генератор') }}</a>
                     </div>
                 </div>
 
-                <a href="{{ url_for('services') }}" class="{{ 'active-nav-link' if active_page == 'services' else '' }}">Услуги</a>
-                <a href="{{ url_for('about') }}" class="{{ 'active-nav-link' if active_page == 'about' else '' }}">За нас</a>
-                <a href="{{ url_for('contact') }}" class="{{ 'active-nav-link' if active_page == 'contact' else '' }}">Контакти</a>
+                <a href="{{ url_for('services') }}" class="{{ 'active-nav-link' if active_page == 'services' else '' }}">{{ _('Услуги') }}</a>
+                <a href="{{ url_for('about') }}" class="{{ 'active-nav-link' if active_page == 'about' else '' }}">{{ _('За нас') }}</a>
+                <a href="{{ url_for('contact') }}" class="{{ 'active-nav-link' if active_page == 'contact' else '' }}">{{ _('Контакти') }}</a>
 
                 {% if current_user.is_authenticated %}
-                    <a href="{{ url_for('dashboard') }}" class="{{ 'active-nav-link' if active_page == 'dashboard' else '' }}">Лична Библиотека</a>
-                    <a href="{{ url_for('create_order') }}" class="{{ 'active-nav-link' if active_page == 'create_order' else '' }}">Нова Поръчка</a>
-                    <a href="{{ url_for('my_orders') }}" class="{{ 'active-nav-link' if active_page == 'my_orders' else '' }}">Моите Поръчки</a>
+                    <a href="{{ url_for('dashboard') }}" class="{{ 'active-nav-link' if active_page == 'dashboard' else '' }}">{{ _('Лична Библиотека') }}</a>
+                    <a href="{{ url_for('create_order') }}" class="{{ 'active-nav-link' if active_page == 'create_order' else '' }}">{{ _('Нова Поръчка') }}</a>
+                    <a href="{{ url_for('my_orders') }}" class="{{ 'active-nav-link' if active_page == 'my_orders' else '' }}">{{ _('Моите Поръчки') }}</a>
 
-                    {% if current_user.is_admin or current_user.is_worker or current_user.can_edit_content %}
+                    {% if current_user.is_admin or current_user.is_worker or current_user.can_edit_content or current_user.can_manage_quality %}
                         <div class="dropdown">
-                            <a class="dropdown-trigger {{ 'active-nav-link' if active_page in ['admin', 'admin_users', 'admin_materials', 'admin_details', 'admin_products', 'admin_services', 'admin_clients', 'admin_offers', 'admin_delivery_notes', 'admin_client_delivery_notes', 'production', 'admin_missing_stock', 'admin_production_orders', 'machines', 'admin_power', 'content', 'storage', 'admin_log', 'admin_generator_presets'] else '' }}" href="#" tabindex="0" onclick="event.preventDefault()">Управление <span class="dropdown-arrow">▼</span></a>
+                            <a class="dropdown-trigger {{ 'active-nav-link' if active_page in ['admin', 'admin_users', 'admin_materials', 'admin_details', 'admin_products', 'admin_services', 'admin_clients', 'admin_offers', 'admin_delivery_notes', 'admin_client_delivery_notes', 'production', 'admin_missing_stock', 'admin_production_orders', 'machines', 'admin_power', 'content', 'storage', 'admin_log', 'admin_generator_presets', 'admin_quality_control', 'admin_measuring_instruments', 'admin_documents', 'admin_capa', 'admin_audits', 'admin_management_reviews', 'admin_training', 'admin_risk_register', 'admin_customer_satisfaction', 'admin_factory_map', 'admin_buildings', 'admin_panels', 'admin_temperature_sensors', 'admin_solar_roof', 'admin_vehicles'] else '' }}" href="#" tabindex="0" onclick="event.preventDefault()">Управление <span class="dropdown-arrow">▼</span></a>
                             <div class="dropdown-content dropdown-content-grouped">
                                 {% if current_user.is_admin %}
                                     <a href="{{ url_for('admin_dashboard') }}" class="dropdown-home-link">Админ Панел</a>
                                 {% endif %}
                                 {% if current_user.is_admin %}
-                                    <div class="dropdown-group-label">Каталог</div>
-                                    <a href="{{ url_for('admin_users') }}">Потребители</a>
-                                    <a href="{{ url_for('admin_materials') }}">Материали</a>
-                                    <a href="{{ url_for('admin_details') }}">Детайли</a>
-                                    <a href="{{ url_for('admin_products') }}">Продукти</a>
-                                    <a href="{{ url_for('admin_services') }}">Услуги (цени/час)</a>
+                                    <div class="dropdown-sub">
+                                        <span class="dropdown-trigger dropdown-sub-trigger">Каталог <span class="dropdown-arrow">▾</span></span>
+                                        <div class="dropdown-content dropdown-content-sub">
+                                            <a href="{{ url_for('admin_users') }}">Потребители</a>
+                                            <a href="{{ url_for('admin_materials') }}">Материали</a>
+                                            <a href="{{ url_for('admin_details') }}">Детайли</a>
+                                            <a href="{{ url_for('admin_products') }}">Продукти</a>
+                                            <a href="{{ url_for('admin_services') }}">Услуги (цени/час)</a>
+                                        </div>
+                                    </div>
                                 {% endif %}
                                 {% if current_user.is_admin %}
-                                    <div class="dropdown-group-label">Продажби</div>
-                                    <a href="{{ url_for('admin_clients') }}">Клиенти / Куриери</a>
-                                    <a href="{{ url_for('admin_offers') }}">Оферти</a>
-                                {% endif %}
-                                {% if current_user.is_admin or current_user.is_worker %}
-                                    <div class="dropdown-group-label">Производство</div>
-                                    <a href="{{ url_for('admin_production_report') }}">Справка Производство</a>
-                                    <a href="{{ url_for('admin_missing_stock') }}">Липсваща Наличност</a>
-                                    <a href="{{ url_for('admin_production_orders') }}">Производство на детайли</a>
-                                {% endif %}
-                                {% if current_user.is_admin or current_user.is_worker %}
-                                    <div class="dropdown-group-label">Склад</div>
-                                    <a href="{{ url_for('storage_dashboard') }}">Склад</a>
-                                    <a href="{{ url_for('admin_delivery_notes') }}">Стокови Разписки</a>
-                                    <a href="{{ url_for('admin_client_delivery_notes') }}">Стокови Разписки към Клиенти</a>
+                                    <div class="dropdown-sub">
+                                        <span class="dropdown-trigger dropdown-sub-trigger">Продажби <span class="dropdown-arrow">▾</span></span>
+                                        <div class="dropdown-content dropdown-content-sub">
+                                            <a href="{{ url_for('admin_clients') }}">Клиенти / Куриери</a>
+                                            <a href="{{ url_for('admin_offers') }}">Оферти</a>
+                                        </div>
+                                    </div>
                                 {% endif %}
                                 {% if current_user.is_admin or current_user.is_worker or current_user.can_edit_content %}
-                                    <div class="dropdown-group-label">Система</div>
-                                    <a href="{{ url_for('list_machines') }}">Машини</a>
+                                    <div class="dropdown-sub">
+                                        <span class="dropdown-trigger dropdown-sub-trigger">Производство <span class="dropdown-arrow">▾</span></span>
+                                        <div class="dropdown-content dropdown-content-sub">
+                                            <a href="{{ url_for('list_machines') }}">Машини</a>
+                                            {% if current_user.is_admin or current_user.is_worker %}
+                                                <a href="{{ url_for('admin_production_report') }}">Справка Производство</a>
+                                                <a href="{{ url_for('admin_missing_stock') }}">Липсваща Наличност</a>
+                                                <a href="{{ url_for('admin_production_orders') }}">Производство на детайли</a>
+                                            {% endif %}
+                                        </div>
+                                    </div>
                                 {% endif %}
-                                {% if current_user.is_admin %}
-                                    <a href="{{ url_for('admin_power') }}">Консумация</a>
-                                    <a href="{{ url_for('admin_generator_presets') }}">Пресети</a>
-                                    <a href="{{ url_for('admin_log') }}">Лог</a>
+                                {% if current_user.is_admin or current_user.is_worker %}
+                                    <div class="dropdown-sub">
+                                        <span class="dropdown-trigger dropdown-sub-trigger">Склад <span class="dropdown-arrow">▾</span></span>
+                                        <div class="dropdown-content dropdown-content-sub">
+                                            <a href="{{ url_for('storage_dashboard') }}">Склад</a>
+                                            <a href="{{ url_for('admin_delivery_notes') }}">Стокови Разписки</a>
+                                            <a href="{{ url_for('admin_client_delivery_notes') }}">Стокови Разписки към Клиенти</a>
+                                        </div>
+                                    </div>
                                 {% endif %}
-                                {% if current_user.can_edit_content %}
-                                    <a href="{{ url_for('admin_content') }}">Съдържание</a>
+                                {% if current_user.can_manage_quality %}
+                                    <div class="dropdown-sub">
+                                        <span class="dropdown-trigger dropdown-sub-trigger">Качество <span class="dropdown-arrow">▾</span></span>
+                                        <div class="dropdown-content dropdown-content-sub">
+                                            <a href="{{ url_for('admin_quality_control') }}">Контрол на качеството</a>
+                                            <a href="{{ url_for('admin_measuring_instruments') }}">Измервателни инструменти</a>
+                                            <a href="{{ url_for('admin_documents') }}">Документален контрол</a>
+                                            <a href="{{ url_for('admin_capa') }}">CAPA</a>
+                                            <a href="{{ url_for('admin_audits') }}">Вътрешни одити</a>
+                                            <a href="{{ url_for('admin_management_reviews') }}">Преглед от ръководството</a>
+                                            <a href="{{ url_for('admin_training_records') }}">Обучение на персонала</a>
+                                            <a href="{{ url_for('admin_risk_register') }}">Регистър на риска</a>
+                                            <a href="{{ url_for('admin_customer_satisfaction') }}">Удовлетвореност на клиенти</a>
+                                        </div>
+                                    </div>
+                                {% elif current_user.is_worker %}
+                                    <div class="dropdown-sub">
+                                        <span class="dropdown-trigger dropdown-sub-trigger">Качество <span class="dropdown-arrow">▾</span></span>
+                                        <div class="dropdown-content dropdown-content-sub">
+                                            <a href="{{ url_for('admin_documents') }}">Документален контрол</a>
+                                            <a href="{{ url_for('admin_capa') }}">CAPA</a>
+                                            <a href="{{ url_for('admin_audits') }}">Вътрешни одити</a>
+                                            <a href="{{ url_for('admin_management_reviews') }}">Преглед от ръководството</a>
+                                            <a href="{{ url_for('admin_training_records') }}">Обучение на персонала</a>
+                                            <a href="{{ url_for('admin_risk_register') }}">Регистър на риска</a>
+                                            <a href="{{ url_for('admin_customer_satisfaction') }}">Удовлетвореност на клиенти</a>
+                                        </div>
+                                    </div>
+                                {% endif %}
+                                {% if current_user.is_admin or current_user.is_worker %}
+                                    <div class="dropdown-sub">
+                                        <span class="dropdown-trigger dropdown-sub-trigger">Съоръжения и енергия <span class="dropdown-arrow">▾</span></span>
+                                        <div class="dropdown-content dropdown-content-sub">
+                                            <a href="{{ url_for('admin_factory_map') }}">Карта на фабриката</a>
+                                            <a href="{{ url_for('admin_buildings') }}">Сгради и помещения</a>
+                                            <a href="{{ url_for('admin_panels') }}">Ел. табла</a>
+                                            <a href="{{ url_for('admin_temperature_sensors') }}">Температурни сензори</a>
+                                            <a href="{{ url_for('admin_convectors') }}">Конвектори</a>
+                                            {% if current_user.is_admin %}
+                                                <a href="{{ url_for('admin_power') }}">Консумация</a>
+                                                <a href="{{ url_for('admin_solar_roof') }}">Покрив (соларни панели)</a>
+                                                <a href="{{ url_for('admin_battery_cabinets') }}">Батерийно стопанство</a>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                {% endif %}
+                                {% if current_user.is_admin or current_user.is_worker %}
+                                    <div class="dropdown-sub">
+                                        <span class="dropdown-trigger dropdown-sub-trigger">Автопарк <span class="dropdown-arrow">▾</span></span>
+                                        <div class="dropdown-content dropdown-content-sub">
+                                            <a href="{{ url_for('admin_vehicles') }}">Автомобили</a>
+                                        </div>
+                                    </div>
+                                {% endif %}
+                                {% if current_user.is_admin or current_user.is_worker or current_user.can_edit_content %}
+                                    <div class="dropdown-sub">
+                                        <span class="dropdown-trigger dropdown-sub-trigger">Система <span class="dropdown-arrow">▾</span></span>
+                                        <div class="dropdown-content dropdown-content-sub">
+                                            {% if current_user.is_admin %}
+                                                <a href="{{ url_for('admin_generator_presets') }}">Пресети</a>
+                                                <a href="{{ url_for('admin_log') }}">Лог</a>
+                                            {% endif %}
+                                            {% if current_user.can_edit_content %}
+                                                <a href="{{ url_for('admin_content') }}">Съдържание</a>
+                                            {% endif %}
+                                        </div>
+                                    </div>
                                 {% endif %}
                             </div>
                         </div>
@@ -76,6 +158,7 @@
             </div>
 
             <div class="nav-cta-buttons">
+                {% include 'partials/language_switcher.html' %}
                 {% if current_user.is_authenticated %}
                     {% if current_user.is_admin %}
                         <span class="user-badge" style="border-color: var(--danger-border); color: #ff7675;">АДМИНИСТРАТОР &middot; {{ current_user.username }}</span>
@@ -83,19 +166,43 @@
                         <span class="user-badge" style="border-color: #17a2b8; color: #5bc8dd;">СЛУЖИТЕЛ &middot; {{ current_user.username }}</span>
                     {% elif current_user.role == 'web_designer' %}
                         <span class="user-badge" style="border-color: #8e44ad; color: #c39bd3;">УЕБ ДИЗАЙНЕР &middot; {{ current_user.username }}</span>
+                    {% elif current_user.role == 'quality_control' %}
+                        <span class="user-badge" style="border-color: #27ae60; color: #6fcf97;">КОНТРОЛ НА КАЧЕСТВОТО &middot; {{ current_user.username }}</span>
                     {% else %}
                         <span class="user-badge">{{ current_user.username }}</span>
                     {% endif %}
-                    <a href="{{ url_for('account') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Профил</a>
-                    <a href="{{ url_for('logout') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Изход</a>
+                    <a href="{{ url_for('account') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">{{ _('Профил') }}</a>
+                    <a href="{{ url_for('logout') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">{{ _('Изход') }}</a>
                 {% else %}
-                    <a href="{{ url_for('login') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Вход</a>
-                    <a href="{{ url_for('register') }}" class="btn-submit" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Регистрация</a>
+                    <a href="{{ url_for('login') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">{{ _('Вход') }}</a>
+                    <a href="{{ url_for('register') }}" class="btn-submit" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">{{ _('Регистрация') }}</a>
                 {% endif %}
             </div>
         </div>
     </div>
 </nav>
+
+{% if vehicle_alerts %}
+<div class="vehicle-alert-banner">
+    <div class="vehicle-alert-banner-inner">
+        <span class="vehicle-alert-icon">&#9888;</span>
+        {% for a in vehicle_alerts %}
+        <a href="{{ url_for('admin_vehicles') }}" class="vehicle-alert-item vehicle-alert-{{ a.status }}">
+            {{ a.vehicle }} ({{ a.plate }}) - {{ a.label }}{% if a.status == 'expired' %}: изтекла от {{ -a.days }} дни{% else %}: остават {{ a.days }} дни{% endif %}
+        </a>{% if not loop.last %}<span class="vehicle-alert-sep">·</span>{% endif %}
+        {% endfor %}
+    </div>
+</div>
+<style>
+    .vehicle-alert-banner { background-color: rgba(239, 68, 68, 0.1); border-bottom: 1px solid rgba(239, 68, 68, 0.35); padding: 8px 20px; }
+    .vehicle-alert-banner-inner { max-width: 1400px; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 0.85rem; }
+    .vehicle-alert-icon { color: #ef4444; }
+    .vehicle-alert-item { text-decoration: none; font-weight: 600; }
+    .vehicle-alert-item.vehicle-alert-expired { color: #ef4444; }
+    .vehicle-alert-item.vehicle-alert-warning { color: #f59e0b; }
+    .vehicle-alert-sep { color: var(--text-muted); }
+</style>
+{% endif %}
 
 <script>
     // Read by AJAX POST calls that build FormData() from scratch (i.e. not
@@ -109,6 +216,26 @@
         toggle.addEventListener('click', function () {
             var isOpen = links.classList.toggle('open');
             toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        });
+    })();
+
+    // "Управление" second-level groups (Каталог, Производство, ...) are an
+    // accordion, not a hover flyout - a sideways flyout off a dropdown
+    // already pinned to the navbar's right edge kept running off-screen.
+    // Click-toggled (works the same on touch, unlike hover) - opening one
+    // closes any other open section at the same level.
+    (function () {
+        document.querySelectorAll('.dropdown-sub-trigger').forEach(function (trigger) {
+            trigger.addEventListener('click', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                var section = trigger.closest('.dropdown-sub');
+                var wasOpen = section.classList.contains('open');
+                section.parentElement.querySelectorAll('.dropdown-sub.open').forEach(function (open) {
+                    open.classList.remove('open');
+                });
+                if (!wasOpen) section.classList.add('open');
+            });
         });
     })();
 </script>

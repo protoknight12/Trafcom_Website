@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Температурни сензори - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .sensor-reading {
+            font-size: 1.1rem;
+            font-weight: 700;
+        }
+        .sensor-offline {
+            color: var(--text-muted);
+            font-weight: 400;
+            font-size: 0.85rem;
+        }
+        /* A value shown while the sensor itself currently reads offline
+           (asleep, not a fault - see _mqtt_temp_snapshot()) - the number
+           stays exactly as last received, just dimmed so it reads as "last
+           known" rather than "live". Hover for exactly when. */
+        .sensor-stale {
+            color: var(--text-muted);
+            cursor: help;
+        }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Нов температурен сензор</h3>
+        <p class="section-subtitle">Shelly H&amp;T (или подобен) сензор, публикуващ по MQTT. Свържете го към помещение от картата, или въведете свободно място (напр. "склад - северна стена"), ако не е в нито едно заведено помещение.</p>
+        <form action="{{ url_for('admin_add_temperature_sensor') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="new_sensor_name">Име на сензора</label>
+                <input type="text" id="new_sensor_name" name="name" required placeholder="напр. Термометър - склад">
+            </div>
+            <div class="form-group">
+                <label for="new_sensor_topic">MQTT тема</label>
+                <input type="text" id="new_sensor_topic" name="mqtt_topic" required placeholder="напр. shellies/shellyht-XXXXXX">
+            </div>
+            <div class="form-group">
+                <label for="new_sensor_type">Вид сензор</label>
+                <select id="new_sensor_type" name="sensor_type">
+                    {% for key, label in sensor_types.items() %}
+                    <option value="{{ key }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+                <p class="text-small text-muted" style="margin-top: 4px;">Различните модели публикуват по MQTT по различен начин - изберете верния, за да могат данните да се четат.</p>
+            </div>
+            <div class="form-group">
+                <label for="new_sensor_room">Помещение (по избор)</label>
+                <select id="new_sensor_room" name="room_id">
+                    <option value="">-- няма --</option>
+                    {% for r in rooms %}
+                    <option value="{{ r.id }}">{{ r.building.name }} / {{ r.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="new_sensor_location">Или свободно място (ако не е в помещение)</label>
+                <input type="text" id="new_sensor_location" name="location_label" placeholder="напр. Външна стена - север">
+            </div>
+            <button type="submit" class="btn-submit">Добави сензор</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Сензори</h3>
+        {% if sensors %}
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Име</th>
+                    <th>Място</th>
+                    <th>Температура</th>
+                    <th>Влажност</th>
+                    <th>Батерия</th>
+                    <th>MQTT тема</th>
+                    <th>Вид</th>
+                    <th class="text-right">Действие</th>
+                    <th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for s in sensors %}
+                <tr>
+                    <td><strong>{{ s.name }}</strong></td>
+                    <td>{{ s.place_label }}</td>
+                    <td class="sensor-reading" data-field="temperature" data-sensor-id="{{ s.id }}">—</td>
+                    <td data-field="humidity" data-sensor-id="{{ s.id }}">—</td>
+                    <td data-field="battery" data-sensor-id="{{ s.id }}">—</td>
+                    <td class="text-small text-muted">{{ s.mqtt_topic }}</td>
+                    <td class="text-small text-muted">{{ sensor_types.get(s.sensor_type, s.sensor_type) }}</td>
+                    <td class="text-right">
+                        <a href="{{ url_for('edit_temperature_sensor_window', sensor_id=s.id) }}" onclick="window.open(this.href, 'editSensor', 'width=480,height=480'); return false;" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
+                    </td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_delete_temperature_sensor', sensor_id=s.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на сензор &quot;{{ s.name|e }}&quot;?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <p class="text-muted text-small" id="sensorsTs" style="margin-top: 10px;"></p>
+        {% else %}
+        <p class="no-data text-center">Няма добавени сензори.</p>
+        {% endif %}
+    </section>
+
+</main>
+
+<script>
+(function () {
+    var tsEl = document.getElementById('sensorsTs');
+    if (!document.querySelector('[data-sensor-id]')) return;
+
+    function poll() {
+        fetch('{{ url_for("admin_temperature_sensors_data") }}')
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (tsEl) tsEl.textContent = 'Последно обновено: ' + data.ts;
+                document.querySelectorAll('[data-sensor-id]').forEach(function (el) {
+                    var id = el.getAttribute('data-sensor-id');
+                    var field = el.getAttribute('data-field');
+                    var info = data.sensors[id];
+                    var value = info ? info[field] : null;
+                    // A battery sensor reading online=false just means it's
+                    // asleep right now (normal - see _mqtt_temp_snapshot()),
+                    // not that the reading is invalid - only a field that's
+                    // truly never received anything shows as "—".
+                    if (value === null || value === undefined) {
+                        el.innerHTML = '<span class="sensor-offline">—</span>';
+                        el.removeAttribute('title');
+                        return;
+                    }
+                    var unit = field === 'temperature' ? ' °C' : ' %';
+                    var decimals = field === 'temperature' ? 1 : 0;
+                    el.textContent = value.toFixed(decimals) + unit;
+                    el.classList.toggle('sensor-stale', !info.online);
+                    if (info.online) {
+                        el.removeAttribute('title');
+                    } else {
+                        el.title = info.last_seen ? 'Последно получено в ' + info.last_seen : 'Последно получено: няма отчетен час';
+                    }
+                });
+            })
+            .catch(function () {});
+    }
+    poll();
+    setInterval(poll, 10000);
+})();
+</script>
+
+</body>
+</html>

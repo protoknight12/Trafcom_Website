@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="bg">
+<html lang="{{ get_locale() }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     {% include 'partials/favicon.html' %}
-    <title>Моите Поръчки - TRAFCOM</title>
+    <title>{{ _('Моите Поръчки') }} - TRAFCOM</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <style>
         .status-badge { padding: 4px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; display: inline-block; }
@@ -33,11 +33,11 @@
     {% endif %}
     {% endwith %}
 
-    <h2 style="margin-bottom: 20px;">Моите Поръчки</h2>
+    <h2 style="margin-bottom: 20px;">{{ _('Моите Поръчки') }}</h2>
 
     {% if orders %}
     <div class="form-group" style="max-width: 360px;">
-        <input type="text" id="myOrdersSearchInput" placeholder="Търсене по № поръчка, клиент, артикул...">
+        <input type="text" id="myOrdersSearchInput" placeholder="{{ _('Търсене по № поръчка, клиент, артикул...') }}">
     </div>
     {% endif %}
 
@@ -59,11 +59,11 @@
             <table class="data-table">
                 <thead>
                 <tr>
-                    <th>Артикул</th>
-                    <th class="text-center">Кол.</th>
-                    <th class="text-right">Ед. цена</th>
-                    <th class="text-right">Общо</th>
-                    <th style="min-width: 140px;">Прогрес</th>
+                    <th>{{ _('Артикул') }}</th>
+                    <th class="text-center">{{ _('Кол.') }}</th>
+                    <th class="text-right">{{ _('Ед. цена') }}</th>
+                    <th class="text-right">{{ _('Общо') }}</th>
+                    <th style="min-width: 140px;">{{ _('Прогрес') }}</th>
                 </tr>
                 </thead>
                 <tbody>
@@ -72,17 +72,17 @@
                     <td>
                         {{ item.item_name }}
                         {% if item.product %}
-                        <span class="badge badge-user">Продукт</span>
+                        <span class="badge badge-user">{{ _('Продукт') }}</span>
                         {% else %}
-                        <span class="badge badge-user">Детайл</span>
+                        <span class="badge badge-user">{{ _('Детайл') }}</span>
                         {% endif %}
                         {% if item.operations %}
                         <div class="text-small text-muted">
-                            {% for op in item.operations %}{{ op.service.name }}{% if op.description %} ({{ op.description }}){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}
+                            {% for op in item.operations %}{{ localized(op.service, 'name') }}{% if op.description %} ({{ op.description }}){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}
                         </div>
                         {% endif %}
                     </td>
-                    <td class="text-center">{{ item.quantity_ordered }} бр.</td>
+                    <td class="text-center">{{ item.quantity_ordered }} {{ _('бр.') }}</td>
                     <td class="text-right">{{ "%.2f"|format(item.unit_price) }} €</td>
                     <td class="text-right">{{ "%.2f"|format(item.line_total) }} €</td>
                     <td>
@@ -98,25 +98,25 @@
         <div class="order-footer">
             <div style="min-width: 220px;">
                 <div class="progress-container"><div class="progress-bar" style="width: {{ order.percent_complete }}%;"></div></div>
-                <span class="text-small text-muted">Общ напредък на поръчката: {{ order.percent_complete }}%</span>
+                <span class="text-small text-muted">{{ _('Общ напредък на поръчката:') }} {{ order.percent_complete }}%</span>
             </div>
             <div style="display: flex; align-items: center; gap: 16px;">
-                <strong>Обща сума: {{ "%.2f"|format(order.total_price) }} €</strong>
+                <strong>{{ _('Обща сума:') }} {{ "%.2f"|format(order.total_price) }} €</strong>
                 {% if order.can_cancel %}
                 <form method="POST" action="{{ url_for('cancel_order', order_id=order.id) }}"
-                      onsubmit="return confirm('Наистина ли искате да отмените поръчка {{ order.order_number }}?');">
+                      onsubmit="return confirm('{{ _('Наистина ли искате да отмените поръчка %(order_number)s?', order_number=order.order_number) }}');">
                     {% include 'partials/csrf_field.html' %}
-                    <button type="submit" class="btn-delete">Отмени поръчка</button>
+                    <button type="submit" class="btn-delete">{{ _('Отмени поръчка') }}</button>
                 </form>
                 {% endif %}
             </div>
         </div>
     </section>
     {% else %}
-    <div class="admin-card text-center no-data">Нямате направени поръчки все още. <a href="{{ url_for('create_order') }}">Направете първата си поръчка</a>.</div>
+    <div class="admin-card text-center no-data">{{ _('Нямате направени поръчки все още.') }} <a href="{{ url_for('create_order') }}">{{ _('Направете първата си поръчка') }}</a>.</div>
     {% endfor %}
     {% if orders %}
-    <div class="admin-card text-center no-data search-empty-row" hidden>Няма съвпадения.</div>
+    <div class="admin-card text-center no-data search-empty-row" hidden>{{ _('Няма съвпадения.') }}</div>
     {% endif %}
     </div>
 </main>

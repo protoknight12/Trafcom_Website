@@ -65,6 +65,14 @@
                 <input type="text" id="new_display_name" name="display_name" placeholder="напр. Алуминий 2мм" required autocomplete="off">
             </div>
             <div class="form-group">
+                <label for="new_display_name_en">Име (EN, незадължително)</label>
+                <input type="text" id="new_display_name_en" name="display_name_en" autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="new_display_name_de">Име (DE, незадължително)</label>
+                <input type="text" id="new_display_name_de" name="display_name_de" autocomplete="off">
+            </div>
+            <div class="form-group">
                 <label for="new_type">Тип (форма на суровината)</label>
                 <select id="new_type" name="type">
                     {% for type_key, type_label in MATERIAL_TYPE_LABELS.items() %}
@@ -75,6 +83,10 @@
             <div class="form-group">
                 <label for="new_brand">Марка (незадължително)</label>
                 <input type="text" id="new_brand" name="brand" placeholder="напр. Alcoa">
+            </div>
+            <div class="form-group">
+                <label for="new_notes">Забележка (незадължително)</label>
+                <input type="text" id="new_notes" name="notes" placeholder="напр. само за вътрешна употреба">
             </div>
             <div class="form-group">
                 <label for="new_cost_per_m2" id="new_cost_per_m2_label">Цена на м² плоча (€)</label>
@@ -156,6 +168,7 @@
                     <th>ID</th>
                     <th>Материал</th>
                     <th>Марка</th>
+                    <th>Забележка</th>
                     <th>Тип</th>
                     <th>{{ material_price_m2_label(type_key) }}</th>
                     <th>Цена за цяла бройка (€)</th>
@@ -189,9 +202,15 @@
                     </td>
                     <td>
                         <strong>{{ material.display_name }}</strong>
+                        <input type="text" name="display_name_en" form="{{ form_id }}" value="{{ material.display_name_en or '' }}"
+                               class="material-price-input" style="margin-top: 4px;" placeholder="EN">
+                        <input type="text" name="display_name_de" form="{{ form_id }}" value="{{ material.display_name_de or '' }}"
+                               class="material-price-input" style="margin-top: 4px;" placeholder="DE">
                     </td>
                     <td><input type="text" name="brand" form="{{ form_id }}" value="{{ material.brand or '' }}"
                                class="material-price-input" placeholder="Марка"></td>
+                    <td><input type="text" name="notes" form="{{ form_id }}" value="{{ material.notes or '' }}"
+                               class="material-price-input" placeholder="Забележка"></td>
                     <td>
                         <select name="type" form="{{ form_id }}" class="material-price-input">
                             {% for type_key2, type_label in MATERIAL_TYPE_LABELS.items() %}
@@ -264,7 +283,7 @@
                     </td>
                 </tr>
                 {% endfor %}
-                <tr class="search-empty-row" hidden><td colspan="22" class="text-center no-data">Няма съвпадения.</td></tr>
+                <tr class="search-empty-row" hidden><td colspan="23" class="text-center no-data">Няма съвпадения.</td></tr>
                 </tbody>
             </table>
         </div>

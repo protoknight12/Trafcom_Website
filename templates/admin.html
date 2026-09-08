@@ -109,6 +109,22 @@
                 <h4>Машини</h4>
                 <p>Производствени единици и статус.</p>
             </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_factory_map') }}">
+                <h4>Карта на фабриката</h4>
+                <p>Интерактивна схема по помещения с живо натоварване от Shelly електромерите.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_buildings') }}">
+                <h4>Сгради и помещения</h4>
+                <p>Йерархия за картата на фабриката.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_panels') }}">
+                <h4>Ел. табла</h4>
+                <p>Електрически табла, електромери и свързани машини.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_temperature_sensors') }}">
+                <h4>Температурни сензори</h4>
+                <p>Живи данни за температура и влажност по помещения.</p>
+            </a>
             <a class="admin-hub-card" href="{{ url_for('storage_dashboard') }}">
                 <h4>Склад</h4>
                 <p>Текуща наличност по материали, детайли и продукти.</p>
@@ -130,6 +146,50 @@
             <a class="admin-hub-card" href="{{ url_for('admin_power') }}">
                 <h4>Консумация</h4>
                 <p>Live мониторинг на енергопотреблението.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_solar_roof') }}">
+                <h4>Покрив (соларни панели)</h4>
+                <p>Карта на покрива с 172-та панела и присвояване по стрингове.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_quality_control') }}">
+                <div class="hub-count">{{ counts.quality_checks }}</div>
+                <h4>Контрол на качеството</h4>
+                <p>Измервания и анализ на качеството по детайли и продукти.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_documents') }}">
+                <div class="hub-count">{{ counts.documents }}</div>
+                <h4>Документален контрол</h4>
+                <p>ISO 9001 наръчник, процедури, работни инструкции и записи.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_capa') }}">
+                <div class="hub-count">{{ counts.capa }}</div>
+                <h4>CAPA</h4>
+                <p>Корективни и превантивни действия по несъответствия.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_audits') }}">
+                <div class="hub-count">{{ counts.audits }}</div>
+                <h4>Вътрешни одити</h4>
+                <p>Планиране на одити и записване на констатации.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_management_reviews') }}">
+                <div class="hub-count">{{ counts.management_reviews }}</div>
+                <h4>Преглед от ръководството</h4>
+                <p>ISO 9001 §9.3 - периодичен преглед на системата за качество.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_training_records') }}">
+                <div class="hub-count">{{ counts.training_records }}</div>
+                <h4>Обучение на персонала</h4>
+                <p>ISO 9001 §7.2 - записи за обучения и компетентност.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_risk_register') }}">
+                <div class="hub-count">{{ counts.risk_entries }}</div>
+                <h4>Регистър на риска</h4>
+                <p>ISO 9001 §6.1 - рискове и възможности пред системата за качество.</p>
+            </a>
+            <a class="admin-hub-card" href="{{ url_for('admin_customer_satisfaction') }}">
+                <div class="hub-count">{{ counts.satisfaction_records }}</div>
+                <h4>Удовлетвореност на клиенти</h4>
+                <p>ISO 9001 §9.1.2 - анкети, оплаквания, похвали и рекламации.</p>
             </a>
             <a class="admin-hub-card" href="{{ url_for('admin_content') }}">
                 <h4>Съдържание</h4>

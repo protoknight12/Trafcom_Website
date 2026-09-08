@@ -1,20 +1,27 @@
 <!DOCTYPE html>
-<html lang="bg">
+<html lang="{{ get_locale() }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     {% include 'partials/favicon.html' %}
-    <title>Контакти - Trafcom</title>
+    <title>{{ _('Контакти') }} - Trafcom</title>
     <meta name="description" content="Контакти на Трафком ООД - гр. Тетевен, ул. Александър Стамболийски 36 (административен адрес) / ул. Воловийте (производствена база). Телефон и имейл за запитвания за CNC обработка и лазерно рязане.">
-    <meta name="keywords" content="контакти Трафком, CNC оферта, Тетевен, телефон, имейл">
+    <meta name="keywords" content="контакти Трафком, CNC оферта, Тетевен, телефон, имейл, CNC цех Ловеч, CNC цех Плевен, CNC цех Троян, оферта за лазерно рязане, оферта за CNC обработка">
     <meta name="robots" content="index, follow">
     <meta property="og:title" content="Контакти - Trafcom">
     <meta property="og:description" content="Свържете се с Трафком ООД за CNC обработка, лазерно рязане и производство на детайли.">
     <meta property="og:type" content="website">
     <meta property="og:locale" content="bg_BG">
     <meta property="og:site_name" content="Trafcom">
-    <meta property="og:image" content="{{ url_for('static', filename='img/favicon/android-chrome-512x512.png', _external=True) }}">
+    <meta property="og:url" content="https://trafcombg.com/contact">
+    <meta property="og:image" content="{{ url_for('static', filename='img/hero_poster.png', _external=True) }}">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Контакти - Trafcom">
+    <meta name="twitter:description" content="Свържете се с Трафком ООД за CNC обработка, лазерно рязане и производство на детайли.">
+    <meta name="twitter:image" content="{{ url_for('static', filename='img/hero_poster.png', _external=True) }}">
+    <link rel="canonical" href="https://trafcombg.com/contact">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    {% include 'partials/local_business_schema.html' %}
 </head>
 <body class="public-page">
 {% from 'partials/editable.html' import text with context %}
@@ -29,25 +36,25 @@
 
     <section class="dmg-hero">
         <div class="hero-content">
-            <div class="hero-tag"><span>01</span> // ВРЪЗКА С НАС</div>
-            <h1 class="hero-title">КОНТАКТИ</h1>
-            <p class="hero-lead">{{ text('contact.hero_lead', 'За запитвания, оферти и въпроси относно механична обработка, лазерно рязане или производство на детайли - свържете се с нас директно.') }}</p>
+            <div class="hero-tag"><span>01</span> // {{ _('ВРЪЗКА С НАС') }}</div>
+            <h1 class="hero-title">{{ _('КОНТАКТИ') }}</h1>
+            <p class="hero-lead">{{ text('contact.hero_lead', _('За запитвания, оферти и въпроси относно механична обработка, лазерно рязане или производство на детайли - свържете се с нас директно.')) }}</p>
 
             <div class="info-grid">
                 <div class="info-card">
-                    <h3>Административен адрес</h3>
-                    <p>{{ text('contact.office_address', 'гр. Тетевен, ул. „Александър Стамболийски“ 36') }}</p>
+                    <h3>{{ _('Административен адрес') }}</h3>
+                    <p>{{ text('contact.office_address', _('гр. Тетевен, ул. „Александър Стамболийски“ 36')) }}</p>
                 </div>
                 <div class="info-card">
-                    <h3>Производствена база</h3>
-                    <p>{{ text('contact.production_address', 'ул. „Воловийте“, 5700 гр. Тетевен') }}</p>
+                    <h3>{{ _('Производствена база') }}</h3>
+                    <p>{{ text('contact.production_address', _('ул. „Воловийте“, 5700 гр. Тетевен')) }}</p>
                 </div>
                 <div class="info-card">
-                    <h3>Телефон</h3>
+                    <h3>{{ _('Телефон') }}</h3>
                     <p><a href="tel:+359886762276">+359 886 762 276</a></p>
                 </div>
                 <div class="info-card">
-                    <h3>Имейл</h3>
+                    <h3>{{ _('Имейл') }}</h3>
                     <p><a href="mailto:trafcom@trafcombg.com">trafcom@trafcombg.com</a></p>
                 </div>
             </div>

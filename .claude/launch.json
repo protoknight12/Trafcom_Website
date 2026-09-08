@@ -3,7 +3,7 @@
   "configurations": [
     {
       "name": "trafcom-flask",
-      "runtimeExecutable": "python",
+      "runtimeExecutable": "py",
       "runtimeArgs": ["app.py"],
       "port": 5000
     }

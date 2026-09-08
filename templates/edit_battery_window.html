@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Редакция на батерия - {{ battery.stack.name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        body { margin: 0; padding: 20px; background-color: var(--bg-main); }
+    </style>
+</head>
+<body>
+
+<div class="admin-card" style="max-width: 480px; margin: 0 auto;">
+    <h3 style="margin-top:0;">Редакция на батерия &middot; {{ battery.stack.name }}</h3>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <form action="{{ url_for('admin_update_battery', battery_id=battery.id) }}" method="POST" class="admin-form">
+        {% include 'partials/csrf_field.html' %}
+        <div class="form-group" style="flex-basis: 100%;">
+            <label for="bat_model">Модел батерия</label>
+            <select id="bat_model" name="model_id" onchange="applyBatteryModel(this)">
+                <option value="">-- без модел (ръчно въвеждане) --</option>
+                {% for m in battery_models %}
+                <option value="{{ m.id }}" data-voltage="{{ m.nominal_voltage_v }}" data-capacity="{{ m.capacity_ah }}" data-energy="{{ m.energy_kwh if m.energy_kwh is not none else '' }}" {% if battery.model_id == m.id %}selected{% endif %}>{{ m.name }} ({{ m.nominal_voltage_v }}V / {{ m.capacity_ah }}Ah)</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="bat_voltage">Напрежение (V)</label>
+            <input type="text" id="bat_voltage" name="voltage" value="{{ battery.voltage if battery.voltage is not none else '' }}" oninput="updateEnergyDisplay()" {% if battery.model_id %}readonly{% endif %}>
+        </div>
+        <div class="form-group">
+            <label for="bat_capacity">Капацитет (Ah)</label>
+            <input type="text" id="bat_capacity" name="capacity_ah" value="{{ battery.capacity_ah if battery.capacity_ah is not none else '' }}" oninput="updateEnergyDisplay()" {% if battery.model_id %}readonly{% endif %}>
+        </div>
+        <div class="form-group">
+            <label>Енергия</label>
+            <div id="bat_energy_display" style="padding: 10px 0; color: var(--text-muted);">—</div>
+        </div>
+        <div class="form-group" style="flex-basis: 100%;">
+            <label for="bat_serial">Сериен номер</label>
+            <input type="text" id="bat_serial" name="serial_number" value="{{ battery.serial_number or '' }}">
+        </div>
+        <div style="display: flex; gap: 10px;">
+            <button type="submit" class="btn-submit">Запази</button>
+            <a href="{{ url_for('admin_stack_batteries_window', stack_id=battery.stack_id) }}" class="btn-secondary" style="padding: 12px 24px; text-decoration:none;">Отказ</a>
+        </div>
+    </form>
+
+    <script>
+        function applyBatteryModel(sel) {
+            const opt = sel.options[sel.selectedIndex];
+            const voltageInput = document.getElementById('bat_voltage');
+            const capacityInput = document.getElementById('bat_capacity');
+            if (opt.value) {
+                voltageInput.value = opt.dataset.voltage;
+                capacityInput.value = opt.dataset.capacity;
+                voltageInput.readOnly = true;
+                capacityInput.readOnly = true;
+            } else {
+                voltageInput.readOnly = false;
+                capacityInput.readOnly = false;
+            }
+            updateEnergyDisplay();
+        }
+        function updateEnergyDisplay() {
+            const sel = document.getElementById('bat_model');
+            const opt = sel.options[sel.selectedIndex];
+            const display = document.getElementById('bat_energy_display');
+            if (opt.value && opt.dataset.energy) {
+                display.textContent = parseFloat(opt.dataset.energy).toFixed(2) + ' kWh';
+                return;
+            }
+            const v = parseFloat(document.getElementById('bat_voltage').value);
+            const c = parseFloat(document.getElementById('bat_capacity').value);
+            display.textContent = (!isNaN(v) && !isNaN(c)) ? (v * c / 1000).toFixed(2) + ' kWh' : '—';
+        }
+        updateEnergyDisplay();
+    </script>
+</div>
+
+</body>
+</html>

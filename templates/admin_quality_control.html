@@ -1,0 +1,1020 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Контрол на качеството - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .qc-measurement-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+        .qc-measurement-row input {
+            padding: 0.5rem 0.6rem;
+            background-color: var(--bg-input);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-sm);
+            font-size: 0.85rem;
+        }
+        .qc-param-name { width: 180px; }
+        .qc-type-input { width: 140px; }
+        .qc-num-input { width: 90px; }
+        .qc-unit-input { width: 70px; }
+        .qc-measurement-row select {
+            padding: 0.5rem 0.6rem;
+            background-color: var(--bg-input);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-sm);
+            font-size: 0.85rem;
+        }
+        .qc-tol-standard-select { width: 170px; }
+        .qc-instrument-select { width: 170px; }
+        .qc-row-num {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 22px;
+            height: 30px;
+            font-weight: 700;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+        .qc-drawing-input { width: 90px; }
+        .qc-ref-length-input { width: 130px; }
+        .qc-sample-inputs {
+            display: inline-flex;
+            gap: 4px;
+        }
+        .qc-sample-input { width: 70px; }
+        .qc-check-flag {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .qc-quick-add-btn {
+            font-size: 0.75rem;
+            padding: 4px 8px;
+            background-color: var(--accent-primary);
+            color: #fff;
+            border-radius: 4px;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .qc-modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            z-index: 1100;
+            align-items: center;
+            justify-content: center;
+        }
+        .qc-modal-box {
+            width: 100%;
+            max-width: 460px;
+            margin: 20px;
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-md);
+            padding: 28px;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
+            position: relative;
+        }
+        .qc-modal-close {
+            position: absolute; right: 20px; top: 20px;
+            font-size: 1.5rem; cursor: pointer; color: var(--text-muted);
+        }
+        .qc-remove-row {
+            background: none;
+            border: 1px solid var(--danger-border);
+            color: var(--danger-text);
+            border-radius: var(--border-radius-sm);
+            width: 30px;
+            height: 30px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            line-height: 1;
+        }
+        .qc-measurement-list {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            font-size: 0.82rem;
+        }
+        .qc-measurement-list li {
+            white-space: nowrap;
+        }
+        .qc-mv-ok { color: var(--success-text); }
+        .qc-mv-bad { color: var(--danger-text); font-weight: 600; }
+        .result-filter-links a {
+            margin-right: 12px;
+        }
+        .result-filter-links a.active-filter {
+            font-weight: 700;
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">
+            {{ message }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px;">
+            <h3 style="margin: 0;">{{ 'Редакция на QC проверка #' ~ edit_check.id if edit_check else 'Нова QC проверка' }}</h3>
+            <div style="display: flex; gap: 14px; align-items: baseline;">
+                {% if edit_check %}
+                <a href="{{ url_for('admin_quality_control') }}" class="text-small">Отказ от редакцията &rarr;</a>
+                {% endif %}
+                <a href="{{ url_for('admin_measuring_instruments') }}" class="text-small">Управление на инструменти &rarr;</a>
+            </div>
+        </div>
+        {% if edit_check %}
+        <p class="section-subtitle">Редактирате вече записана QC проверка - поправете грешните стойности и натиснете "Запази промените". Резултатът (Годен/Негоден) се преизчислява автоматично.</p>
+        {% else %}
+        <p class="section-subtitle">Изберете детайл или продукт, въведете измерените стойности спрямо номинал и толеранс - резултатът (Годен/Негоден) се изчислява автоматично. Толерансът може да се въведе ръчно или да се вземе автоматично от стандарт (ISO 2768-1 общи допуски - линейни и ъглови, ISO 286 допуски за отвори/валове, ISO 2768-2 геометрични допуски, ISO 13715 допуски за ръбове) - полетата остават редактируеми след попълване. За всяко измерване по избор може да се посочи № от чертежа и инструментът, с който е направено.</p>
+        {% endif %}
+        <form action="{{ url_for('admin_update_quality_check', check_id=edit_check.id) if edit_check else url_for('admin_create_quality_check') }}" method="POST" class="admin-form" id="qcForm">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="qc_target_type">Тип обект</label>
+                <select id="qc_target_type" name="target_type">
+                    <option value="detail">Детайл</option>
+                    <option value="product">Продукт</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="qc_target_id">Детайл / Продукт</label>
+                <select id="qc_target_id" name="target_id" required></select>
+            </div>
+            <div class="form-group">
+                <label for="qc_drawing_no">Drawing No (незадължително)</label>
+                <input type="text" id="qc_drawing_no" name="drawing_no" placeholder="напр. 3088">
+            </div>
+            <div class="form-group">
+                <label for="qc_batch_size">Batch Size (незадължително)</label>
+                <input type="number" id="qc_batch_size" name="batch_size" min="0" step="1">
+            </div>
+            <div class="form-group">
+                <label for="qc_sample_size">Sample Size (брой проби на измерване)</label>
+                <input type="number" id="qc_sample_size" name="sample_size" min="1" step="1" value="1" required>
+            </div>
+            <div class="form-group">
+                <label for="qc_order_no">Order No (незадължително)</label>
+                <input type="text" id="qc_order_no" name="order_no" placeholder="напр. PO-1234">
+            </div>
+            <div class="form-group">
+                <label for="qc_supervisor_name">Supervisor (незадължително)</label>
+                <input type="text" id="qc_supervisor_name" name="supervisor_name" placeholder="напр. Jackson">
+            </div>
+
+            <div class="form-group" style="width: 100%;">
+                <label>Измервания</label>
+                <div id="qcMeasurementRows"></div>
+                <button type="button" class="btn-secondary" id="qcAddRow" style="padding: 6px 14px; font-size: 0.85rem;">+ Добави измерване</button>
+            </div>
+
+            <div class="form-group" style="width: 100%;">
+                <label for="qc_notes">Забележка (незадължително)</label>
+                <textarea id="qc_notes" name="notes" rows="2" style="width: 100%; padding: 0.6rem 0.75rem; background-color: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm);"></textarea>
+            </div>
+
+            <div class="qc-check-flag" style="width: 100%;">
+                <input type="checkbox" id="qc_iso8015" name="iso8015">
+                <label for="qc_iso8015" style="margin: 0;" title="ISO 8015 не дефинира числени толеранси - това е само отметка за принципа на тълкуване, приложен към тази проверка">Съгласно ISO 8015 (принцип на независимост)</label>
+            </div>
+
+            <div class="form-group" style="width: 100%;">
+                <label>Заключение (Disposition)</label>
+                <div style="display: flex; flex-wrap: wrap; gap: 14px;">
+                    <label style="display: flex; align-items: center; gap: 6px; font-weight: normal;"><input type="checkbox" name="disposition" value="accept">Приемане</label>
+                    <label style="display: flex; align-items: center; gap: 6px; font-weight: normal;"><input type="checkbox" name="disposition" value="reject">Отказ</label>
+                    <label style="display: flex; align-items: center; gap: 6px; font-weight: normal;"><input type="checkbox" name="disposition" value="full_inspection">Пълна проверка</label>
+                    <label style="display: flex; align-items: center; gap: 6px; font-weight: normal;"><input type="checkbox" name="disposition" value="rework">Преработка</label>
+                    <label style="display: flex; align-items: center; gap: 6px; font-weight: normal;"><input type="checkbox" name="disposition" value="deduction">Удръжка</label>
+                    <label style="display: flex; align-items: center; gap: 6px; font-weight: normal;"><input type="checkbox" name="disposition" value="other">Друго</label>
+                </div>
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                <button type="submit" class="btn-submit">{{ 'Запази промените' if edit_check else 'Запази проверка' }}</button>
+                <button type="button" id="qcSaveTemplateBtn" class="btn-secondary" style="padding: 10px 18px; font-size: 0.9rem;" title="Записва Drawing No/Batch/Sample Size и редовете с размери (без пробите) като темплейт за избрания детайл/продукт">Запиши като темплейт</button>
+                <a id="qcPrintTemplateBtn" href="#" target="_blank" class="btn-secondary" style="padding: 10px 18px; font-size: 0.9rem; text-decoration: none; display: inline-block; opacity: 0.5; pointer-events: none;" title="Няма запазен темплейт за този обект">Печат на празен формуляр</a>
+                <span id="qcSaveTemplateMsg" style="font-size: 0.85rem;"></span>
+            </div>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>История на проверките</h3>
+        <p class="section-subtitle">Всички записани QC проверки, най-новите отгоре.</p>
+
+        <div class="result-filter-links">
+            <a href="{{ url_for('admin_quality_control') }}" class="{{ 'active-filter' if not result_filter }}">Всички</a>
+            <a href="{{ url_for('admin_quality_control', result='pass') }}" class="{{ 'active-filter' if result_filter == 'pass' }}">Годни</a>
+            <a href="{{ url_for('admin_quality_control', result='fail') }}" class="{{ 'active-filter' if result_filter == 'fail' }}">Негодни</a>
+        </div>
+
+        {% if checks %}
+        <div class="table-responsive" style="margin-top: 1rem;">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Дата</th>
+                    <th>Обект</th>
+                    <th>Drawing No</th>
+                    <th>Партида</th>
+                    <th>Инспектор</th>
+                    <th>Резултат</th>
+                    <th>Измервания</th>
+                    <th>Забележка</th>
+                    <th class="text-right">Редакция</th>
+                    <th class="text-right">Печат</th>
+                    <th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for check in checks %}
+                <tr>
+                    <td>#{{ check.id }}</td>
+                    <td>{{ check.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+                    <td>
+                        {{ check.target_name }}
+                        <br><span class="text-muted text-small">{{ 'Детайл' if check.target_type == 'detail' else 'Продукт' }}</span>
+                    </td>
+                    <td>{{ check.drawing_no or '—' }}</td>
+                    <td>{{ check.batch_size or '—' }} / {{ check.sample_size }} пр.</td>
+                    <td>{{ check.inspector.username if check.inspector else '—' }}</td>
+                    <td>
+                        {% if check.overall_result == 'pass' %}
+                        <span class="badge badge-pass">Годен</span>
+                        {% else %}
+                        <span class="badge badge-fail">Негоден</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <ul class="qc-measurement-list">
+                            {% for m in check.measurements %}
+                            <li class="{{ 'qc-mv-ok' if m.is_within_tolerance else 'qc-mv-bad' }}">
+                                №{{ loop.index }}
+                                {% if m.drawing_ref %}(черт. {{ m.drawing_ref }}){% endif %}
+                                {% if m.measurement_type %}<span class="text-muted">[{{ m.measurement_type }}]</span>{% endif %}
+                                {{ m.parameter_name }}:
+                                {% for s in m.samples %}<span class="{{ 'qc-mv-ok' if s.is_within_tolerance else 'qc-mv-bad' }}">{{ s.value }}{{ m.unit or '' }}{% if not loop.last %}, {% endif %}</span>{% endfor %}
+                                (ном. {{ m.nominal_value }} +{{ m.tolerance_plus }}/-{{ m.tolerance_minus }})
+                                {{ '✓' if m.is_within_tolerance else '✗' }}
+                                {% if m.instrument %}<span class="text-muted"> · {{ m.instrument.name }}</span>{% endif %}
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </td>
+                    <td>
+                        {{ check.notes or '—' }}
+                        {% if check.iso8015 %}<br><span class="badge badge-pass" style="margin-top: 4px;">ISO 8015</span>{% endif %}
+                    </td>
+                    <td class="text-right">
+                        <a href="{{ url_for('admin_edit_quality_check', check_id=check.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
+                    </td>
+                    <td class="text-right">
+                        <a href="{{ url_for('admin_quality_check_print', check_id=check.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;" target="_blank">Печат</a>
+                    </td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_delete_quality_check', check_id=check.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на QC проверка #{{ check.id }}?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма записани QC проверки{{ ' с този резултат' if result_filter else '' }}.</p>
+        {% endif %}
+    </section>
+
+    <div class="qc-modal-overlay" id="qcInstrumentModal">
+        <div class="qc-modal-box">
+            <span class="qc-modal-close" onclick="closeQcInstrumentModal()">&times;</span>
+            <h3 style="margin-top: 0; margin-bottom: 16px;">Бързо създаване на инструмент</h3>
+            <form id="qcInstrumentForm">
+                {% include 'partials/csrf_field.html' %}
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label for="qi_name">Име на инструмента</label>
+                    <input type="text" id="qi_name" name="name" required placeholder="напр. Дигитален шублер 150мм">
+                </div>
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label for="qi_accuracy_value">Точност (незадължително)</label>
+                    <input type="number" id="qi_accuracy_value" step="any" min="0" name="accuracy_value" placeholder="напр. 0.01">
+                </div>
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label for="qi_accuracy_unit">Мерна единица</label>
+                    <input type="text" id="qi_accuracy_unit" name="accuracy_unit" placeholder="напр. мм" value="мм">
+                </div>
+                <div class="form-group" style="margin-bottom: 20px;">
+                    <label for="qi_description">Описание (незадължително)</label>
+                    <textarea id="qi_description" name="description" rows="2" style="width: 100%; padding: 0.6rem 0.75rem; background-color: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm);"></textarea>
+                </div>
+                <button type="submit" class="btn-submit" style="width: 100%;">Добави инструмент</button>
+                <div id="qi_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
+            </form>
+        </div>
+    </div>
+
+    <datalist id="qcMeasurementTypes">
+        <option value="Диаметър">
+        <option value="Радиус">
+        <option value="Дължина">
+        <option value="Ширина">
+        <option value="Височина">
+        <option value="Дебелина">
+        <option value="Дълбочина">
+        <option value="Стъпка">
+        <option value="Ъгъл">
+        <option value="Резба">
+        <option value="Конусност">
+        <option value="Скосяване">
+        <option value="Праволинейност">
+        <option value="Плоскостност">
+        <option value="Кръглост">
+        <option value="Цилиндричност">
+        <option value="Профил на линия">
+        <option value="Профил на повърхнина">
+        <option value="Перпендикулярност">
+        <option value="Успоредност">
+        <option value="Наклон (ъгловост)">
+        <option value="Позиция">
+        <option value="Концентричност">
+        <option value="Симетричност">
+        <option value="Кръгово биене">
+        <option value="Пълно биене">
+        <option value="Грапавост на повърхността">
+        <option value="Твърдост">
+        <option value="Тегло">
+    </datalist>
+
+</main>
+
+<script>
+    const QC_DETAILS = [
+        {% for d in details %}{ id: {{ d.id }}, name: {{ d.name | tojson }} }{% if not loop.last %}, {% endif %}{% endfor %}
+    ];
+    const QC_PRODUCTS = [
+        {% for p in products %}{ id: {{ p.id }}, name: {{ p.name | tojson }} }{% if not loop.last %}, {% endif %}{% endfor %}
+    ];
+    let QC_INSTRUMENTS = [
+        {% for i in instruments %}{ id: {{ i.id }}, label: {{ i.display_label | tojson }} }{% if not loop.last %}, {% endif %}{% endfor %}
+    ];
+    // Non-null only on admin_edit_quality_check() - pre-fills the form
+    // (header + rows + sample *values*) from an existing QualityCheck
+    // instead of starting blank/from a template. See populateFormFromEditCheck().
+    const QC_EDIT_CHECK = {{ edit_check_data | tojson }};
+    let qcInitialLoadDone = false;
+
+    function refreshTargetOptions() {
+        const type = document.getElementById('qc_target_type').value;
+        const list = type === 'detail' ? QC_DETAILS : QC_PRODUCTS;
+        const sel = document.getElementById('qc_target_id');
+        sel.innerHTML = '';
+        list.forEach(function (item) {
+            const opt = document.createElement('option');
+            opt.value = item.id;
+            opt.textContent = item.name;
+            sel.appendChild(opt);
+        });
+        if (QC_EDIT_CHECK && !qcInitialLoadDone) {
+            qcInitialLoadDone = true;
+            sel.value = QC_EDIT_CHECK.target_id;
+            populateFormFromEditCheck(QC_EDIT_CHECK);
+        } else {
+            loadTemplateForTarget();
+        }
+    }
+    document.getElementById('qc_target_type').addEventListener('change', refreshTargetOptions);
+    document.getElementById('qc_target_id').addEventListener('change', loadTemplateForTarget);
+
+    // Reuses the most recently saved QualityCheck for whichever
+    // Detail/Product is now selected as a starting template - same
+    // dimension rows (name/nominal/tolerance/tool) and header fields, but
+    // never the old sample *values* (those are always entered fresh per
+    // inspection). Each target has its own template; switching to one with
+    // no prior check resets the form instead of leaving the previously
+    // selected target's template sitting on screen.
+    function loadTemplateForTarget() {
+        const type = document.getElementById('qc_target_type').value;
+        const id = document.getElementById('qc_target_id').value;
+        if (!id) {
+            applyTemplateToForm(null);
+            return;
+        }
+        fetch('/api/quality-template/' + type + '/' + id)
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                applyTemplateToForm(data.status === 'success' ? data.template : null);
+            })
+            .catch(function () { applyTemplateToForm(null); });
+    }
+
+    function setPrintTemplateButton(templateExists) {
+        const printBtn = document.getElementById('qcPrintTemplateBtn');
+        const type = document.getElementById('qc_target_type').value;
+        const id = document.getElementById('qc_target_id').value;
+        if (templateExists) {
+            printBtn.href = '/admin/quality/template/' + type + '/' + id + '/print';
+            printBtn.style.opacity = '1';
+            printBtn.style.pointerEvents = '';
+            printBtn.title = 'Отпечатва празен формуляр по този темплейт, за ръчно попълване';
+        } else {
+            printBtn.href = '#';
+            printBtn.style.opacity = '0.5';
+            printBtn.style.pointerEvents = 'none';
+            printBtn.title = 'Няма запазен темплейт за този обект';
+        }
+    }
+
+    // Re-checks whether the currently selected target has a saved template,
+    // just to toggle qcPrintTemplateBtn - used when the form's other fields
+    // are already populated from elsewhere (editing an existing check) and
+    // shouldn't be touched by the template fetch.
+    function refreshPrintTemplateButtonOnly() {
+        const type = document.getElementById('qc_target_type').value;
+        const id = document.getElementById('qc_target_id').value;
+        if (!id) { setPrintTemplateButton(false); return; }
+        fetch('/api/quality-template/' + type + '/' + id)
+            .then(function (res) { return res.json(); })
+            .then(function (data) { setPrintTemplateButton(data.status === 'success' && !!data.template); })
+            .catch(function () { setPrintTemplateButton(false); });
+    }
+
+    function applyTemplateToForm(t) {
+        setPrintTemplateButton(!!t);
+
+        document.getElementById('qc_drawing_no').value = t ? (t.drawing_no || '') : '';
+        document.getElementById('qc_batch_size').value = t ? (t.batch_size || '') : '';
+        document.getElementById('qc_sample_size').value = t ? (t.sample_size || 1) : 1;
+        document.getElementById('qc_iso8015').checked = t ? !!t.iso8015 : false;
+
+        document.getElementById('qcMeasurementRows').innerHTML = '';
+        const measurements = t ? t.measurements : [];
+        if (measurements.length === 0) {
+            addMeasurementRow();
+            return;
+        }
+        measurements.forEach(function (m) {
+            addMeasurementRow();
+            const rows = document.querySelectorAll('#qcMeasurementRows .qc-measurement-row');
+            const row = rows[rows.length - 1];
+            row.querySelector('input[name="measurement_type"]').value = m.measurement_type || '';
+            row.querySelector('input[name="param_name"]').value = m.parameter_name;
+            row.querySelector('input[name="nominal_value"]').value = m.nominal_value;
+            row.querySelector('input[name="tolerance_plus"]').value = m.tolerance_plus;
+            row.querySelector('input[name="tolerance_minus"]').value = m.tolerance_minus;
+            row.querySelector('input[name="unit"]').value = m.unit || '';
+            row.querySelector('input[name="drawing_ref"]').value = m.drawing_ref || '';
+            if (m.instrument_id) row.querySelector('.qc-instrument-select').value = m.instrument_id;
+        });
+    }
+
+    // Pre-fills the form from an existing QualityCheck (admin_edit_quality_check())
+    // - same shape as applyTemplateToForm() plus the per-inspection fields a
+    // template never has (order_no/supervisor/notes/disposition) and, unlike
+    // a template, the actual sample *values* so a data-entry mistake can be
+    // fixed in place.
+    function populateFormFromEditCheck(data) {
+        document.getElementById('qc_drawing_no').value = data.drawing_no || '';
+        document.getElementById('qc_batch_size').value = data.batch_size || '';
+        document.getElementById('qc_sample_size').value = data.sample_size || 1;
+        document.getElementById('qc_order_no').value = data.order_no || '';
+        document.getElementById('qc_supervisor_name').value = data.supervisor_name || '';
+        document.getElementById('qc_notes').value = data.notes || '';
+        document.getElementById('qc_iso8015').checked = !!data.iso8015;
+        document.querySelectorAll('input[name="disposition"]').forEach(function (cb) {
+            cb.checked = data.disposition.indexOf(cb.value) !== -1;
+        });
+
+        document.getElementById('qcMeasurementRows').innerHTML = '';
+        data.measurements.forEach(function (m) {
+            addMeasurementRow();
+            const rows = document.querySelectorAll('#qcMeasurementRows .qc-measurement-row');
+            const row = rows[rows.length - 1];
+            row.querySelector('input[name="measurement_type"]').value = m.measurement_type || '';
+            row.querySelector('input[name="param_name"]').value = m.parameter_name;
+            row.querySelector('input[name="nominal_value"]').value = m.nominal_value;
+            row.querySelector('input[name="tolerance_plus"]').value = m.tolerance_plus;
+            row.querySelector('input[name="tolerance_minus"]').value = m.tolerance_minus;
+            row.querySelector('input[name="unit"]').value = m.unit || '';
+            row.querySelector('input[name="drawing_ref"]').value = m.drawing_ref || '';
+            if (m.instrument_id) row.querySelector('.qc-instrument-select').value = m.instrument_id;
+            const sampleInputs = row.querySelectorAll('.qc-sample-input');
+            m.samples.forEach(function (val, i) {
+                if (val !== null && sampleInputs[i]) sampleInputs[i].value = val;
+            });
+        });
+        refreshPrintTemplateButtonOnly();
+    }
+
+    if (QC_EDIT_CHECK) document.getElementById('qc_target_type').value = QC_EDIT_CHECK.target_type;
+    refreshTargetOptions();
+
+    // ISO 2768-1 general tolerances (linear dimensions, ± mm) by nominal-size
+    // range and class - f(ine)/m(edium)/c(oarse)/v(ery coarse). null means
+    // that class has no defined tolerance for the range (e.g. no 'f' over
+    // 4000mm, no 'v' at/under 3mm). Ranges are "up to and including X".
+    const ISO_2768_RANGES = [
+        { max: 3, f: 0.05, m: 0.1, c: 0.2, v: null },
+        { max: 6, f: 0.05, m: 0.1, c: 0.3, v: 0.5 },
+        { max: 30, f: 0.1, m: 0.2, c: 0.5, v: 1.0 },
+        { max: 120, f: 0.15, m: 0.3, c: 0.8, v: 1.5 },
+        { max: 400, f: 0.2, m: 0.5, c: 1.2, v: 2.5 },
+        { max: 1000, f: 0.3, m: 0.8, c: 2.0, v: 4.0 },
+        { max: 2000, f: 0.5, m: 1.2, c: 3.0, v: 6.0 },
+        { max: 4000, f: null, m: 2.0, c: 4.0, v: 8.0 },
+    ];
+
+    function iso2768LinearTolerance(nominal, cls) {
+        const n = Math.abs(parseFloat(nominal));
+        if (!(n >= 0)) return null;
+        const value = (function () {
+            for (const range of ISO_2768_RANGES) {
+                if (n <= range.max) return range[cls];
+            }
+            return null;
+        })();
+        if (value === null) return null;
+        return { plus: value, minus: value };
+    }
+
+    // ISO 2768-1 angular tolerances, by class and the nominal length of the
+    // *shorter side of the angle* (mm) - a different lookup key from the
+    // angle being measured itself, hence the separate "reference length"
+    // input shown only for this group (see .qc-ref-length-input). Values in
+    // decimal degrees (converted from the standard's °/' notation, e.g.
+    // 0°30' = 0.5°, 0°10' = 0.1667°).
+    const ISO_2768_ANGULAR_RANGES = [
+        { max: 10, f: 1.0, m: 1.0, c: 1.5, v: 3.0 },
+        { max: 50, f: 0.5, m: 0.5, c: 1.0, v: 2.0 },
+        { max: 120, f: 1 / 3, m: 1 / 3, c: 0.5, v: 1.0 },
+        { max: 400, f: 1 / 6, m: 1 / 6, c: 0.25, v: 0.5 },
+        { max: Infinity, f: 1 / 12, m: 1 / 12, c: 1 / 6, v: 1 / 3 },
+    ];
+
+    function iso2768AngularTolerance(refLength, cls) {
+        const n = Math.abs(parseFloat(refLength));
+        if (!(n >= 0)) return null;
+        for (const range of ISO_2768_ANGULAR_RANGES) {
+            if (n <= range.max) {
+                const value = range[cls];
+                return value == null ? null : { plus: value, minus: value };
+            }
+        }
+        return null;
+    }
+
+    // ISO 2768-2 geometric tolerances (form/position), classes H/K/L. Values
+    // in mm; the measured "size" is always the deviation from ideal form, so
+    // nominal is forced to 0 when one of these is applied (see
+    // applyToleranceStandard). 'form' covers straightness AND flatness
+    // (same table in the standard); 'runout' (circular run-out) doesn't
+    // depend on length at all - no reference-length lookup needed for it.
+    const ISO_2768_GEO_RANGES = {
+        form: [
+            { max: 10, H: 0.02, K: 0.05, L: 0.1 },
+            { max: 30, H: 0.05, K: 0.1, L: 0.2 },
+            { max: 100, H: 0.1, K: 0.2, L: 0.4 },
+            { max: 300, H: 0.2, K: 0.4, L: 0.8 },
+            { max: 1000, H: 0.3, K: 0.6, L: 1.2 },
+            { max: 3000, H: 0.4, K: 0.8, L: 1.6 },
+        ],
+        perp: [
+            { max: 100, H: 0.2, K: 0.4, L: 0.6 },
+            { max: 300, H: 0.3, K: 0.6, L: 1.0 },
+            { max: 1000, H: 0.4, K: 0.8, L: 1.5 },
+            { max: 3000, H: 0.5, K: 1.0, L: 2.0 },
+        ],
+        sym: [
+            { max: 100, H: 0.5, K: 0.6, L: 0.6 },
+            { max: 300, H: 0.5, K: 0.6, L: 1.0 },
+            { max: 1000, H: 0.5, K: 0.8, L: 1.5 },
+            { max: 3000, H: 0.5, K: 1.0, L: 2.0 },
+        ],
+    };
+    const ISO_2768_RUNOUT = { H: 0.1, K: 0.2, L: 0.5 };
+
+    function iso2768GeoTolerance(refLength, characteristic, cls) {
+        if (characteristic === 'runout') {
+            const value = ISO_2768_RUNOUT[cls];
+            return value == null ? null : { plus: value, minus: 0 };
+        }
+        const n = Math.abs(parseFloat(refLength));
+        if (!(n >= 0)) return null;
+        const ranges = ISO_2768_GEO_RANGES[characteristic];
+        if (!ranges) return null;
+        for (const range of ranges) {
+            if (n <= range.max) {
+                const value = range[cls];
+                return value == null ? null : { plus: value, minus: 0 };
+            }
+        }
+        return null;
+    }
+
+    // ISO 13715 (edges of undefined shape) has no size-based lookup table -
+    // the permissible edge deviation is chosen directly by the drafter per
+    // edge, so this is just a fixed list of common values rather than a
+    // computed table.
+    function iso13715Tolerance(value) {
+        const v = parseFloat(value);
+        if (!(v >= 0)) return null;
+        return { plus: v, minus: v };
+    }
+
+    // ISO 286-1 tolerances/fits for holes and shafts, by nominal-size range.
+    // IT* values are the standard IT-grade widths in µm; k6ei is the k6
+    // fundamental (lower) deviation in µm (the only non-h/H/js class here
+    // whose deviation isn't simply 0 or ±IT/2). Ranges are "up to and
+    // including X" mm, same convention as ISO_2768_RANGES above.
+    const ISO_286_RANGES = [
+        { max: 3, IT6: 6, IT7: 10, IT8: 14, IT9: 25, IT11: 60, k6ei: 0 },
+        { max: 6, IT6: 8, IT7: 12, IT8: 18, IT9: 30, IT11: 75, k6ei: 1 },
+        { max: 10, IT6: 9, IT7: 15, IT8: 22, IT9: 36, IT11: 90, k6ei: 1 },
+        { max: 18, IT6: 11, IT7: 18, IT8: 27, IT9: 43, IT11: 110, k6ei: 1 },
+        { max: 30, IT6: 13, IT7: 21, IT8: 33, IT9: 52, IT11: 130, k6ei: 2 },
+        { max: 50, IT6: 16, IT7: 25, IT8: 39, IT9: 62, IT11: 160, k6ei: 2 },
+        { max: 80, IT6: 19, IT7: 30, IT8: 46, IT9: 74, IT11: 190, k6ei: 2 },
+        { max: 120, IT6: 22, IT7: 35, IT8: 54, IT9: 87, IT11: 220, k6ei: 3 },
+        { max: 180, IT6: 25, IT7: 40, IT8: 63, IT9: 100, IT11: 250, k6ei: 3 },
+        { max: 250, IT6: 29, IT7: 46, IT8: 72, IT9: 115, IT11: 290, k6ei: 4 },
+        { max: 315, IT6: 32, IT7: 52, IT8: 81, IT9: 130, IT11: 320, k6ei: 4 },
+        { max: 400, IT6: 36, IT7: 57, IT8: 89, IT9: 140, IT11: 360, k6ei: 4 },
+        { max: 500, IT6: 40, IT7: 63, IT8: 97, IT9: 155, IT11: 400, k6ei: 5 },
+    ];
+
+    function iso286Tolerance(nominal, cls) {
+        const n = Math.abs(parseFloat(nominal));
+        if (!(n >= 0)) return null;
+        let range = null;
+        for (const r of ISO_286_RANGES) {
+            if (n <= r.max) { range = r; break; }
+        }
+        if (!range) return null;
+        const mm = function (um) { return um / 1000; };
+        switch (cls) {
+            // Holes (upper-case): base line at 0, tolerance zone entirely above it.
+            case 'H6': return { plus: mm(range.IT6), minus: 0 };
+            case 'H7': return { plus: mm(range.IT7), minus: 0 };
+            case 'H8': return { plus: mm(range.IT8), minus: 0 };
+            case 'H9': return { plus: mm(range.IT9), minus: 0 };
+            case 'H11': return { plus: mm(range.IT11), minus: 0 };
+            // Shafts (lower-case): zone entirely below the base line.
+            case 'h6': return { plus: 0, minus: mm(range.IT6) };
+            case 'h7': return { plus: 0, minus: mm(range.IT7) };
+            // Symmetric shaft fit.
+            case 'js6': return { plus: mm(range.IT6 / 2), minus: mm(range.IT6 / 2) };
+            // k6: zone shifted entirely above the base line by k6ei - stored
+            // as a negative "minus" so nominal - minus = nominal + k6ei,
+            // same is_within_tolerance formula as every other class.
+            case 'k6': return { plus: mm(range.k6ei + range.IT6), minus: -mm(range.k6ei) };
+            default: return null;
+        }
+    }
+
+    // Which standards need the auxiliary "reference length" field instead of
+    // (or in addition to) the row's own nominal_value - angular tolerances
+    // key off the angle's shorter leg, geometric ones off the part's length,
+    // neither of which is the value actually being toleranced.
+    const REF_LENGTH_TABLES = { iso2768ang: true, iso2768geo: true };
+
+    function updateRefLengthVisibility(row) {
+        const raw = row.querySelector('.qc-tol-standard-select').value;
+        const table = raw.split(':')[0];
+        const needsRefLength = REF_LENGTH_TABLES[table] && !(table === 'iso2768geo' && raw.split(':')[1] === 'runout');
+        row.querySelector('.qc-ref-length-input').style.display = needsRefLength ? '' : 'none';
+    }
+
+    function applyToleranceStandard(row) {
+        const select = row.querySelector('.qc-tol-standard-select');
+        const raw = select.value;
+        updateRefLengthVisibility(row);
+        if (!raw) return; // "-- ръчно --" - leave the typed values alone
+        const parts = raw.split(':');
+        const table = parts[0];
+        const nominalInput = row.querySelector('input[name="nominal_value"]');
+        const refLength = row.querySelector('.qc-ref-length-input').value;
+
+        let result = null;
+        if (table === 'iso2768lin') {
+            result = iso2768LinearTolerance(nominalInput.value, parts[1]);
+        } else if (table === 'iso286') {
+            result = iso286Tolerance(nominalInput.value, parts[1]);
+        } else if (table === 'iso2768ang') {
+            result = iso2768AngularTolerance(refLength, parts[1]);
+        } else if (table === 'iso2768geo') {
+            result = iso2768GeoTolerance(refLength, parts[1], parts[2]);
+            if (result) nominalInput.value = 0; // geometric target is always "no deviation"
+        } else if (table === 'iso13715') {
+            result = iso13715Tolerance(parts[1]);
+        }
+        if (!result) return; // out of range (or ref. length not entered yet) - nothing to fill
+        row.querySelector('input[name="tolerance_plus"]').value = result.plus;
+        row.querySelector('input[name="tolerance_minus"]').value = result.minus;
+    }
+
+    function buildInstrumentSelect() {
+        const sel = document.createElement('select');
+        sel.name = 'instrument_id';
+        sel.className = 'qc-instrument-select';
+        sel.title = 'Инструмент, с който е направено измерването (по избор)';
+        const blank = document.createElement('option');
+        blank.value = '';
+        blank.textContent = '-- инструмент --';
+        sel.appendChild(blank);
+        QC_INSTRUMENTS.forEach(function (item) {
+            const opt = document.createElement('option');
+            opt.value = item.id;
+            opt.textContent = item.label;
+            sel.appendChild(opt);
+        });
+        return sel;
+    }
+
+    // Every row's instrument <select> gets the newly created instrument
+    // appended (not just the one that opened the modal) - so a later row
+    // doesn't need its own separate "not found yet" round trip.
+    function refreshAllInstrumentSelects() {
+        document.querySelectorAll('.qc-instrument-select').forEach(function (sel) {
+            const currentValue = sel.value;
+            sel.innerHTML = '';
+            const blank = document.createElement('option');
+            blank.value = '';
+            blank.textContent = '-- инструмент --';
+            sel.appendChild(blank);
+            QC_INSTRUMENTS.forEach(function (item) {
+                const opt = document.createElement('option');
+                opt.value = item.id;
+                opt.textContent = item.label;
+                sel.appendChild(opt);
+            });
+            sel.value = currentValue;
+        });
+    }
+
+    function renumberMeasurementRows() {
+        document.querySelectorAll('#qcMeasurementRows .qc-measurement-row').forEach(function (row, i) {
+            row.querySelector('.qc-row-num').textContent = '№' + (i + 1);
+            // Sample inputs are named sample_row{i} (repeated name per row,
+            // read via request.form.getlist(f'sample_row{i}')) - the index
+            // must track the row's *current* position, so this has to be
+            // re-applied every time a row is added/removed, same as the
+            // display number above.
+            row.querySelectorAll('.qc-sample-input').forEach(function (input) {
+                input.name = 'sample_row' + i;
+            });
+        });
+    }
+
+    function currentSampleSize() {
+        return Math.max(1, parseInt(document.getElementById('qc_sample_size').value, 10) || 1);
+    }
+
+    function buildSampleInputsContainer(count) {
+        const wrap = document.createElement('span');
+        wrap.className = 'qc-sample-inputs';
+        for (let i = 0; i < count; i++) {
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.step = 'any';
+            input.className = 'qc-sample-input';
+            input.placeholder = 'Проба ' + (i + 1);
+            if (i === 0) input.required = true; // at least one sample per row
+            wrap.appendChild(input);
+        }
+        return wrap;
+    }
+
+    // Sample Size is set once for the whole check (like the paper form's
+    // fixed sample columns) - changing it rebuilds every row's sample
+    // inputs to match, preserving whatever values were already typed.
+    function rebuildAllSampleColumns() {
+        const count = currentSampleSize();
+        document.querySelectorAll('#qcMeasurementRows .qc-measurement-row').forEach(function (row) {
+            const oldWrap = row.querySelector('.qc-sample-inputs');
+            const oldValues = oldWrap ? [...oldWrap.querySelectorAll('.qc-sample-input')].map(function (i) { return i.value; }) : [];
+            const newWrap = buildSampleInputsContainer(count);
+            [...newWrap.querySelectorAll('.qc-sample-input')].forEach(function (input, i) {
+                if (oldValues[i] !== undefined) input.value = oldValues[i];
+            });
+            if (oldWrap) oldWrap.replaceWith(newWrap);
+            else row.querySelector('.qc-unit-input').insertAdjacentElement('beforebegin', newWrap);
+        });
+        renumberMeasurementRows();
+    }
+    document.getElementById('qc_sample_size').addEventListener('input', rebuildAllSampleColumns);
+
+    function addMeasurementRow() {
+        const container = document.getElementById('qcMeasurementRows');
+        const row = document.createElement('div');
+        row.className = 'qc-measurement-row';
+        row.innerHTML =
+            '<span class="qc-row-num"></span>' +
+            '<input type="text" name="drawing_ref" class="qc-drawing-input" placeholder="№ от чертежа">' +
+            '<input type="text" name="measurement_type" class="qc-type-input" list="qcMeasurementTypes" placeholder="Вид (напр. Диаметър)">' +
+            '<input type="text" name="param_name" class="qc-param-name" placeholder="напр. Диаметър Ø20" required>' +
+            '<input type="number" step="any" name="nominal_value" class="qc-num-input" placeholder="Номинал" required>' +
+            '<select class="qc-tol-standard-select" title="Стандартен толеранс (по избор) - автоматично попълва полетата вдясно според номинала/дължината, остават редактируеми">' +
+            '<option value="">-- ръчно --</option>' +
+            '<optgroup label="ISO 2768-1 - линейни размери">' +
+            '<option value="iso2768lin:f">Фин (f)</option>' +
+            '<option value="iso2768lin:m">Среден (m)</option>' +
+            '<option value="iso2768lin:c">Груб (c)</option>' +
+            '<option value="iso2768lin:v">Мн. груб (v)</option>' +
+            '</optgroup>' +
+            '<optgroup label="ISO 2768-1 - ъглови размери">' +
+            '<option value="iso2768ang:f">Фин/среден (f/m)</option>' +
+            '<option value="iso2768ang:c">Груб (c)</option>' +
+            '<option value="iso2768ang:v">Мн. груб (v)</option>' +
+            '</optgroup>' +
+            '<optgroup label="ISO 286 - отвори">' +
+            '<option value="iso286:H6">H6</option>' +
+            '<option value="iso286:H7">H7</option>' +
+            '<option value="iso286:H8">H8</option>' +
+            '<option value="iso286:H9">H9</option>' +
+            '<option value="iso286:H11">H11</option>' +
+            '</optgroup>' +
+            '<optgroup label="ISO 286 - валове">' +
+            '<option value="iso286:h6">h6</option>' +
+            '<option value="iso286:h7">h7</option>' +
+            '<option value="iso286:js6">js6</option>' +
+            '<option value="iso286:k6">k6</option>' +
+            '</optgroup>' +
+            '<optgroup label="ISO 2768-2 - права/плоскост">' +
+            '<option value="iso2768geo:form:H">H</option>' +
+            '<option value="iso2768geo:form:K">K</option>' +
+            '<option value="iso2768geo:form:L">L</option>' +
+            '</optgroup>' +
+            '<optgroup label="ISO 2768-2 - перпендикулярност">' +
+            '<option value="iso2768geo:perp:H">H</option>' +
+            '<option value="iso2768geo:perp:K">K</option>' +
+            '<option value="iso2768geo:perp:L">L</option>' +
+            '</optgroup>' +
+            '<optgroup label="ISO 2768-2 - симетричност">' +
+            '<option value="iso2768geo:sym:H">H</option>' +
+            '<option value="iso2768geo:sym:K">K</option>' +
+            '<option value="iso2768geo:sym:L">L</option>' +
+            '</optgroup>' +
+            '<optgroup label="ISO 2768-2 - кръгово биене">' +
+            '<option value="iso2768geo:runout:H">H</option>' +
+            '<option value="iso2768geo:runout:K">K</option>' +
+            '<option value="iso2768geo:runout:L">L</option>' +
+            '</optgroup>' +
+            '<optgroup label="ISO 13715 - ръбове">' +
+            '<option value="iso13715:0.1">± 0.1 мм</option>' +
+            '<option value="iso13715:0.2">± 0.2 мм</option>' +
+            '<option value="iso13715:0.3">± 0.3 мм</option>' +
+            '<option value="iso13715:0.5">± 0.5 мм</option>' +
+            '<option value="iso13715:1.0">± 1.0 мм</option>' +
+            '</optgroup>' +
+            '</select>' +
+            '<input type="number" step="any" name="ref_length" class="qc-ref-length-input" placeholder="Дълж./страна за справка (мм)" style="display:none;" title="Дължина на детайла (или по-късата страна на ъгъла) - използва се само за търсене в таблицата на избрания стандарт, не се записва">' +
+            '<input type="number" step="any" name="tolerance_plus" class="qc-num-input" placeholder="Тол. +" value="0">' +
+            '<input type="number" step="any" name="tolerance_minus" class="qc-num-input" placeholder="Тол. -" value="0">' +
+            '<input type="text" name="unit" class="qc-unit-input" placeholder="мм">' +
+            '<button type="button" class="qc-remove-row" title="Премахни ред">&times;</button>';
+        row.querySelector('.qc-remove-row').addEventListener('click', function () {
+            if (container.children.length > 1) {
+                row.remove();
+                renumberMeasurementRows();
+            }
+        });
+        row.querySelector('.qc-tol-standard-select').addEventListener('change', function () {
+            applyToleranceStandard(row);
+        });
+        row.querySelector('input[name="nominal_value"]').addEventListener('input', function () {
+            applyToleranceStandard(row);
+        });
+        row.querySelector('.qc-ref-length-input').addEventListener('input', function () {
+            applyToleranceStandard(row);
+        });
+
+        row.querySelector('.qc-unit-input').insertAdjacentElement('beforebegin', buildSampleInputsContainer(currentSampleSize()));
+
+        const instrumentSelect = buildInstrumentSelect();
+        const quickAddBtn = document.createElement('button');
+        quickAddBtn.type = 'button';
+        quickAddBtn.className = 'qc-quick-add-btn';
+        quickAddBtn.title = 'Бързо създаване на инструмент';
+        quickAddBtn.textContent = '⚡';
+        quickAddBtn.addEventListener('click', function () {
+            openQcInstrumentModal(instrumentSelect);
+        });
+        row.insertBefore(quickAddBtn, row.querySelector('.qc-remove-row'));
+        row.insertBefore(instrumentSelect, quickAddBtn);
+
+        container.appendChild(row);
+        renumberMeasurementRows();
+    }
+    document.getElementById('qcAddRow').addEventListener('click', addMeasurementRow);
+    // Skip the default blank row when editing - populateFormFromEditCheck()
+    // (called synchronously above, unlike the template fetch which resolves
+    // later and clears this row itself) has already added the real rows.
+    if (!QC_EDIT_CHECK) addMeasurementRow();
+
+    let qcInstrumentTargetSelect = null;
+    function openQcInstrumentModal(targetSelect) {
+        qcInstrumentTargetSelect = targetSelect;
+        document.getElementById('qcInstrumentModal').style.display = 'flex';
+        document.getElementById('qi_error').style.display = 'none';
+    }
+    function closeQcInstrumentModal() {
+        document.getElementById('qcInstrumentModal').style.display = 'none';
+        document.getElementById('qcInstrumentForm').reset();
+    }
+
+    document.getElementById('qcInstrumentForm').addEventListener('submit', function (e) {
+        e.preventDefault();
+        const submitBtn = this.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Обработване...';
+
+        const formData = new FormData(this);
+        const errDiv = document.getElementById('qi_error');
+        errDiv.style.display = 'none';
+
+        fetch('{{ url_for("api_quick_create_instrument") }}', { method: 'POST', body: formData })
+        .then(res => res.json())
+        .then(data => {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Добави инструмент';
+            if (data.status === 'success') {
+                QC_INSTRUMENTS.push({ id: data.instrument.id, label: data.instrument.option_text });
+                refreshAllInstrumentSelects();
+                if (qcInstrumentTargetSelect) qcInstrumentTargetSelect.value = data.instrument.id;
+                closeQcInstrumentModal();
+            } else {
+                errDiv.textContent = data.message || 'Грешка при създаване.';
+                errDiv.style.display = 'block';
+            }
+        })
+        .catch(function () {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Добави инструмент';
+            errDiv.textContent = 'Връзката със сървъра беше прекъсната.';
+            errDiv.style.display = 'block';
+        });
+    });
+
+    // "Запиши като темплейт" - a plain type="button" (not submit) so it
+    // never triggers the main form's native validation (e.g. the required
+    // first sample input, which a template deliberately has none of) -
+    // just reads the form's current field values via FormData and posts
+    // them to the dedicated save-template endpoint.
+    document.getElementById('qcSaveTemplateBtn').addEventListener('click', function () {
+        const btn = this;
+        const msg = document.getElementById('qcSaveTemplateMsg');
+        btn.disabled = true;
+        msg.style.color = 'var(--text-muted)';
+        msg.textContent = 'Записване...';
+
+        const formData = new FormData(document.getElementById('qcForm'));
+        fetch('{{ url_for("admin_save_quality_template") }}', { method: 'POST', body: formData })
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+            btn.disabled = false;
+            msg.style.color = data.status === 'success' ? 'var(--success-text)' : 'var(--danger-text)';
+            msg.textContent = data.message || (data.status === 'success' ? 'Записано.' : 'Грешка при записване.');
+            if (data.status === 'success') setPrintTemplateButton(true);
+        })
+        .catch(function () {
+            btn.disabled = false;
+            msg.style.color = 'var(--danger-text)';
+            msg.textContent = 'Връзката със сървъра беше прекъсната.';
+        });
+    });
+</script>
+
+</body>
+</html>

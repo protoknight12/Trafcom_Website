@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="bg">
+<html lang="{{ get_locale() }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     {% include 'partials/favicon.html' %}
-    <title>Качване на DXF - TRAFCOM</title>
+    <title>{{ _('Качване на DXF') }} - TRAFCOM</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <style>
         .service-checkbox-group {
@@ -47,46 +47,46 @@
     {% endwith %}
 
     <section class="admin-card">
-        <h3>DXF CNC Калкулатор</h3>
-        <p class="section-subtitle">Качете чертеж, изберете материал за ценообразуване и го свържете с конкретна машина по избор.
-            Резултатът се добавя към вашата <a href="{{ url_for('dashboard') }}">лична библиотека</a>.</p>
+        <h3>{{ _('DXF CNC Калкулатор') }}</h3>
+        <p class="section-subtitle">{{ _('Качете чертеж, изберете материал за ценообразуване и го свържете с конкретна машина по избор.') }}
+            {{ _('Резултатът се добавя към вашата') }} <a href="{{ url_for('dashboard') }}">{{ _('лична библиотека') }}</a>.</p>
 
         <form action="{{ url_for('upload') }}" method="POST" enctype="multipart/form-data" class="admin-form">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group" style="margin-bottom: 20px;">
-                <label for="material">Материал за изчисление *</label>
+                <label for="material">{{ _('Материал за изчисление *') }}</label>
                 <select name="material" id="material" required class="material-picker">
                     {% include 'partials/material_options.html' %}
                 </select>
             </div>
 
             <div class="form-group" style="margin-bottom: 20px;">
-                <label>Услуги (рязане) * - изберете една или повече, цената се сумира съответно</label>
+                <label>{{ _('Услуги (рязане) * - изберете една или повече, цената се сумира съответно') }}</label>
                 <div class="service-checkbox-group" id="serviceCheckboxGroup">
                     {% for s in services %}
-                    <label><input type="checkbox" name="service_ids" value="{{ s.id }}">{{ s.name }} ({{ "%.2f"|format(s.price_per_hour_eur) }} €/час)</label>
+                    <label><input type="checkbox" name="service_ids" value="{{ s.id }}">{{ localized(s, 'name') }} ({{ "%.2f"|format(s.price_per_hour_eur) }} €/{{ _('час') }})</label>
                     {% else %}
-                    <span class="text-muted text-small">Няма добавени услуги.</span>
+                    <span class="text-muted text-small">{{ _('Няма добавени услуги.') }}</span>
                     {% endfor %}
                 </div>
             </div>
 
             <div class="form-group" style="margin-bottom: 20px;">
-                <label for="dxf_file">DXF файл *</label>
+                <label for="dxf_file">{{ _('DXF файл *') }}</label>
                 <input type="file" id="dxf_file" name="file" accept=".dxf" required style="color: #fff;">
             </div>
 
             <div class="form-group" style="margin-bottom: 24px;">
-                <label for="machine_id">Свържи с машина (незадължително)</label>
+                <label for="machine_id">{{ _('Свържи с машина (незадължително)') }}</label>
                 <select name="machine_id" id="machine_id">
-                    <option value="">-- Без конкретна машина --</option>
+                    <option value="">-- {{ _('Без конкретна машина') }} --</option>
                     {% for machine in machines %}
-                    <option value="{{ machine.id }}">{{ machine.name }} ({% if machine.status == 'idle' %}Свободна{% elif machine.status == 'running' %}Работи{% else %}Поддръжка{% endif %})</option>
+                    <option value="{{ machine.id }}">{{ machine.name }} ({% if machine.status == 'idle' %}{{ _('Свободна') }}{% elif machine.status == 'running' %}{{ _('Работи') }}{% else %}{{ _('Поддръжка') }}{% endif %})</option>
                     {% endfor %}
                 </select>
             </div>
 
-            <button type="submit" class="btn-submit" style="width: 100%;">Качи и изчисли</button>
+            <button type="submit" class="btn-submit" style="width: 100%;">{{ _('Качи и изчисли') }}</button>
         </form>
     </section>
 </main>
@@ -96,7 +96,7 @@
         const anyChecked = document.querySelectorAll('input[name="service_ids"]:checked').length > 0;
         if (!anyChecked) {
             e.preventDefault();
-            alert('Моля изберете поне една услуга.');
+            alert("{{ _('Моля изберете поне една услуга.') }}");
         }
     });
 </script>

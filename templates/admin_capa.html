@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>CAPA - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .badge-in-progress {
+            background-color: rgba(23, 162, 184, 0.15);
+            color: #17a2b8;
+            border: 1px solid rgba(23, 162, 184, 0.3);
+        }
+        .badge-closed {
+            background-color: rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
+            border: 1px solid var(--border-color);
+        }
+        .result-filter-links a { margin-right: 12px; }
+        .result-filter-links a.active-filter { font-weight: 700; text-decoration: underline; }
+        .capa-overdue { color: var(--danger-text); font-weight: 700; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    {% if current_user.is_admin or current_user.role == 'quality_control' %}
+    <section class="admin-card">
+        <h3>Нов CAPA запис</h3>
+        <p class="section-subtitle">Корективно/превантивно действие (ISO 9001 §10.2) - отворете със самото описание на проблема; останалите стъпки (анализ, действия, потвърждение) се попълват по-късно в "Редактирай".</p>
+        <form action="{{ url_for('admin_add_capa') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            {% if from_finding_id %}
+            <input type="hidden" name="from_finding_id" value="{{ from_finding_id }}">
+            {% endif %}
+            {% if from_review_action_id %}
+            <input type="hidden" name="from_review_action_id" value="{{ from_review_action_id }}">
+            {% endif %}
+            {% if from_risk_entry_id %}
+            <input type="hidden" name="from_risk_entry_id" value="{{ from_risk_entry_id }}">
+            {% endif %}
+            {% if from_satisfaction_id %}
+            <input type="hidden" name="from_satisfaction_id" value="{{ from_satisfaction_id }}">
+            {% endif %}
+            <div class="form-group" style="width: 100%;">
+                <label for="new_problem_description">Описание на проблема/несъответствието</label>
+                <textarea id="new_problem_description" name="problem_description" rows="2" required style="width: 100%; padding: 0.6rem 0.75rem; background-color: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm);">{{ prefill_problem }}</textarea>
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="new_source_description">Източник (незадължително)</label>
+                <input type="text" id="new_source_description" name="source_description" value="{{ prefill_source }}" placeholder="напр. Клиентска рекламация, вътрешен одит, QC проверка №...">
+            </div>
+            <div class="form-group">
+                <label for="new_responsible_id">Отговорник</label>
+                <select id="new_responsible_id" name="responsible_id">
+                    <option value="">-- няма --</option>
+                    {% for u in users %}
+                    <option value="{{ u.id }}">{{ u.username }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="new_due_date">Срок (незадължително)</label>
+                <input type="date" id="new_due_date" name="due_date">
+            </div>
+            <button type="submit" class="btn-submit">Отвори CAPA</button>
+        </form>
+    </section>
+    {% endif %}
+
+    <section class="admin-card">
+        <h3>CAPA записи</h3>
+
+        <div class="result-filter-links">
+            <a href="{{ url_for('admin_capa') }}" class="{{ 'active-filter' if not status_filter }}">Всички</a>
+            {% for key, label in statuses.items() %}
+            <a href="{{ url_for('admin_capa', status=key) }}" class="{{ 'active-filter' if status_filter == key }}">{{ label }}</a>
+            {% endfor %}
+        </div>
+
+        {% if records %}
+        <div class="table-responsive" style="margin-top: 1rem;">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>№</th>
+                    <th>Дата</th>
+                    <th>Проблем</th>
+                    <th>Източник</th>
+                    <th>Отговорник</th>
+                    <th>Срок</th>
+                    <th>Статус</th>
+                    <th class="text-right">Действие</th>
+                    <th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for capa in records %}
+                <tr>
+                    <td><strong>{{ capa.capa_no }}</strong></td>
+                    <td>{{ capa.created_at.strftime('%d.%m.%Y') }}</td>
+                    <td style="max-width: 320px;">{{ capa.problem_description }}</td>
+                    <td>{{ capa.source_description or '—' }}</td>
+                    <td>{{ capa.responsible.username if capa.responsible else '—' }}</td>
+                    <td class="{{ 'capa-overdue' if capa.is_overdue }}">
+                        {{ capa.due_date.strftime('%d.%m.%Y') if capa.due_date else '—' }}
+                        {% if capa.is_overdue %}<br>Просрочен{% endif %}
+                    </td>
+                    <td>
+                        {% if capa.status == 'verified' %}
+                        <span class="badge badge-pass">{{ capa.status_label }}</span>
+                        {% elif capa.status == 'in_progress' %}
+                        <span class="badge badge-in-progress">{{ capa.status_label }}</span>
+                        {% elif capa.status == 'closed' %}
+                        <span class="badge badge-closed">{{ capa.status_label }}</span>
+                        {% else %}
+                        <span class="badge badge-fail">{{ capa.status_label }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-right">
+                        <a href="{{ url_for('admin_edit_capa', capa_id=capa.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
+                    </td>
+                    <td class="text-right">
+                        {% if current_user.is_admin or current_user.role == 'quality_control' %}
+                        <form action="{{ url_for('admin_delete_capa', capa_id=capa.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на &quot;{{ capa.capa_no }}&quot;?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма CAPA записи{{ ' с този статус' if status_filter else '' }}.</p>
+        {% endif %}
+    </section>
+
+</main>
+
+</body>
+</html>

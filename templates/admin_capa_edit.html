@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>{{ capa.capa_no }} - CAPA - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .capa-textarea {
+            width: 100%;
+            padding: 0.6rem 0.75rem;
+            background-color: var(--bg-input);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-sm);
+        }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px;">
+            <h3 style="margin: 0;">{{ capa.capa_no }}</h3>
+            <a href="{{ url_for('admin_capa') }}" class="text-small">&larr; Обратно към CAPA записите</a>
+        </div>
+        <p class="section-subtitle">Отворен на {{ capa.created_at.strftime('%d.%m.%Y') }}{% if capa.opened_by %} от {{ capa.opened_by.username }}{% endif %}.</p>
+
+        {% set readonly = not (current_user.is_admin or current_user.role == 'quality_control') %}
+        <form action="{{ url_for('admin_update_capa', capa_id=capa.id) }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+
+            <div class="form-group" style="width: 100%;">
+                <label for="problem_description">Описание на проблема/несъответствието</label>
+                <textarea id="problem_description" name="problem_description" rows="2" required class="capa-textarea" {{ 'readonly' if readonly }}>{{ capa.problem_description }}</textarea>
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="source_description">Източник</label>
+                <input type="text" id="source_description" name="source_description" value="{{ capa.source_description or '' }}" {{ 'readonly' if readonly }} style="width: 100%;">
+            </div>
+
+            <div class="form-group" style="width: 100%;">
+                <label for="containment_action">Сдържащо (временно) действие</label>
+                <textarea id="containment_action" name="containment_action" rows="2" class="capa-textarea" {{ 'readonly' if readonly }}>{{ capa.containment_action or '' }}</textarea>
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="root_cause">Коренов анализ</label>
+                <textarea id="root_cause" name="root_cause" rows="2" class="capa-textarea" {{ 'readonly' if readonly }}>{{ capa.root_cause or '' }}</textarea>
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="corrective_action">Корективно действие</label>
+                <textarea id="corrective_action" name="corrective_action" rows="2" class="capa-textarea" {{ 'readonly' if readonly }}>{{ capa.corrective_action or '' }}</textarea>
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="preventive_action">Превантивно действие</label>
+                <textarea id="preventive_action" name="preventive_action" rows="2" class="capa-textarea" {{ 'readonly' if readonly }}>{{ capa.preventive_action or '' }}</textarea>
+            </div>
+
+            <div class="form-group">
+                <label for="responsible_id">Отговорник</label>
+                <select id="responsible_id" name="responsible_id" {{ 'disabled' if readonly }}>
+                    <option value="">-- няма --</option>
+                    {% for u in users %}
+                    <option value="{{ u.id }}" {% if capa.responsible_id == u.id %}selected{% endif %}>{{ u.username }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="due_date">Срок</label>
+                <input type="date" id="due_date" name="due_date" value="{{ capa.due_date.strftime('%Y-%m-%d') if capa.due_date else '' }}" {{ 'readonly' if readonly }}>
+            </div>
+            <div class="form-group">
+                <label for="status">Статус</label>
+                <select id="status" name="status" {{ 'disabled' if readonly }}>
+                    {% for key, label in statuses.items() %}
+                    <option value="{{ key }}" {% if capa.status == key %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group" style="width: 100%;">
+                <label for="verification_notes">Проверка на ефективността</label>
+                <textarea id="verification_notes" name="verification_notes" rows="2" class="capa-textarea" {{ 'readonly' if readonly }}>{{ capa.verification_notes or '' }}</textarea>
+            </div>
+            <div class="form-group">
+                <label for="verified_by">Потвърдил</label>
+                <input type="text" id="verified_by" name="verified_by" value="{{ capa.verified_by or '' }}" {{ 'readonly' if readonly }}>
+            </div>
+            <div class="form-group">
+                <label for="verified_at">Дата на потвърждение</label>
+                <input type="date" id="verified_at" name="verified_at" value="{{ capa.verified_at.strftime('%Y-%m-%d') if capa.verified_at else '' }}" {{ 'readonly' if readonly }}>
+            </div>
+
+            {% if not readonly %}
+            <button type="submit" class="btn-submit">Запази промените</button>
+            {% endif %}
+        </form>
+    </section>
+
+</main>
+
+</body>
+</html>

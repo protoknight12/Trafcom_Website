@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="bg">
+<html lang="{{ get_locale() }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     {% include 'partials/favicon.html' %}
-    <title>Регистрация - CNC Портал</title>
+    <title>{{ _('Регистрация') }} - {{ _('CNC Портал') }}</title>
     <link class="style-hook" rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <style>
         .auth-wrapper { display: flex; justify-content: center; align-items: center; min-height: 90vh; }
@@ -21,25 +21,26 @@
         <div class="nav-links">
             <div class="nav-section-links">
                 <div class="dropdown">
-                    <a class="dropdown-trigger" href="#" tabindex="0" onclick="event.preventDefault()">Приложения <span class="dropdown-arrow">▼</span></a>
+                    <a class="dropdown-trigger" href="#" tabindex="0" onclick="event.preventDefault()">{{ _('Приложения') }} <span class="dropdown-arrow">▼</span></a>
                     <div class="dropdown-content">
-                        <a href="{{ url_for('dashboard') }}">DXF CNC Калкулатор</a>
-                        <a href="{{ url_for('generator') }}">Параметричен Генератор</a>
+                        <a href="{{ url_for('dashboard') }}">{{ _('DXF CNC Калкулатор') }}</a>
+                        <a href="{{ url_for('generator') }}">{{ _('Параметричен Генератор') }}</a>
                     </div>
                 </div>
             </div>
         </div>
+        {% include 'partials/language_switcher.html' %}
     </div>
 </nav>
 
 <div class="admin-container auth-wrapper">
     <div class="admin-card auth-card">
-        <a href="/" style="display: block; margin-bottom: 20px; color: var(--accent-secondary); text-decoration: none; font-size: 0.9rem;">← Към начална страница</a>
+        <a href="/" style="display: block; margin-bottom: 20px; color: var(--accent-secondary); text-decoration: none; font-size: 0.9rem;">← {{ _('Към начална страница') }}</a>
 
         <h2 style="text-align: center; margin-bottom: 12px; margin-top: 0; color: var(--text-main);">
-            Регистрация
+            {{ _('Регистрация') }}
         </h2>
-        <p class="section-subtitle" style="text-align: center; margin-bottom: 28px;">Създайте нов профил, за да управлявате вашите чертежи.</p>
+        <p class="section-subtitle" style="text-align: center; margin-bottom: 28px;">{{ _('Създайте нов профил, за да управлявате вашите чертежи.') }}</p>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
@@ -56,24 +57,24 @@
         <form method="POST" action="{{ url_for('register') }}" class="admin-form">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
-                <label for="username">Потребителско име</label>
-                <input type="text" id="username" name="username" placeholder="Изберете потребителско име..." required autocomplete="off">
+                <label for="username">{{ _('Потребителско име') }}</label>
+                <input type="text" id="username" name="username" placeholder="{{ _('Изберете потребителско име...') }}" required autocomplete="off">
             </div>
             <div class="form-group">
-                <label for="email">Имейл</label>
+                <label for="email">{{ _('Имейл') }}</label>
                 <input type="email" id="email" name="email" placeholder="you@example.com" required autocomplete="email">
             </div>
             <div class="form-group">
-                <label for="password">Парола</label>
-                <input type="password" id="password" name="password" placeholder="Изберете сигурна парола..." required>
+                <label for="password">{{ _('Парола') }}</label>
+                <input type="password" id="password" name="password" placeholder="{{ _('Изберете сигурна парола...') }}" required>
             </div>
             <button type="submit" class="btn-submit" style="width: 100%; margin-top: 12px; padding: 14px;">
-                Създай профил
+                {{ _('Създай профил') }}
             </button>
         </form>
 
         <div class="auth-footer">
-            Вече имате профил? <a href="{{ url_for('login') }}">Влезте оттук</a>
+            {{ _('Вече имате профил?') }} <a href="{{ url_for('login') }}">{{ _('Влезте оттук') }}</a>
         </div>
     </div>
 </div>

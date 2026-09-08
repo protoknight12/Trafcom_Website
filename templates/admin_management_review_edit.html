@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Преглед от {{ review.review_date.strftime('%d.%m.%Y') }} - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .capa-textarea {
+            width: 100%;
+            padding: 0.6rem 0.75rem;
+            background-color: var(--bg-input);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-sm);
+        }
+        .snapshot-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 14px;
+            margin-top: 0.5rem;
+        }
+        .snapshot-box {
+            background-color: var(--bg-input);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-sm);
+            padding: 12px 16px;
+        }
+        .snapshot-box .snapshot-value {
+            font-size: 1.6rem;
+            font-weight: 700;
+        }
+        .snapshot-box .snapshot-label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    {% set readonly = not (current_user.is_admin or current_user.role == 'quality_control') %}
+
+    <section class="admin-card">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px;">
+            <h3 style="margin: 0;">Преглед от {{ review.review_date.strftime('%d.%m.%Y') }}</h3>
+            <a href="{{ url_for('admin_management_reviews') }}" class="text-small">&larr; Обратно към прегледите</a>
+        </div>
+        <p class="section-subtitle">Създаден на {{ review.created_at.strftime('%d.%m.%Y') }}{% if review.created_by %} от {{ review.created_by.username }}{% endif %}.</p>
+
+        <div class="snapshot-grid">
+            <div class="snapshot-box">
+                <div class="snapshot-value">{{ review.snapshot_open_capa_count }}</div>
+                <div class="snapshot-label">Отворени CAPA (към датата на прегледа)</div>
+            </div>
+            <div class="snapshot-box">
+                <div class="snapshot-value">{{ review.snapshot_overdue_capa_count }}</div>
+                <div class="snapshot-label">Просрочени CAPA</div>
+            </div>
+            <div class="snapshot-box">
+                <div class="snapshot-value">{{ review.snapshot_audit_nonconformity_count }}</div>
+                <div class="snapshot-label">Несъответствия от последния одит</div>
+            </div>
+            <div class="snapshot-box">
+                <div class="snapshot-value">{{ review.snapshot_overdue_calibration_count }}</div>
+                <div class="snapshot-label">Просрочени калибрирания</div>
+            </div>
+        </div>
+
+        <form action="{{ url_for('admin_update_management_review', review_id=review.id) }}" method="POST" class="admin-form" style="margin-top: 1.25rem;">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="review_date">Дата на прегледа</label>
+                <input type="date" id="review_date" name="review_date" value="{{ review.review_date.strftime('%Y-%m-%d') }}" required {{ 'readonly' if readonly }}>
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="participants">Участници</label>
+                <input type="text" id="participants" name="participants" value="{{ review.participants or '' }}" {{ 'readonly' if readonly }} style="width: 100%;">
+            </div>
+
+            <div class="form-group" style="width: 100%;">
+                <label for="customer_feedback">Обратна връзка от клиенти</label>
+                <textarea id="customer_feedback" name="customer_feedback" rows="2" class="capa-textarea" {{ 'readonly' if readonly }}>{{ review.customer_feedback or '' }}</textarea>
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="process_performance">Резултати от дейността / показатели за качество</label>
+                <textarea id="process_performance" name="process_performance" rows="2" class="capa-textarea" {{ 'readonly' if readonly }}>{{ review.process_performance or '' }}</textarea>
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="resource_adequacy">Адекватност на ресурсите</label>
+                <textarea id="resource_adequacy" name="resource_adequacy" rows="2" class="capa-textarea" {{ 'readonly' if readonly }}>{{ review.resource_adequacy or '' }}</textarea>
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="external_internal_changes">Промени във вътрешни/външни фактори</label>
+                <textarea id="external_internal_changes" name="external_internal_changes" rows="2" class="capa-textarea" {{ 'readonly' if readonly }}>{{ review.external_internal_changes or '' }}</textarea>
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="risk_opportunity_actions">Ефективност на действията по рискове и възможности</label>
+                <textarea id="risk_opportunity_actions" name="risk_opportunity_actions" rows="2" class="capa-textarea" {{ 'readonly' if readonly }}>{{ review.risk_opportunity_actions or '' }}</textarea>
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="conclusion">Заключения / обобщение</label>
+                <textarea id="conclusion" name="conclusion" rows="2" class="capa-textarea" {{ 'readonly' if readonly }}>{{ review.conclusion or '' }}</textarea>
+            </div>
+
+            {% if not readonly %}
+            <button type="submit" class="btn-submit">Запази промените</button>
+            {% endif %}
+        </form>
+    </section>
+
+    {% if not readonly %}
+    <section class="admin-card">
+        <h3>Ново решение/действие</h3>
+        <form action="{{ url_for('admin_add_management_review_action', review_id=review.id) }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group" style="width: 100%;">
+                <label for="description">Решение/действие</label>
+                <textarea id="description" name="description" rows="2" required class="capa-textarea"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="responsible_id">Отговорник</label>
+                <select id="responsible_id" name="responsible_id">
+                    <option value="">-- няма --</option>
+                    {% for u in users %}
+                    <option value="{{ u.id }}">{{ u.username }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="due_date">Срок</label>
+                <input type="date" id="due_date" name="due_date">
+            </div>
+            <button type="submit" class="btn-submit">Добави действие</button>
+        </form>
+    </section>
+    {% endif %}
+
+    <section class="admin-card">
+        <h3>Решения/действия ({{ review.actions|length }})</h3>
+        {% if review.actions %}
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Решение/действие</th>
+                    <th>Отговорник</th>
+                    <th>Срок</th>
+                    <th>CAPA</th>
+                    <th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for action in review.actions %}
+                <tr>
+                    <td style="max-width: 340px;">{{ action.description }}</td>
+                    <td>{{ action.responsible.username if action.responsible else '—' }}</td>
+                    <td>{{ action.due_date.strftime('%d.%m.%Y') if action.due_date else '—' }}</td>
+                    <td>
+                        {% if action.capa %}
+                        <a href="{{ url_for('admin_edit_capa', capa_id=action.capa.id) }}">{{ action.capa.capa_no }}</a>
+                        {% elif not readonly %}
+                        <a href="{{ url_for('admin_capa', prefill_problem=action.description, prefill_source='Преглед от ръководството ' ~ review.review_date.strftime('%d.%m.%Y'), from_review_action_id=action.id) }}" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Отвори CAPA</a>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td class="text-right">
+                        {% if not readonly %}
+                        <form action="{{ url_for('admin_delete_management_review_action', action_id=action.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на действието?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма добавени решения/действия.</p>
+        {% endif %}
+    </section>
+
+</main>
+
+</body>
+</html>

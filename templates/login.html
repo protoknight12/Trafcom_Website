@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="bg">
+<html lang="{{ get_locale() }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     {% include 'partials/favicon.html' %}
-    <title>Вход - CNC Портал</title>
+    <title>{{ _('Вход') }} - {{ _('CNC Портал') }}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <style>
         .auth-wrapper { display: flex; justify-content: center; align-items: center; min-height: 90vh; }
@@ -21,23 +21,24 @@
         <div class="nav-links">
             <div class="nav-section-links">
                 <div class="dropdown">
-                    <a class="dropdown-trigger" href="#" tabindex="0" onclick="event.preventDefault()">Приложения <span class="dropdown-arrow">▼</span></a>
+                    <a class="dropdown-trigger" href="#" tabindex="0" onclick="event.preventDefault()">{{ _('Приложения') }} <span class="dropdown-arrow">▼</span></a>
                     <div class="dropdown-content">
-                        <a href="{{ url_for('dashboard') }}">DXF CNC Калкулатор</a>
-                        <a href="{{ url_for('generator') }}">Параметричен Генератор</a>
+                        <a href="{{ url_for('dashboard') }}">{{ _('DXF CNC Калкулатор') }}</a>
+                        <a href="{{ url_for('generator') }}">{{ _('Параметричен Генератор') }}</a>
                     </div>
                 </div>
             </div>
         </div>
+        {% include 'partials/language_switcher.html' %}
     </div>
 </nav>
 
 <div class="admin-container auth-wrapper">
     <div class="admin-card auth-card">
-        <a href="/" style="display: block; margin-bottom: 20px; color: var(--accent-secondary); text-decoration: none; font-size: 0.9rem;">← Към начална страница</a>
+        <a href="/" style="display: block; margin-bottom: 20px; color: var(--accent-secondary); text-decoration: none; font-size: 0.9rem;">← {{ _('Към начална страница') }}</a>
 
         <h2 style="text-align: center; margin-bottom: 28px; margin-top: 0; color: var(--text-main);">
-            Вход в CNC Портал
+            {{ _('Вход в CNC Портал') }}
         </h2>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -55,23 +56,23 @@
         <form method="POST" action="{{ url_for('login') }}" class="admin-form">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
-                <label for="username">Потребителско име</label>
-                <input type="text" id="username" name="username" placeholder="Въведете потребителско име..." required autofocus autocomplete="off">
+                <label for="username">{{ _('Потребителско име') }}</label>
+                <input type="text" id="username" name="username" placeholder="{{ _('Въведете потребителско име...') }}" required autofocus autocomplete="off">
             </div>
             <div class="form-group">
-                <label for="password">Парола</label>
-                <input type="password" id="password" name="password" placeholder="Въведете вашата парола..." required>
+                <label for="password">{{ _('Парола') }}</label>
+                <input type="password" id="password" name="password" placeholder="{{ _('Въведете вашата парола...') }}" required>
             </div>
             <button type="submit" class="btn-submit" style="width: 100%; margin-top: 12px; padding: 14px;">
-                Влез в системата
+                {{ _('Влез в системата') }}
             </button>
         </form>
 
         <div class="auth-footer">
-            <a href="{{ url_for('forgot_password') }}">Забравена парола?</a>
+            <a href="{{ url_for('forgot_password') }}">{{ _('Забравена парола?') }}</a>
         </div>
         <div class="auth-footer">
-            Нямате профил? <a href="{{ url_for('register') }}">Регистрирайте се тук</a>
+            {{ _('Нямате профил?') }} <a href="{{ url_for('register') }}">{{ _('Регистрирайте се тук') }}</a>
         </div>
     </div>
 </div>

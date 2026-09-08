@@ -1,0 +1,5 @@
+<div class="lang-switcher">
+    {% for code, label in supported_languages.items() %}
+    <a href="{{ url_for('set_language', lang_code=code) }}" class="{{ 'lang-active' if get_locale() == code else '' }}" title="{{ label }}">{{ code|upper }}</a>
+    {% endfor %}
+</div>

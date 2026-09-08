@@ -1,0 +1,1338 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Главна карта - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .map-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 18px;
+            margin: 10px 0 18px 0;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+        .map-legend span {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .connections-svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        .connection-line {
+            stroke: var(--border-color);
+            stroke-width: 2;
+            fill: none;
+            transition: stroke 0.3s ease, stroke-width 0.3s ease;
+        }
+        .connection-line.active {
+            stroke: #17a2b8;
+            stroke-width: 2.5;
+            stroke-dasharray: 8 6;
+            animation: connection-flow 0.8s linear infinite;
+        }
+        /* .reverse flips the dash travel direction - used when current is
+           actually flowing child-to-parent (an inverter exporting to its
+           feed, or a battery discharging into its inverter) instead of the
+           default parent-to-child (consumption) direction. */
+        .connection-line.active.reverse {
+            stroke: #f59e0b;
+            animation-name: connection-flow-reverse;
+        }
+        .connection-line.battery-link {
+            stroke: #10b981;
+        }
+        /* Dash travel direction along a line goes from (x1,y1) towards
+           (x2,y2) with a NEGATIVE dashoffset step - verified against this
+           page's own lines (was backwards here before: positive was used
+           for the default/parent<-child direction, which visually travels
+           the opposite way from what the surrounding logic intended). */
+        @keyframes connection-flow {
+            to { stroke-dashoffset: 14; }
+        }
+        @keyframes connection-flow-reverse {
+            to { stroke-dashoffset: -14; }
+        }
+        .battery-node {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            width: 84px;
+            background-color: var(--bg-surface);
+            border: 1px dashed #10b981;
+            border-radius: var(--border-radius-sm);
+            padding: 6px 8px;
+            text-align: center;
+            cursor: pointer;
+            transition: box-shadow 0.15s ease;
+        }
+        .battery-node:hover { box-shadow: 0 0 0 2px #10b981; }
+        .battery-node .bn-icon { width: 22px; height: 22px; color: #10b981; margin: 0 auto 2px auto; display: block; }
+        .battery-node .bn-soc { font-size: 0.85rem; font-weight: 700; }
+        .battery-node .bn-soc.offline { color: var(--text-muted); font-weight: 400; }
+        .battery-node .bn-dir { font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+        .pv-node {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            width: 72px;
+            background-color: var(--bg-surface);
+            border: 1px dashed #f59e0b;
+            border-radius: var(--border-radius-sm);
+            padding: 5px 6px;
+            text-align: center;
+            cursor: pointer;
+            transition: box-shadow 0.15s ease;
+        }
+        .pv-node:hover { box-shadow: 0 0 0 2px #f59e0b; }
+        .pv-node .pv-icon { width: 20px; height: 20px; color: #fbbf24; margin: 0 auto 2px auto; display: block; }
+        .pv-node .pv-label { font-size: 0.62rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+        .pv-node .pv-watt { font-size: 0.8rem; font-weight: 700; }
+        .pv-node .pv-watt.offline { color: var(--text-muted); font-weight: 400; }
+        .connection-line.pv-link { stroke: #fbbf24; }
+        .pole-node {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            width: 60px;
+            background-color: var(--bg-surface);
+            border: 1px dashed #94a3b8;
+            border-radius: var(--border-radius-sm);
+            padding: 5px 6px;
+            text-align: center;
+            cursor: default;
+        }
+        .pole-node .pn-icon { width: 26px; height: 26px; color: #94a3b8; margin: 0 auto 2px auto; display: block; }
+        .pole-node .pn-label { font-size: 0.6rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+        .connection-line.grid-link { stroke: #94a3b8; }
+        .connection-line.grid-link.active { stroke: #94a3b8; }
+        /* One shape per AC port of a Solis inverter (Мрежа/Основен/Бекъп/
+           Генератор), sitting directly on the inverter card's own border
+           (one per corner) instead of a separate satellite - see
+           PORT_DEFS/initPortBadges() below. Shape itself (not just color)
+           tells them apart: filled square/circle/triangle/diamond. */
+        .port-badge {
+            position: absolute;
+            width: 15px;
+            height: 15px;
+            background-color: var(--port-color, #94a3b8);
+            cursor: pointer;
+            z-index: 2;
+            opacity: 0.45;
+            transition: opacity 0.15s ease, transform 0.15s ease;
+        }
+        .port-badge.active { opacity: 1; }
+        .port-badge:hover { transform: scale(1.35); }
+        .port-badge-grid { top: -6px; left: -6px; --port-color: #94a3b8; }
+        .port-badge-main { top: -6px; right: -6px; --port-color: #38bdf8; border-radius: 50%; }
+        .port-badge-backup { bottom: -6px; left: -6px; --port-color: #a78bfa; clip-path: polygon(50% 0%, 0% 100%, 100% 100%); }
+        .port-badge-generator { bottom: -6px; right: -6px; --port-color: #f97316; transform: rotate(45deg); }
+        .port-badge-generator:hover { transform: rotate(45deg) scale(1.35); }
+        /* PORT_PANEL_LINKS - a direct line from an inverter's own panel card
+           to whichever ElectricalPanel one of its ports is set to connect to
+           (set on /admin/power). Colored per port, only animates (dashed
+           flow) once it's actually carrying measurable power. */
+        .connection-line.port-link { stroke: var(--port-color, #94a3b8); stroke-dasharray: 3 4; opacity: 0.55; }
+        .connection-line.port-link.active { stroke-dasharray: 8 6; opacity: 1; animation: connection-flow 0.8s linear infinite; }
+        /* .reverse on a port-link means the flow is inverter->target (see
+           PORT_REVERSE below) - only the dash *direction* should change,
+           not the color, since the port's own color is what identifies
+           which badge it belongs to. More classes than the generic
+           .connection-line.active.reverse rule above, so this wins over it
+           (that rule's flat amber would otherwise erase the port color). */
+        .connection-line.port-link.active.reverse { stroke: var(--port-color, #94a3b8); animation-name: connection-flow-reverse; }
+        /* Invisible wide-stroke twin of each port-link line, just for
+           hover/hit-testing - the visible line itself is only 2px wide
+           (stroke-dasharray 3 4 / 8 6), too thin to reliably hover, and
+           .connections-svg has pointer-events:none so nothing on it reacts
+           to the mouse unless overridden here. */
+        .port-link-hit { stroke: transparent; stroke-width: 14; fill: none; cursor: pointer; pointer-events: stroke; }
+        /* Same hover-hit-area idea, for the plain panel-to-panel hierarchy
+           lines (`connections` below) - shows the child panel's own power
+           reading on hover, same content as hovering its card directly. */
+        .connection-hit { stroke: transparent; stroke-width: 14; fill: none; cursor: pointer; pointer-events: stroke; }
+        /* Dashed bounding box around every panel-card belonging to the same
+           room (see ROOM_GROUPS/redrawRoomGroups() below) - purely a visual
+           grouping aid, sits behind the cards/connections (appended first,
+           see the Jinja loop above the SVG) so it never intercepts clicks
+           meant for a card; only its own label is clickable. */
+        .room-group-box {
+            position: absolute;
+            border: 1px dashed rgba(148, 163, 184, 0.5);
+            border-radius: var(--border-radius-md);
+            pointer-events: none;
+        }
+        .room-group-label {
+            position: absolute;
+            top: -11px;
+            left: 10px;
+            background-color: var(--bg-input);
+            padding: 1px 8px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            border-radius: 999px;
+            border: 1px solid rgba(148, 163, 184, 0.5);
+            text-decoration: none;
+            pointer-events: auto;
+            white-space: nowrap;
+        }
+        .room-group-label:hover { color: var(--text-main); border-color: var(--accent-primary); }
+        /* Exporting to the grid (net generation exceeds consumption) -
+           overrides the steady grid-gray above back to the same amber used
+           for every other reverse/export flow on this page. */
+        .connection-line.grid-link.active.reverse { stroke: #f59e0b; }
+        .pc-passthrough.reverse span { color: #f59e0b; }
+        .map-canvas {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            min-height: 480px;
+            background-color: var(--bg-input);
+            background-image:
+                linear-gradient(to right, var(--border-color) 1px, transparent 1px),
+                linear-gradient(to bottom, var(--border-color) 1px, transparent 1px);
+            background-size: 5% 5%;
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-md);
+            overflow: hidden;
+            touch-action: none;
+        }
+        .panel-card {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            width: 170px;
+            background-color: var(--bg-surface);
+            border: 1px dashed #f59e0b;
+            border-radius: var(--border-radius-sm);
+            padding: 10px 12px;
+            cursor: pointer;
+            user-select: none;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+            transition: box-shadow 0.15s ease;
+        }
+        .panel-card:hover { box-shadow: 0 0 0 2px var(--accent-primary); }
+        .map-canvas.edit-mode .panel-card { cursor: grab; }
+        .map-canvas.edit-mode .panel-card:active {
+            cursor: grabbing;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+            z-index: 10;
+        }
+        .panel-card.dragging {
+            z-index: 20;
+        }
+        .map-toolbar { display: flex; gap: 10px; align-items: center; margin: 4px 0 14px 0; flex-wrap: wrap; }
+        .map-toolbar .text-small { color: var(--text-muted); }
+        /* Zoom widens/narrows .map-canvas's own real width% (not a visual
+           CSS transform) inside this scrollable viewport - since every card
+           is positioned with left/top in percent of .map-canvas's own box,
+           a real width change keeps every card (and the drag-to-reposition
+           math, which reads getBoundingClientRect()) correctly aligned at
+           any zoom level with no extra recalculation needed anywhere else. */
+        .map-zoom-viewport { overflow: auto; border-radius: var(--border-radius-md); }
+        .zoom-controls { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+        .zoom-controls button { width: 28px; height: 28px; padding: 0; font-weight: 700; }
+        .zoom-controls .zoom-level { min-width: 3.2em; text-align: center; font-size: 0.8rem; color: var(--text-muted); }
+        .map-tooltip {
+            position: fixed;
+            z-index: 100;
+            background-color: var(--bg-surface);
+            border: 1px solid var(--accent-primary);
+            border-radius: var(--border-radius-sm);
+            padding: 10px 12px;
+            font-size: 0.8rem;
+            width: 300px;
+            max-height: 70vh;
+            overflow-y: auto;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+            pointer-events: none;
+            display: none;
+        }
+        .map-tooltip .tt-title { font-weight: 700; margin-bottom: 4px; }
+        .map-tooltip .tt-device { font-weight: 700; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--accent-primary); margin: 10px 0 4px 0; padding-top: 8px; border-top: 1px solid var(--border-color); }
+        .map-tooltip .tt-device:first-of-type { margin-top: 6px; padding-top: 0; border-top: none; }
+        .map-tooltip .tt-sub { font-weight: 700; font-size: 0.7rem; color: var(--text-muted); margin: 6px 0 2px 0; }
+        .map-tooltip .tt-row { display: flex; justify-content: space-between; gap: 10px; color: var(--text-muted); }
+        .map-tooltip .tt-row span { color: var(--text-main); text-align: right; }
+        .map-tooltip .tt-hint { margin-top: 8px; color: var(--text-muted); font-size: 0.75rem; font-style: italic; }
+        .panel-card .pc-name {
+            font-weight: 700;
+            font-size: 0.9rem;
+            margin-bottom: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .panel-card .pc-name::before {
+            content: "⚡ ";
+        }
+        .panel-card .pc-place {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .panel-card .pc-power {
+            font-size: 0.85rem;
+        }
+        .panel-card .pc-power.offline {
+            color: var(--text-muted);
+        }
+        .panel-card .pc-passthrough {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+        .panel-card .pc-passthrough span {
+            color: var(--text-main);
+            font-weight: 600;
+        }
+        .panel-card .pc-passthrough.offline span {
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+        .map-ts {
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            margin-top: 8px;
+        }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px;">
+            <h3 style="margin: 0;">Главна карта - разпределение по табла</h3>
+            <a href="{{ url_for('admin_factory_map') }}" id="backLink" class="text-small">&larr; Назад</a>
+        </div>
+        <p class="section-subtitle">Всички ел. табла в обекта, независимо от помещение/сграда. Линиите показват кое табло захранва кое ("Захранва се от", редактира се в /admin/panels). Задръжте курсора върху картичка за детайли, кликнете за пълно редактиране. Позициите са заключени - отключете ги за да местите картички.</p>
+
+        <div class="map-legend">
+            <span><span class="dot" style="width:10px;height:10px;border-radius:50%;display:inline-block;background-color:#f59e0b;"></span> Ел. табло</span>
+            <span><span class="dot" style="width:10px;height:10px;border-radius:50%;display:inline-block;background-color:#10b981;"></span> Батерия</span>
+            <span><svg width="24" height="10"><line x1="0" y1="5" x2="24" y2="5" class="connection-line active"></line></svg> Тече ток (към таблото)</span>
+            <span><svg width="24" height="10"><line x1="0" y1="5" x2="24" y2="5" class="connection-line active reverse"></line></svg> Тече ток (обратно - подава/разрежда)</span>
+            <span><svg width="24" height="10"><line x1="0" y1="5" x2="24" y2="5" class="connection-line grid-link active"></line></svg> Захранване от мрежата (стълб)</span>
+            <span><svg width="24" height="10"><line x1="0" y1="5" x2="24" y2="5" class="connection-line grid-link active reverse"></line></svg> Изнасяне към мрежата (генерирането надвишава товара)</span>
+        </div>
+
+        <div class="map-toolbar">
+            <button type="button" id="unlockBtn" class="btn-secondary">🔓 Отключи местоположенията</button>
+            <button type="button" id="saveBtn" class="btn-submit" style="display:none;">💾 Запази местоположенията</button>
+            <button type="button" id="cancelBtn" class="btn-secondary" style="display:none;">Откажи</button>
+            <span id="editHint" class="text-small" style="display:none;">Местоположенията са отключени - влачете картички, после запазете.</span>
+            <div class="zoom-controls">
+                <button type="button" id="zoomOutBtn" class="btn-secondary" title="Намали">&minus;</button>
+                <span class="zoom-level" id="zoomLevelLabel">100%</span>
+                <button type="button" id="zoomInBtn" class="btn-secondary" title="Увеличи">+</button>
+                <button type="button" id="zoomResetBtn" class="btn-secondary" title="Нулирай мащаба">100%</button>
+            </div>
+        </div>
+
+        {% if panels %}
+        <div class="map-zoom-viewport" id="mapZoomViewport">
+        <div class="map-canvas" id="mapCanvas">
+            <svg class="connections-svg" id="connectionsSvg"></svg>
+            {% for p in panels %}
+            {% set col = loop.index0 % 6 %}
+            {% set row = loop.index0 // 6 %}
+            {% if p.shelly_devices %}{% set primary_host = p.shelly_devices[0].host %}
+            {% elif p.modbus_devices %}{% set primary_host = p.modbus_devices[0].host ~ ':' ~ p.modbus_devices[0].port %}
+            {% else %}{% set primary_host = '' %}{% endif %}
+            {% set solis_device = (p.modbus_devices | selectattr('device_type', 'equalto', 'solis_s6') | list | first) %}
+            <div class="panel-card" data-id="{{ p.id }}"
+                 data-fed-from="{{ p.parent_panel.name if p.parent_panel else 'директно от мрежата' }}"
+                 data-power-host="{{ primary_host }}"
+                 style="left: {{ p.overview_pos_x if p.overview_pos_x is not none else (10 + col * 16) }}%; top: {{ p.overview_pos_y if p.overview_pos_y is not none else (15 + row * 25) }}%;">
+                <div class="pc-name">{{ p.name }}</div>
+                <div class="pc-place">{{ p.room.building.name }} / {{ p.room.name }}</div>
+                {% if p.shelly_devices or p.modbus_devices %}
+                <div class="pc-power offline" data-power-for="{{ p.id }}">— kW</div>
+                {% elif p.child_panels %}
+                <div class="pc-passthrough offline" data-passthrough-for="{{ p.id }}">Преминаваща <span>— kW</span></div>
+                {% endif %}
+                {% if solis_device %}
+                <div class="port-badge port-badge-grid" data-port="grid" data-device-id="{{ solis_device.id }}" title="Мрежа"></div>
+                <div class="port-badge port-badge-main" data-port="main" data-device-id="{{ solis_device.id }}" title="Основен"></div>
+                <div class="port-badge port-badge-backup" data-port="backup" data-device-id="{{ solis_device.id }}" title="Бекъп"></div>
+                <div class="port-badge port-badge-generator" data-port="generator" data-device-id="{{ solis_device.id }}" title="Генератор"></div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        </div>
+        <div class="map-ts" id="mapTs"></div>
+        <div class="map-tooltip" id="mapTooltip"></div>
+        {% else %}
+        <p class="no-data text-center">Няма добавени табла. <a href="{{ url_for('admin_panels') }}">Добавете първото</a>.</p>
+        {% endif %}
+    </section>
+
+</main>
+
+<script>
+(function () {
+    var canvas = document.getElementById('mapCanvas');
+    if (!canvas) return;
+    var cards = Array.from(document.querySelectorAll('.panel-card'));
+    var tsEl = document.getElementById('mapTs');
+    var svg = document.getElementById('connectionsSvg');
+    var tooltip = document.getElementById('mapTooltip');
+    var lastPollData = null;
+
+    // --- Zoom (view-only, independent of the position edit lock above) ---
+    // Widens/narrows the canvas's own real width% rather than a CSS
+    // transform - every card's left/top is already a percent of this same
+    // box, so a real width change keeps them (and the drag math below,
+    // which reads getBoundingClientRect()) correctly aligned at any zoom
+    // level with no extra recalculation. The zoom viewport's own
+    // overflow:auto turns the extra width/height into normal scrollbars.
+    var zoomLevel = 1;
+    var zoomLevelLabel = document.getElementById('zoomLevelLabel');
+    function setZoom(z) {
+        zoomLevel = Math.max(0.5, Math.min(3, z));
+        canvas.style.width = (zoomLevel * 100) + '%';
+        zoomLevelLabel.textContent = Math.round(zoomLevel * 100) + '%';
+    }
+    var zoomInBtn = document.getElementById('zoomInBtn');
+    var zoomOutBtn = document.getElementById('zoomOutBtn');
+    var zoomResetBtn = document.getElementById('zoomResetBtn');
+    if (zoomInBtn) {
+        zoomInBtn.addEventListener('click', function () { setZoom(zoomLevel + 0.15); });
+        zoomOutBtn.addEventListener('click', function () { setZoom(zoomLevel - 0.15); });
+        zoomResetBtn.addEventListener('click', function () { setZoom(1); });
+        // Ctrl+wheel zoom, like a map/design tool - plain wheel is left
+        // alone so normal page/viewport scrolling isn't hijacked.
+        document.getElementById('mapZoomViewport').addEventListener('wheel', function (e) {
+            if (!e.ctrlKey) return;
+            e.preventDefault();
+            setZoom(zoomLevel - e.deltaY * 0.001);
+        }, { passive: false });
+    }
+
+    // --- Lock/unlock/save positions ---
+    // Positions stay fixed by default so a stray click doesn't nudge a
+    // card; unlocking arms dragging, and moves are only persisted when
+    // "Запази" is pressed (not on every drag release) so a whole layout
+    // pass can be undone with "Откажи" before anything is saved.
+    var editMode = false;
+    var dirty = {};  // panelId -> {x, y}
+    var unlockBtn = document.getElementById('unlockBtn');
+    var saveBtn = document.getElementById('saveBtn');
+    var cancelBtn = document.getElementById('cancelBtn');
+    var editHint = document.getElementById('editHint');
+
+    function setEditMode(on) {
+        editMode = on;
+        canvas.classList.toggle('edit-mode', on);
+        unlockBtn.style.display = on ? 'none' : '';
+        saveBtn.style.display = on ? '' : 'none';
+        cancelBtn.style.display = on ? '' : 'none';
+        editHint.style.display = on ? '' : 'none';
+    }
+    unlockBtn.addEventListener('click', function () { setEditMode(true); });
+    cancelBtn.addEventListener('click', function () { window.location.reload(); });
+    saveBtn.addEventListener('click', function () {
+        var ids = Object.keys(dirty);
+        if (!ids.length) { setEditMode(false); return; }
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Запазване…';
+        Promise.all(ids.map(function (id) {
+            return fetch('/admin/factory-map/panel/' + id + '/overview-position', {
+                method: 'POST',
+                body: csrfHeaders({pos_x: dirty[id].x.toFixed(2), pos_y: dirty[id].y.toFixed(2)})
+            });
+        })).then(function () {
+            dirty = {};
+            saveBtn.disabled = false;
+            saveBtn.textContent = '💾 Запази местоположенията';
+            setEditMode(false);
+        }).catch(function () {
+            saveBtn.disabled = false;
+            saveBtn.textContent = '💾 Запази местоположенията';
+            alert('Възникна грешка при запис. Опитайте отново.');
+        });
+    });
+
+    // One dashed bounding box per room represented on this site-wide map -
+    // see room_groups in admin_factory_map_overview() and
+    // redrawRoomGroups() below. Purely a visual grouping aid; the box
+    // itself is computed client-side from wherever its member cards
+    // actually are right now (so it stays right after a drag), not from
+    // any stored position of its own.
+    var ROOM_GROUPS = [
+        {% for g in room_groups %}
+        {label: {{ (g.room.building.name + ' / ' + g.room.name) | tojson }}, url: {{ url_for('admin_factory_map_room', room_id=g.room.id) | tojson }},
+         panelIds: {{ g.panel_ids | tojson }}},
+        {% endfor %}
+    ];
+
+    var connections = [
+        {% for p in panels %}{% if p.parent_panel_id %}{childId: '{{ p.id }}', parentId: '{{ p.parent_panel_id }}', line: null, active: false, reverse: false},
+        {% endif %}{% endfor %}
+    ];
+
+    // Which ElectricalPanel each of a Solis inverter's 4 AC ports actually
+    // feeds/connects to (ModbusDevice.grid_panel_id/main_panel_id/
+    // backup_panel_id/generator_panel_id, set on /admin/power) - drawn as a
+    // direct line between the inverter's own panel card and the target
+    // panel card, colored/animated the same way as the port's own badge
+    // (see PORT_DEFS/portWatts below). Both ends are always on THIS map (no
+    // cross-room stub needed - the overview shows every panel regardless of
+    // room), so this is simpler than REMOTE_PANEL_LINKS on the room map.
+    var PORT_PANEL_LINKS = [
+        {% for p in panels %}
+        {% set solis_device = (p.modbus_devices | selectattr('device_type', 'equalto', 'solis_s6') | list | first) %}
+        {% if solis_device %}
+        {% for port_key, target_panel_id in [
+            ('grid', solis_device.grid_panel_id), ('main', solis_device.main_panel_id),
+            ('backup', solis_device.backup_panel_id), ('generator', solis_device.generator_panel_id),
+        ] %}
+        {% if target_panel_id %}
+        {panelId: '{{ p.id }}', portKey: '{{ port_key }}', targetPanelId: '{{ target_panel_id }}', line: null},
+        {% endif %}
+        {% endfor %}
+        {% endif %}
+        {% endfor %}
+    ];
+
+    // Battery satellites - not real ElectricalPanel rows (a battery isn't a
+    // distribution panel), just a small node drawn offset from whichever
+    // panel's Solis snapshot reports a 'battery' block (see
+    // _collect_power_aggregates() in app.py) and a short connecting line
+    // back to it. Built/positioned entirely client-side from live data.
+    var ICON_BATTERY = '<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<rect x="10" y="10" width="38" height="12" rx="2.5" stroke="currentColor" stroke-width="3"/>' +
+        '<rect x="10" y="26" width="38" height="12" rx="2.5" stroke="currentColor" stroke-width="3"/>' +
+        '<rect x="10" y="42" width="38" height="12" rx="2.5" stroke="currentColor" stroke-width="3"/>' +
+        '<rect x="48" y="14" width="5" height="4" fill="currentColor"/><rect x="48" y="30" width="5" height="4" fill="currentColor"/><rect x="48" y="46" width="5" height="4" fill="currentColor"/>' +
+        '</svg>';
+    var BATTERY_DIR_LABELS = {charge: 'Зарежда', discharge: 'Разрежда', idle: 'Покой'};
+    var batteryNodes = {};  // panelId -> {el, line}
+
+    // PV/MPPT satellites - one per MPPT tracker reported in the Solis
+    // snapshot's pv.strings (see _solis_snapshot() in app.py; each tracker
+    // combines 2 physical strings, see SolarPanel's docstring), same
+    // client-only pattern as the battery node above but drawn above the
+    // inverter instead of below, one line per tracker.
+    var ICON_SOLAR = '<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<circle cx="32" cy="14" r="6" stroke="currentColor" stroke-width="3"/>' +
+        '<path d="M32 3v4M20 8l3 3M44 8l-3 3M14 14h4M50 14h-4" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>' +
+        '<path d="M10 26h44l-4 30H14z" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/>' +
+        '<path d="M10 26h44M20.5 26l-3 30M43.5 26l3 30M32 26v30" stroke="currentColor" stroke-width="2"/>' +
+        '</svg>';
+    var pvNodes = {};  // "panelId-stringIndex" -> {el, line}
+
+    // Grid-pole satellites - a static (not live-data-driven) marker above
+    // every root panel (parent_panel_id is None, i.e. "директно от
+    // мрежата" - fed straight from the external grid, not from another
+    // panel on this diagram). Unlike battery/pv nodes these don't
+    // appear/disappear with poll data - every root panel always has one,
+    // created up front from GRID_ROOT_PANEL_IDS (server-rendered below).
+    var GRID_ROOT_PANEL_IDS = [
+        {% for p in panels %}{% if not p.parent_panel_id %}'{{ p.id }}',
+        {% endif %}{% endfor %}
+    ];
+    var ICON_POLE = '<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<line x1="32" y1="6" x2="32" y2="58" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>' +
+        '<line x1="14" y1="16" x2="50" y2="16" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>' +
+        '<line x1="18" y1="28" x2="46" y2="28" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>' +
+        '<line x1="14" y1="16" x2="7" y2="9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
+        '<line x1="50" y1="16" x2="57" y2="9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
+        '<line x1="18" y1="28" x2="12" y2="22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
+        '<line x1="46" y1="28" x2="52" y2="22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
+        '<path d="M22 58l10-13 10 13" stroke="currentColor" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>' +
+        '</svg>';
+    var poleNodes = {};  // panelId -> {el, line}
+
+    function polePosition(panelPos) {
+        return {x: panelPos.x, y: Math.max(3, panelPos.y - 16)};
+    }
+
+    function ensurePoleNode(panelId) {
+        var existing = poleNodes[panelId];
+        if (existing) return existing;
+        var el = document.createElement('div');
+        el.className = 'pole-node';
+        el.innerHTML = '<span class="pn-icon">' + ICON_POLE + '</span><div class="pn-label">Мрежа</div>';
+        canvas.appendChild(el);
+        var line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('class', 'connection-line grid-link');
+        svg.appendChild(line);
+        var node = {el: el, line: line};
+        poleNodes[panelId] = node;
+        return node;
+    }
+
+    function updatePoleNodes() {
+        GRID_ROOT_PANEL_IDS.forEach(function (panelId) {
+            var panelPos = cardCenter(panelId);
+            if (!panelPos) return;
+            var node = ensurePoleNode(panelId);
+            var pos = polePosition(panelPos);
+            node.el.style.left = pos.x + '%';
+            node.el.style.top = pos.y + '%';
+            node.line.setAttribute('x1', pos.x + '%');
+            node.line.setAttribute('y1', pos.y + '%');
+            node.line.setAttribute('x2', panelPos.x + '%');
+            node.line.setAttribute('y2', panelPos.y + '%');
+        });
+    }
+
+    // One shape per AC port of a Solis inverter (see _solis_snapshot()'s
+    // 'meter'/'load'/'generator' blocks in app.py) - Мрежа/Основен/Бекъп/
+    // Генератор. Server-rendered directly as 4 corner badges INSIDE the
+    // inverter's own .panel-card (see the Jinja loop above) rather than a
+    // separate satellite node - they move with the card for free via CSS,
+    // no JS positioning needed. Shape itself (square/circle/triangle/
+    // diamond, via CSS in the .port-badge-* rules) tells them apart, not
+    // just color. key matches a field read off the live snapshot in
+    // portWatts() below and the label shown in the hover tooltip.
+    var PORT_DEFS = {
+        grid: {label: 'Мрежа'}, main: {label: 'Основен'},
+        backup: {label: 'Бекъп'}, generator: {label: 'Генератор'},
+    };
+    // Same colors as the .port-badge-* CSS rules above, for PORT_PANEL_LINKS'
+    // connection lines (see redrawConnections()).
+    var PORT_COLORS = {grid: '#94a3b8', main: '#38bdf8', backup: '#a78bfa', generator: '#f97316'};
+
+    // Whether a port-link line's current visually flows from the inverter's
+    // own badge TOWARDS the target panel (x1->x2) - matching the .reverse
+    // convention already established for `connections`/pole lines elsewhere
+    // on this page, where .reverse means x1->x2 travel and the default (no
+    // .reverse) means x2->x1. grid's register is signed with a documented
+    // sign (_solis_snapshot()'s total_power: "+ exporting to grid, -
+    // importing"), so + = inverter->grid = reverse. main/backup are
+    // unsigned registers - the user described both as pure inverter outputs
+    // ("Основен... изход на генератора", "backup... само на генератора"),
+    // so they're always inverter->target regardless of reading. generator
+    // uses the same signed-register shape as grid (s16, see
+    // _solis_read_extra_blocks()) - assumed to follow the same sign
+    // convention by analogy, though this port reads all-zero on every unit
+    // actually wired here so that assumption has never been observed live.
+    var PORT_REVERSE = {
+        grid: function (watts) { return watts > 0; },
+        main: function () { return true; },
+        backup: function () { return true; },
+        generator: function (watts) { return watts > 0; },
+    };
+
+    // solisSnap is the *device's* own full _solis_snapshot() payload (not
+    // the panel-level aggregate `info`) - only that has 'meter'/'load'/
+    // 'generator', see pollPower()'s solisSnap lookup for the same pattern.
+    function portWatts(solisSnap, key) {
+        if (!solisSnap) return null;
+        if (key === 'grid') return solisSnap.meter ? solisSnap.meter.power : null;
+        if (key === 'main') return solisSnap.load ? solisSnap.load.household_w : null;
+        if (key === 'backup') return solisSnap.load ? solisSnap.load.backup_w : null;
+        if (key === 'generator') {
+            var g = solisSnap.generator;
+            return g ? (g.power_a || 0) + (g.power_b || 0) + (g.power_c || 0) : null;
+        }
+        return null;
+    }
+
+    function updatePortBadges(panelId, solisSnap) {
+        document.querySelectorAll('.panel-card[data-id="' + panelId + '"] .port-badge').forEach(function (el) {
+            var key = el.getAttribute('data-port');
+            var watts = portWatts(solisSnap, key);
+            var active = watts !== null && Math.abs(watts) > POWER_ACTIVE_THRESHOLD_W;
+            el.classList.toggle('active', active);
+        });
+    }
+
+    function csrfHeaders(extra) {
+        var fd = new FormData();
+        fd.append('csrf_token', window.CSRF_TOKEN);
+        for (var k in extra) fd.append(k, extra[k]);
+        return fd;
+    }
+
+    function cardCenter(id) {
+        var card = document.querySelector('.panel-card[data-id="' + id + '"]');
+        return card ? {x: parseFloat(card.style.left), y: parseFloat(card.style.top)} : null;
+    }
+
+    // Where a port badge (see the .port-badge-* CSS/Jinja loop above) actually
+    // sits on screen right now, as a canvas-relative percentage - used so
+    // PORT_PANEL_LINKS lines visibly touch the badge itself (at the card's
+    // corner) instead of running to the card's center, where they'd disappear
+    // under the card's own opaque background. Falls back to cardCenter() if
+    // the badge isn't in the DOM for some reason.
+    function portBadgeCenter(panelId, portKey) {
+        var badge = document.querySelector('.panel-card[data-id="' + panelId + '"] .port-badge-' + portKey);
+        if (!badge) return cardCenter(panelId);
+        var badgeRect = badge.getBoundingClientRect();
+        var canvasRect = canvas.getBoundingClientRect();
+        if (!canvasRect.width || !canvasRect.height) return cardCenter(panelId);
+        return {
+            x: ((badgeRect.left + badgeRect.width / 2) - canvasRect.left) / canvasRect.width * 100,
+            y: ((badgeRect.top + badgeRect.height / 2) - canvasRect.top) / canvasRect.height * 100,
+        };
+    }
+
+    // A card's actual rendered box as canvas-relative percentages (not just
+    // its center point, unlike cardCenter()) - needed for ROOM_GROUPS'
+    // bounding box since .panel-card's real height varies with its content
+    // (only its width is a fixed 170px).
+    function cardBoundsPercent(id) {
+        var card = document.querySelector('.panel-card[data-id="' + id + '"]');
+        if (!card) return null;
+        var cardRect = card.getBoundingClientRect();
+        var canvasRect = canvas.getBoundingClientRect();
+        if (!canvasRect.width || !canvasRect.height) return null;
+        return {
+            left: (cardRect.left - canvasRect.left) / canvasRect.width * 100,
+            top: (cardRect.top - canvasRect.top) / canvasRect.height * 100,
+            right: (cardRect.right - canvasRect.left) / canvasRect.width * 100,
+            bottom: (cardRect.bottom - canvasRect.top) / canvasRect.height * 100,
+        };
+    }
+
+    // Dashed box around every room's own panel-cards (see ROOM_GROUPS above)
+    // - recomputed from wherever the member cards actually are right now,
+    // not stored anywhere of its own, so it just tracks them after a drag.
+    // Expressed in percent throughout, so - like the connection lines and
+    // cards themselves - it stays correctly aligned at any zoom level with
+    // no extra recalculation needed there (see .map-zoom-viewport's comment).
+    var roomGroupNodes = [];
+    function redrawRoomGroups() {
+        var PAD_PX = 14;
+        var canvasRect = canvas.getBoundingClientRect();
+        if (!canvasRect.width || !canvasRect.height) return;
+        var padX = PAD_PX / canvasRect.width * 100;
+        var padY = PAD_PX / canvasRect.height * 100;
+        ROOM_GROUPS.forEach(function (group, idx) {
+            var minLeft = null, minTop = null, maxRight = null, maxBottom = null;
+            group.panelIds.forEach(function (id) {
+                var b = cardBoundsPercent(id);
+                if (!b) return;
+                minLeft = minLeft === null ? b.left : Math.min(minLeft, b.left);
+                minTop = minTop === null ? b.top : Math.min(minTop, b.top);
+                maxRight = maxRight === null ? b.right : Math.max(maxRight, b.right);
+                maxBottom = maxBottom === null ? b.bottom : Math.max(maxBottom, b.bottom);
+            });
+            if (minLeft === null) return;
+            var node = roomGroupNodes[idx];
+            if (!node) {
+                var box = document.createElement('div');
+                box.className = 'room-group-box';
+                var label = document.createElement('a');
+                label.className = 'room-group-label';
+                label.textContent = group.label;
+                label.href = group.url;
+                box.appendChild(label);
+                canvas.insertBefore(box, canvas.firstChild);
+                node = {box: box};
+                roomGroupNodes[idx] = node;
+            }
+            node.box.style.left = (minLeft - padX) + '%';
+            node.box.style.top = (minTop - padY) + '%';
+            node.box.style.width = (maxRight - minLeft + padX * 2) + '%';
+            node.box.style.height = (maxBottom - minTop + padY * 2) + '%';
+        });
+    }
+
+    // Offset a bit down-right of its inverter, clamped to stay on-canvas.
+    function batteryPosition(panelPos) {
+        return {x: Math.min(97, panelPos.x + 9), y: Math.min(97, panelPos.y + 14)};
+    }
+
+    function ensureBatteryNode(panelId) {
+        var existing = batteryNodes[panelId];
+        if (existing) return existing;
+        var el = document.createElement('div');
+        el.className = 'battery-node';
+        el.innerHTML = '<span class="bn-icon">' + ICON_BATTERY + '</span>' +
+            '<div class="bn-soc offline">—</div><div class="bn-dir"></div>';
+        canvas.appendChild(el);
+        var line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('class', 'connection-line battery-link');
+        svg.appendChild(line);
+        var node = {el: el, line: line};
+        batteryNodes[panelId] = node;
+
+        el.addEventListener('mouseenter', function (e) { showTooltip(el, 'battery', panelId, e); });
+        el.addEventListener('mousemove', function (e) { positionTooltip(e); });
+        el.addEventListener('mouseleave', hideTooltip);
+        el.addEventListener('click', function () {
+            var host = el.getAttribute('data-host');
+            if (host) window.location.href = '{{ url_for("admin_power") }}?host=' + encodeURIComponent(host);
+        });
+        return node;
+    }
+
+    function updateBatteryNode(panelId, battery) {
+        // Only Solis panels ever report a 'battery' block - no point in a
+        // permanent empty satellite next to every other panel that will
+        // never have one, so it's created lazily and removed if the data
+        // disappears (e.g. the device gets deleted).
+        if (!battery) {
+            var stale = batteryNodes[panelId];
+            if (stale) {
+                stale.el.remove();
+                stale.line.remove();
+                delete batteryNodes[panelId];
+            }
+            return;
+        }
+        var panelPos = cardCenter(panelId);
+        if (!panelPos) return;
+        var node = ensureBatteryNode(panelId);
+        node.el.setAttribute('data-host', battery.host);
+        var pos = batteryPosition(panelPos);
+        node.el.style.left = pos.x + '%';
+        node.el.style.top = pos.y + '%';
+        var socEl = node.el.querySelector('.bn-soc');
+        var dirEl = node.el.querySelector('.bn-dir');
+        socEl.textContent = Math.round(battery.soc) + '%';
+        socEl.classList.remove('offline');
+        dirEl.textContent = BATTERY_DIR_LABELS[battery.direction] || '';
+        node.line.setAttribute('x1', pos.x + '%');
+        node.line.setAttribute('y1', pos.y + '%');
+        node.line.setAttribute('x2', panelPos.x + '%');
+        node.line.setAttribute('y2', panelPos.y + '%');
+        // Charging = normal (inverter -> battery), discharging = reverse
+        // (battery -> inverter) - see BATTERY_DIR_LABELS/direction above.
+        var active = !!battery && battery.direction !== 'idle';
+        node.line.classList.toggle('active', active);
+        node.line.classList.toggle('reverse', active && battery.direction === 'discharge');
+    }
+
+    // Spread up to 4 strings evenly above the inverter card.
+    function pvPosition(panelPos, idx, total) {
+        var spread = 9;
+        var startOffset = -((total - 1) * spread) / 2;
+        return {
+            x: Math.max(3, Math.min(97, panelPos.x + startOffset + idx * spread)),
+            y: Math.max(3, panelPos.y - 16),
+        };
+    }
+
+    function ensurePvNode(key) {
+        var existing = pvNodes[key];
+        if (existing) return existing;
+        var el = document.createElement('div');
+        el.className = 'pv-node';
+        el.innerHTML = '<span class="pv-icon">' + ICON_SOLAR + '</span><div class="pv-label"></div><div class="pv-watt offline">—</div>';
+        canvas.appendChild(el);
+        var line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('class', 'connection-line pv-link');
+        svg.appendChild(line);
+        var node = {el: el, line: line};
+        pvNodes[key] = node;
+
+        el.addEventListener('mouseenter', function (e) { showTooltip(el, 'pv', key, e); });
+        el.addEventListener('mousemove', function (e) { positionTooltip(e); });
+        el.addEventListener('mouseleave', hideTooltip);
+        // Opens the roof map focused on this exact tracker (bright; every
+        // other tracker fades - see admin_solar_roof.html's ?inverter=&mppt=
+        // handling) rather than the live Consumption view, since "which
+        // physical panels are on this tracker" is what the roof map answers.
+        el.addEventListener('click', function () {
+            var deviceId = el.getAttribute('data-device-id');
+            var mppt = el.getAttribute('data-mppt');
+            if (deviceId && mppt) {
+                window.location.href = '{{ url_for("admin_solar_roof") }}?inverter=' + deviceId + '&mppt=' + mppt;
+            }
+        });
+        return node;
+    }
+
+    function updatePvNodes(panelId, snap) {
+        var strings = snap && snap.pv ? snap.pv.strings : null;
+        var count = strings ? strings.length : 0;
+        // Drop nodes for strings that no longer exist (device offline, or
+        // fewer configured DC inputs than before).
+        Object.keys(pvNodes).forEach(function (key) {
+            if (key.indexOf(panelId + '-') !== 0) return;
+            if (parseInt(key.slice((panelId + '-').length), 10) >= count) {
+                pvNodes[key].el.remove();
+                pvNodes[key].line.remove();
+                delete pvNodes[key];
+            }
+        });
+        var panelPos = cardCenter(panelId);
+        if (!strings || !panelPos) return;
+        strings.forEach(function (s, idx) {
+            var key = panelId + '-' + idx;
+            var node = ensurePvNode(key);
+            node.el.setAttribute('data-host', snap.host);
+            node.el.setAttribute('data-device-id', snap.device_id);
+            node.el.setAttribute('data-mppt', idx + 1);
+            var pos = pvPosition(panelPos, idx, count);
+            node.el.style.left = pos.x + '%';
+            node.el.style.top = pos.y + '%';
+            node.el.querySelector('.pv-label').textContent = 'MPPT' + (idx + 1);
+            var watt = Math.round(s.voltage * s.current);
+            var wattEl = node.el.querySelector('.pv-watt');
+            wattEl.textContent = watt + ' W';
+            wattEl.classList.remove('offline');
+            node.line.setAttribute('x1', pos.x + '%');
+            node.line.setAttribute('y1', pos.y + '%');
+            node.line.setAttribute('x2', panelPos.x + '%');
+            node.line.setAttribute('y2', panelPos.y + '%');
+            node.line.classList.toggle('active', watt > 5);
+        });
+    }
+
+    function redrawConnections() {
+        connections.forEach(function (conn) {
+            var from = cardCenter(conn.childId);
+            var to = cardCenter(conn.parentId);
+            if (!from || !to) return;
+            if (!conn.line) {
+                conn.line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                conn.line.setAttribute('class', 'connection-line');
+                svg.appendChild(conn.line);
+                // Wide invisible hover twin, same idea as .port-link-hit
+                // above - shows the same tooltip as hovering the child
+                // panel's own card, since that panel's reading is what
+                // actually drives this line's active/reverse state.
+                conn.hitLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                conn.hitLine.setAttribute('class', 'connection-hit');
+                svg.appendChild(conn.hitLine);
+                conn.hitLine.addEventListener('mouseenter', function (e) {
+                    var childCard = document.querySelector('.panel-card[data-id="' + conn.childId + '"]');
+                    if (childCard) showTooltip(childCard, 'panel', conn.childId, e);
+                });
+                conn.hitLine.addEventListener('mousemove', positionTooltip);
+                conn.hitLine.addEventListener('mouseleave', hideTooltip);
+            }
+            conn.line.setAttribute('x1', from.x + '%');
+            conn.line.setAttribute('y1', from.y + '%');
+            conn.line.setAttribute('x2', to.x + '%');
+            conn.line.setAttribute('y2', to.y + '%');
+            conn.line.classList.toggle('active', conn.active);
+            conn.line.classList.toggle('reverse', conn.active && conn.reverse);
+            conn.hitLine.setAttribute('x1', from.x + '%');
+            conn.hitLine.setAttribute('y1', from.y + '%');
+            conn.hitLine.setAttribute('x2', to.x + '%');
+            conn.hitLine.setAttribute('y2', to.y + '%');
+        });
+        PORT_PANEL_LINKS.forEach(function (link) {
+            var from = portBadgeCenter(link.panelId, link.portKey);
+            var to = cardCenter(link.targetPanelId);
+            if (!from || !to) return;
+            if (!link.line) {
+                link.line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                link.line.setAttribute('class', 'connection-line port-link');
+                link.line.style.setProperty('--port-color', PORT_COLORS[link.portKey] || '#94a3b8');
+                svg.appendChild(link.line);
+                // Wide invisible twin just for hover - see .port-link-hit's
+                // comment above. Reuses the exact same tooltip content as
+                // hovering the port's own badge (kind 'port', same
+                // panelId::portKey id), so hovering either shows the same info.
+                link.hitLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                link.hitLine.setAttribute('class', 'port-link-hit');
+                svg.appendChild(link.hitLine);
+                link.hitLine.addEventListener('mouseenter', function (e) {
+                    showTooltip(null, 'port', link.panelId + '::' + link.portKey, e);
+                });
+                link.hitLine.addEventListener('mousemove', positionTooltip);
+                link.hitLine.addEventListener('mouseleave', hideTooltip);
+            }
+            link.line.setAttribute('x1', from.x + '%');
+            link.line.setAttribute('y1', from.y + '%');
+            link.line.setAttribute('x2', to.x + '%');
+            link.line.setAttribute('y2', to.y + '%');
+            link.hitLine.setAttribute('x1', from.x + '%');
+            link.hitLine.setAttribute('y1', from.y + '%');
+            link.hitLine.setAttribute('x2', to.x + '%');
+            link.hitLine.setAttribute('y2', to.y + '%');
+        });
+        Object.keys(batteryNodes).forEach(function (panelId) {
+            var panelPos = cardCenter(panelId);
+            if (!panelPos) return;
+            var node = batteryNodes[panelId];
+            var pos = batteryPosition(panelPos);
+            node.el.style.left = pos.x + '%';
+            node.el.style.top = pos.y + '%';
+            node.line.setAttribute('x1', pos.x + '%');
+            node.line.setAttribute('y1', pos.y + '%');
+            node.line.setAttribute('x2', panelPos.x + '%');
+            node.line.setAttribute('y2', panelPos.y + '%');
+        });
+        // Group pv-node keys ("panelId-idx") back by panelId to recompute
+        // each string's spread position relative to its siblings.
+        var pvByPanel = {};
+        Object.keys(pvNodes).forEach(function (key) {
+            var sep = key.lastIndexOf('-');
+            var panelId = key.slice(0, sep), idx = parseInt(key.slice(sep + 1), 10);
+            (pvByPanel[panelId] || (pvByPanel[panelId] = [])).push(idx);
+        });
+        Object.keys(pvByPanel).forEach(function (panelId) {
+            var panelPos = cardCenter(panelId);
+            if (!panelPos) return;
+            var indices = pvByPanel[panelId];
+            var count = indices.length;
+            indices.forEach(function (idx) {
+                var node = pvNodes[panelId + '-' + idx];
+                var pos = pvPosition(panelPos, idx, count);
+                node.el.style.left = pos.x + '%';
+                node.el.style.top = pos.y + '%';
+                node.line.setAttribute('x1', pos.x + '%');
+                node.line.setAttribute('y1', pos.y + '%');
+                node.line.setAttribute('x2', panelPos.x + '%');
+                node.line.setAttribute('y2', panelPos.y + '%');
+            });
+        });
+        updatePoleNodes();
+        redrawRoomGroups();
+        // Port badges need no repositioning here - they're children of
+        // .panel-card itself (see the Jinja loop above), so they move with
+        // the card automatically via CSS.
+    }
+
+    cards.forEach(function (card) {
+        var dragging = false;
+        var moved = false;
+        var id = card.getAttribute('data-id');
+
+        function pointerToPercent(clientX, clientY) {
+            var rect = canvas.getBoundingClientRect();
+            var x = ((clientX - rect.left) / rect.width) * 100;
+            var y = ((clientY - rect.top) / rect.height) * 100;
+            return {x: Math.max(0, Math.min(100, x)), y: Math.max(0, Math.min(100, y))};
+        }
+
+        function onMove(e) {
+            if (!dragging) return;
+            moved = true;
+            var point = e.touches ? e.touches[0] : e;
+            var pos = pointerToPercent(point.clientX, point.clientY);
+            card.style.left = pos.x + '%';
+            card.style.top = pos.y + '%';
+            redrawConnections();
+        }
+
+        function onUp(e) {
+            if (!dragging) return;
+            dragging = false;
+            card.classList.remove('dragging');
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            document.removeEventListener('touchmove', onMove);
+            document.removeEventListener('touchend', onUp);
+
+            var point = (e.changedTouches && e.changedTouches[0]) || e;
+            var pos = pointerToPercent(point.clientX, point.clientY);
+            card.style.left = pos.x + '%';
+            card.style.top = pos.y + '%';
+            // Not sent to the server here - just marked dirty, see saveBtn.
+            dirty[id] = {x: pos.x, y: pos.y};
+            redrawConnections();
+        }
+
+        function onDown(e) {
+            if (!editMode) return;  // locked - a click below navigates instead
+            dragging = true;
+            moved = false;
+            card.classList.add('dragging');
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+            document.addEventListener('touchmove', onMove, {passive: false});
+            document.addEventListener('touchend', onUp);
+            e.preventDefault();
+        }
+
+        card.addEventListener('mousedown', onDown);
+        card.addEventListener('touchstart', onDown, {passive: false});
+
+        // Locked: a plain click opens this panel's live view in Консумация,
+        // focused on its primary meter (?host=...) if it has one. Unlocked:
+        // clicks are drags instead (moved stays false for a real click, so
+        // this also guards against navigating right after a drag release).
+        card.addEventListener('click', function () {
+            if (editMode || moved) return;
+            var host = card.getAttribute('data-power-host');
+            window.location.href = '{{ url_for("admin_power") }}' + (host ? '?host=' + encodeURIComponent(host) : '');
+        });
+
+        card.addEventListener('mouseenter', function (e) { showTooltip(card, 'panel', id, e); });
+        card.addEventListener('mousemove', function (e) { positionTooltip(e); });
+        card.addEventListener('mouseleave', hideTooltip);
+
+        // Port badges (see PORT_DEFS/updatePortBadges above) - own tooltip
+        // and click target, stopPropagation so hovering/clicking one
+        // doesn't also trigger the parent card's (which would show the
+        // whole-panel tooltip / navigate without a port focus).
+        card.querySelectorAll('.port-badge').forEach(function (badge) {
+            var portKey = badge.getAttribute('data-port');
+            badge.addEventListener('mouseenter', function (e) {
+                e.stopPropagation();
+                showTooltip(card, 'port', id + '::' + portKey, e);
+            });
+            badge.addEventListener('mousemove', function (e) { e.stopPropagation(); positionTooltip(e); });
+            badge.addEventListener('mouseleave', function (e) { e.stopPropagation(); hideTooltip(); });
+            badge.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+            badge.addEventListener('click', function (e) {
+                e.stopPropagation();
+                window.location.href = '{{ url_for("admin_power") }}?host=' + encodeURIComponent(card.getAttribute('data-power-host'));
+            });
+        });
+    });
+
+    // --- Hover tooltip - same detail as the live cards on /admin/power
+    // (snap.channels for Shelly/DTSU666, snap.pv/ac/battery/load/meter for
+    // Solis), built from the full per-device snapshots _collect_power_
+    // aggregates() now passes through (see app.py). ---
+    function positionTooltip(e) {
+        var x = e.clientX + 16, y = e.clientY + 12;
+        if (x + 310 > window.innerWidth) x = e.clientX - 310;
+        if (y + 300 > window.innerHeight) y = Math.max(8, window.innerHeight - 300);
+        tooltip.style.left = x + 'px';
+        tooltip.style.top = y + 'px';
+    }
+    function renderSnapshotDetail(snap) {
+        var html = '<div class="tt-device">' + snap.name + (snap.online ? '' : ' &middot; без връзка') + '</div>';
+        if (!snap.online) {
+            html += '<div class="tt-row">Грешка <span>' + (snap.error || '—') + '</span></div>';
+            return html;
+        }
+        if (snap.battery) {
+            // `snap.battery` alone is only BMS port 1's own reading - combine
+            // with port 2 (snap.battery_groups[1]) the same way admin_power.html's
+            // renderBatteryBlock() does, so this tooltip doesn't silently
+            // show "the inverter's" charge/power as just port 1's number -
+            // explicit bug report: "общото зареждане на инвертора ...
+            // показва само числото на първия бмс".
+            var b = snap.battery, pv = snap.pv, ac = snap.ac, load = snap.load;
+            var groups = snap.battery_groups;
+            var port2 = groups && groups[1] && groups[1].soc != null ? groups[1] : null;
+            var soc = port2 ? (b.soc + port2.soc) / 2 : b.soc;
+            var power = port2 ? b.power + port2.power : b.power;
+            var current = port2 ? b.current + port2.current : b.current;
+            var voltage = port2 ? (b.voltage + port2.voltage) / 2 : b.voltage;
+            var direction = power > 0 ? 'charge' : power < 0 ? 'discharge' : 'idle';
+            html += '<div class="tt-row">Мощност към мрежата <span>' + Math.round(snap.total_power) + ' W</span></div>' +
+                '<div class="tt-sub">Батерия' + (port2 ? ' (2 порта)' : '') + '</div>' +
+                '<div class="tt-row">Заряд <span>' + Math.round(soc) + '% (SOH ' + Math.round(b.soh) + '%)</span></div>' +
+                '<div class="tt-row">Мощност <span>' + Math.round(Math.abs(power)) + ' W (' + (BATTERY_DIR_LABELS[direction] || direction) + ')</span></div>' +
+                '<div class="tt-row">Напрежение / Ток <span>' + voltage.toFixed(1) + ' V / ' + current.toFixed(1) + ' A</span></div>' +
+                '<div class="tt-row">Заредено/разредено днес (БМС 1) <span>' + b.today_charge_kwh.toFixed(1) + ' / ' + b.today_discharge_kwh.toFixed(1) + ' kWh</span></div>' +
+                '<div class="tt-sub">Соларно (PV)</div>' +
+                '<div class="tt-row">Мощност сега <span>' + Math.round(pv.power) + ' W</span></div>' +
+                '<div class="tt-row">Днес / Общо <span>' + pv.today_kwh.toFixed(1) + ' / ' + Math.round(pv.total_kwh) + ' kWh</span></div>' +
+                '<div class="tt-sub">AC изход</div>' +
+                '<div class="tt-row">Акт. / Реакт. / Пълна <span>' + Math.round(ac.active_power) + ' / ' + Math.round(ac.reactive_power) + ' / ' + Math.round(ac.apparent_power) + ' W</span></div>' +
+                '<div class="tt-row">Честота <span>' + ac.frequency.toFixed(2) + ' Hz</span></div>' +
+                '<div class="tt-sub">Товар</div>' +
+                '<div class="tt-row">Домакински / Бекъп <span>' + Math.round(load.household_w) + ' / ' + Math.round(load.backup_w) + ' W</span></div>' +
+                '<div class="tt-row">Температура <span>' + snap.temperature.toFixed(1) + ' &deg;C</span></div>';
+        } else if (snap.channels && snap.channels.length) {
+            html += '<div class="tt-row">Обща мощност <span>' + Math.round(snap.total_power) + ' W</span></div>' +
+                '<div class="tt-row">Общо изразходвани <span>' + snap.total_energy.toFixed(1) + ' kWh</span></div>';
+            snap.channels.forEach(function (ch) {
+                html += '<div class="tt-sub">' + ch.label + '</div>' +
+                    '<div class="tt-row">Мощност <span>' + Math.round(ch.act_power) + ' W</span></div>' +
+                    '<div class="tt-row">Напрежение / Ток <span>' + ch.voltage.toFixed(1) + ' V / ' + ch.current.toFixed(2) + ' A</span></div>';
+            });
+        } else {
+            html += '<div class="tt-row">Мощност <span>' + Math.round(snap.total_power) + ' W</span></div>';
+        }
+        return html;
+    }
+    function showTooltip(card, kind, id, e) {
+        var html;
+        if (kind === 'pv') {
+            var sep = id.lastIndexOf('-');
+            var pid = id.slice(0, sep), idx = parseInt(id.slice(sep + 1), 10);
+            var pInfo = lastPollData && lastPollData.panels[pid];
+            var pSnap = pInfo && pInfo.snapshots && pInfo.snapshots.filter(function (s) { return s.pv; })[0];
+            var str = pSnap && pSnap.pv.strings[idx];
+            html = '<div class="tt-title">MPPT' + (idx + 1) + ' &middot; стрингове ' + (idx * 2 + 1) + '+' + (idx * 2 + 2) + '</div>';
+            html += str
+                ? '<div class="tt-row">Напрежение <span>' + str.voltage.toFixed(1) + ' V</span></div>' +
+                  '<div class="tt-row">Ток <span>' + str.current.toFixed(1) + ' A</span></div>' +
+                  '<div class="tt-row">Мощност <span>' + Math.round(str.voltage * str.current) + ' W</span></div>'
+                : '<div class="tt-row">Няма данни</div>';
+            html += '<div class="tt-hint">Кликни за пълния изглед в Консумация</div>';
+            tooltip.innerHTML = html;
+            tooltip.style.display = 'block';
+            positionTooltip(e);
+            return;
+        }
+        if (kind === 'port') {
+            var sepP = id.lastIndexOf('::');
+            var panelIdP = id.slice(0, sepP), portKey = id.slice(sepP + 2);
+            var pInfoP = lastPollData && lastPollData.panels[panelIdP];
+            var solisSnapP = pInfoP && pInfoP.snapshots && pInfoP.snapshots.filter(function (s) { return s.battery; })[0];
+            html = '<div class="tt-title">' + (PORT_DEFS[portKey] ? PORT_DEFS[portKey].label : portKey) + '</div>';
+            if (!solisSnapP) {
+                html += '<div class="tt-row">Няма данни</div>';
+            } else if (portKey === 'grid') {
+                var m = solisSnapP.meter;
+                html += '<div class="tt-row">Мощност <span>' + Math.round(m.power) + ' W</span></div>' +
+                    '<div class="tt-row">Напрежение / Ток <span>' + m.voltage.toFixed(1) + ' V / ' + m.current.toFixed(1) + ' A</span></div>' +
+                    '<div class="tt-row">Общо <span>' + m.total_energy_kwh.toFixed(1) + ' kWh</span></div>';
+            } else if (portKey === 'main') {
+                html += '<div class="tt-row">Мощност <span>' + Math.round(solisSnapP.load.household_w) + ' W</span></div>';
+            } else if (portKey === 'backup') {
+                html += '<div class="tt-row">Мощност <span>' + Math.round(solisSnapP.load.backup_w) + ' W</span></div>';
+            } else if (portKey === 'generator') {
+                var g = solisSnapP.generator;
+                html += '<div class="tt-row">Мощност A/B/C <span>' + Math.round(g.power_a) + ' / ' + Math.round(g.power_b) + ' / ' + Math.round(g.power_c) + ' W</span></div>' +
+                    '<div class="tt-row">Днес / Общо <span>' + g.today_kwh.toFixed(1) + ' / ' + Math.round(g.total_kwh) + ' kWh</span></div>';
+            }
+            tooltip.innerHTML = html;
+            tooltip.style.display = 'block';
+            positionTooltip(e);
+            return;
+        }
+        var info = lastPollData && lastPollData.panels[id];
+        if (kind === 'battery') {
+            var snap = info && info.snapshots && info.snapshots.filter(function (s) { return s.battery; })[0];
+            html = '<div class="tt-title">Батерия</div>' + (snap ? renderSnapshotDetail(snap) : '<div class="tt-row">Няма данни</div>');
+        } else {
+            var name = card.querySelector('.pc-name').textContent;
+            var place = card.querySelector('.pc-place').textContent;
+            html = '<div class="tt-title">' + name + '</div>' +
+                '<div class="tt-row">Помещение <span>' + place + '</span></div>' +
+                '<div class="tt-row">Захранва се от <span>' + card.getAttribute('data-fed-from') + '</span></div>';
+            if (info && info.snapshots && info.snapshots.length) {
+                info.snapshots.forEach(function (snap) { html += renderSnapshotDetail(snap); });
+            } else {
+                html += '<div class="tt-row">Няма свързан електромер</div>';
+            }
+        }
+        html += '<div class="tt-hint">Кликни за пълния изглед в Консумация</div>';
+        tooltip.innerHTML = html;
+        tooltip.style.display = 'block';
+        positionTooltip(e);
+    }
+    function hideTooltip() { tooltip.style.display = 'none'; }
+
+    var POWER_ACTIVE_THRESHOLD_W = 5;
+
+    function pollPower() {
+        fetch('{{ url_for("admin_factory_map_overview_data") }}')
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                lastPollData = data;
+                tsEl.textContent = 'Последно обновено: ' + data.ts;
+                document.querySelectorAll('[data-power-for]').forEach(function (el) {
+                    var id = el.getAttribute('data-power-for');
+                    var info = data.panels[id];
+                    if (!info) {
+                        el.textContent = '— kW';
+                        el.classList.add('offline');
+                        return;
+                    }
+                    if (info.online) {
+                        el.textContent = (info.total_power / 1000).toFixed(2) + ' kW';
+                        el.classList.remove('offline');
+                    } else {
+                        el.textContent = 'без връзка';
+                        el.classList.add('offline');
+                    }
+                    // Only a Solis inverter's snapshot carries 'battery'/'pv' -
+                    // these satellites just stay absent for every other panel.
+                    updateBatteryNode(id, info.online ? info.battery : null);
+                    var solisSnap = info.online && info.snapshots && info.snapshots.filter(function (s) { return s.battery; })[0];
+                    updatePvNodes(id, solisSnap || null);
+                    updatePortBadges(id, solisSnap || null);
+                    PORT_PANEL_LINKS.forEach(function (link) {
+                        if (link.panelId !== id || !link.line) return;
+                        var watts = portWatts(solisSnap || null, link.portKey);
+                        var active = watts !== null && Math.abs(watts) > POWER_ACTIVE_THRESHOLD_W;
+                        link.line.classList.toggle('active', active);
+                        link.line.classList.toggle('reverse', active && PORT_REVERSE[link.portKey](watts));
+                    });
+                });
+                // Only rendered (server-side) for a panel with no meter of
+                // its own - the sum of its nearest meter-equipped
+                // descendant panel(s), see passthrough_power in
+                // _collect_power_aggregates().
+                document.querySelectorAll('[data-passthrough-for]').forEach(function (el) {
+                    var id = el.getAttribute('data-passthrough-for');
+                    var info = data.panels[id];
+                    var span = el.querySelector('span');
+                    if (info && info.passthrough_online) {
+                        // reverse = net generation among its descendants exceeds
+                        // consumption (inverters are generators, machines are
+                        // consumers - see _collect_power_aggregates()), so power
+                        // is actually flowing OUT through this panel.
+                        span.textContent = (info.passthrough_reverse ? '↑ ' : '↓ ') + (info.passthrough_power / 1000).toFixed(2) + ' kW';
+                        el.classList.remove('offline');
+                        el.classList.toggle('reverse', !!info.passthrough_reverse);
+                    } else {
+                        span.textContent = '— kW';
+                        el.classList.add('offline');
+                        el.classList.remove('reverse');
+                    }
+                });
+                connections.forEach(function (conn) {
+                    var info = data.panels[conn.childId];
+                    // A meterless child panel has no total_power/online of its
+                    // own (see passthrough_power in _collect_power_aggregates())
+                    // - fall back to its passthrough reading so the line still
+                    // shows current moving whenever there's real flow behind it.
+                    var power = info && info.online ? info.total_power : (info && info.passthrough_online ? info.passthrough_power : 0);
+                    var online = !!(info && (info.online || info.passthrough_online));
+                    conn.active = online && Math.abs(power) > POWER_ACTIVE_THRESHOLD_W;
+                    // A plain consumption panel only ever draws (parent -> child,
+                    // the default/non-reversed direction). A Solis inverter
+                    // (identifiable by having a 'battery' block) can also feed
+                    // power back up into its parent when total_power is
+                    // positive ("+ подава" - see _solis_snapshot()) - reverse
+                    // the animation for that case only. A meterless child falls
+                    // back to its own already-signed passthrough_reverse
+                    // (inverters = generators, machines = consumers).
+                    conn.reverse = info && info.online
+                        ? !!(info.battery && info.total_power > POWER_ACTIVE_THRESHOLD_W)
+                        : !!(info && info.passthrough_reverse);
+                });
+                GRID_ROOT_PANEL_IDS.forEach(function (panelId) {
+                    var node = poleNodes[panelId];
+                    if (!node) return;
+                    var info = data.panels[panelId];
+                    // A root panel normally has no meter of its own either -
+                    // same passthrough fallback as the connections above.
+                    var power = info && info.online ? info.total_power : (info && info.passthrough_online ? info.passthrough_power : 0);
+                    var online = !!(info && (info.online || info.passthrough_online));
+                    var active = online && Math.abs(power) > POWER_ACTIVE_THRESHOLD_W;
+                    node.line.classList.toggle('active', active);
+                    node.line.classList.toggle('reverse', active && !info.online && !!info.passthrough_reverse);
+                });
+                redrawConnections();
+            })
+            .catch(function () {});
+    }
+    redrawConnections();
+    pollPower();
+    setInterval(pollPower, 5000);
+
+    // "Назад" goes to wherever actually linked here instead of always the
+    // same fixed page - falls back to the href already in the markup when
+    // there's no same-origin referrer (direct link/bookmark).
+    var backLink = document.getElementById('backLink');
+    if (backLink && document.referrer && document.referrer.indexOf(window.location.origin) === 0) {
+        backLink.href = document.referrer;
+    }
+})();
+</script>
+
+</body>
+</html>
