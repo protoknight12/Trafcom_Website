@@ -8,7 +8,10 @@ shelly_device table.
 
     python -m migration.migrate_add_connection_type
 
-Safe to run more than once.
+Safe to run more than once, and independent of run order relative to
+migrate_add_shelly_mqtt.py - the backfill below reads mqtt_topic, so this
+also adds that column itself (identical ADD COLUMN IF NOT EXISTS) rather
+than assuming migrate_add_shelly_mqtt.py already ran first.
 """
 from sqlalchemy import text
 
@@ -17,6 +20,9 @@ from app import app, db
 with app.app_context():
     db.session.execute(text('''
         ALTER TABLE shelly_device ADD COLUMN IF NOT EXISTS connection_type VARCHAR(20) NOT NULL DEFAULT 'ip'
+    '''))
+    db.session.execute(text('''
+        ALTER TABLE shelly_device ADD COLUMN IF NOT EXISTS mqtt_topic VARCHAR(150)
     '''))
     db.session.execute(text('''
         UPDATE shelly_device SET connection_type = 'mqtt' WHERE mqtt_topic IS NOT NULL
