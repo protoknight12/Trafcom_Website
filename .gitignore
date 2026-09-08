@@ -6,6 +6,9 @@ uploads/
 static/uploads/products/*
 detail_dxf_files/
 order_item_files/
+controlled_documents/
+calibration_certificates/
+training_certificates/
 
 # Local-only dev docs - not part of the public site repo
 CLAUDE.md

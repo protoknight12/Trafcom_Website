@@ -6,6 +6,53 @@
     {% include 'partials/favicon.html' %}
     <title>Измервателни инструменти - Trafcom DXF</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .badge-due-soon {
+            background-color: rgba(255, 193, 7, 0.15);
+            color: #e0a800;
+            border: 1px solid rgba(255, 193, 7, 0.3);
+        }
+        .badge-not-tracked {
+            background-color: rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
+            border: 1px solid var(--border-color);
+        }
+        .cal-modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            z-index: 1100;
+            align-items: center;
+            justify-content: center;
+        }
+        .cal-modal-box {
+            width: 100%;
+            max-width: 460px;
+            margin: 20px;
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-md);
+            padding: 28px;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
+            position: relative;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .cal-modal-close {
+            position: absolute; right: 20px; top: 20px;
+            font-size: 1.5rem; cursor: pointer; color: var(--text-muted);
+        }
+        .cal-history summary {
+            cursor: pointer;
+            color: var(--accent-primary);
+            font-size: 0.78rem;
+        }
+        .cal-history table {
+            margin-top: 8px;
+            font-size: 0.78rem;
+        }
+    </style>
 </head>
 <body>
 {% include 'partials/navbar.html' %}
@@ -43,6 +90,10 @@
                 <label for="new_instrument_accuracy_unit">Мерна единица</label>
                 <input type="text" id="new_instrument_accuracy_unit" name="accuracy_unit" placeholder="напр. мм" value="мм">
             </div>
+            <div class="form-group">
+                <label for="new_instrument_calibration_interval">Интервал на калибриране (месеци, незадължително)</label>
+                <input type="number" id="new_instrument_calibration_interval" name="calibration_interval_months" min="1" step="1" placeholder="напр. 12">
+            </div>
             <div class="form-group" style="width: 100%;">
                 <label for="new_instrument_description">Описание (незадължително)</label>
                 <textarea id="new_instrument_description" name="description" rows="2" style="width: 100%; padding: 0.6rem 0.75rem; background-color: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm);"></textarea>
@@ -63,6 +114,8 @@
                     <th>Точност</th>
                     <th>Ед.</th>
                     <th>Описание</th>
+                    <th>Интервал (мес.)</th>
+                    <th>Калибриране</th>
                     <th class="text-right">Действие</th>
                     <th class="text-right">Изтриване</th>
                 </tr>
@@ -88,6 +141,49 @@
                     <td><input type="text" name="description" form="{{ form_id }}"
                                value="{{ instrument.description or '' }}"
                                class="material-price-input" style="width: 220px;" placeholder="Описание"></td>
+                    <td><input type="number" min="1" step="1" name="calibration_interval_months" form="{{ form_id }}"
+                               value="{{ instrument.calibration_interval_months if instrument.calibration_interval_months is not none else '' }}"
+                               class="material-price-input" style="width: 70px;" placeholder="напр. 12"></td>
+                    <td>
+                        {% set latest_cal = instrument.latest_calibration %}
+                        {% if instrument.calibration_status == 'valid' %}
+                        <span class="badge badge-pass">Валидно</span>
+                        {% elif instrument.calibration_status == 'due_soon' %}
+                        <span class="badge badge-due-soon">Изтича скоро</span>
+                        {% elif instrument.calibration_status == 'overdue' %}
+                        <span class="badge badge-fail">Просрочено</span>
+                        {% else %}
+                        <span class="badge badge-not-tracked">Няма данни</span>
+                        {% endif %}
+                        {% if latest_cal and latest_cal.next_due_date %}
+                        <br><span class="text-muted text-small">до {{ latest_cal.next_due_date.strftime('%d.%m.%Y') }}</span>
+                        {% endif %}
+                        <br>
+                        <button type="button" class="btn-secondary" style="padding: 4px 8px; font-size: 0.72rem; margin-top: 4px;" onclick="openCalModal({{ instrument.id }}, '{{ instrument.name|e }}')">+ Калибриране</button>
+                        {% if instrument.calibration_records|length > 0 %}
+                        <details class="cal-history">
+                            <summary>История ({{ instrument.calibration_records|length }})</summary>
+                            <table class="users-table">
+                                <thead><tr><th>Дата</th><th>Валидно до</th><th>Извършено от</th><th>Сертификат №</th><th>Файл</th></tr></thead>
+                                <tbody>
+                                {% for rec in instrument.calibration_records %}
+                                <tr>
+                                    <td>{{ rec.calibrated_at.strftime('%d.%m.%Y') }}</td>
+                                    <td>{{ rec.next_due_date.strftime('%d.%m.%Y') if rec.next_due_date else '—' }}</td>
+                                    <td>{{ rec.calibrated_by or '—' }}</td>
+                                    <td>{{ rec.certificate_no or '—' }}</td>
+                                    <td>
+                                        {% if rec.filename %}
+                                        <a href="{{ url_for('admin_download_calibration_certificate', record_id=rec.id) }}">Изтегли</a>
+                                        {% else %}—{% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                                </tbody>
+                            </table>
+                        </details>
+                        {% endif %}
+                    </td>
                     <td class="text-right"><button type="submit" form="{{ form_id }}" class="btn-save-price" style="background-color: var(--accent-primary); color: var(--text-main); border: none; border-radius: var(--border-radius-sm); padding: 0.5rem 0.9rem; cursor: pointer; font-weight: 600; font-size: 0.85rem;">Запази</button></td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_measuring_instrument', instrument_id=instrument.id) }}" method="POST"
@@ -107,6 +203,53 @@
     </section>
 
 </main>
+
+<div class="cal-modal-overlay" id="calModal">
+    <div class="cal-modal-box">
+        <span class="cal-modal-close" onclick="closeCalModal()">&times;</span>
+        <h3 style="margin-top: 0; margin-bottom: 16px;">Ново калибриране на <span id="calModalInstrumentName"></span></h3>
+        <form id="calForm" method="POST" enctype="multipart/form-data">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="cal_calibrated_at">Дата на калибриране</label>
+                <input type="date" id="cal_calibrated_at" name="calibrated_at" required>
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="cal_next_due_date">Валидно до (незадължително)</label>
+                <input type="date" id="cal_next_due_date" name="next_due_date">
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="cal_calibrated_by">Извършено от</label>
+                <input type="text" id="cal_calibrated_by" name="calibrated_by" placeholder="напр. лаборатория / лице">
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="cal_certificate_no">Сертификат №</label>
+                <input type="text" id="cal_certificate_no" name="certificate_no">
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="cal_file">Сертификат (файл, незадължително)</label>
+                <input type="file" id="cal_file" name="file">
+            </div>
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label for="cal_notes">Бележки</label>
+                <textarea id="cal_notes" name="notes" rows="2" style="width: 100%; padding: 0.6rem 0.75rem; background-color: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm);"></textarea>
+            </div>
+            <button type="submit" class="btn-submit" style="width: 100%;">Запази калибрирането</button>
+        </form>
+    </div>
+</div>
+
+<script>
+function openCalModal(instrumentId, instrumentName) {
+    document.getElementById('calModalInstrumentName').textContent = instrumentName;
+    document.getElementById('calForm').action = '/admin/quality/instruments/' + instrumentId + '/calibrate';
+    document.getElementById('calModal').style.display = 'flex';
+}
+function closeCalModal() {
+    document.getElementById('calModal').style.display = 'none';
+    document.getElementById('calForm').reset();
+}
+</script>
 
 </body>
 </html>

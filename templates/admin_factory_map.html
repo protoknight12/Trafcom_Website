@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Карта на фабриката - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .room-pick-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 16px;
+            margin-top: 10px;
+        }
+        .room-pick-card {
+            display: block;
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-md);
+            padding: 18px;
+            text-decoration: none;
+            color: var(--text-main);
+            transition: border-color 0.2s ease, transform 0.2s ease;
+        }
+        .room-pick-card:hover {
+            border-color: var(--accent-primary);
+            transform: translateY(-2px);
+        }
+        .room-pick-card h4 {
+            margin: 0 0 6px 0;
+        }
+        .room-pick-card p {
+            margin: 0;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+        .building-section {
+            margin-bottom: 24px;
+        }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px;">
+            <h3 style="margin: 0;">Карта на фабриката</h3>
+            <a href="{{ url_for('admin_factory_map_overview') }}" class="btn-secondary" style="padding: 6px 14px; font-size: 0.85rem;">Главна карта - разпределение по табла</a>
+        </div>
+        <p class="section-subtitle">Изберете помещение, за да видите неговата интерактивна схема с машини и ел. табла, или отворете главната карта за връзките между таблата в целия обект.</p>
+
+        {% if buildings %}
+        {% for b in buildings %}
+        <div class="building-section">
+            <h4>{{ b.name }}</h4>
+            {% if b.rooms %}
+            <div class="room-pick-grid">
+                {% for r in b.rooms %}
+                <a class="room-pick-card" href="{{ url_for('admin_factory_map_room', room_id=r.id) }}">
+                    <h4>{{ r.name }}</h4>
+                    <p>{{ r.machines|length }} машини · {{ r.panels|length }} табла</p>
+                </a>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="no-data text-small">Няма добавени помещения в тази сграда.</p>
+            {% endif %}
+        </div>
+        {% endfor %}
+        {% else %}
+        <p class="no-data text-center">Няма добавени сгради/помещения. <a href="{{ url_for('admin_buildings') }}">Добавете първата сграда и помещение</a>, за да започнете да разполагате машини на картата.</p>
+        {% endif %}
+    </section>
+
+</main>
+
+</body>
+</html>

@@ -1,0 +1,1217 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>{{ room.name }} - Карта на фабриката - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .map-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 18px;
+            margin: 10px 0 18px 0;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+        .map-legend span {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .map-legend .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .map-legend .swatch {
+            width: 14px;
+            height: 10px;
+            border-radius: 2px;
+            display: inline-block;
+        }
+        .map-canvas {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            min-height: 420px;
+            background-color: var(--bg-input);
+            background-image:
+                linear-gradient(to right, var(--border-color) 1px, transparent 1px),
+                linear-gradient(to bottom, var(--border-color) 1px, transparent 1px);
+            background-size: 5% 5%;
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-md);
+            overflow: hidden;
+            touch-action: none;
+        }
+        .map-card {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            width: 150px;
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-sm);
+            padding: 10px 12px;
+            cursor: pointer;
+            user-select: none;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+            transition: box-shadow 0.15s ease;
+        }
+        .map-card:hover { box-shadow: 0 0 0 2px var(--accent-primary); }
+        .map-canvas.edit-mode .map-card { cursor: grab; }
+        .map-canvas.edit-mode .map-card:active {
+            cursor: grabbing;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+            z-index: 10;
+        }
+        .map-card.dragging {
+            z-index: 20;
+        }
+        .map-toolbar { display: flex; gap: 10px; align-items: center; margin: 4px 0 14px 0; flex-wrap: wrap; }
+        .map-toolbar .text-small { color: var(--text-muted); }
+        /* Zoom widens/narrows .map-canvas's own real width% (not a visual
+           CSS transform) inside this scrollable viewport - every card is
+           positioned with left/top in percent of .map-canvas's own box, so
+           a real width change keeps them (and the drag math, which reads
+           getBoundingClientRect()) correctly aligned at any zoom level. */
+        .map-zoom-viewport { overflow: auto; border-radius: var(--border-radius-md); }
+        .zoom-controls { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+        .zoom-controls button { width: 28px; height: 28px; padding: 0; font-weight: 700; }
+        .zoom-controls .zoom-level { min-width: 3.2em; text-align: center; font-size: 0.8rem; color: var(--text-muted); }
+        .map-tooltip {
+            position: fixed;
+            z-index: 100;
+            background-color: var(--bg-surface);
+            border: 1px solid var(--accent-primary);
+            border-radius: var(--border-radius-sm);
+            padding: 10px 12px;
+            font-size: 0.8rem;
+            width: 300px;
+            max-height: 70vh;
+            overflow-y: auto;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+            pointer-events: none;
+            display: none;
+        }
+        .map-tooltip .tt-title { font-weight: 700; margin-bottom: 4px; }
+        .map-tooltip .tt-device { font-weight: 700; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--accent-primary); margin: 10px 0 4px 0; padding-top: 8px; border-top: 1px solid var(--border-color); }
+        .map-tooltip .tt-device:first-of-type { margin-top: 6px; padding-top: 0; border-top: none; }
+        .map-tooltip .tt-sub { font-weight: 700; font-size: 0.7rem; color: var(--text-muted); margin: 6px 0 2px 0; }
+        .map-tooltip .tt-row { display: flex; justify-content: space-between; gap: 10px; color: var(--text-muted); }
+        .map-tooltip .tt-row span { color: var(--text-main); text-align: right; }
+        .map-tooltip .tt-hint { margin-top: 8px; color: var(--text-muted); font-size: 0.75rem; font-style: italic; }
+        .panel-card {
+            border: 1px dashed #f59e0b;
+        }
+        /* Convector card - a small wall-unit icon with 3 vent slits, plus a
+           set of curved "air wave" lines that only animate while the unit
+           is reported on (see .convector-card.is-on below, toggled by
+           pollPower() from the live data.convectors[id].is_on). The waves
+           sit BELOW the icon's own viewBox (y up to 46, box is 0-40) with
+           overflow:visible on the <svg>, so they can flow outward past the
+           unit's body without needing a taller icon. */
+        .convector-card { border: 1px solid #38bdf8; text-align: center; padding-bottom: 8px; }
+        .convector-card .mc-name::before { content: "❄ "; }
+        .conv-icon { width: 64px; height: 46px; overflow: visible; margin: 0 auto 4px auto; display: block; }
+        .conv-body { fill: var(--bg-input); stroke: var(--border-color); stroke-width: 2; transition: stroke 0.3s ease, fill 0.3s ease; }
+        .conv-vent { stroke: var(--border-color); stroke-width: 2; stroke-linecap: round; transition: stroke 0.3s ease; }
+        .convector-card.is-on .conv-body { stroke: #38bdf8; fill: rgba(56, 189, 248, 0.12); }
+        .convector-card.is-on .conv-vent { stroke: #38bdf8; }
+        .air-wave { fill: none; stroke: #38bdf8; stroke-width: 2; stroke-linecap: round; opacity: 0; }
+        .convector-card.is-on .air-wave { animation: conv-airflow 1.8s ease-in infinite; }
+        .convector-card.is-on .air-wave.wave2 { animation-delay: 0.45s; }
+        .convector-card.is-on .air-wave.wave3 { animation-delay: 0.9s; }
+        @keyframes conv-airflow {
+            0% { transform: translateY(0); opacity: 0; }
+            20% { opacity: 0.85; }
+            100% { transform: translateY(12px); opacity: 0; }
+        }
+        .convector-card .conv-state { font-size: 0.78rem; font-weight: 600; color: var(--text-muted); }
+        .convector-card.is-on .conv-state { color: #38bdf8; }
+        .convector-card .conv-power { min-height: 1em; }
+        .convector-card .conv-toggle-map-btn {
+            margin-top: 6px; padding: 3px 10px; font-size: 0.72rem; cursor: pointer;
+        }
+        .convector-card.is-on .conv-toggle-map-btn { background-color: #38bdf8; border-color: #38bdf8; color: #0b1220; }
+        .stack-card { border: 1px solid #10b981; text-align: center; padding-bottom: 8px; }
+        .stack-icon { display: block; margin: 0 auto 4px auto; }
+        .stack-body { fill: rgba(148, 163, 184, 0.08); stroke: #10b981; stroke-width: 2; }
+        .stack-body.out-of-range { stroke: #ef4444; }
+        .stack-cap { fill: #10b981; }
+        .stack-body.out-of-range ~ .stack-cap { fill: #ef4444; }
+        /* SOC fill inside the outline (see .stack-body above) - width is set
+           live by JS from the stack's own group.soc (see pollPower()).
+           Color/animation reflect the *inverter's* aggregate charge
+           direction (individual BMS ports have no current/power reading of
+           their own - see _battery_stack_live_data() in app.py): gray+still
+           at rest, green+pulsing while charging, orange+pulsing while
+           discharging. */
+        .stack-fill { fill: #94a3b8; transition: width 0.6s ease; }
+        .stack-fill.charge { fill: #10b981; animation: stack-fill-pulse 1.6s ease-in-out infinite; }
+        .stack-fill.discharge { fill: #f97316; animation: stack-fill-pulse 1.6s ease-in-out infinite; }
+        @keyframes stack-fill-pulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+        /* SOC as a number inside the battery icon itself, not just the fill
+           level - explicit ask: "да е по видимо". White fill + dark stroke
+           keeps it readable regardless of what's under it (empty outline,
+           gray/green/orange fill). */
+        .stack-soc-label {
+            fill: #fff;
+            stroke: #0f172a;
+            stroke-width: 1.5px;
+            paint-order: stroke fill;
+            font-size: 9px;
+            font-weight: 700;
+            font-family: inherit;
+            pointer-events: none;
+            dominant-baseline: middle;
+        }
+        .map-card .mc-name {
+            font-weight: 700;
+            font-size: 0.9rem;
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .panel-card .mc-name::before {
+            content: "⚡ ";
+        }
+        .map-card .mc-status-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 4px;
+        }
+        .map-card .mc-status-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .mc-status-idle { background-color: #10b981; }
+        .mc-status-running { background-color: #17a2b8; }
+        .mc-status-maintenance { background-color: #ffc107; }
+        .map-card .mc-status-label {
+            font-size: 0.78rem;
+            color: var(--text-muted);
+        }
+        .map-card .mc-power {
+            font-size: 0.82rem;
+            color: var(--text-main);
+        }
+        .map-card .mc-power.offline {
+            color: var(--text-muted);
+        }
+        .map-card .mc-passthrough {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+        }
+        .map-card .mc-passthrough span {
+            color: var(--text-main);
+            font-weight: 600;
+        }
+        .map-card .mc-passthrough.offline span {
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+        .map-card .mc-passthrough.reverse span {
+            color: #f59e0b;
+        }
+        .map-card .mc-sub {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .map-card select.mc-status-select {
+            width: 100%;
+            margin-top: 6px;
+            padding: 3px 4px;
+            font-size: 0.75rem;
+            background-color: var(--bg-input);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+        }
+        .map-ts {
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            margin-top: 8px;
+        }
+        .connections-svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        .connection-line {
+            stroke: var(--border-color);
+            stroke-width: 2;
+            fill: none;
+            transition: stroke 0.3s ease, stroke-width 0.3s ease;
+        }
+        .connection-line.active {
+            stroke: #17a2b8;
+            stroke-width: 2.5;
+            stroke-dasharray: 8 6;
+            animation: connection-flow 0.8s linear infinite;
+        }
+        /* Dash travel goes from (x1,y1) towards (x2,y2) with a NEGATIVE
+           dashoffset step (see admin_factory_map_overview.html, where this
+           was originally worked out) - default/non-reverse here must travel
+           towards (x1,y1), the FROM point, which every connection below
+           sets to the consuming end (machine, or this room's own panel for
+           a cross-room stub) - machines are always consumers, so they never
+           get .reverse, only the animation direction matters for them. */
+        @keyframes connection-flow {
+            to { stroke-dashoffset: 14; }
+        }
+        .connection-line.active.reverse {
+            stroke: #f59e0b;
+            animation-name: connection-flow-reverse;
+        }
+        /* Stack -> its inverter's panel - always this same green, active or
+           not (no direction concept - a battery group has no power/current
+           reading, see _decode_battery_group() in app.py, just "has live
+           data right now"). More classes than .connection-line.active, so
+           this wins over its teal. */
+        .connection-line.battery-link { stroke: #10b981; opacity: 0.55; }
+        .connection-line.battery-link.active {
+            stroke: #10b981; stroke-width: 2.5; stroke-dasharray: 8 6; opacity: 1;
+            animation: connection-flow 0.8s linear infinite;
+        }
+        @keyframes connection-flow-reverse {
+            to { stroke-dashoffset: -14; }
+        }
+        /* Wide invisible hover twin for every connection-line below - the
+           visible line is only 2px, too thin to reliably hover, and
+           .connections-svg has pointer-events:none so nothing on it reacts
+           to the mouse unless overridden here (see admin_factory_map_
+           overview.html's .port-link-hit/.connection-hit, same idea). */
+        .connection-hit { stroke: transparent; stroke-width: 14; fill: none; cursor: pointer; pointer-events: stroke; }
+        .remote-link-label {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            background-color: var(--bg-surface);
+            border: 1px dashed var(--border-color);
+            border-radius: var(--border-radius-sm);
+            padding: 2px 6px;
+            white-space: nowrap;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px;">
+            <h3 style="margin: 0;">{{ room.building.name }} / {{ room.name }}</h3>
+            <a href="{{ url_for('admin_factory_map') }}" id="backLink" class="text-small">&larr; Назад</a>
+        </div>
+        <p class="section-subtitle">Задръжте курсора върху картичка за детайли, кликнете за пълно редактиране. Позициите са заключени - отключете ги за да местите картички.</p>
+
+        <div class="map-legend">
+            <span><span class="dot" style="background-color: #10b981;"></span> Свободна</span>
+            <span><span class="dot" style="background-color: #17a2b8;"></span> Работи</span>
+            <span><span class="dot" style="background-color: #ffc107;"></span> Поддръжка</span>
+            <span><span class="swatch" style="border: 1px dashed #f59e0b;"></span> Ел. табло</span>
+            <span><svg width="24" height="10"><line x1="0" y1="5" x2="24" y2="5" class="connection-line active"></line></svg> Консумира в момента</span>
+            <span><svg width="24" height="10"><line x1="0" y1="5" x2="24" y2="5" class="connection-line active reverse"></line></svg> Тече ток (обратно - подава)</span>
+            <span><svg width="24" height="10"><line x1="0" y1="5" x2="24" y2="5" class="connection-line" stroke-dasharray="4 3"></line></svg> Табло в друго помещение</span>
+        </div>
+
+        <div class="map-toolbar">
+            <button type="button" id="unlockBtn" class="btn-secondary">🔓 Отключи местоположенията</button>
+            <button type="button" id="saveBtn" class="btn-submit" style="display:none;">💾 Запази местоположенията</button>
+            <button type="button" id="cancelBtn" class="btn-secondary" style="display:none;">Откажи</button>
+            <span id="editHint" class="text-small" style="display:none;">Местоположенията са отключени - влачете картички, после запазете.</span>
+            <div class="zoom-controls">
+                <button type="button" id="zoomOutBtn" class="btn-secondary" title="Намали">&minus;</button>
+                <span class="zoom-level" id="zoomLevelLabel">100%</span>
+                <button type="button" id="zoomInBtn" class="btn-secondary" title="Увеличи">+</button>
+                <button type="button" id="zoomResetBtn" class="btn-secondary" title="Нулирай мащаба">100%</button>
+            </div>
+        </div>
+
+        <div class="map-zoom-viewport" id="mapZoomViewport">
+        <div class="map-canvas" id="mapCanvas">
+            <svg class="connections-svg" id="connectionsSvg"></svg>
+            {% for m in machines %}
+            {% set col = loop.index0 % 5 %}
+            {% set row = loop.index0 // 5 %}
+            {% if m.shelly_devices %}{% set primary_host = m.shelly_devices[0].host %}
+            {% elif m.modbus_devices %}{% set primary_host = m.modbus_devices[0].host ~ ':' ~ m.modbus_devices[0].port %}
+            {% else %}{% set primary_host = '' %}{% endif %}
+            <div class="map-card" data-kind="machine" data-id="{{ m.id }}"
+                 data-power-host="{{ primary_host }}"
+                 data-machine-type="{{ m.machine_type or 'няма' }}"
+                 style="left: {{ m.pos_x if m.pos_x is not none else (10 + col * 20) }}%; top: {{ m.pos_y if m.pos_y is not none else (15 + row * 25) }}%;">
+                <div class="mc-name">{{ m.name }}</div>
+                <div class="mc-status-row">
+                    <span class="mc-status-dot mc-status-{{ m.status }}"></span>
+                    <span class="mc-status-label">
+                        {% if m.status == 'idle' %}Свободна{% elif m.status == 'running' %}Работи{% else %}Поддръжка{% endif %}
+                    </span>
+                </div>
+                <div class="mc-power offline" data-power-for="machine-{{ m.id }}">— kW</div>
+                {% if m.panel %}<div class="mc-sub">Табло: {{ m.panel.name }}</div>{% endif %}
+                <select class="mc-status-select" data-status-for="{{ m.id }}">
+                    <option value="idle" {% if m.status == 'idle' %}selected{% endif %}>Свободна</option>
+                    <option value="running" {% if m.status == 'running' %}selected{% endif %}>Работи</option>
+                    <option value="maintenance" {% if m.status == 'maintenance' %}selected{% endif %}>Поддръжка</option>
+                </select>
+            </div>
+            {% endfor %}
+
+            {% for p in panels %}
+            {% set col = loop.index0 % 5 %}
+            {% set row = loop.index0 // 5 %}
+            {% if p.shelly_devices %}{% set primary_host = p.shelly_devices[0].host %}
+            {% elif p.modbus_devices %}{% set primary_host = p.modbus_devices[0].host ~ ':' ~ p.modbus_devices[0].port %}
+            {% else %}{% set primary_host = '' %}{% endif %}
+            <div class="map-card panel-card" data-kind="panel" data-id="{{ p.id }}"
+                 data-power-host="{{ primary_host }}"
+                 data-fed-from="{{ p.parent_panel.name if p.parent_panel else 'директно от мрежата' }}"
+                 style="left: {{ p.pos_x if p.pos_x is not none else (20 + col * 20) }}%; top: {{ p.pos_y if p.pos_y is not none else (70 + row * 20) }}%;">
+                <div class="mc-name">{{ p.name }}</div>
+                {% if p.shelly_devices or p.modbus_devices %}
+                <div class="mc-power offline" data-power-for="panel-{{ p.id }}">— kW</div>
+                {% elif p.child_panels %}
+                <div class="mc-passthrough offline" data-passthrough-for="panel-{{ p.id }}">Преминаваща <span>— kW</span></div>
+                {% endif %}
+                <div class="mc-sub">{{ p.wired_machines|map(attribute='name')|join(', ') or 'няма свързани машини' }}</div>
+            </div>
+            {% endfor %}
+
+            {% for c in convectors %}
+            {% set col = loop.index0 % 5 %}
+            {% set row = loop.index0 // 5 %}
+            <div class="map-card convector-card" data-kind="convector" data-id="{{ c.id }}"
+                 style="left: {{ c.pos_x if c.pos_x is not none else (30 + col * 20) }}%; top: {{ c.pos_y if c.pos_y is not none else (40 + row * 20) }}%;">
+                <svg class="conv-icon" viewBox="0 0 64 40" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="4" y="4" width="56" height="26" rx="5" class="conv-body"></rect>
+                    <line x1="13" y1="13" x2="51" y2="13" class="conv-vent"></line>
+                    <line x1="13" y1="19" x2="51" y2="19" class="conv-vent"></line>
+                    <line x1="13" y1="25" x2="51" y2="25" class="conv-vent"></line>
+                    <path d="M 14 34 Q 24 40 34 34 T 54 34" class="air-wave wave1"></path>
+                    <path d="M 10 34 Q 20 40 30 34 T 50 34" class="air-wave wave2"></path>
+                    <path d="M 18 34 Q 28 40 38 34 T 58 34" class="air-wave wave3"></path>
+                </svg>
+                <div class="mc-name">{{ c.name }}</div>
+                <div class="conv-state" data-conv-state-for="{{ c.id }}">—</div>
+                <div class="mc-sub conv-power" data-conv-power-for="{{ c.id }}"></div>
+                <button type="button" class="btn-secondary conv-toggle-map-btn" data-id="{{ c.id }}">Превключи</button>
+            </div>
+            {% endfor %}
+
+            {% for st in battery_stacks %}
+            {% set col = loop.index0 % 5 %}
+            {% set row = loop.index0 // 5 %}
+            {% set count = st.battery_count %}
+            {% set out_of_range = (st.min_batteries and count < st.min_batteries) or (st.max_batteries and count > st.max_batteries) %}
+            {# Icon width grows a little with battery count - "take the count into account" without a full per-cell drawing. #}
+            {% set icon_w = 28 + [count, 8] | min * 4 %}
+            <div class="map-card stack-card" data-kind="stack" data-id="{{ st.id }}"
+                 style="left: {{ st.pos_x if st.pos_x is not none else (30 + col * 20) }}%; top: {{ st.pos_y if st.pos_y is not none else (60 + row * 20) }}%;">
+                <svg class="stack-icon" width="{{ icon_w }}" height="30" viewBox="0 0 {{ icon_w }} 30" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="1" y="1" width="{{ icon_w - 6 }}" height="28" rx="3" class="stack-body {{ 'out-of-range' if out_of_range else '' }}"></rect>
+                    <rect x="3" y="3" width="0" height="24" rx="2" class="stack-fill" data-stack-fill-for="{{ st.id }}" data-max-width="{{ icon_w - 10 }}"></rect>
+                    <rect x="{{ icon_w - 5 }}" y="10" width="4" height="10" rx="1" class="stack-cap"></rect>
+                    <text class="stack-soc-label" data-stack-soc-label-for="{{ st.id }}" x="{{ (icon_w - 6) / 2 }}" y="19" text-anchor="middle">&mdash;</text>
+                </svg>
+                <div class="mc-name">{{ st.name }}</div>
+                <div class="mc-sub">{{ count }}{% if st.min_batteries or st.max_batteries %} / {{ st.min_batteries or '?' }}-{{ st.max_batteries or '?' }}{% endif %} батерии{% if st.bms_port %} &middot; БМС {{ st.bms_port }}{% endif %}{% if st.total_energy_kwh is not none %} &middot; {{ st.total_energy_kwh }} kWh{% endif %}</div>
+                <div class="mc-sub" data-stack-live-for="{{ st.id }}">&mdash;</div>
+                <div class="mc-sub" data-stack-power-for="{{ st.id }}">&mdash;</div>
+            </div>
+            {% endfor %}
+        </div>
+        </div>
+        <div class="map-ts" id="mapTs"></div>
+        <div class="map-tooltip" id="mapTooltip"></div>
+    </section>
+
+</main>
+
+<script>
+(function () {
+    var canvas = document.getElementById('mapCanvas');
+    var cards = Array.from(document.querySelectorAll('.map-card'));
+    var tsEl = document.getElementById('mapTs');
+    var svg = document.getElementById('connectionsSvg');
+    var tooltip = document.getElementById('mapTooltip');
+    var lastPollData = null;
+
+    // --- Zoom (view-only, independent of the position edit lock below) ---
+    // Same technique as admin_factory_map_overview.html - widens/narrows
+    // the canvas's own real width% (every card's left/top is a percent of
+    // this box already) rather than a CSS transform, so drag math reading
+    // getBoundingClientRect() keeps working unchanged at any zoom level.
+    var zoomLevel = 1;
+    var zoomLevelLabel = document.getElementById('zoomLevelLabel');
+    function setZoom(z) {
+        zoomLevel = Math.max(0.5, Math.min(3, z));
+        canvas.style.width = (zoomLevel * 100) + '%';
+        zoomLevelLabel.textContent = Math.round(zoomLevel * 100) + '%';
+    }
+    var zoomInBtn = document.getElementById('zoomInBtn');
+    var zoomOutBtn = document.getElementById('zoomOutBtn');
+    var zoomResetBtn = document.getElementById('zoomResetBtn');
+    if (zoomInBtn) {
+        zoomInBtn.addEventListener('click', function () { setZoom(zoomLevel + 0.15); });
+        zoomOutBtn.addEventListener('click', function () { setZoom(zoomLevel - 0.15); });
+        zoomResetBtn.addEventListener('click', function () { setZoom(1); });
+        document.getElementById('mapZoomViewport').addEventListener('wheel', function (e) {
+            if (!e.ctrlKey) return;
+            e.preventDefault();
+            setZoom(zoomLevel - e.deltaY * 0.001);
+        }, { passive: false });
+    }
+    var positionUrls = {machine: '/admin/factory-map/machine/', panel: '/admin/factory-map/panel/', convector: '/admin/factory-map/convector/', stack: '/admin/battery-stacks/'};
+
+    function csrfHeaders(extra) {
+        var fd = new FormData();
+        fd.append('csrf_token', window.CSRF_TOKEN);
+        for (var k in extra) fd.append(k, extra[k]);
+        return fd;
+    }
+
+    // --- Lock/unlock/save positions - see admin_factory_map_overview.html
+    // for the same pattern; positions stay fixed until unlocked, and moves
+    // are only persisted when "Запази" is pressed. ---
+    var editMode = false;
+    var dirty = {};  // "kind-id" -> {x, y}
+    var unlockBtn = document.getElementById('unlockBtn');
+    var saveBtn = document.getElementById('saveBtn');
+    var cancelBtn = document.getElementById('cancelBtn');
+    var editHint = document.getElementById('editHint');
+
+    function setEditMode(on) {
+        editMode = on;
+        canvas.classList.toggle('edit-mode', on);
+        unlockBtn.style.display = on ? 'none' : '';
+        saveBtn.style.display = on ? '' : 'none';
+        cancelBtn.style.display = on ? '' : 'none';
+        editHint.style.display = on ? '' : 'none';
+    }
+    unlockBtn.addEventListener('click', function () { setEditMode(true); });
+    cancelBtn.addEventListener('click', function () { window.location.reload(); });
+    saveBtn.addEventListener('click', function () {
+        var keys = Object.keys(dirty);
+        if (!keys.length) { setEditMode(false); return; }
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Запазване…';
+        Promise.all(keys.map(function (key) {
+            var parts = key.split('-');
+            var kind = parts[0], id = parts[1];
+            return fetch(positionUrls[kind] + id + '/position', {
+                method: 'POST',
+                body: csrfHeaders({pos_x: dirty[key].x.toFixed(2), pos_y: dirty[key].y.toFixed(2)})
+            });
+        })).then(function () {
+            dirty = {};
+            saveBtn.disabled = false;
+            saveBtn.textContent = '💾 Запази местоположенията';
+            setEditMode(false);
+        }).catch(function () {
+            saveBtn.disabled = false;
+            saveBtn.textContent = '💾 Запази местоположенията';
+            alert('Възникна грешка при запис. Опитайте отново.');
+        });
+    });
+
+    // Machine -> its wired panel (see Machine.panel_id) - one <line> per pair,
+    // redrawn on drag and re-colored/animated on every live power poll.
+    var connections = [
+        {% for m in machines %}{% if m.panel %}{machineId: '{{ m.id }}', panelId: '{{ m.panel.id }}', line: null, active: false},
+        {% endif %}{% endfor %}
+    ];
+
+    // Panel -> its parent panel (ElectricalPanel.parent_panel_id), for
+    // pairs where BOTH ends are physically in this room - same idea as
+    // admin_factory_map_overview.html's site-wide diagram, just filtered to
+    // this room. A pair where the other end is elsewhere gets a
+    // REMOTE_PANEL_LINKS stub instead (see below), not a line here.
+    var panelConnections = [
+        {% for p in panels %}{% if p.parent_panel and p.parent_panel.room_id == room.id %}{childId: '{{ p.id }}', parentId: '{{ p.parent_panel.id }}', line: null, active: false, reverse: false},
+        {% endif %}{% endfor %}
+    ];
+
+    // BatteryStack -> the panel its inverter (BatteryStack.inverter_device_id)
+    // is itself mounted in - only for pairs where BOTH ends are physically
+    // in this room (see REMOTE_LINKS' kind='stack'/'panel' entries below for
+    // when the other end is elsewhere). No direction/reverse - a battery
+    // group has no power/current reading of its own (see
+    // _decode_battery_group() in app.py), just "does it have live data".
+    var stackConnections = [
+        {% for st in battery_stacks %}
+        {% if st.inverter and st.inverter.panel and st.inverter.panel.room_id == room.id %}
+        {stackId: '{{ st.id }}', panelId: '{{ st.inverter.panel.id }}', line: null, active: false},
+        {% endif %}
+        {% endfor %}
+    ];
+
+    // A link where the OTHER end is in a different room never had any line
+    // at all before - the other panel/machine simply isn't on this canvas
+    // to draw a real line to. Instead, for each such link, draw a short
+    // dashed stub from this room's own panel/machine out to the nearest
+    // canvas edge, labeled with where it actually goes - see
+    // nearestEdgePoint()/updateRemoteLinkNodes(). role 'child': the local
+    // end is the consumer, the remote end (edge) is its source - covers a
+    // panel whose parent is remote, and a machine whose panel is remote.
+    // role 'parent': the local end is the source, the remote end (edge) is
+    // a consumer - covers a panel with a remote child panel or a remote
+    // wired machine (a machine is always a consumer, never generates).
+    var REMOTE_LINKS = [
+        {% for p in panels %}
+        {% if p.parent_panel and p.parent_panel.room_id != room.id %}
+        {kind: 'panel', id: '{{ p.id }}', role: 'child', label: {{ p.parent_panel.name | tojson }},
+         full: {{ (p.parent_panel.room.building.name + ' / ' + p.parent_panel.room.name + ' - ' + p.parent_panel.name) | tojson }}},
+        {% endif %}
+        {% for c in p.child_panels %}
+        {% if c.room_id != room.id %}
+        {kind: 'panel', id: '{{ p.id }}', role: 'parent', label: {{ c.name | tojson }},
+         full: {{ (c.room.building.name + ' / ' + c.room.name + ' - ' + c.name) | tojson }}},
+        {% endif %}
+        {% endfor %}
+        {% for m in p.wired_machines %}
+        {% if not m.room_id or m.room_id != room.id %}
+        {kind: 'panel', id: '{{ p.id }}', role: 'parent', label: {{ m.name | tojson }},
+         full: {{ ((m.room.building.name + ' / ' + m.room.name + ' - ' + m.name) if m.room else m.name) | tojson }}},
+        {% endif %}
+        {% endfor %}
+        {% for d in p.modbus_devices %}
+        {% for st in d.battery_stacks %}
+        {% if not st.room_id or st.room_id != room.id %}
+        {kind: 'panel', id: '{{ p.id }}', role: 'parent', label: {{ st.name | tojson }},
+         full: {{ ((st.room.building.name + ' / ' + st.room.name + ' - ' + st.name) if st.room else st.name) | tojson }}},
+        {% endif %}
+        {% endfor %}
+        {% endfor %}
+        {% endfor %}
+        {% for m in machines %}
+        {% if m.panel and m.panel.room_id != room.id %}
+        {kind: 'machine', id: '{{ m.id }}', role: 'child', label: {{ m.panel.name | tojson }},
+         full: {{ (m.panel.room.building.name + ' / ' + m.panel.room.name + ' - ' + m.panel.name) | tojson }}},
+        {% endif %}
+        {% endfor %}
+        {% for st in battery_stacks %}
+        {% if st.inverter and st.inverter.panel and st.inverter.panel.room_id != room.id %}
+        {kind: 'stack', id: '{{ st.id }}', role: 'child', label: {{ st.inverter.panel.name | tojson }},
+         full: {{ (st.inverter.panel.room.building.name + ' / ' + st.inverter.panel.room.name + ' - ' + st.inverter.panel.name) | tojson }}},
+        {% endif %}
+        {% endfor %}
+    ];
+
+    function cardCenter(kind, id) {
+        var card = document.querySelector('.map-card[data-kind="' + kind + '"][data-id="' + id + '"]');
+        return card ? {x: parseFloat(card.style.left), y: parseFloat(card.style.top)} : null;
+    }
+
+    // Whichever of the 4 canvas edges is geometrically closest to a panel's
+    // own position - the stub just runs straight out to that edge rather
+    // than trying to point in the real-world direction of the other room.
+    function nearestEdgePoint(pos) {
+        var dTop = pos.y, dBottom = 100 - pos.y, dLeft = pos.x, dRight = 100 - pos.x;
+        var min = Math.min(dTop, dBottom, dLeft, dRight);
+        if (min === dTop) return {x: pos.x, y: 2};
+        if (min === dBottom) return {x: pos.x, y: 98};
+        if (min === dLeft) return {x: 2, y: pos.y};
+        return {x: 98, y: pos.y};
+    }
+
+    var remoteLinkNodes = REMOTE_LINKS.map(function (link) {
+        var line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('class', 'connection-line');
+        line.setAttribute('stroke-dasharray', '4 3');
+        var titleEl = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+        titleEl.textContent = 'Свързано с: ' + link.full;
+        line.appendChild(titleEl);
+        svg.appendChild(line);
+        var labelEl = document.createElement('div');
+        labelEl.className = 'remote-link-label';
+        labelEl.textContent = link.label;
+        labelEl.title = link.full;
+        canvas.appendChild(labelEl);
+        // Hover twin - shows the LOCAL end's own tooltip (the remote end
+        // isn't rendered on this canvas at all, so there's no card/live
+        // data to show for it here - see admin_factory_map_room_data(),
+        // which is scoped to this room only).
+        var hitLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        hitLine.setAttribute('class', 'connection-hit');
+        svg.appendChild(hitLine);
+        hitLine.addEventListener('mouseenter', function (e) {
+            var localCard = document.querySelector('.map-card[data-kind="' + link.kind + '"][data-id="' + link.id + '"]');
+            if (localCard) showTooltip(localCard, link.kind, link.id, e);
+        });
+        hitLine.addEventListener('mousemove', positionTooltip);
+        hitLine.addEventListener('mouseleave', hideTooltip);
+        return {link: link, line: line, hitLine: hitLine, labelEl: labelEl};
+    });
+
+    function updateRemoteLinkNodes() {
+        // Grouped by (kind, id) so multiple links off the same panel/machine
+        // (e.g. several children each in a different room) fan out along
+        // the edge instead of stacking exactly on top of each other.
+        var byOwner = {};
+        remoteLinkNodes.forEach(function (rn) {
+            var key = rn.link.kind + '-' + rn.link.id;
+            (byOwner[key] || (byOwner[key] = [])).push(rn);
+        });
+        Object.keys(byOwner).forEach(function (key) {
+            var group = byOwner[key];
+            var ownerPos = cardCenter(group[0].link.kind, group[0].link.id);
+            if (!ownerPos) return;
+            var edge = nearestEdgePoint(ownerPos);
+            var horizontalEdge = edge.y === 2 || edge.y === 98;
+            var spread = 7;
+            var startOffset = -((group.length - 1) * spread) / 2;
+            group.forEach(function (rn, idx) {
+                var offset = startOffset + idx * spread;
+                var edgePoint = horizontalEdge
+                    ? {x: Math.max(2, Math.min(98, edge.x + offset)), y: edge.y}
+                    : {x: edge.x, y: Math.max(2, Math.min(98, edge.y + offset))};
+                // role 'child': the local panel/machine is the consuming end
+                // (from=owner, default direction travels towards it). role
+                // 'parent': the remote end is the consuming end (from=edge).
+                var from = rn.link.role === 'child' ? ownerPos : edgePoint;
+                var to = rn.link.role === 'child' ? edgePoint : ownerPos;
+                rn.line.setAttribute('x1', from.x + '%');
+                rn.line.setAttribute('y1', from.y + '%');
+                rn.line.setAttribute('x2', to.x + '%');
+                rn.line.setAttribute('y2', to.y + '%');
+                rn.hitLine.setAttribute('x1', from.x + '%');
+                rn.hitLine.setAttribute('y1', from.y + '%');
+                rn.hitLine.setAttribute('x2', to.x + '%');
+                rn.hitLine.setAttribute('y2', to.y + '%');
+                rn.labelEl.style.left = edgePoint.x + '%';
+                rn.labelEl.style.top = edgePoint.y + '%';
+            });
+        });
+    }
+
+    function updateRemoteLinkActivity(data) {
+        remoteLinkNodes.forEach(function (rn) {
+            if (rn.link.kind === 'stack') {
+                // Always role 'child' (see REMOTE_LINKS above) - a battery
+                // group has no power/current reading (see
+                // _decode_battery_group() in app.py), just "has live data".
+                rn.line.classList.toggle('active', !!data.stacks[rn.link.id]);
+                rn.line.classList.remove('reverse');
+                return;
+            }
+            var isPanel = rn.link.kind === 'panel';
+            var info = isPanel ? data.panels[rn.link.id] : data.machines[rn.link.id];
+            // A meterless panel falls back to its passthrough reading, same
+            // as its own pc-power/pc-passthrough display. A machine has no
+            // such fallback - it's either read by a meter or it isn't.
+            var power = isPanel
+                ? (info && info.online ? info.total_power : (info && info.passthrough_online ? info.passthrough_power : 0))
+                : (info ? info.total_power : 0);
+            var online = isPanel ? !!(info && (info.online || info.passthrough_online)) : !!(info && info.online);
+            var active = online && Math.abs(power) > POWER_ACTIVE_THRESHOLD_W;
+            rn.line.classList.toggle('active', active);
+            if (rn.link.role === 'child' && isPanel) {
+                // The local panel is the consuming end - reverse only if
+                // it's itself a net generator (inverter exporting up to its
+                // remote parent). A machine is always a consumer, so a
+                // machine's 'child' stub never reverses.
+                var reverse = info && info.online
+                    ? !!(info.battery && info.total_power > POWER_ACTIVE_THRESHOLD_W)
+                    : !!(info && info.passthrough_reverse);
+                rn.line.classList.toggle('reverse', active && reverse);
+            } else {
+                // role 'parent' (remote end's own data isn't available from
+                // this room's poll) or a machine's 'child' stub - always
+                // normal consumption flow, never reverse.
+                rn.line.classList.remove('reverse');
+            }
+        });
+    }
+
+    function redrawConnections() {
+        connections.forEach(function (conn) {
+            var from = cardCenter('machine', conn.machineId);
+            var to = cardCenter('panel', conn.panelId);
+            if (!from || !to) return;
+            if (!conn.line) {
+                conn.line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                conn.line.setAttribute('class', 'connection-line');
+                svg.appendChild(conn.line);
+                // Hover twin - shows the machine's own tooltip, since its
+                // reading is what drives this line's active state (see the
+                // comment above `connections`' declaration).
+                conn.hitLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                conn.hitLine.setAttribute('class', 'connection-hit');
+                svg.appendChild(conn.hitLine);
+                conn.hitLine.addEventListener('mouseenter', function (e) {
+                    var machineCard = document.querySelector('.map-card[data-kind="machine"][data-id="' + conn.machineId + '"]');
+                    if (machineCard) showTooltip(machineCard, 'machine', conn.machineId, e);
+                });
+                conn.hitLine.addEventListener('mousemove', positionTooltip);
+                conn.hitLine.addEventListener('mouseleave', hideTooltip);
+            }
+            conn.line.setAttribute('x1', from.x + '%');
+            conn.line.setAttribute('y1', from.y + '%');
+            conn.line.setAttribute('x2', to.x + '%');
+            conn.line.setAttribute('y2', to.y + '%');
+            conn.line.classList.toggle('active', conn.active);
+            conn.hitLine.setAttribute('x1', from.x + '%');
+            conn.hitLine.setAttribute('y1', from.y + '%');
+            conn.hitLine.setAttribute('x2', to.x + '%');
+            conn.hitLine.setAttribute('y2', to.y + '%');
+        });
+        panelConnections.forEach(function (conn) {
+            var from = cardCenter('panel', conn.childId);
+            var to = cardCenter('panel', conn.parentId);
+            if (!from || !to) return;
+            if (!conn.line) {
+                conn.line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                conn.line.setAttribute('class', 'connection-line');
+                svg.appendChild(conn.line);
+                // Hover twin - shows the child panel's own tooltip, since
+                // its reading is what drives this line's active/reverse.
+                conn.hitLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                conn.hitLine.setAttribute('class', 'connection-hit');
+                svg.appendChild(conn.hitLine);
+                conn.hitLine.addEventListener('mouseenter', function (e) {
+                    var childCard = document.querySelector('.map-card[data-kind="panel"][data-id="' + conn.childId + '"]');
+                    if (childCard) showTooltip(childCard, 'panel', conn.childId, e);
+                });
+                conn.hitLine.addEventListener('mousemove', positionTooltip);
+                conn.hitLine.addEventListener('mouseleave', hideTooltip);
+            }
+            conn.line.setAttribute('x1', from.x + '%');
+            conn.line.setAttribute('y1', from.y + '%');
+            conn.line.setAttribute('x2', to.x + '%');
+            conn.line.setAttribute('y2', to.y + '%');
+            conn.line.classList.toggle('active', conn.active);
+            conn.line.classList.toggle('reverse', conn.active && conn.reverse);
+            conn.hitLine.setAttribute('x1', from.x + '%');
+            conn.hitLine.setAttribute('y1', from.y + '%');
+            conn.hitLine.setAttribute('x2', to.x + '%');
+            conn.hitLine.setAttribute('y2', to.y + '%');
+        });
+        stackConnections.forEach(function (conn) {
+            var from = cardCenter('stack', conn.stackId);
+            var to = cardCenter('panel', conn.panelId);
+            if (!from || !to) return;
+            if (!conn.line) {
+                conn.line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                conn.line.setAttribute('class', 'connection-line battery-link');
+                svg.appendChild(conn.line);
+                // Hover twin - shows the stack's own tooltip.
+                conn.hitLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                conn.hitLine.setAttribute('class', 'connection-hit');
+                svg.appendChild(conn.hitLine);
+                conn.hitLine.addEventListener('mouseenter', function (e) {
+                    var stackCard = document.querySelector('.map-card[data-kind="stack"][data-id="' + conn.stackId + '"]');
+                    if (stackCard) showTooltip(stackCard, 'stack', conn.stackId, e);
+                });
+                conn.hitLine.addEventListener('mousemove', positionTooltip);
+                conn.hitLine.addEventListener('mouseleave', hideTooltip);
+            }
+            conn.line.setAttribute('x1', from.x + '%');
+            conn.line.setAttribute('y1', from.y + '%');
+            conn.line.setAttribute('x2', to.x + '%');
+            conn.line.setAttribute('y2', to.y + '%');
+            conn.line.classList.toggle('active', conn.active);
+            conn.hitLine.setAttribute('x1', from.x + '%');
+            conn.hitLine.setAttribute('y1', from.y + '%');
+            conn.hitLine.setAttribute('x2', to.x + '%');
+            conn.hitLine.setAttribute('y2', to.y + '%');
+        });
+        updateRemoteLinkNodes();
+    }
+
+    // --- Drag to reposition (only while unlocked) ---
+    cards.forEach(function (card) {
+        var dragging = false;
+        var moved = false;
+        var kind = card.getAttribute('data-kind');
+        var id = card.getAttribute('data-id');
+
+        function pointerToPercent(clientX, clientY) {
+            var rect = canvas.getBoundingClientRect();
+            var x = ((clientX - rect.left) / rect.width) * 100;
+            var y = ((clientY - rect.top) / rect.height) * 100;
+            return {
+                x: Math.max(0, Math.min(100, x)),
+                y: Math.max(0, Math.min(100, y))
+            };
+        }
+
+        function onMove(e) {
+            if (!dragging) return;
+            moved = true;
+            var point = e.touches ? e.touches[0] : e;
+            var pos = pointerToPercent(point.clientX, point.clientY);
+            card.style.left = pos.x + '%';
+            card.style.top = pos.y + '%';
+            redrawConnections();
+        }
+
+        function onUp(e) {
+            if (!dragging) return;
+            dragging = false;
+            card.classList.remove('dragging');
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            document.removeEventListener('touchmove', onMove);
+            document.removeEventListener('touchend', onUp);
+
+            var point = (e.changedTouches && e.changedTouches[0]) || e;
+            var pos = pointerToPercent(point.clientX, point.clientY);
+            card.style.left = pos.x + '%';
+            card.style.top = pos.y + '%';
+            // Not sent to the server here - just marked dirty, see saveBtn.
+            dirty[kind + '-' + id] = {x: pos.x, y: pos.y};
+            redrawConnections();
+        }
+
+        function onDown(e) {
+            if (!editMode || e.target.tagName === 'SELECT' || e.target.tagName === 'BUTTON') return;
+            dragging = true;
+            moved = false;
+            card.classList.add('dragging');
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+            document.addEventListener('touchmove', onMove, {passive: false});
+            document.addEventListener('touchend', onUp);
+            e.preventDefault();
+        }
+
+        card.addEventListener('mousedown', onDown);
+        card.addEventListener('touchstart', onDown, {passive: false});
+
+        // Locked: a plain click opens this object's live view in Консумация,
+        // focused on its primary meter (?host=...) if it has one. Unlocked:
+        // clicks are drags instead (moved stays false for a real click, so
+        // this also guards against navigating right after a drag release).
+        card.addEventListener('click', function (e) {
+            if (editMode || moved || e.target.tagName === 'SELECT' || e.target.tagName === 'BUTTON') return;
+            if (kind === 'stack') {
+                window.location.href = '{{ url_for("admin_battery_cabinets") }}';
+                return;
+            }
+            var host = card.getAttribute('data-power-host');
+            window.location.href = '{{ url_for("admin_power") }}' + (host ? '?host=' + encodeURIComponent(host) : '');
+        });
+
+        card.addEventListener('mouseenter', function (e) { showTooltip(card, kind, id, e); });
+        card.addEventListener('mousemove', function (e) { if (!dragging) positionTooltip(e); });
+        card.addEventListener('mouseleave', hideTooltip);
+    });
+
+    // --- Hover tooltip - same detail as the live cards on /admin/power
+    // (snap.channels for Shelly/DTSU666, snap.pv/ac/battery/load/meter for
+    // Solis), built from the full per-device snapshots _collect_power_
+    // aggregates() passes through (see app.py). ---
+    var BATTERY_DIR_LABELS = {charge: 'Зарежда', discharge: 'Разрежда', idle: 'Покой'};
+    function positionTooltip(e) {
+        var x = e.clientX + 16, y = e.clientY + 12;
+        if (x + 310 > window.innerWidth) x = e.clientX - 310;
+        if (y + 300 > window.innerHeight) y = Math.max(8, window.innerHeight - 300);
+        tooltip.style.left = x + 'px';
+        tooltip.style.top = y + 'px';
+    }
+    function renderSnapshotDetail(snap) {
+        var html = '<div class="tt-device">' + snap.name + (snap.online ? '' : ' &middot; без връзка') + '</div>';
+        if (!snap.online) {
+            html += '<div class="tt-row">Грешка <span>' + (snap.error || '—') + '</span></div>';
+            return html;
+        }
+        if (snap.battery) {
+            // `snap.battery` alone is only BMS port 1's own reading - combine
+            // with port 2 (snap.battery_groups[1]) the same way admin_power.html's
+            // renderBatteryBlock() does, so this tooltip doesn't silently
+            // show "the inverter's" charge/power as just port 1's number -
+            // explicit bug report: "общото зареждане на инвертора ...
+            // показва само числото на първия бмс".
+            var b = snap.battery, pv = snap.pv, ac = snap.ac, load = snap.load;
+            var groups = snap.battery_groups;
+            var port2 = groups && groups[1] && groups[1].soc != null ? groups[1] : null;
+            var soc = port2 ? (b.soc + port2.soc) / 2 : b.soc;
+            var power = port2 ? b.power + port2.power : b.power;
+            var current = port2 ? b.current + port2.current : b.current;
+            var voltage = port2 ? (b.voltage + port2.voltage) / 2 : b.voltage;
+            var direction = power > 0 ? 'charge' : power < 0 ? 'discharge' : 'idle';
+            html += '<div class="tt-row">Мощност към мрежата <span>' + Math.round(snap.total_power) + ' W</span></div>' +
+                '<div class="tt-sub">Батерия' + (port2 ? ' (2 порта)' : '') + '</div>' +
+                '<div class="tt-row">Заряд <span>' + Math.round(soc) + '% (SOH ' + Math.round(b.soh) + '%)</span></div>' +
+                '<div class="tt-row">Мощност <span>' + Math.round(Math.abs(power)) + ' W (' + (BATTERY_DIR_LABELS[direction] || direction) + ')</span></div>' +
+                '<div class="tt-row">Напрежение / Ток <span>' + voltage.toFixed(1) + ' V / ' + current.toFixed(1) + ' A</span></div>' +
+                '<div class="tt-row">Заредено/разредено днес (БМС 1) <span>' + b.today_charge_kwh.toFixed(1) + ' / ' + b.today_discharge_kwh.toFixed(1) + ' kWh</span></div>' +
+                '<div class="tt-sub">Соларно (PV)</div>' +
+                '<div class="tt-row">Мощност сега <span>' + Math.round(pv.power) + ' W</span></div>' +
+                '<div class="tt-row">Днес / Общо <span>' + pv.today_kwh.toFixed(1) + ' / ' + Math.round(pv.total_kwh) + ' kWh</span></div>' +
+                '<div class="tt-sub">AC изход</div>' +
+                '<div class="tt-row">Акт. / Реакт. / Пълна <span>' + Math.round(ac.active_power) + ' / ' + Math.round(ac.reactive_power) + ' / ' + Math.round(ac.apparent_power) + ' W</span></div>' +
+                '<div class="tt-row">Честота <span>' + ac.frequency.toFixed(2) + ' Hz</span></div>' +
+                '<div class="tt-sub">Товар</div>' +
+                '<div class="tt-row">Домакински / Бекъп <span>' + Math.round(load.household_w) + ' / ' + Math.round(load.backup_w) + ' W</span></div>' +
+                '<div class="tt-row">Температура <span>' + snap.temperature.toFixed(1) + ' &deg;C</span></div>';
+        } else if (snap.channels && snap.channels.length) {
+            html += '<div class="tt-row">Обща мощност <span>' + Math.round(snap.total_power) + ' W</span></div>' +
+                '<div class="tt-row">Общо изразходвани <span>' + snap.total_energy.toFixed(1) + ' kWh</span></div>';
+            snap.channels.forEach(function (ch) {
+                html += '<div class="tt-sub">' + ch.label + '</div>' +
+                    '<div class="tt-row">Мощност <span>' + Math.round(ch.act_power) + ' W</span></div>' +
+                    '<div class="tt-row">Напрежение / Ток <span>' + ch.voltage.toFixed(1) + ' V / ' + ch.current.toFixed(2) + ' A</span></div>';
+            });
+        } else {
+            html += '<div class="tt-row">Мощност <span>' + Math.round(snap.total_power) + ' W</span></div>';
+        }
+        return html;
+    }
+    function showTooltip(card, kind, id, e) {
+        var group = lastPollData && (kind === 'machine' ? lastPollData.machines : lastPollData.panels);
+        var info = group && group[id];
+        var name = card.querySelector('.mc-name').textContent;
+        var html = '<div class="tt-title">' + name + '</div>';
+        if (kind === 'machine') {
+            var status = card.querySelector('.mc-status-label').textContent.trim();
+            html += '<div class="tt-row">Статус <span>' + status + '</span></div>' +
+                '<div class="tt-row">Тип машина <span>' + card.getAttribute('data-machine-type') + '</span></div>';
+        } else if (kind === 'stack') {
+            card.querySelectorAll('.mc-sub').forEach(function (sub) {
+                html += '<div class="tt-row">' + sub.textContent + '</div>';
+            });
+            tooltip.innerHTML = html;
+            tooltip.style.display = 'block';
+            positionTooltip(e);
+            return;
+        } else {
+            html += '<div class="tt-row">Захранва се от <span>' + card.getAttribute('data-fed-from') + '</span></div>';
+        }
+        if (info && info.snapshots && info.snapshots.length) {
+            info.snapshots.forEach(function (snap) { html += renderSnapshotDetail(snap); });
+        } else {
+            html += '<div class="tt-row">Няма свързан електромер</div>';
+        }
+        html += '<div class="tt-hint">Кликни за пълния изглед в Консумация</div>';
+        tooltip.innerHTML = html;
+        tooltip.style.display = 'block';
+        positionTooltip(e);
+    }
+    function hideTooltip() { tooltip.style.display = 'none'; }
+
+    // --- Inline status change (machines only) ---
+    document.querySelectorAll('.mc-status-select').forEach(function (select) {
+        select.addEventListener('change', function () {
+            var machineId = select.getAttribute('data-status-for');
+            var newStatus = select.value;
+            fetch('/machines/update/' + machineId, {
+                method: 'POST',
+                body: csrfHeaders({status: newStatus})
+            }).then(function () {
+                var card = select.closest('.map-card');
+                var dot = card.querySelector('.mc-status-dot');
+                var label = card.querySelector('.mc-status-label');
+                dot.className = 'mc-status-dot mc-status-' + newStatus;
+                label.textContent = newStatus === 'idle' ? 'Свободна' : (newStatus === 'running' ? 'Работи' : 'Поддръжка');
+            }).catch(function () {});
+        });
+    });
+
+    // --- Live power polling ---
+    // A machine's own reading (not the panel's, which sums every meter
+    // mounted inside it) decides whether ITS line to the panel animates -
+    // "this specific machine is drawing power right now", not just "the
+    // panel has some load from somewhere".
+    var POWER_ACTIVE_THRESHOLD_W = 5;
+
+    function pollPower() {
+        fetch('{{ url_for("admin_factory_map_room_data", room_id=room.id) }}')
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                lastPollData = data;
+                tsEl.textContent = 'Последно обновено: ' + data.ts;
+                document.querySelectorAll('[data-power-for]').forEach(function (el) {
+                    var key = el.getAttribute('data-power-for');
+                    var parts = key.split('-');
+                    var group = parts[0] === 'machine' ? data.machines : data.panels;
+                    var info = group[parts[1]];
+                    if (!info) {
+                        el.textContent = '— kW';
+                        el.classList.add('offline');
+                        return;
+                    }
+                    if (info.online) {
+                        el.textContent = (info.total_power / 1000).toFixed(2) + ' kW';
+                        el.classList.remove('offline');
+                    } else {
+                        el.textContent = 'без връзка';
+                        el.classList.add('offline');
+                    }
+                });
+                // Only rendered (server-side) for a panel with no meter of
+                // its own - the sum of its nearest meter-equipped
+                // descendant panel(s), see passthrough_power in
+                // _collect_power_aggregates().
+                document.querySelectorAll('[data-passthrough-for]').forEach(function (el) {
+                    var key = el.getAttribute('data-passthrough-for');
+                    var id = key.split('-')[1];
+                    var info = data.panels[id];
+                    var span = el.querySelector('span');
+                    if (info && info.passthrough_online) {
+                        // reverse = net generation among its descendants exceeds
+                        // consumption (inverters are generators, machines are
+                        // consumers), so power is flowing OUT through this panel.
+                        span.textContent = (info.passthrough_reverse ? '↑ ' : '↓ ') + (info.passthrough_power / 1000).toFixed(2) + ' kW';
+                        el.classList.remove('offline');
+                        el.classList.toggle('reverse', !!info.passthrough_reverse);
+                    } else {
+                        span.textContent = '— kW';
+                        el.classList.add('offline');
+                        el.classList.remove('reverse');
+                    }
+                });
+                connections.forEach(function (conn) {
+                    var info = data.machines[conn.machineId];
+                    conn.active = !!(info && info.online && info.total_power > POWER_ACTIVE_THRESHOLD_W);
+                });
+                panelConnections.forEach(function (conn) {
+                    var info = data.panels[conn.childId];
+                    // Same meterless fallback as pc-passthrough/the remote
+                    // stubs - a child panel with no meter of its own uses its
+                    // passthrough reading instead.
+                    var power = info && info.online ? info.total_power : (info && info.passthrough_online ? info.passthrough_power : 0);
+                    var online = !!(info && (info.online || info.passthrough_online));
+                    conn.active = online && Math.abs(power) > POWER_ACTIVE_THRESHOLD_W;
+                    conn.reverse = info && info.online
+                        ? !!(info.battery && info.total_power > POWER_ACTIVE_THRESHOLD_W)
+                        : !!(info && info.passthrough_reverse);
+                });
+                stackConnections.forEach(function (conn) {
+                    conn.active = !!(data.stacks || {})[conn.stackId];
+                });
+                updateRemoteLinkActivity(data);
+                redrawConnections();
+
+                document.querySelectorAll('[data-stack-live-for]').forEach(function (el) {
+                    var id = el.getAttribute('data-stack-live-for');
+                    var g = (data.stacks || {})[id];
+                    // g.voltage is the real BMS pack voltage (CONFIRMED per
+                    // port - see _battery_stack_live_data() in app.py),
+                    // separate from the per-cell min/max range already
+                    // shown here - "добавим... напрежението за всяка
+                    // батерия от bms".
+                    el.textContent = g
+                        ? g.soc + '% SOC · ' + g.voltage.toFixed(1) + ' V · ' + g.cell_voltage_min.toFixed(2) + '-' + g.cell_voltage_max.toFixed(2) + ' V/клетка · ' + g.temperature_min.toFixed(0) + '-' + g.temperature_max.toFixed(0) + ' °C'
+                        : '—';
+                });
+                // Charge/discharge current+power - shared inverter-wide
+                // aggregate, same reasoning as g.soc above (individual BMS
+                // ports have no current/power register of their own) -
+                // explicit ask: "трябва да се вижда с какъв ток се
+                // зареждат/разреждат, каква мощност".
+                document.querySelectorAll('[data-stack-power-for]').forEach(function (el) {
+                    var id = el.getAttribute('data-stack-power-for');
+                    var g = (data.stacks || {})[id];
+                    el.textContent = (g && g.direction && g.direction !== 'idle')
+                        ? BATTERY_DIR_LABELS[g.direction] + ' · ' + Math.abs(g.current).toFixed(1) + ' A · ' + Math.round(Math.abs(g.power)) + ' W'
+                        : (g ? 'В покой' : '—');
+                });
+                // Battery icon fill level/color - see .stack-fill's comment
+                // above and _battery_stack_live_data() in app.py (direction
+                // is the inverter-wide aggregate, shared by both its stacks).
+                document.querySelectorAll('[data-stack-fill-for]').forEach(function (el) {
+                    var id = el.getAttribute('data-stack-fill-for');
+                    var g = (data.stacks || {})[id];
+                    var maxWidth = parseFloat(el.getAttribute('data-max-width'));
+                    el.setAttribute('width', g ? Math.max(0, Math.min(100, g.soc)) / 100 * maxWidth : 0);
+                    el.classList.toggle('charge', !!g && g.direction === 'charge');
+                    el.classList.toggle('discharge', !!g && g.direction === 'discharge');
+                });
+                // SOC number inside the icon itself - "да е по видимо".
+                document.querySelectorAll('[data-stack-soc-label-for]').forEach(function (el) {
+                    var id = el.getAttribute('data-stack-soc-label-for');
+                    var g = (data.stacks || {})[id];
+                    el.textContent = g ? Math.round(g.soc) + '%' : '—';
+                });
+
+                document.querySelectorAll('[data-conv-state-for]').forEach(function (el) {
+                    var id = el.getAttribute('data-conv-state-for');
+                    var info = (data.convectors || {})[id];
+                    var card = el.closest('.convector-card');
+                    var powerEl = card.querySelector('[data-conv-power-for="' + id + '"]');
+                    var toggleBtn = card.querySelector('.conv-toggle-map-btn');
+                    if (!info || !info.online) {
+                        el.textContent = info && info.error ? info.error : 'няма връзка';
+                        card.classList.remove('is-on');
+                        if (powerEl) powerEl.textContent = '';
+                        if (toggleBtn) toggleBtn.disabled = true;
+                        return;
+                    }
+                    el.textContent = info.is_on ? 'Включен' : 'Изключен';
+                    card.classList.toggle('is-on', !!info.is_on);
+                    if (powerEl) {
+                        // Not every relay meters power - a plain (non-PM)
+                        // Shelly 1/Plus 1 never reports it, so leave the
+                        // line blank rather than claim a false "0 W".
+                        powerEl.textContent = (info.power_w === null || info.power_w === undefined)
+                            ? '' : info.power_w.toFixed(0) + ' W';
+                    }
+                    if (toggleBtn) toggleBtn.disabled = false;
+                });
+            })
+            .catch(function () {});
+    }
+    redrawConnections();
+    pollPower();
+    setInterval(pollPower, 5000);
+
+    // --- Toggle a convector on/off directly from its map card ---
+    document.querySelectorAll('.conv-toggle-map-btn').forEach(function (btn) {
+        btn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+        btn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            if (editMode) return;  // repositioning, not switching
+            var id = btn.getAttribute('data-id');
+            btn.disabled = true;
+            fetch('/admin/convectors/' + id + '/toggle', { method: 'POST', body: csrfHeaders({}) })
+                .then(pollPower)
+                .catch(function () {})
+                .then(function () { btn.disabled = false; });
+        });
+    });
+
+    // "Назад" goes to wherever actually linked here (e.g. the room picker,
+    // the main overview map, or a tracker's focus link) instead of always
+    // the same fixed page - falls back to the href already in the markup
+    // when there's no same-origin referrer (direct link/bookmark).
+    var backLink = document.getElementById('backLink');
+    if (backLink && document.referrer && document.referrer.indexOf(window.location.origin) === 0) {
+        backLink.href = document.referrer;
+    }
+})();
+</script>
+
+</body>
+</html>

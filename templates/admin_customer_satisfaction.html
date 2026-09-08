@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Удовлетвореност на клиенти - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .capa-textarea {
+            width: 100%;
+            padding: 0.6rem 0.75rem;
+            background-color: var(--bg-input);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-sm);
+        }
+        .rating-stars {
+            color: #f59e0b;
+            letter-spacing: 1px;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    {% if current_user.is_admin or current_user.role == 'quality_control' %}
+    <section class="admin-card">
+        <h3>Нова обратна връзка</h3>
+        <p class="section-subtitle">ISO 9001 §9.1.2 - наблюдение на възприятието на клиента (анкета, оплакване, похвала, рекламация, преглед на доставка).</p>
+        <form action="{{ url_for('admin_add_satisfaction_record') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="new_client_id">Клиент</label>
+                <select id="new_client_id" name="client_id" required>
+                    <option value="">-- изберете --</option>
+                    {% for c in clients %}
+                    <option value="{{ c.id }}">{{ c.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="new_source">Източник</label>
+                <select id="new_source" name="source">
+                    {% for key, label in sources.items() %}
+                    <option value="{{ key }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="new_rating">Оценка (1-5)</label>
+                <select id="new_rating" name="rating">
+                    {% for n in range(1, 6) %}
+                    <option value="{{ n }}" {% if n == 5 %}selected{% endif %}>{{ n }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="new_feedback_date">Дата</label>
+                <input type="date" id="new_feedback_date" name="feedback_date" required>
+            </div>
+            <div class="form-group">
+                <label for="new_order_reference">Свързана поръчка (незадължително)</label>
+                <input type="text" id="new_order_reference" name="order_reference" placeholder="№ на поръчка">
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="new_comment">Коментар</label>
+                <textarea id="new_comment" name="comment" rows="2" class="capa-textarea"></textarea>
+            </div>
+            <button type="submit" class="btn-submit">Запиши</button>
+        </form>
+    </section>
+    {% endif %}
+
+    <section class="admin-card">
+        <h3>Записи за удовлетвореност</h3>
+
+        <form method="GET" class="admin-form" style="margin-bottom: 0.5rem;">
+            <div class="form-group">
+                <label for="client_filter">Филтър по клиент</label>
+                <select id="client_filter" name="client_id" onchange="this.form.submit()">
+                    <option value="">-- всички --</option>
+                    {% for c in clients %}
+                    <option value="{{ c.id }}" {% if client_filter == c.id|string %}selected{% endif %}>{{ c.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </form>
+
+        {% if records %}
+        <div class="table-responsive" style="margin-top: 1rem;">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Клиент</th>
+                    <th>Източник</th>
+                    <th>Оценка</th>
+                    <th>Дата</th>
+                    <th>Поръчка</th>
+                    <th>Коментар</th>
+                    <th>CAPA</th>
+                    <th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for record in records %}
+                <tr>
+                    <td>{{ record.client.name if record.client else '—' }}</td>
+                    <td>{{ record.source_label }}</td>
+                    <td class="rating-stars">{{ '★' * record.rating }}{{ '☆' * (5 - record.rating) }}</td>
+                    <td>{{ record.feedback_date.strftime('%d.%m.%Y') }}</td>
+                    <td>{{ record.order_reference or '—' }}</td>
+                    <td style="max-width: 260px;">{{ record.comment or '—' }}</td>
+                    <td>
+                        {% if record.capa %}
+                        <a href="{{ url_for('admin_edit_capa', capa_id=record.capa.id) }}">{{ record.capa.capa_no }}</a>
+                        {% elif current_user.is_admin or current_user.role == 'quality_control' %}
+                        <a href="{{ url_for('admin_capa', prefill_problem=(record.comment or record.source_label) ~ ' (' ~ (record.client.name if record.client else '') ~ ')', prefill_source='Удовлетвореност на клиенти - ' ~ record.source_label, from_satisfaction_id=record.id) }}" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Отвори CAPA</a>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td class="text-right">
+                        {% if current_user.is_admin or current_user.role == 'quality_control' %}
+                        <form action="{{ url_for('admin_delete_satisfaction_record', record_id=record.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на записа?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма записи за удовлетвореност{{ ' за този клиент' if client_filter }}.</p>
+        {% endif %}
+    </section>
+
+</main>
+
+</body>
+</html>

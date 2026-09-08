@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Регистър на риска - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .capa-textarea {
+            width: 100%;
+            padding: 0.6rem 0.75rem;
+            background-color: var(--bg-input);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-sm);
+        }
+        .badge-risk-medium {
+            background-color: rgba(245, 158, 11, 0.15);
+            color: #f59e0b;
+            border: 1px solid rgba(245, 158, 11, 0.35);
+        }
+        .result-filter-links a { margin-right: 12px; }
+        .result-filter-links a.active-filter { font-weight: 700; text-decoration: underline; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    {% if current_user.is_admin or current_user.role == 'quality_control' %}
+    <section class="admin-card">
+        <h3>Нов запис в регистъра на риска</h3>
+        <p class="section-subtitle">ISO 9001 §6.1 - идентифициране на риск или възможност; оценка по матрица 5x5 (вероятност &times; въздействие). Действието за намаляване/оползотворяване се попълва след това в "Редактирай".</p>
+        <form action="{{ url_for('admin_add_risk_entry') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group" style="width: 100%;">
+                <label for="new_title">Заглавие</label>
+                <input type="text" id="new_title" name="title" required placeholder="напр. Престой на основния лазерен център" style="width: 100%;">
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="new_description">Описание (незадължително)</label>
+                <textarea id="new_description" name="description" rows="2" class="capa-textarea"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="new_risk_type">Вид</label>
+                <select id="new_risk_type" name="risk_type">
+                    {% for key, label in risk_types.items() %}
+                    <option value="{{ key }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="new_category">Категория</label>
+                <select id="new_category" name="category">
+                    {% for key, label in categories.items() %}
+                    <option value="{{ key }}" {% if key == 'other' %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="new_likelihood">Вероятност (1-5)</label>
+                <select id="new_likelihood" name="likelihood">
+                    {% for n in range(1, 6) %}
+                    <option value="{{ n }}">{{ n }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="new_impact">Въздействие (1-5)</label>
+                <select id="new_impact" name="impact">
+                    {% for n in range(1, 6) %}
+                    <option value="{{ n }}">{{ n }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="new_owner_id">Отговорник</label>
+                <select id="new_owner_id" name="owner_id">
+                    <option value="">-- няма --</option>
+                    {% for u in users %}
+                    <option value="{{ u.id }}">{{ u.username }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="new_identified_date">Дата на идентифициране</label>
+                <input type="date" id="new_identified_date" name="identified_date" required>
+            </div>
+            <div class="form-group">
+                <label for="new_review_date">Следващ преглед (незадължително)</label>
+                <input type="date" id="new_review_date" name="review_date">
+            </div>
+            <button type="submit" class="btn-submit">Добави запис</button>
+        </form>
+    </section>
+    {% endif %}
+
+    <section class="admin-card">
+        <h3>Регистър на риска</h3>
+
+        <div class="result-filter-links">
+            <a href="{{ url_for('admin_risk_register') }}" class="{{ 'active-filter' if not status_filter }}">Всички</a>
+            {% for key, label in statuses.items() %}
+            <a href="{{ url_for('admin_risk_register', status=key) }}" class="{{ 'active-filter' if status_filter == key }}">{{ label }}</a>
+            {% endfor %}
+        </div>
+
+        {% if entries %}
+        <div class="table-responsive" style="margin-top: 1rem;">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Заглавие</th>
+                    <th>Вид</th>
+                    <th>Категория</th>
+                    <th>В &times; В</th>
+                    <th>Риск-бал</th>
+                    <th>Отговорник</th>
+                    <th>Статус</th>
+                    <th>Следващ преглед</th>
+                    <th class="text-right">Действие</th>
+                    <th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for entry in entries %}
+                <tr>
+                    <td style="max-width: 260px;"><strong>{{ entry.title }}</strong></td>
+                    <td>{{ entry.risk_type_label }}</td>
+                    <td>{{ entry.category_label }}</td>
+                    <td>{{ entry.likelihood }} &times; {{ entry.impact }}</td>
+                    <td>
+                        {% if entry.risk_level == 'high' %}
+                        <span class="badge badge-fail">{{ entry.risk_score }} - {{ entry.risk_level_label }}</span>
+                        {% elif entry.risk_level == 'medium' %}
+                        <span class="badge badge-risk-medium">{{ entry.risk_score }} - {{ entry.risk_level_label }}</span>
+                        {% else %}
+                        <span class="badge badge-pass">{{ entry.risk_score }} - {{ entry.risk_level_label }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ entry.owner.username if entry.owner else '—' }}</td>
+                    <td>{{ entry.status_label }}</td>
+                    <td>{{ entry.review_date.strftime('%d.%m.%Y') if entry.review_date else '—' }}</td>
+                    <td class="text-right">
+                        <a href="{{ url_for('admin_edit_risk_entry', entry_id=entry.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
+                    </td>
+                    <td class="text-right">
+                        {% if current_user.is_admin or current_user.role == 'quality_control' %}
+                        <form action="{{ url_for('admin_delete_risk_entry', entry_id=entry.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на &quot;{{ entry.title }}&quot;?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма записи в регистъра на риска{{ ' с този статус' if status_filter }}.</p>
+        {% endif %}
+    </section>
+
+</main>
+
+</body>
+</html>

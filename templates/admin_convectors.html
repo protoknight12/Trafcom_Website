@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Конвектори - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .conv-state { font-size: 1rem; font-weight: 700; }
+        .conv-state.on { color: #10b981; }
+        .conv-state.off { color: var(--text-muted); }
+        .conv-offline { color: var(--text-muted); font-weight: 400; font-size: 0.85rem; }
+        .conv-toggle-btn { padding: 6px 14px; font-size: 0.85rem; }
+        .conv-toggle-btn.is-on { background-color: #b91c1c; border-color: #b91c1c; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Нов конвектор</h3>
+        <p class="section-subtitle">Отоплителен/охладителен конвектор, превключван през собствено Shelly реле (Shelly 1/1PM или Plus/Pro 1/1PM). Свържете го към помещение от картата, или въведете свободно място, ако не е в нито едно заведено помещение.</p>
+        <form action="{{ url_for('admin_add_convector') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="new_conv_name">Име на конвектора</label>
+                <input type="text" id="new_conv_name" name="name" required placeholder="напр. Конвектор - Офис">
+            </div>
+            <div class="form-group">
+                <label for="new_conv_connection">Вид връзка</label>
+                <select id="new_conv_connection" name="connection_type">
+                    {% for key, label in connection_types.items() %}
+                    <option value="{{ key }}" {% if key == 'ip' %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="new_conv_host">Адрес (IP, за връзка тип IP)</label>
+                <input type="text" id="new_conv_host" name="host" placeholder="напр. 192.168.18.90">
+            </div>
+            <div class="form-group">
+                <label for="new_conv_topic">MQTT тема (за връзка тип MQTT)</label>
+                <input type="text" id="new_conv_topic" name="mqtt_topic" placeholder="напр. shellyplus1-conv-office">
+            </div>
+            <p class="text-muted text-small" style="width: 100%; margin: -8px 0 8px 0;">За "IP (HTTP)" е нужен адрес, за "MQTT" - MQTT тема.</p>
+            <div class="form-group">
+                <label for="new_conv_type">Вид устройство</label>
+                <select id="new_conv_type" name="device_type">
+                    {% for key, label in convector_types.items() %}
+                    <option value="{{ key }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="new_conv_channel">Номер на реле (0 за едноканални устройства)</label>
+                <input type="text" id="new_conv_channel" name="relay_channel" value="0" placeholder="0">
+            </div>
+            <div class="form-group">
+                <label for="new_conv_room">Помещение (по избор)</label>
+                <select id="new_conv_room" name="room_id">
+                    <option value="">-- няма --</option>
+                    {% for r in rooms %}
+                    <option value="{{ r.id }}">{{ r.building.name }} / {{ r.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="new_conv_location">Или свободно място (ако не е в помещение)</label>
+                <input type="text" id="new_conv_location" name="location_label" placeholder="напр. Хале 1 - южна стена">
+            </div>
+            <button type="submit" class="btn-submit">Добави конвектор</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Конвектори</h3>
+        {% if convectors %}
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Име</th>
+                    <th>Място</th>
+                    <th>Състояние</th>
+                    <th>Мощност</th>
+                    <th>Адрес</th>
+                    <th>Вид</th>
+                    <th class="text-right">Управление</th>
+                    <th class="text-right">Действие</th>
+                    <th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for c in convectors %}
+                <tr>
+                    <td><strong>{{ c.name }}</strong></td>
+                    <td>{{ c.place_label }}</td>
+                    <td class="conv-state" data-field="state" data-conv-id="{{ c.id }}">—</td>
+                    <td class="text-small text-muted" data-field="power" data-conv-id="{{ c.id }}">—</td>
+                    <td class="text-small text-muted">{{ c.mqtt_topic if c.connection_type == 'mqtt' else c.host }}{% if c.relay_channel %} · реле {{ c.relay_channel }}{% endif %}</td>
+                    <td class="text-small text-muted">{{ convector_types.get(c.device_type, c.device_type) }}</td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_convector_toggle', conv_id=c.id) }}" method="POST" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-secondary conv-toggle-btn" data-conv-id="{{ c.id }}">Превключи</button>
+                        </form>
+                    </td>
+                    <td class="text-right">
+                        <a href="{{ url_for('edit_convector_window', conv_id=c.id) }}" onclick="window.open(this.href, 'editConvector', 'width=480,height=520'); return false;" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
+                    </td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_delete_convector', conv_id=c.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на конвектор &quot;{{ c.name|e }}&quot;?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <p class="text-muted text-small" id="convectorsTs" style="margin-top: 10px;"></p>
+        {% else %}
+        <p class="no-data text-center">Няма добавени конвектори.</p>
+        {% endif %}
+    </section>
+
+</main>
+
+<script>
+(function () {
+    var tsEl = document.getElementById('convectorsTs');
+    if (!document.querySelector('[data-conv-id]')) return;
+
+    function poll() {
+        fetch('{{ url_for("admin_convectors_data") }}')
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (tsEl) tsEl.textContent = 'Последно обновено: ' + data.ts;
+                document.querySelectorAll('[data-field="state"]').forEach(function (el) {
+                    var id = el.getAttribute('data-conv-id');
+                    var info = data.convectors[id];
+                    var toggleBtn = document.querySelector('.conv-toggle-btn[data-conv-id="' + id + '"]');
+                    var powerEl = document.querySelector('[data-field="power"][data-conv-id="' + id + '"]');
+                    if (!info || !info.online) {
+                        el.innerHTML = '<span class="conv-offline">' + (info && info.error ? info.error : 'няма връзка') + '</span>';
+                        if (toggleBtn) { toggleBtn.disabled = true; toggleBtn.classList.remove('is-on'); }
+                        if (powerEl) powerEl.textContent = '—';
+                        return;
+                    }
+                    el.textContent = info.is_on ? 'Включен' : 'Изключен';
+                    el.classList.toggle('on', !!info.is_on);
+                    el.classList.toggle('off', !info.is_on);
+                    if (toggleBtn) {
+                        toggleBtn.disabled = false;
+                        toggleBtn.classList.toggle('is-on', !!info.is_on);
+                        toggleBtn.textContent = info.is_on ? 'Изключи' : 'Включи';
+                    }
+                    if (powerEl) {
+                        // Not every relay meters power - a plain (non-PM)
+                        // Shelly 1/Plus 1 never reports it at all, vs. "0 W"
+                        // which would misleadingly claim it measured zero.
+                        powerEl.textContent = (info.power_w === null || info.power_w === undefined)
+                            ? 'няма данни' : info.power_w.toFixed(0) + ' W';
+                    }
+                });
+            })
+            .catch(function () {});
+    }
+    poll();
+    setInterval(poll, 10000);
+})();
+</script>
+
+</body>
+</html>

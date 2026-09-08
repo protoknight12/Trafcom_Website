@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Документален контрол - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .badge-draft {
+            background-color: rgba(255, 193, 7, 0.15);
+            color: #e0a800;
+            border: 1px solid rgba(255, 193, 7, 0.3);
+        }
+        .badge-obsolete {
+            background-color: rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
+            border: 1px solid var(--border-color);
+        }
+        .doc-modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            z-index: 1100;
+            align-items: center;
+            justify-content: center;
+        }
+        .doc-modal-box {
+            width: 100%;
+            max-width: 460px;
+            margin: 20px;
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-md);
+            padding: 28px;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
+            position: relative;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .doc-modal-close {
+            position: absolute; right: 20px; top: 20px;
+            font-size: 1.5rem; cursor: pointer; color: var(--text-muted);
+        }
+        .doc-history summary {
+            cursor: pointer;
+            color: var(--accent-primary);
+            font-size: 0.82rem;
+        }
+        .doc-history table {
+            margin-top: 8px;
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    {% if current_user.is_admin or current_user.role == 'quality_control' %}
+    <section class="admin-card">
+        <h3>Добавяне на нов документ</h3>
+        <p class="section-subtitle">Наръчник по качеството, политики, процедури, работни инструкции, формуляри и записи (ISO 9001 §7.5) - с версии и одобрения.</p>
+        <form action="{{ url_for('admin_add_document') }}" method="POST" enctype="multipart/form-data" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="new_document_no">Номер на документа</label>
+                <input type="text" id="new_document_no" name="document_no" placeholder="напр. QP-001" required autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="new_title">Заглавие</label>
+                <input type="text" id="new_title" name="title" placeholder="напр. Процедура за контрол на документи" required>
+            </div>
+            <div class="form-group">
+                <label for="new_category">Категория</label>
+                <select id="new_category" name="category">
+                    {% for key, label in categories.items() %}
+                    <option value="{{ key }}" {% if key == 'procedure' %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="new_status">Статус</label>
+                <select id="new_status" name="status">
+                    {% for key, label in statuses.items() %}
+                    <option value="{{ key }}" {% if key == 'active' %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="new_owner_id">Отговорник (незадължително)</label>
+                <select id="new_owner_id" name="owner_id">
+                    <option value="">-- няма --</option>
+                    {% for u in users %}
+                    <option value="{{ u.id }}">{{ u.username }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="new_approved_by">Одобрил (незадължително)</label>
+                <input type="text" id="new_approved_by" name="approved_by" placeholder="напр. Иван Иванов">
+            </div>
+            <div class="form-group">
+                <label for="new_effective_date">Дата на влизане в сила (незадължително)</label>
+                <input type="date" id="new_effective_date" name="effective_date">
+            </div>
+            <div class="form-group">
+                <label for="new_revision_label">Версия</label>
+                <input type="text" id="new_revision_label" name="revision_label" value="1" placeholder="напр. 1">
+            </div>
+            <div class="form-group">
+                <label for="new_file">Файл (незадължително)</label>
+                <input type="file" id="new_file" name="file">
+            </div>
+            <button type="submit" class="btn-submit">Добави документ</button>
+        </form>
+    </section>
+    {% endif %}
+
+    <section class="admin-card">
+        <h3>Контролирани документи</h3>
+        {% if documents %}
+        <div class="form-group" style="max-width: 360px;">
+            <input type="text" id="documentsSearchInput" placeholder="Търсене по номер, заглавие...">
+        </div>
+        <div class="table-responsive" style="margin-top: 1rem;">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>№</th>
+                    <th>Заглавие</th>
+                    <th>Категория</th>
+                    <th>Статус</th>
+                    <th>Версия</th>
+                    <th>В сила от</th>
+                    <th>Отговорник</th>
+                    <th>Одобрил</th>
+                    <th class="text-right">Файл</th>
+                    <th class="text-right">Действие</th>
+                </tr>
+                </thead>
+                <tbody id="documentsTableBody">
+                {% for doc in documents %}
+                <tr data-search="{{ (doc.document_no ~ ' ' ~ doc.title) | lower }}">
+                    <td><strong>{{ doc.document_no }}</strong></td>
+                    <td>
+                        {{ doc.title }}
+                        {% if doc.revisions|length > 1 %}
+                        <details class="doc-history">
+                            <summary>История ({{ doc.revisions|length }})</summary>
+                            <table class="users-table">
+                                <thead><tr><th>Версия</th><th>Дата</th><th>Промяна</th><th>Одобрил</th><th>Кой</th><th>Файл</th></tr></thead>
+                                <tbody>
+                                {% for rev in doc.revisions|reverse %}
+                                <tr>
+                                    <td>{{ rev.revision_label }}</td>
+                                    <td>{{ rev.created_at.strftime('%d.%m.%Y') }}</td>
+                                    <td>{{ rev.change_description or '—' }}</td>
+                                    <td>{{ rev.approved_by or '—' }}</td>
+                                    <td>{{ rev.revised_by.username if rev.revised_by else '—' }}</td>
+                                    <td>
+                                        {% if rev.filename %}
+                                        <a href="{{ url_for('admin_download_document_revision', revision_id=rev.id) }}">Изтегли</a>
+                                        {% else %}—{% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                                </tbody>
+                            </table>
+                        </details>
+                        {% endif %}
+                    </td>
+                    <td>{{ doc.category_label }}</td>
+                    <td>
+                        {% if doc.status == 'active' %}
+                        <span class="badge badge-pass">{{ doc.status_label }}</span>
+                        {% elif doc.status == 'draft' %}
+                        <span class="badge badge-draft">{{ doc.status_label }}</span>
+                        {% else %}
+                        <span class="badge badge-obsolete">{{ doc.status_label }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ doc.current_revision }}</td>
+                    <td>{{ doc.effective_date.strftime('%d.%m.%Y') if doc.effective_date else '—' }}</td>
+                    <td>{{ doc.owner.username if doc.owner else '—' }}</td>
+                    <td>{{ doc.approved_by or '—' }}</td>
+                    <td class="text-right">
+                        {% if doc.filename %}
+                        <a href="{{ url_for('admin_download_document', document_id=doc.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.78rem;">Изтегли</a>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td class="text-right">
+                        {% if current_user.is_admin or current_user.role == 'quality_control' %}
+                        <div style="display: flex; gap: 6px; justify-content: flex-end;">
+                            <button type="button" class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;" onclick="openRevisionModal({{ doc.id }}, '{{ doc.document_no|e }}')">+ Версия</button>
+                            <form action="{{ url_for('admin_delete_document', document_id=doc.id) }}" method="POST"
+                                  onsubmit="return confirm('Изтриване на документ &quot;{{ doc.document_no|e }}&quot;? Ще се изтрият и всички негови версии.');" style="display:inline;">
+                                {% include 'partials/csrf_field.html' %}
+                                <button type="submit" class="btn-delete">Изтрий</button>
+                            </form>
+                        </div>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                <tr class="search-empty-row" hidden><td colspan="10" class="text-center no-data">Няма съвпадения.</td></tr>
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма добавени документи.</p>
+        {% endif %}
+    </section>
+
+</main>
+
+{% if current_user.is_admin or current_user.role == 'quality_control' %}
+<div class="doc-modal-overlay" id="revisionModal">
+    <div class="doc-modal-box">
+        <span class="doc-modal-close" onclick="closeRevisionModal()">&times;</span>
+        <h3 style="margin-top: 0; margin-bottom: 16px;">Нова версия на <span id="revisionModalDocNo"></span></h3>
+        <form id="revisionForm" method="POST" enctype="multipart/form-data">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="rev_revision_label">Нов номер/означение на версията</label>
+                <input type="text" id="rev_revision_label" name="revision_label" required placeholder="напр. 2">
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="rev_change_description">Описание на промяната</label>
+                <textarea id="rev_change_description" name="change_description" rows="2" style="width: 100%; padding: 0.6rem 0.75rem; background-color: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm);"></textarea>
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="rev_approved_by">Одобрил</label>
+                <input type="text" id="rev_approved_by" name="approved_by" placeholder="напр. Иван Иванов">
+            </div>
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label for="rev_file">Файл</label>
+                <input type="file" id="rev_file" name="file">
+            </div>
+            <button type="submit" class="btn-submit" style="width: 100%;">Запази версията</button>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+<script src="{{ url_for('static', filename='js/table_search.js') }}"></script>
+<script>
+initTableSearch('documentsSearchInput', 'documentsTableBody');
+
+function openRevisionModal(documentId, documentNo) {
+    document.getElementById('revisionModalDocNo').textContent = documentNo;
+    document.getElementById('revisionForm').action = '/admin/documents/' + documentId + '/new-revision';
+    document.getElementById('revisionModal').style.display = 'flex';
+}
+function closeRevisionModal() {
+    document.getElementById('revisionModal').style.display = 'none';
+    document.getElementById('revisionForm').reset();
+}
+</script>
+
+</body>
+</html>

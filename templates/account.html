@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="bg">
+<html lang="{{ get_locale() }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     {% include 'partials/favicon.html' %}
-    <title>Моят профил - TRAFCOM</title>
+    <title>{{ _('Моят профил') }} - TRAFCOM</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
@@ -22,19 +22,19 @@
     {% endif %}
     {% endwith %}
 
-    <h2 style="margin-bottom: 20px;">Моят профил</h2>
+    <h2 style="margin-bottom: 20px;">{{ _('Моят профил') }}</h2>
 
     <div class="admin-card">
-        <h3 style="margin-top: 0;">Имейл</h3>
-        <p class="section-subtitle">Използва се за възстановяване на паролата.</p>
+        <h3 style="margin-top: 0;">{{ _('Имейл') }}</h3>
+        <p class="section-subtitle">{{ _('Използва се за възстановяване на паролата.') }}</p>
         {% if current_user.email %}
             {% if current_user.email_verified %}
-                <p class="section-subtitle" style="color: var(--success, #2e8540);">Потвърден.</p>
+                <p class="section-subtitle" style="color: var(--success, #2e8540);">{{ _('Потвърден.') }}</p>
             {% else %}
-                <p class="section-subtitle" style="color: var(--danger, #c0392b);">Непотвърден.</p>
+                <p class="section-subtitle" style="color: var(--danger, #c0392b);">{{ _('Непотвърден.') }}</p>
                 <form method="POST" action="{{ url_for('account_resend_verification') }}" class="admin-form" style="margin-bottom: 16px;">
                     {% include 'partials/csrf_field.html' %}
-                    <button type="submit" class="btn-secondary">Изпрати връзка за потвърждение отново</button>
+                    <button type="submit" class="btn-secondary">{{ _('Изпрати връзка за потвърждение отново') }}</button>
                 </form>
             {% endif %}
         {% endif %}
@@ -43,25 +43,25 @@
             <div class="form-group">
                 <input type="email" name="email" value="{{ current_user.email or '' }}" placeholder="you@example.com" required autocomplete="email">
             </div>
-            <button type="submit" class="btn-submit">{{ 'Смени имейла' if current_user.email else 'Добави имейл' }}</button>
+            <button type="submit" class="btn-submit">{{ _('Смени имейла') if current_user.email else _('Добави имейл') }}</button>
         </form>
     </div>
 
     <div class="admin-card" style="margin-top: 20px;">
-        <h3 style="margin-top: 0;">Двуфакторно удостоверяване (2FA)</h3>
+        <h3 style="margin-top: 0;">{{ _('Двуфакторно удостоверяване (2FA)') }}</h3>
         {% if current_user.totp_secret %}
-            <p class="section-subtitle">Активирано е. При вход ще се изисква код от приложението за удостоверяване.</p>
+            <p class="section-subtitle">{{ _('Активирано е. При вход ще се изисква код от приложението за удостоверяване.') }}</p>
             <form method="POST" action="{{ url_for('account_2fa_disable') }}" class="admin-form">
                 {% include 'partials/csrf_field.html' %}
                 <div class="form-group">
-                    <label for="disable-password">Парола (за потвърждение)</label>
+                    <label for="disable-password">{{ _('Парола (за потвърждение)') }}</label>
                     <input type="password" id="disable-password" name="password" required>
                 </div>
-                <button type="submit" class="btn-secondary">Изключи 2FA</button>
+                <button type="submit" class="btn-secondary">{{ _('Изключи 2FA') }}</button>
             </form>
         {% else %}
-            <p class="section-subtitle">Не е активирано. Добавете допълнителен слой защита на входа.</p>
-            <a href="{{ url_for('account_2fa_setup') }}" class="btn-submit">Активирай 2FA</a>
+            <p class="section-subtitle">{{ _('Не е активирано. Добавете допълнителен слой защита на входа.') }}</p>
+            <a href="{{ url_for('account_2fa_setup') }}" class="btn-submit">{{ _('Активирай 2FA') }}</a>
         {% endif %}
     </div>
 

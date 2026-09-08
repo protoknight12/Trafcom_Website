@@ -65,6 +65,14 @@
                 <input type="text" id="new_display_name" name="display_name" placeholder="напр. Алуминий 2мм" required autocomplete="off">
             </div>
             <div class="form-group">
+                <label for="new_display_name_en">Име (EN, незадължително)</label>
+                <input type="text" id="new_display_name_en" name="display_name_en" autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="new_display_name_de">Име (DE, незадължително)</label>
+                <input type="text" id="new_display_name_de" name="display_name_de" autocomplete="off">
+            </div>
+            <div class="form-group">
                 <label for="new_type">Тип (форма на суровината)</label>
                 <select id="new_type" name="type">
                     {% for type_key, type_label in MATERIAL_TYPE_LABELS.items() %}
@@ -194,6 +202,10 @@
                     </td>
                     <td>
                         <strong>{{ material.display_name }}</strong>
+                        <input type="text" name="display_name_en" form="{{ form_id }}" value="{{ material.display_name_en or '' }}"
+                               class="material-price-input" style="margin-top: 4px;" placeholder="EN">
+                        <input type="text" name="display_name_de" form="{{ form_id }}" value="{{ material.display_name_de or '' }}"
+                               class="material-price-input" style="margin-top: 4px;" placeholder="DE">
                     </td>
                     <td><input type="text" name="brand" form="{{ form_id }}" value="{{ material.brand or '' }}"
                                class="material-price-input" placeholder="Марка"></td>

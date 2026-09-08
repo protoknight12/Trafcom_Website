@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="bg">
+<html lang="{{ get_locale() }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     {% include 'partials/favicon.html' %}
-    <title>Файлове - {{ detail.name }} - Trafcom DXF</title>
+    <title>{{ _('Файлове') }} - {{ localized(detail, 'name') }} - Trafcom DXF</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <style>
         /* ---------- 2D DXF Viewer Modal (same as dashboard.html) ---------- */
@@ -111,29 +111,29 @@
 
     <div data-tab-panel="files">
     <section class="admin-card">
-        <h3>Файлове: {{ detail.name }}</h3>
+        <h3>{{ _('Файлове:') }} {{ localized(detail, 'name') }}</h3>
         <p class="section-subtitle">
-            Хранилище на файлове за този детайл - всякакъв тип (DXF чертежи, снимки, спецификации...).
+            {{ _('Хранилище на файлове за този детайл - всякакъв тип (DXF чертежи, снимки, спецификации...).') }}
             {% if current_user.is_admin %}Само администратори могат да ги изтеглят, преглеждат и премахват.{% endif %}
         </p>
 
         <form action="{{ url_for('upload_detail_dxf', detail_id=detail.id) }}" method="POST" enctype="multipart/form-data" class="admin-form" style="margin-bottom: 1.5rem;">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
-                <label for="dxf_file">Качване на нов файл</label>
+                <label for="dxf_file">{{ _('Качване на нов файл') }}</label>
                 <input type="file" id="dxf_file" name="file" required>
             </div>
-            <button type="submit" class="btn-submit">Качи</button>
+            <button type="submit" class="btn-submit">{{ _('Качи') }}</button>
         </form>
 
         <div class="table-responsive">
             <table class="users-table">
                 <thead>
                 <tr>
-                    <th>Файл</th>
-                    <th>Качен от</th>
-                    <th>Дата</th>
-                    <th class="text-right">Действие</th>
+                    <th>{{ _('Файл') }}</th>
+                    <th>{{ _('Качен от') }}</th>
+                    <th>{{ _('Дата') }}</th>
+                    <th class="text-right">{{ _('Действие') }}</th>
                 </tr>
                 </thead>
                 <tbody>
@@ -157,13 +157,13 @@
                             </form>
                         </div>
                         {% else %}
-                        <span class="text-muted text-small">Само за администратори</span>
+                        <span class="text-muted text-small">{{ _('Само за администратори') }}</span>
                         {% endif %}
                     </td>
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="4" class="text-center no-data">Няма качени файлове.</td>
+                    <td colspan="4" class="text-center no-data">{{ _('Няма качени файлове.') }}</td>
                 </tr>
                 {% endfor %}
                 </tbody>
@@ -637,11 +637,11 @@
 <div class="viewer-overlay" id="viewerOverlay">
     <div class="viewer-modal">
         <div class="viewer-header">
-            <h4 id="viewerTitle">Визуализация</h4>
+            <h4 id="viewerTitle">{{ _('Визуализация') }}</h4>
             <button type="button" class="viewer-close-btn" onclick="closeDxfViewer()">&times;</button>
         </div>
         <div class="viewer-body">
-            <div class="viewer-status" id="viewerStatus">Зареждане...</div>
+            <div class="viewer-status" id="viewerStatus">{{ _('Зареждане...') }}</div>
             <canvas class="viewer-canvas" id="viewerCanvas"></canvas>
         </div>
     </div>

@@ -81,6 +81,11 @@
                 <option value="{{ opt }}"></option>
                 {% endfor %}
             </datalist>
+            {% elif f.type == 'date' %}
+            <input type="date" id="field_{{ loop.index }}" name="{{ f.name }}" value="{{ f.value }}"
+                   {% if f.required %}required{% endif %}>
+            {% elif f.type == 'checkbox' %}
+            <input type="checkbox" id="field_{{ loop.index }}" name="{{ f.name }}" value="1" {% if f.value %}checked{% endif %}>
             {% elif f.type == 'file' %}
             {% if f.preview_url %}
             <div style="margin-bottom: 8px;">

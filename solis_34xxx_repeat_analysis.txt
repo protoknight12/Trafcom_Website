@@ -1,0 +1,165 @@
+=== Top offsets by device (exact + close match count) ===
+
+Device 4:
+  offset 2: score=13 (exact=9, close=4)
+  offset 25: score=13 (exact=8, close=5)
+  offset 1: score=12 (exact=3, close=9)
+  offset 4: score=8 (exact=6, close=2)
+  offset 3: score=7 (exact=0, close=7)
+  offset 50: score=7 (exact=7, close=0)
+  offset 100: score=7 (exact=7, close=0)
+  offset 6: score=5 (exact=3, close=2)
+  offset 150: score=5 (exact=5, close=0)
+  offset 12: score=4 (exact=3, close=1)
+  offset 13: score=4 (exact=1, close=3)
+  offset 93: score=4 (exact=3, close=1)
+  offset 14: score=3 (exact=2, close=1)
+  offset 16: score=3 (exact=1, close=2)
+  offset 23: score=3 (exact=3, close=0)
+
+Device 5:
+  offset 25: score=12 (exact=8, close=4)
+  offset 50: score=7 (exact=7, close=0)
+  offset 100: score=7 (exact=7, close=0)
+  offset 150: score=7 (exact=5, close=2)
+  offset 2: score=6 (exact=6, close=0)
+  offset 1: score=5 (exact=2, close=3)
+  offset 4: score=4 (exact=4, close=0)
+  offset 6: score=3 (exact=2, close=1)
+  offset 23: score=3 (exact=3, close=0)
+  offset 26: score=3 (exact=2, close=1)
+  offset 27: score=3 (exact=3, close=0)
+  offset 300: score=3 (exact=2, close=1)
+  offset 200: score=3 (exact=3, close=0)
+  offset 9: score=2 (exact=1, close=1)
+  offset 21: score=2 (exact=2, close=0)
+
+=== Top offsets confirmed in BOTH devices ===
+  offset 25: combined score=25 (dev4=13, dev5=12)
+  offset 2: combined score=19 (dev4=13, dev5=6)
+  offset 1: combined score=17 (dev4=12, dev5=5)
+  offset 50: combined score=14 (dev4=7, dev5=7)
+  offset 100: combined score=14 (dev4=7, dev5=7)
+  offset 4: combined score=12 (dev4=8, dev5=4)
+  offset 150: combined score=12 (dev4=5, dev5=7)
+  offset 6: combined score=8 (dev4=5, dev5=3)
+  offset 23: combined score=6 (dev4=3, dev5=3)
+  offset 27: combined score=6 (dev4=3, dev5=3)
+  offset 200: combined score=6 (dev4=3, dev5=3)
+  offset 26: combined score=5 (dev4=2, dev5=3)
+  offset 88: combined score=5 (dev4=3, dev5=2)
+  offset 93: combined score=5 (dev4=4, dev5=1)
+  offset 300: combined score=5 (dev4=2, dev5=3)
+
+=== Detail for the best few offsets (device 4) ===
+
+--- offset 25 ---
+  EXACT  34346=5016  <->  34371=5016
+  EXACT  34352=1  <->  34377=1
+  EXACT  34354=1  <->  34379=1
+  EXACT  34356=1  <->  34381=1
+  EXACT  34358=1  <->  34383=1
+  EXACT  34361=100  <->  34386=100
+  EXACT  34364=16  <->  34389=16
+  EXACT  34365=11  <->  34390=11
+  CLOSE  34348=3345  <->  34373=3339  (diff=6)
+  CLOSE  34349=3349  <->  34374=3361  (diff=12)
+  CLOSE  34350=244  <->  34375=254  (diff=10)
+  CLOSE  34351=275  <->  34376=288  (diff=13)
+  CLOSE  34656=2412  <->  34681=2353  (diff=59)
+
+--- offset 2 ---
+  EXACT  34352=1  <->  34354=1
+  EXACT  34354=1  <->  34356=1
+  EXACT  34356=1  <->  34358=1
+  EXACT  34377=1  <->  34379=1
+  EXACT  34379=1  <->  34381=1
+  EXACT  34381=1  <->  34383=1
+  EXACT  34670=65535  <->  34672=65535
+  EXACT  34672=65535  <->  34674=65535
+  EXACT  34674=65535  <->  34676=65535
+  CLOSE  34671=62988  <->  34673=63242  (diff=254)
+  CLOSE  34673=63242  <->  34675=62727  (diff=515)
+  CLOSE  34693=2391  <->  34695=2412  (diff=21)
+  CLOSE  34695=2412  <->  34697=2410  (diff=2)
+
+--- offset 1 ---
+  EXACT  34278=100  <->  34279=100
+  EXACT  34341=8000  <->  34342=8000
+  EXACT  34708=8  <->  34709=8
+  CLOSE  34348=3345  <->  34349=3349  (diff=4)
+  CLOSE  34373=3339  <->  34374=3361  (diff=22)
+  CLOSE  34670=65535  <->  34671=62988  (diff=2547)
+  CLOSE  34671=62988  <->  34672=65535  (diff=2547)
+  CLOSE  34672=65535  <->  34673=63242  (diff=2293)
+  CLOSE  34673=63242  <->  34674=65535  (diff=2293)
+  CLOSE  34674=65535  <->  34675=62727  (diff=2808)
+  CLOSE  34675=62727  <->  34676=65535  (diff=2808)
+  CLOSE  34765=65535  <->  34766=65446  (diff=89)
+
+--- offset 50 ---
+  EXACT  34601=48  <->  34651=48
+  EXACT  34602=43605  <->  34652=43605
+  EXACT  34651=48  <->  34701=48
+  EXACT  34652=43605  <->  34702=43605
+  EXACT  34701=48  <->  34751=48
+  EXACT  34702=43605  <->  34752=43605
+  EXACT  34752=43605  <->  34802=43605
+
+--- offset 100 ---
+  EXACT  34502=43605  <->  34602=43605
+  EXACT  34601=48  <->  34701=48
+  EXACT  34602=43605  <->  34702=43605
+  EXACT  34651=48  <->  34751=48
+  EXACT  34652=43605  <->  34752=43605
+  EXACT  34702=43605  <->  34802=43605
+  EXACT  34802=43605  <->  34902=43605
+
+=== Detail for the best few offsets (device 5) ===
+
+--- offset 25 ---
+  EXACT  34346=5016  <->  34371=5016
+  EXACT  34352=1  <->  34377=1
+  EXACT  34354=1  <->  34379=1
+  EXACT  34356=1  <->  34381=1
+  EXACT  34358=1  <->  34383=1
+  EXACT  34361=100  <->  34386=100
+  EXACT  34364=16  <->  34389=16
+  EXACT  34365=11  <->  34390=11
+  CLOSE  34348=3335  <->  34373=3338  (diff=3)
+  CLOSE  34349=3344  <->  34374=3345  (diff=1)
+  CLOSE  34350=235  <->  34375=245  (diff=10)
+  CLOSE  34351=266  <->  34376=274  (diff=8)
+
+--- offset 2 ---
+  EXACT  34352=1  <->  34354=1
+  EXACT  34354=1  <->  34356=1
+  EXACT  34356=1  <->  34358=1
+  EXACT  34377=1  <->  34379=1
+  EXACT  34379=1  <->  34381=1
+  EXACT  34381=1  <->  34383=1
+
+--- offset 1 ---
+  EXACT  34341=8000  <->  34342=8000
+  EXACT  34708=8  <->  34709=8
+  CLOSE  34278=98  <->  34279=100  (diff=2)
+  CLOSE  34348=3335  <->  34349=3344  (diff=9)
+  CLOSE  34373=3338  <->  34374=3345  (diff=7)
+
+--- offset 50 ---
+  EXACT  34601=48  <->  34651=48
+  EXACT  34602=43605  <->  34652=43605
+  EXACT  34651=48  <->  34701=48
+  EXACT  34652=43605  <->  34702=43605
+  EXACT  34701=48  <->  34751=48
+  EXACT  34702=43605  <->  34752=43605
+  EXACT  34752=43605  <->  34802=43605
+
+--- offset 100 ---
+  EXACT  34502=43605  <->  34602=43605
+  EXACT  34601=48  <->  34701=48
+  EXACT  34602=43605  <->  34702=43605
+  EXACT  34651=48  <->  34751=48
+  EXACT  34652=43605  <->  34752=43605
+  EXACT  34702=43605  <->  34802=43605
+  EXACT  34802=43605  <->  34902=43605

@@ -2,34 +2,34 @@
     <div class="footer-container">
         <div class="footer-col">
             <h3 class="nav-logo">TRAFCOM</h3>
-            <p>Трафком ООД &middot; гр. Тетевен<br>Прецизна ЦПУ обработка от 1997 г.</p>
+            <p>{{ _('Трафком ООД') }} &middot; {{ _('гр. Тетевен') }}<br>{{ _('Прецизна ЦПУ обработка от 1997 г.') }}</p>
         </div>
         <div class="footer-col">
-            <span class="footer-col-title">Контакти</span>
-            <p>ул. „Александър Стамболийски“ 36, гр. Тетевен<br>ул. „Воловийте“, 5700 гр. Тетевен (производствена база)</p>
+            <span class="footer-col-title">{{ _('Контакти') }}</span>
+            <p>{{ _('ул. „Александър Стамболийски“ 36, гр. Тетевен') }}<br>{{ _('ул. „Воловийте“, 5700 гр. Тетевен (производствена база)') }}</p>
             <p><a href="tel:+359886762276">+359 886 762 276</a></p>
             <p><a href="mailto:trafcom@trafcombg.com">trafcom@trafcombg.com</a></p>
         </div>
         <div class="footer-col">
-            <span class="footer-col-title">Навигация</span>
-            <p><a href="{{ url_for('services') }}">Услуги</a></p>
-            <p><a href="{{ url_for('about') }}">За нас</a></p>
-            <p><a href="{{ url_for('contact') }}">Контакти</a></p>
+            <span class="footer-col-title">{{ _('Навигация') }}</span>
+            <p><a href="{{ url_for('services') }}">{{ _('Услуги') }}</a></p>
+            <p><a href="{{ url_for('about') }}">{{ _('За нас') }}</a></p>
+            <p><a href="{{ url_for('contact') }}">{{ _('Контакти') }}</a></p>
         </div>
     </div>
-    <div class="footer-bottom">&copy; {{ current_year }} Трафком ООД. Всички права запазени.</div>
+    <div class="footer-bottom">&copy; {{ current_year }} {{ _('Трафком ООД') }}. {{ _('Всички права запазени.') }}</div>
 </footer>
 
 {% if current_user.is_authenticated %}
 <div id="chatbot-widget">
-    <button id="chatbot-toggle" type="button" aria-label="Отвори чат">
+    <button id="chatbot-toggle" type="button" aria-label="{{ _('Отвори чат') }}">
         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 4h16v12H7l-3 3V4z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
     </button>
     <div id="chatbot-panel" hidden>
-        <div id="chatbot-header">Асистент на Трафком</div>
+        <div id="chatbot-header">{{ _('Асистент на Трафком') }}</div>
         <div id="chatbot-messages"></div>
         <form id="chatbot-form">
-            <input type="text" id="chatbot-input" placeholder="Напишете съобщение..." autocomplete="off" maxlength="1000">
+            <input type="text" id="chatbot-input" placeholder="{{ _('Напишете съобщение...') }}" autocomplete="off" maxlength="1000">
             <button type="submit">➤</button>
         </form>
     </div>

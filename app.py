@@ -3,6 +3,7 @@ import os
 import json
 import math
 import re
+import calendar
 import difflib
 import uuid
 import io
@@ -40,6 +41,9 @@ import pyotp
 import qrcode
 import qrcode.image.svg
 import anthropic
+import paho.mqtt.client as mqtt_client
+from pymodbus.client import ModbusTcpClient
+from flask_babel import Babel, gettext
 
 # Optional: load a local .env file if python-dotenv is installed, so secrets
 # can be kept out of source control. Safe no-op if the package isn't present.
@@ -63,6 +67,17 @@ except KeyError as e:
         f'Missing required environment variable: {e.args[0]}. '
         'Set SECRET_KEY and DATABASE_URL (e.g. in a .env file - see .env.example).'
     ) from e
+# Default pool (size=5, max_overflow=10 -> 15 connections) proved too small
+# under real concurrent load: a Solis Modbus read that stalls/retries on the
+# shared, flaky WiFi-to-Modbus gateway (see SOLIS_INVERTER_MODBUS.md) holds
+# its DB session's connection checked out for the whole stall, and enough of
+# those piling up at once exhausted the pool - every OTHER page (not just
+# Modbus ones) then failed with "QueuePool limit... connection timed out"
+# too, since the pool is shared app-wide. Confirmed live 2026-09-06 (site
+# froze under heavy Modbus polling, cleared by restarting - this raises the
+# ceiling so it takes much more concurrent stalling to repeat).
+# pool_pre_ping avoids handing out a connection Postgres has since dropped.
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_size': 10, 'max_overflow': 20, 'pool_pre_ping': True}
 app.config['UPLOAD_FOLDER'] = os.path.join(os.getcwd(), 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 # Belt-and-suspenders alongside CSRFProtect below: without an explicit
@@ -104,6 +119,38 @@ login_manager.login_view = 'login'
 # storage_uri="redis://..." if this ever runs with >1 worker process.
 limiter = Limiter(get_remote_address, app=app, default_limits=["300 per hour"])
 
+# Visitor-facing multilingual support (public + client pages only - the
+# staff/admin panel stays Bulgarian-only). Language choice lives in the
+# session (no per-language URLs - see set_language()), so this never touches
+# url_for() or route signatures anywhere in the app.
+SUPPORTED_LANGUAGES = {'bg': 'Български', 'en': 'English', 'de': 'Deutsch'}
+app.config['BABEL_DEFAULT_LOCALE'] = 'bg'
+
+
+def get_locale():
+    return session.get('language') if session.get('language') in SUPPORTED_LANGUAGES else 'bg'
+
+
+babel = Babel(app, locale_selector=get_locale)
+
+
+@app.context_processor
+def inject_locale():
+    return {'get_locale': get_locale, 'supported_languages': SUPPORTED_LANGUAGES}
+
+
+def localized(obj, field):
+    """Customer-facing translated field (Product/Service/MaterialPrice/Detail
+    name/description) - falls back to the Bulgarian base field whenever the
+    current locale is 'bg' or no translation was entered for that record."""
+    locale = get_locale()
+    if locale == 'bg':
+        return getattr(obj, field)
+    return getattr(obj, f'{field}_{locale}', None) or getattr(obj, field)
+
+
+app.jinja_env.globals['localized'] = localized
+
 # Unlike SECRET_KEY/DATABASE_URL, this is optional - the site works fine
 # without it, only the chat widget degrades (see api_chat()). Some
 # Console-issued keys are "identity-linked" and reject requests unless the
@@ -128,6 +175,13 @@ os.makedirs(app.config['MACHINE_IMAGES_FOLDER'], exist_ok=True)
 # exported .xlsx (see build_offer_workbook()).
 app.config['OFFER_IMAGES_FOLDER'] = os.path.join(app.static_folder, 'uploads', 'offers')
 os.makedirs(app.config['OFFER_IMAGES_FOLDER'], exist_ok=True)
+# Reference photo of the real panel, shown as a scalable/movable backdrop
+# under a panel's schematic (see ElectricalPanel.schematic_bg_filename /
+# admin_panel_schematic.html) - just an underlay to trace over, never
+# embedded anywhere else, so it lives alongside the other web-servable
+# upload folders.
+app.config['PANEL_BACKGROUND_FOLDER'] = os.path.join(app.static_folder, 'uploads', 'panel_backgrounds')
+os.makedirs(app.config['PANEL_BACKGROUND_FOLDER'], exist_ok=True)
 # Private (non-static) storage for Detail DXF files - unlike UPLOAD_FOLDER,
 # files saved here are kept permanently, not deleted after processing. Never
 # served via Flask's static route; only download_detail_dxf() (admin-only)
@@ -141,6 +195,18 @@ os.makedirs(app.config['DETAIL_DXF_FOLDER'], exist_ok=True)
 # from it.
 app.config['ORDER_ITEM_FILE_FOLDER'] = os.path.join(os.getcwd(), 'order_item_files')
 os.makedirs(app.config['ORDER_ITEM_FILE_FOLDER'], exist_ok=True)
+# ISO 9001 controlled documents (quality manual/procedures/work instructions/
+# forms/records) and their revision history - see ControlledDocument/
+# ControlledDocumentRevision. Same private/permanent storage convention as
+# DETAIL_DXF_FOLDER.
+app.config['CONTROLLED_DOCUMENT_FOLDER'] = os.path.join(os.getcwd(), 'controlled_documents')
+os.makedirs(app.config['CONTROLLED_DOCUMENT_FOLDER'], exist_ok=True)
+# Calibration certificates (ISO 9001 §7.1.5) - see InstrumentCalibrationRecord.
+app.config['CALIBRATION_CERT_FOLDER'] = os.path.join(os.getcwd(), 'calibration_certificates')
+os.makedirs(app.config['CALIBRATION_CERT_FOLDER'], exist_ok=True)
+# Training certificates (ISO 9001 §7.2) - see TrainingRecord.
+app.config['TRAINING_CERT_FOLDER'] = os.path.join(os.getcwd(), 'training_certificates')
+os.makedirs(app.config['TRAINING_CERT_FOLDER'], exist_ok=True)
 
 
 # ----------------- МОДЕЛИ В БАЗАТА ДАННИ -----------------
@@ -278,6 +344,10 @@ class MaterialPrice(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     key = db.Column(db.String(50), unique=True, nullable=False)
     display_name = db.Column(db.String(100), nullable=False)
+    # Optional customer-facing translations - see localized(). Empty/NULL
+    # falls back to display_name (Bulgarian).
+    display_name_en = db.Column(db.String(100), nullable=True)
+    display_name_de = db.Column(db.String(100), nullable=True)
     cost_per_m2 = db.Column(db.Float, nullable=False)
     # Nullable, same reason as pierce_rate_per_min below: 'rods' and
     # 'profiles' stock is cut to length on a saw, not through the DXF-length/
@@ -431,7 +501,7 @@ def _validate_eik(raw):
     if not value:
         return None, None
     if not re.fullmatch(r'\d{9}', value):
-        return None, 'ЕИК трябва да съдържа точно 9 цифри.'
+        return None, gettext('ЕИК трябва да съдържа точно 9 цифри.')
     return value, None
 
 
@@ -446,7 +516,7 @@ def _validate_email(raw):
     if not value:
         return None, None
     if not _EMAIL_RE.fullmatch(value):
-        return None, 'Невалиден имейл адрес.'
+        return None, gettext('Невалиден имейл адрес.')
     return value, None
 
 
@@ -497,6 +567,10 @@ class Detail(db.Model):
     """
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(150), nullable=False)
+    # Optional customer-facing translations - see localized(). Empty/NULL
+    # falls back to name (Bulgarian).
+    name_en = db.Column(db.String(150), nullable=True)
+    name_de = db.Column(db.String(150), nullable=True)
     material_key = db.Column(db.String(50), db.ForeignKey('material_price.key'), nullable=False)
     width = db.Column(db.Float, nullable=False)
     height = db.Column(db.Float, nullable=False)
@@ -648,6 +722,12 @@ class Product(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(150), nullable=False)
     description = db.Column(db.Text, nullable=True)
+    # Optional customer-facing translations - see localized(). Empty/NULL
+    # falls back to name/description (Bulgarian).
+    name_en = db.Column(db.String(150), nullable=True)
+    name_de = db.Column(db.String(150), nullable=True)
+    description_en = db.Column(db.Text, nullable=True)
+    description_de = db.Column(db.Text, nullable=True)
     markup_percent = db.Column(db.Float, nullable=False, default=0.0)
     # ERP code (shown as text + Code128 barcode) and internal part code (КД №)
     # printed on production labels - see print_label(). Optional/nullable
@@ -709,7 +789,10 @@ class Order(db.Model):
 
     @property
     def status_label(self):
-        return STATUS_LABELS.get(self.status, self.status)
+        # STATUS_LABELS values are looked up dynamically, so pybabel can't
+        # statically extract them from here - their EN/DE translations are
+        # added by hand in translations/*/LC_MESSAGES/messages.po.
+        return gettext(STATUS_LABELS.get(self.status, self.status))
 
     @property
     def total_price(self):
@@ -1154,6 +1237,249 @@ class ProductionOrder(db.Model):
         return round(qty * 1000, 1) if self.is_linear_material else round(qty, 3)
 
 
+class Building(db.Model):
+    """Top level of the factory map's location hierarchy (Сграда) - just a
+    name; Rooms live inside it (see Room.building_id)."""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(150), nullable=False)
+
+    rooms = db.relationship('Room', backref='building', lazy=True, order_by='Room.name')
+
+
+class Room(db.Model):
+    """One physical room/premises (Помещение) inside a Building - the unit
+    the interactive factory map is actually drawn per (see
+    admin_factory_map_room()): each room gets its own canvas, since
+    Machine.pos_x/pos_y and ElectricalPanel.pos_x/pos_y are only meaningful
+    relative to one room's layout, not the whole site at once."""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(150), nullable=False)
+    building_id = db.Column(db.Integer, db.ForeignKey('building.id'), nullable=False)
+
+    panels = db.relationship('ElectricalPanel', backref='room', lazy=True, order_by='ElectricalPanel.name')
+
+
+class ElectricalPanel(db.Model):
+    """
+    A physical electrical panel/board (Ел. табло) in a Room. The shop's
+    Shelly/Modbus energy meters are mounted inside a panel (*Device.panel_id)
+    rather than out on the machines themselves, and a Machine separately
+    records which panel it's wired to (Machine.panel_id) - two different
+    facts (where a meter physically sits vs. which machine's circuit it's
+    clamped onto) that happen to both point at the same panel. Positioned on
+    the room's map same as a Machine (pos_x/pos_y, percentage of that room's
+    canvas).
+
+    parent_panel_id is the actual electrical distribution link, independent
+    of the Building/Room hierarchy - a main panel and the sub-panels it
+    feeds are frequently in different rooms or even different buildings
+    (e.g. a main incomer feeding a sub-panel in a separate hall), so this
+    can freely cross both. A root panel (fed straight from the grid/meter,
+    not from another panel here) simply has parent_panel_id = None.
+    overview_pos_x/y position this panel on the site-wide overview map
+    (admin_factory_map_overview()) - deliberately separate columns from
+    pos_x/pos_y, since a panel's placement within its own room's floor plan
+    and its placement in the abstract site-wide distribution diagram are two
+    unrelated layouts; dragging one must never move the other.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(150), nullable=False)
+    room_id = db.Column(db.Integer, db.ForeignKey('room.id'), nullable=False)
+    notes = db.Column(db.Text, nullable=True)
+    pos_x = db.Column(db.Float, nullable=True)
+    pos_y = db.Column(db.Float, nullable=True)
+    parent_panel_id = db.Column(db.Integer, db.ForeignKey('electrical_panel.id'), nullable=True)
+    overview_pos_x = db.Column(db.Float, nullable=True)
+    overview_pos_y = db.Column(db.Float, nullable=True)
+    # Reference photo of the real panel, shown as a backdrop under this
+    # panel's schematic (/admin/panels/<id>/schematic) to trace components
+    # over - see PANEL_BACKGROUND_FOLDER/_save_upload(). scale is a
+    # multiplier of the image's natural pixel size; pos_x/pos_y are the
+    # image's own center, percent of the schematic canvas - same
+    # translate(-50%,-50%) convention as every other draggable card in this
+    # app, just applied to a photo instead of a symbol.
+    schematic_bg_filename = db.Column(db.String(255), nullable=True)
+    schematic_bg_scale = db.Column(db.Float, nullable=False, default=1.0)
+    schematic_bg_pos_x = db.Column(db.Float, nullable=False, default=50.0)
+    schematic_bg_pos_y = db.Column(db.Float, nullable=False, default=50.0)
+    # How much the reference photo shows through under the drawn schematic -
+    # explicit ask: "да има и прозрачност на подложката". 1.0 = fully
+    # visible photo, 0.0 = invisible (pure schematic). Kept separate from
+    # the drag lock (schemUnlock only guards position/scale) since fading
+    # the photo in/out isn't a placement change.
+    schematic_bg_opacity = db.Column(db.Float, nullable=False, default=0.85)
+
+    child_panels = db.relationship('ElectricalPanel', backref=db.backref('parent_panel', remote_side=[id]))
+
+
+PANEL_COMPONENT_TYPES = {
+    'main_breaker': 'Главен прекъсвач',
+    'breaker': 'Автоматичен предпазител',
+    'fuse': 'Стопяем предпазител',
+    'rcd': 'Дефектнотокова защита (RCD)',
+    'contactor': 'Контактор',
+    'busbar': 'Шина',
+    'terminal': 'Клема',
+    'meter': 'Електромер (означение)',
+    # Researched before adding ("проучи ги...") - see componentIconSvg() in
+    # admin_panel_schematic.html for each one's own icon/terminal layout:
+    # - ethernet_switch: a plain network switch - N RJ45 ports in a row, all
+    #   equivalent (no in/out direction), drawn as squares not circles.
+    # - modbus_gateway: RS-485<->Ethernet converter - a Modbus terminal
+    #   block (A/B/GND) plus one Ethernet port, single 'tap' row.
+    # - schrack_urna: Schrack URNA0345 grid/system protection relay (used
+    #   for PV/generator mains disconnect protection) - real terminal block
+    #   transcribed from the manufacturer's own labeled diagram: A1/A2
+    #   supply, N/L1/L2/L3 measuring input, 3 changeover relay outputs
+    #   (11-12-14 / 21-22-24 / 31-32-34), 5 digital inputs each with its own
+    #   common - see schrackUrnaIconSvg() in admin_panel_schematic.html for
+    #   the fixed (not pole-count-scaled) two-row layout.
+    # - smart_meter_3p: a 3-phase meter with real in/out pole pairs (like
+    #   Trafcom's own DTSU666) PLUS an RS-485/Modbus port, unlike the plain
+    #   'meter' type which has no comms tap.
+    # - time_relay: a DIN-rail timer - its own supply (A1/A2) plus one or
+    #   more changeover output contacts, drawn like a contactor with a
+    #   clock face instead of a coil.
+    'ethernet_switch': 'Ethernet суич',
+    'modbus_gateway': 'Modbus към Ethernet',
+    'schrack_urna': 'Schrack URNA 0345 (защита)',
+    'smart_meter_3p': 'Смарт електромер (3-фазен)',
+    'time_relay': 'Реле за време',
+}
+
+
+class PanelComponent(db.Model):
+    """
+    One symbol placed on the internal one-line schematic of an
+    ElectricalPanel (see /admin/panels/<id>/schematic) - a breaker, fuse,
+    contactor, busbar, terminal, etc. Purely a documentation/schematic
+    layer: feeds_machine_id/feeds_panel_id/feeds_modbus_device_id let one
+    optionally point at whatever real Machine/child ElectricalPanel/
+    ModbusDevice this component's downstream side actually is (at most one
+    of the three is expected to be set at a time - enforced in the route,
+    not the schema, same as the rest of this app's optional single-choice
+    FK groups e.g. ModbusDevice's grid_panel_id/main_panel_id/etc.), so the
+    schematic can show "Предпазител 3 -> Лазер ECKERT" instead of a bare
+    label. pos_x/pos_y are percent-of-canvas, same convention as Machine/
+    ElectricalPanel's own map position, but scoped to this panel's own
+    schematic canvas (a totally different coordinate space from the
+    factory map).
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    panel_id = db.Column(db.Integer, db.ForeignKey('electrical_panel.id'), nullable=False)
+    component_type = db.Column(db.String(20), nullable=False, default='breaker')
+    name = db.Column(db.String(150), nullable=False)
+    rated_current_a = db.Column(db.Float, nullable=True)
+    poles = db.Column(db.Integer, nullable=True)
+    manufacturer = db.Column(db.String(100), nullable=True)
+    model = db.Column(db.String(100), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    pos_x = db.Column(db.Float, nullable=True)
+    pos_y = db.Column(db.Float, nullable=True)
+    # Per-element icon size multiplier (independent of pos_x/pos_y and of
+    # every other component's own scale) - see admin_update_panel_component_scale()/
+    # the +/- buttons on each card in admin_panel_schematic.html.
+    scale = db.Column(db.Float, nullable=False, default=1.0)
+    feeds_machine_id = db.Column(db.Integer, db.ForeignKey('machine.id'), nullable=True)
+    feeds_panel_id = db.Column(db.Integer, db.ForeignKey('electrical_panel.id'), nullable=True)
+    feeds_modbus_device_id = db.Column(db.Integer, db.ForeignKey('modbus_device.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    panel = db.relationship('ElectricalPanel', foreign_keys=[panel_id], backref=db.backref('components', cascade='all, delete-orphan'))
+    feeds_machine = db.relationship('Machine')
+    feeds_panel = db.relationship('ElectricalPanel', foreign_keys=[feeds_panel_id])
+    feeds_modbus_device = db.relationship('ModbusDevice')
+
+    @property
+    def feeds_label(self):
+        if self.feeds_machine:
+            return f'Машина: {self.feeds_machine.name}'
+        if self.feeds_panel:
+            return f'Табло: {self.feeds_panel.name}'
+        if self.feeds_modbus_device:
+            return f'Устройство: {self.feeds_modbus_device.name}'
+        return None
+
+
+# Despite the name (kept for the existing 'phase_type' column/routes - a
+# plain unconstrained VARCHAR(20), so new values need no migration), this
+# now covers non-power connection kinds too - explicit ask: "трябва да имам
+# още видове връзки: modbus, ethernet, current transformer" - a signal/data
+# cable or a CT loop drawn on the same schematic, visually distinct from an
+# actual power conductor (see the .pwire-modbus/-ethernet/-ct CSS rules and
+# PHASE_RANK's three_phase-only bundling in admin_panel_schematic.html).
+# All of them behave like 'single_phase' structurally (one plain wire, any
+# pole/side, no 3-pole requirement) - only 'three_phase' has special rules.
+PANEL_WIRE_PHASE_TYPES = {
+    'three_phase': 'Трифазна', 'single_phase': 'Монофазна',
+    'modbus': 'Modbus', 'ethernet': 'Ethernet', 'ct': 'Токов трансформатор (CT)',
+}
+
+# A wire can only connect two components whose ports actually match its own
+# kind - explicit ask: "връзки може да се създават само от един вид ETH-ETH
+# MODBUS-MODBUS и така нататък" (no Ethernet cable landing on a breaker's
+# power pole, no Modbus wire ending at a plain fuse, etc.). 'busbar'/
+# 'terminal' are generic pass-through points (a DIN rail / a screw terminal
+# block carries whatever real cable is landed on it) so they're allowed for
+# every kind. 'ethernet_switch' has only network ports; 'modbus_gateway'
+# bridges Modbus<->Ethernet so it allows both; 'smart_meter_3p' adds an
+# RS-485/Modbus tap to its own power poles. 'schrack_urna' is single_phase
+# ONLY - its real terminal diagram (A1/A2 supply, N/L1/L2/L3 measuring
+# input, 3 dry-contact relay outputs, 5 digital inputs) has no genuine
+# 3-pole power pass-through, no CT input and no comms port at all, so a
+# three_phase bundle (which always wires pole1-2-3 to pole1-2-3) would
+# land on the wrong physical terminals - each of its 24 terminals is only
+# ever wired individually.
+PANEL_WIRE_TYPE_COMPONENT_TYPES = {
+    'three_phase': {'main_breaker', 'breaker', 'fuse', 'rcd', 'contactor', 'busbar', 'terminal', 'meter', 'smart_meter_3p', 'time_relay'},
+    'single_phase': {'main_breaker', 'breaker', 'fuse', 'rcd', 'contactor', 'busbar', 'terminal', 'meter', 'smart_meter_3p', 'time_relay', 'schrack_urna'},
+    'modbus': {'modbus_gateway', 'smart_meter_3p', 'busbar', 'terminal'},
+    'ethernet': {'ethernet_switch', 'modbus_gateway', 'busbar', 'terminal'},
+    'ct': {'meter', 'smart_meter_3p', 'busbar', 'terminal'},
+}
+
+
+def _panel_wire_type_error(phase_type, *components):
+    """Returns a Bulgarian error string if any given component's type isn't
+    valid for this wire kind, else None - shared by admin_add_panel_wire()
+    and admin_retarget_panel_wire()."""
+    allowed = PANEL_WIRE_TYPE_COMPONENT_TYPES.get(phase_type)
+    if not allowed:
+        return None
+    for c in components:
+        if c.component_type not in allowed:
+            return (f'"{PANEL_WIRE_PHASE_TYPES.get(phase_type, phase_type)}" връзка не може да свързва '
+                    f'елемент от тип "{PANEL_COMPONENT_TYPES.get(c.component_type, c.component_type)}".')
+    return None
+
+
+class PanelWire(db.Model):
+    """One drawn line between one specific numbered pole/terminal of a
+    PanelComponent and one on another (or the same component's) symbol on
+    the same panel's schematic - purely visual/topological, no live data of
+    its own. from_side/to_side is 'in' (line-side, top row of terminal
+    circles) or 'out' (load-side, bottom row) for a normal component, or
+    'tap' for a busbar (single row of connection points, no in/out
+    distinction - see componentIconSvg() in admin_panel_schematic.html).
+    phase_type is purely a documentation label (three-phase vs single-phase
+    run) - each wire is still exactly one drawn conductor between two
+    specific terminals, not an auto-bundle of poles."""
+    id = db.Column(db.Integer, primary_key=True)
+    panel_id = db.Column(db.Integer, db.ForeignKey('electrical_panel.id'), nullable=False)
+    from_component_id = db.Column(db.Integer, db.ForeignKey('panel_component.id'), nullable=False)
+    to_component_id = db.Column(db.Integer, db.ForeignKey('panel_component.id'), nullable=False)
+    from_pole = db.Column(db.Integer, nullable=False, default=1)
+    from_side = db.Column(db.String(3), nullable=False, default='out')
+    to_pole = db.Column(db.Integer, nullable=False, default=1)
+    to_side = db.Column(db.String(3), nullable=False, default='in')
+    phase_type = db.Column(db.String(20), nullable=False, default='three_phase')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    panel = db.relationship('ElectricalPanel', backref=db.backref('wires', cascade='all, delete-orphan'))
+    from_component = db.relationship('PanelComponent', foreign_keys=[from_component_id], backref='wires_from')
+    to_component = db.relationship('PanelComponent', foreign_keys=[to_component_id], backref='wires_to')
+
+
 class Machine(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
@@ -1165,6 +1491,26 @@ class Machine(db.Model):
     # shop-specific, open-ended set that admins type rather than pick from a
     # fixed enum. Nullable since existing machines predate this field.
     machine_type = db.Column(db.String(50), nullable=True)
+    # Which Room this machine physically stands in - see Room's docstring.
+    # Nullable: a machine not yet placed anywhere just doesn't show on any
+    # room's map until assigned (see edit_machine_window()).
+    room_id = db.Column(db.Integer, db.ForeignKey('room.id'), nullable=True)
+    # Which ElectricalPanel this machine's power is wired to - independent of
+    # room_id (usually the same room, but not assumed) and independent of
+    # shelly_devices below (that's which meter *reads* this machine; this is
+    # which panel its circuit actually terminates at).
+    panel_id = db.Column(db.Integer, db.ForeignKey('electrical_panel.id'), nullable=True)
+    # Position on its room's map (/admin/factory-map/room/<id>), as a
+    # percentage (0-100) of that room's canvas width/height - resolution-
+    # independent so the same saved position still lands correctly however
+    # big the browser window is. Nullable: a machine with no position yet
+    # falls back to an auto-arranged grid slot in the template rather than
+    # stacking every un-placed machine at (0, 0) - see admin_factory_map_room().
+    pos_x = db.Column(db.Float, nullable=True)
+    pos_y = db.Column(db.Float, nullable=True)
+
+    room = db.relationship('Room', backref='machines')
+    panel = db.relationship('ElectricalPanel', foreign_keys=[panel_id], backref='wired_machines')
 
 
 class Service(db.Model):
@@ -1193,6 +1539,12 @@ class Service(db.Model):
     # EUR per meter (1000 mm) of cut length - only used when pricing_mode == 'length'.
     price_per_meter_eur = db.Column(db.Float, nullable=True)
     description = db.Column(db.Text, nullable=True)
+    # Optional customer-facing translations - see localized(). Empty/NULL
+    # falls back to name/description (Bulgarian).
+    name_en = db.Column(db.String(150), nullable=True)
+    name_de = db.Column(db.String(150), nullable=True)
+    description_en = db.Column(db.Text, nullable=True)
+    description_de = db.Column(db.Text, nullable=True)
     # Whether the public /services page shows this service's hourly rate -
     # see services.html's "ЦЕНИ НА УСЛУГИ" section. Toggled per-service from
     # /admin/services; some services stay listed there without a public price.
@@ -1226,6 +1578,70 @@ shelly_device_machines = db.Table(
 )
 
 
+CONNECTION_TYPES = {
+    'ip': 'IP (HTTP)',
+    'mqtt': 'MQTT',
+    'udp_rpc': 'RPC през UDP',
+    'coiot': 'CoIoT',
+}
+
+MODBUS_DEVICE_TYPES = {
+    'dtsu666': 'DTSU666 електромер',
+    'solis_s6': 'Solis S6 хибриден инвертор',
+    'solis_grid_meter': 'Виртуален "Мрежа" измервател (през друг инвертор)',
+}
+
+TEMP_SENSOR_TYPES = {
+    'shelly_ht_gen1': 'Shelly H&T (Gen1)',
+    'shelly_gen2': 'Shelly Plus/Pro H&T (Gen2+)',
+    'generic_flat': 'Общ формат (prefix/temperature, prefix/humidity)',
+}
+
+CONVECTOR_TYPES = {
+    'shelly_gen1': 'Shelly (Gen1) - /relay/N',
+    'shelly_gen2': 'Shelly Plus/Pro (Gen2+) - Switch.*',
+}
+
+# Only 'ip'/'mqtt' of CONNECTION_TYPES are implemented for Convector (see
+# _shelly_convector_status()/_shelly_convector_set()) - filtered down
+# rather than a separate dict so the label text stays one source of truth
+# with ShellyDevice's own connection-type selector.
+CONVECTOR_CONNECTION_TYPES = {k: v for k, v in CONNECTION_TYPES.items() if k in ('ip', 'mqtt')}
+
+# Vehicle.deadlines/vehicle_deadline_status() warning window - see
+# inject_vehicle_alerts(). A deadline starts showing as 'warning' this many
+# days before it expires, and naturally keeps showing (as 'expired') every
+# day after, since status is recomputed fresh on every request rather than
+# scheduled - no cron/email involved for v1.
+VEHICLE_WARNING_DAYS = 15
+
+
+def vehicle_deadline_status(expiry_date):
+    """('ok'|'warning'|'expired'|'unset', days_remaining) for one Vehicle
+    deadline date. days_remaining is negative once expired, None only for
+    'unset' (no date on file)."""
+    if not expiry_date:
+        return 'unset', None
+    days = (expiry_date - datetime.utcnow().date()).days
+    if days < 0:
+        return 'expired', days
+    if days <= VEHICLE_WARNING_DAYS:
+        return 'warning', days
+    return 'ok', days
+
+
+def _add_months(d, months):
+    """d shifted by whole months (can be negative), clamping the day into
+    the target month (e.g. 31 Jan - 1 month -> 28/29 Feb) - used by
+    Vehicle.insurance_installment_dates to derive the 4 quarterly ГО due
+    dates purely from insurance_expiry (assumes a 12-month policy)."""
+    month_index = d.month - 1 + months
+    year = d.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(d.day, calendar.monthrange(year, month)[1])
+    return datetime(year, month, day).date()
+
+
 class ShellyDevice(db.Model):
     """
     A Shelly energy meter feeding the live power dashboard (/admin/power) -
@@ -1252,8 +1668,319 @@ class ShellyDevice(db.Model):
     """
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
-    host = db.Column(db.String(100), nullable=False, unique=True)
+    # Nullable: a device monitored purely over MQTT (mqtt_topic set) may have
+    # no known/reachable IP to poll - admin_power_add_device() requires at
+    # least one of host/mqtt_topic, not both.
+    host = db.Column(db.String(100), nullable=True, unique=True)
+    # Which ElectricalPanel this meter is physically mounted inside - see
+    # ElectricalPanel's docstring. Nullable: a meter can be added and
+    # monitored before its panel is documented, same as `machines` below.
+    panel_id = db.Column(db.Integer, db.ForeignKey('electrical_panel.id'), nullable=True)
+    # MQTT topic prefix this device publishes under (e.g. "shellies/thermopump_em3"
+    # for a Gen1 device with the default topic root, or a bare custom prefix
+    # like "hale1_conv_gol1" if it was reconfigured) - see start_mqtt_listener()/
+    # shelly_device_snapshot().
+    mqtt_topic = db.Column(db.String(150), nullable=True)
+    # Explicit choice of which live-data transport shelly_device_snapshot()
+    # uses - see CONNECTION_TYPES. Deliberately explicit rather than only
+    # inferred from "mqtt_topic set vs not": 'udp_rpc'/'coiot' are real
+    # Shelly transports (Gen2 outbound RPC over UDP; Gen1's CoAP-based CoIoT)
+    # that aren't implemented yet - confirmed unreachable from this dev host
+    # even with CoIoT's unicast peer pointed straight at it (see
+    # shelly_device_snapshot()'s comment), most likely inbound UDP being
+    # firewalled on this machine rather than anything wrong on the device
+    # side. Kept as selectable now so the UI/data model don't need to change
+    # again once a working listener exists; until then both simply report
+    # "not implemented" rather than silently falling back to host/mqtt_topic.
+    connection_type = db.Column(db.String(20), nullable=False, default='ip')
     machines = db.relationship('Machine', secondary=shelly_device_machines, backref='shelly_devices')
+    panel = db.relationship('ElectricalPanel', backref='shelly_devices')
+
+
+modbus_device_machines = db.Table(
+    'modbus_device_machine',
+    db.Column('modbus_device_id', db.Integer, db.ForeignKey('modbus_device.id'), primary_key=True),
+    db.Column('machine_id', db.Integer, db.ForeignKey('machine.id'), primary_key=True),
+)
+
+
+class ModbusDevice(db.Model):
+    """
+    A Modbus TCP energy meter (e.g. the shop's DTSU666) - separate from
+    ShellyDevice since Modbus meters aren't Shelly hardware at all and have
+    no HTTP/MQTT API, just raw holding/input registers whose meaning is
+    entirely manufacturer/firmware-specific. Register decoding for a given
+    model (once confirmed against a live unit - see
+    admin_modbus_read_registers()) lives in a dedicated snapshot function
+    (e.g. _dtsu666_snapshot()) keyed off of this row's connection details,
+    not a column here - there's currently no per-device "which model" field
+    since only DTSU666 is wired up.
+
+    panel_id/machines mirror ShellyDevice's fields exactly (same
+    "meter physically sits in a panel" / "meter reads these machines"
+    distinction - see ElectricalPanel's docstring) so a Modbus meter
+    participates in the factory map's per-panel power aggregation and
+    per-machine live readings the same way a Shelly one does.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    host = db.Column(db.String(100), nullable=False)
+    port = db.Column(db.Integer, nullable=False, default=502)
+    unit_id = db.Column(db.Integer, nullable=False, default=1)
+    # Which register map/snapshot function to decode this device with (see
+    # _dtsu666_snapshot()/_solis_snapshot()) - 'dtsu666' is the original,
+    # sole model this table supported, kept as the default so existing rows
+    # need no backfill.
+    device_type = db.Column(db.String(20), nullable=False, default='dtsu666')
+    notes = db.Column(db.Text, nullable=True)
+    panel_id = db.Column(db.Integer, db.ForeignKey('electrical_panel.id'), nullable=True)
+    # Only meaningful for device_type='solis_s6' - which physical PV module
+    # spec sheet (SolarPanelModel) this inverter's whole side of the roof is
+    # wired with. One inverter = one uniform module model in this shop, so
+    # this lives here rather than per-SolarPanel row.
+    panel_model_id = db.Column(db.Integer, db.ForeignKey('solar_panel_model.id'), nullable=True)
+    # Only meaningful for device_type='solis_s6' - which ElectricalPanel each
+    # of the inverter's 4 AC "ports" actually feeds/connects to (see
+    # _solis_snapshot()'s 'meter'/'load'/'generator' blocks for the live
+    # readings themselves - this is purely "where does the wire go",
+    # independent of `panel` above, which is where the inverter's OWN meter
+    # is physically mounted). All nullable/independent of each other - a
+    # port not wired to anything tracked here just has no line drawn for it
+    # on admin_factory_map_overview.html.
+    grid_panel_id = db.Column(db.Integer, db.ForeignKey('electrical_panel.id'), nullable=True)
+    main_panel_id = db.Column(db.Integer, db.ForeignKey('electrical_panel.id'), nullable=True)
+    backup_panel_id = db.Column(db.Integer, db.ForeignKey('electrical_panel.id'), nullable=True)
+    generator_panel_id = db.Column(db.Integer, db.ForeignKey('electrical_panel.id'), nullable=True)
+    # Only meaningful for device_type='solis_grid_meter' - a *virtual* row
+    # with no Modbus connection of its own, representing a physical smart
+    # meter that's wired into another Solis inverter's own Modbus network
+    # (e.g. the grid CT in the main distribution panel, relayed through that
+    # inverter's own 'meter' block - see _solis_snapshot()) rather than
+    # polled directly. Lets that meter show up as its own separate card in
+    # Consumption/the factory map (its own name, its own panel_id) without
+    # a second, redundant Modbus read of the same registers - see
+    # _solis_grid_meter_view_snapshot(), which derives this row's snapshot
+    # from source_device's own already-fetched one.
+    source_device_id = db.Column(db.Integer, db.ForeignKey('modbus_device.id'), nullable=True)
+
+    machines = db.relationship('Machine', secondary=modbus_device_machines, backref='modbus_devices')
+    panel = db.relationship('ElectricalPanel', foreign_keys=[panel_id], backref='modbus_devices')
+    panel_model = db.relationship('SolarPanelModel')
+    grid_panel = db.relationship('ElectricalPanel', foreign_keys=[grid_panel_id])
+    main_panel = db.relationship('ElectricalPanel', foreign_keys=[main_panel_id])
+    backup_panel = db.relationship('ElectricalPanel', foreign_keys=[backup_panel_id])
+    generator_panel = db.relationship('ElectricalPanel', foreign_keys=[generator_panel_id])
+    source_device = db.relationship('ModbusDevice', remote_side=[id])
+
+
+BATTERY_STACK_BMS_PORTS = {'1': 'БМС порт 1', '2': 'БМС порт 2'}
+# See BatteryStack.source_type's docstring - 'modbus' has no register map
+# behind it yet, kept here only so the dropdown can offer/save the choice.
+BATTERY_STACK_SOURCE_TYPES = {'inverter': 'През инвертор (БМС порт)', 'modbus': 'Отделен Modbus BMS (все още не е поддържано)'}
+
+
+class Cabinet(db.Model):
+    """
+    Шкаф - a physical enclosure that can hold one or more BatteryStacks (a
+    big cabinet sometimes houses both BMS ports' stacks side by side). Just
+    a name/notes container - the fields the user actually cares about
+    (inverter/BMS link, brand/model/serial, min/max battery count, room)
+    live on BatteryStack itself, one level down.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(150), nullable=False)
+    notes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+
+class BatteryStack(db.Model):
+    """
+    STACK - a group of series-connected battery modules (e.g. 11x Dyness
+    Stack100) behind one BMS port of one Solis inverter - see
+    _solis_snapshot()'s 'battery_groups' in this file (index 0 -> bms_port
+    '1', index 1 -> bms_port '2'). Lives inside a Cabinet. inverter_device_id/
+    bms_port are both nullable - a stack can be catalogued (batteries counted,
+    room assigned) before it's actually wired up and confirmed against a
+    live BMS port reading.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    cabinet_id = db.Column(db.Integer, db.ForeignKey('cabinet.id'), nullable=False)
+    name = db.Column(db.String(150), nullable=False)
+    # How this stack's live SOC/voltage/temperature is read - 'inverter'
+    # (the only working option right now) means "through inverter_device_id's
+    # own BMS-port register block" (see _solis_read_extra_blocks()'s
+    # battery_groups, reused from that inverter's already-fetched snapshot -
+    # see _battery_stack_live_data()). 'modbus' is reserved for a future
+    # stack with its own independent Modbus BMS connection - no register map
+    # exists for one yet, so it currently just shows as unavailable.
+    source_type = db.Column(db.String(20), nullable=False, default='inverter')
+    inverter_device_id = db.Column(db.Integer, db.ForeignKey('modbus_device.id'), nullable=True)
+    bms_port = db.Column(db.String(1), nullable=True)  # '1' or '2' - see BATTERY_STACK_BMS_PORTS
+    brand = db.Column(db.String(100), nullable=True)
+    model = db.Column(db.String(100), nullable=True)
+    serial_number = db.Column(db.String(100), nullable=True)
+    min_batteries = db.Column(db.Integer, nullable=True)
+    max_batteries = db.Column(db.Integer, nullable=True)
+    room_id = db.Column(db.Integer, db.ForeignKey('room.id'), nullable=True)
+    # Position on its room's map (admin_factory_map_room.html), percentage of
+    # canvas width/height - same convention as Machine.pos_x/pos_y.
+    pos_x = db.Column(db.Float, nullable=True)
+    pos_y = db.Column(db.Float, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    cabinet = db.relationship('Cabinet', backref=db.backref('stacks', cascade='all, delete-orphan'))
+    inverter = db.relationship('ModbusDevice', backref='battery_stacks')
+    room = db.relationship('Room', backref='battery_stacks')
+
+    @property
+    def battery_count(self):
+        return len(self.batteries)
+
+    @property
+    def place_label(self):
+        if self.room:
+            return f'{self.room.building.name} / {self.room.name}'
+        return '—'
+
+    @property
+    def total_energy_kwh(self):
+        """Sum of each battery's energy content - from its BatteryModel's
+        energy_kwh when one is assigned, falling back to voltage*capacity_ah
+        for older/manually-entered rows with no model. None if no battery
+        in the stack has enough info to compute a figure."""
+        total = 0.0
+        have_any = False
+        for b in self.batteries:
+            if b.model and b.model.energy_kwh:
+                kwh = b.model.energy_kwh
+            elif b.voltage and b.capacity_ah:
+                kwh = b.voltage * b.capacity_ah / 1000.0
+            else:
+                kwh = None
+            if kwh:
+                total += kwh
+                have_any = True
+        return round(total, 2) if have_any else None
+
+
+class BatteryModel(db.Model):
+    """
+    Reference spec sheet for a battery module product, so the "add battery"
+    form can pick a model from a dropdown instead of retyping voltage/
+    capacity by hand for every unit - see Battery.model_id. Dyness S51100
+    (this shop's actual hardware) sourced from multiple independent
+    distributor listings (KaMeaSolar, Rebor, CCL Solar, ONSA Plus, Jardis,
+    LirikSolar) since Dyness's own datasheet PDF wasn't directly fetchable -
+    core figures (51.2V/100Ah/5.12kWh, 100A continuous, 657x460x292mm,
+    45kg) agreed everywhere checked; cycle_life (one source said 6000, the
+    rest incl. the manufacturer's own site said >=8000) and
+    protection_rating (IP65 vs IP66) each had one outlier source - kept
+    here as the majority/manufacturer figure with the conflict noted rather
+    than silently picking one.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(60), nullable=False, unique=True)
+    manufacturer = db.Column(db.String(80), nullable=False, default='Dyness')
+    chemistry = db.Column(db.String(40), nullable=True)
+    nominal_voltage_v = db.Column(db.Float, nullable=False)
+    capacity_ah = db.Column(db.Float, nullable=False)
+    energy_kwh = db.Column(db.Float, nullable=True)
+    usable_energy_kwh = db.Column(db.Float, nullable=True)
+    continuous_current_a = db.Column(db.Float, nullable=True)
+    max_discharge_power_kw = db.Column(db.Float, nullable=True)
+    round_trip_efficiency_pct = db.Column(db.Float, nullable=True)
+    cycle_life = db.Column(db.Integer, nullable=True)
+    length_mm = db.Column(db.Float, nullable=True)
+    width_mm = db.Column(db.Float, nullable=True)
+    height_mm = db.Column(db.Float, nullable=True)
+    weight_kg = db.Column(db.Float, nullable=True)
+    protection_rating = db.Column(db.String(20), nullable=True)
+    communication = db.Column(db.String(80), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+
+
+class Battery(db.Model):
+    """One physical battery module within a BatteryStack."""
+    id = db.Column(db.Integer, primary_key=True)
+    stack_id = db.Column(db.Integer, db.ForeignKey('battery_stack.id'), nullable=False)
+    model_id = db.Column(db.Integer, db.ForeignKey('battery_model.id'), nullable=True)
+    voltage = db.Column(db.Float, nullable=True)
+    capacity_ah = db.Column(db.Float, nullable=True)
+    serial_number = db.Column(db.String(100), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    stack = db.relationship('BatteryStack', backref=db.backref('batteries', cascade='all, delete-orphan'))
+    model = db.relationship('BatteryModel')
+
+
+class SolarPanelModel(db.Model):
+    """
+    Reference spec sheet for the physical PV module product used on this
+    roof - Tongwei/TW Solar TWMND-72HD575 (inverter 1's side) and
+    TWMND-72HD595 (inverter 2's side). Both share the exact same
+    2278x1134x30mm frame/glass size (just a different power bin of the same
+    cell line), cross-confirmed across independent distributor pages
+    (Synapsun, Liriksolar, czpowersourcing) since the manufacturer's own PDF
+    datasheet (tongwei.cn) refused direct access (401). Electrical figures
+    below (Voc/Isc/Vmp/Imp/efficiency) are the Synapsun comparison table -
+    two other distributor pages for the 575W variant quoted slightly
+    different Voc/Isc (normal for a binned product, no two exact sources
+    agreed) so treat these as representative/typical, not a guaranteed
+    per-unit figure - unlike dimensions/weight/cell count, which agreed
+    everywhere checked.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(60), nullable=False, unique=True)
+    manufacturer = db.Column(db.String(80), nullable=False, default='Tongwei Solar (TW Solar)')
+    rated_power_w = db.Column(db.Float, nullable=False)
+    length_mm = db.Column(db.Float, nullable=False)
+    width_mm = db.Column(db.Float, nullable=False)
+    thickness_mm = db.Column(db.Float, nullable=False)
+    weight_kg = db.Column(db.Float, nullable=True)
+    cell_count = db.Column(db.Integer, nullable=True)
+    cell_type = db.Column(db.String(100), nullable=True)
+    efficiency_pct = db.Column(db.Float, nullable=True)
+    voc_v = db.Column(db.Float, nullable=True)
+    isc_a = db.Column(db.Float, nullable=True)
+    vmp_v = db.Column(db.Float, nullable=True)
+    imp_a = db.Column(db.Float, nullable=True)
+    temp_coeff_pmax_pct = db.Column(db.Float, nullable=True)
+    temp_coeff_voc_pct = db.Column(db.Float, nullable=True)
+    temp_coeff_isc_pct = db.Column(db.Float, nullable=True)
+    max_system_voltage_v = db.Column(db.Float, nullable=True)
+    frame_material = db.Column(db.String(80), nullable=True)
+    glass_type = db.Column(db.String(120), nullable=True)
+    junction_box = db.Column(db.String(80), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+
+
+class SolarPanel(db.Model):
+    """
+    One physical PV module on the roof - 172 total, 86 per roof slope, one
+    slope per Solis inverter (each inverter's DC inputs only reach the
+    modules wired to its own side - see migration/seed_solar_roof.py, which
+    generates all 172 for this shop's 56m x 13m gable roof, 5 rows per side).
+    row/col are a grid position within this panel's own side only (both
+    1-based), not a real-world coordinate - /admin/solar-roof renders the
+    roof as two stacked 5-row grids (inverter_device_id's two distinct
+    values), matching the physical two-slope layout.
+
+    string_number (1-8) is which physical string this panel is wired into -
+    each inverter has 4 MPPT trackers and each tracker combines 2 strings
+    in parallel (string 1&2 -> MPPT1, 3&4 -> MPPT2, 5&6 -> MPPT3, 7&8 ->
+    MPPT4), so a tracker's one live reading (_solis_snapshot()'s pv.strings,
+    0-indexed there) is necessarily shared by both of its strings - the
+    inverter has no way to measure the two halves separately. Nullable
+    until assigned via the bulk-select tool on /admin/solar-roof.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    inverter_device_id = db.Column(db.Integer, db.ForeignKey('modbus_device.id'), nullable=False)
+    row = db.Column(db.Integer, nullable=False)
+    col = db.Column(db.Integer, nullable=False)
+    string_number = db.Column(db.Integer, nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+
+    inverter = db.relationship('ModbusDevice', backref='solar_panels')
 
 
 class ShellyReadingLog(db.Model):
@@ -1279,6 +2006,241 @@ class ShellyReadingLog(db.Model):
     # Detail.geometry_json etc. use JSON elsewhere in this file. Nullable for
     # rows written before this column existed.
     channels_json = db.Column(db.Text)
+
+
+class SolisReadingLog(db.Model):
+    """
+    Same idea as ShellyReadingLog, for a Solis S6 inverter (_solis_snapshot())
+    instead of a plain meter - written by start_solis_history_poller() once a
+    minute for every online Solis ModbusDevice, 24/7 regardless of whether
+    /admin/power is open. A few headline fields get their own column for
+    cheap querying; the FULL snapshot (pv/ac/battery/load/meter - everything
+    the register map exposes) is also kept as JSON, since "for later
+    processing" means not yet knowing which of those fields will actually be
+    wanted - narrowing to a handful of columns now would throw the rest away
+    permanently.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    device_id = db.Column(db.Integer, db.ForeignKey('modbus_device.id'), nullable=False, index=True)
+    ts = db.Column(db.Integer, nullable=False, index=True)
+    ac_power = db.Column(db.Float)
+    pv_power = db.Column(db.Float)
+    battery_soc = db.Column(db.Float)
+    battery_power = db.Column(db.Float)
+    temperature = db.Column(db.Float)
+    battery_temperature = db.Column(db.Float)
+    battery_fault_bits = db.Column(db.Integer)
+    snapshot_json = db.Column(db.Text, nullable=False)
+
+    device = db.relationship('ModbusDevice', backref='reading_logs')
+
+
+class TemperatureSensor(db.Model):
+    """
+    A temperature/humidity sensor (Shelly H&T or otherwise) feeding live
+    readings via MQTT - see sensor_type below, the MQTT LIVE FEED section
+    for the topic shapes, and _mqtt_temp_snapshot(). Separate from
+    ShellyDevice (energy meters): a temp
+    sensor has no power/channels/panel concept, and "room or other place" is
+    its own placement question, not tied to a machine's electrical panel.
+    room_id and location_label are both optional and not mutually exclusive
+    in the schema (a sensor could technically have both), but the UI only
+    ever sets one - room_id for something placed in a mapped Room,
+    location_label free text for "other places" the Building/Room hierarchy
+    doesn't cover (e.g. outdoors, a specific corner not worth its own Room).
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(150), nullable=False)
+    mqtt_topic = db.Column(db.String(150), nullable=False, unique=True)
+    # Which MQTT topic/payload shape this physical sensor publishes -
+    # different brands/generations are NOT interchangeable (see
+    # TEMP_SENSOR_TYPES and _handle_mqtt_temp_message()) the same way
+    # ModbusDevice.device_type or ShellyDevice generations aren't.
+    # 'shelly_ht_gen1' kept as the default so existing rows (all seeded
+    # before this field existed) need no backfill.
+    sensor_type = db.Column(db.String(20), nullable=False, default='shelly_ht_gen1')
+    room_id = db.Column(db.Integer, db.ForeignKey('room.id'), nullable=True)
+    location_label = db.Column(db.String(150), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    room = db.relationship('Room', backref='temperature_sensors')
+
+    @property
+    def place_label(self):
+        if self.room:
+            return f'{self.room.building.name} / {self.room.name}'
+        return self.location_label or '—'
+
+
+class Convector(db.Model):
+    """
+    A room's heating/cooling convector, switched via its own dedicated
+    Shelly relay (a plain Shelly 1/1PM for Gen1, Shelly Plus/Pro 1/1PM for
+    Gen2+) - a separate device from ShellyDevice (energy meters) and
+    TemperatureSensor. This is deliberately the ONE device class in the app
+    the UI is allowed to actively switch on/off - see
+    _shelly_convector_set()/admin_convector_toggle(). Turning an industrial
+    Machine's power on/off remotely is a regulated safety question
+    (EN 60204-1/ISO 12100 - see the READ-ONLY BY POLICY comment in the
+    Shelly section below), but a room convector is an ordinary smart-plug
+    action; wiring up control here was confirmed explicitly with the user
+    rather than just because the hardware happens to support it.
+    device_type picks the HTTP/MQTT payload shape to poll/switch with (see
+    CONVECTOR_TYPES) - Gen1's plain /relay/<N> vs Gen2's Switch.* RPC, same
+    reasoning as ModbusDevice.device_type/TemperatureSensor.sensor_type.
+    connection_type picks HTTP (host) vs MQTT (mqtt_topic) transport for
+    both reading status AND switching - same host/mqtt_topic split as
+    ShellyDevice, except here MQTT control means this app PUBLISHing a
+    command (see _mqtt_publish()), not just subscribing like everywhere
+    else MQTT is used.
+    room_id/location_label mirror TemperatureSensor's optional-either-way
+    placement fields. pos_x/pos_y are this convector's dragged position on
+    its room's map (admin_factory_map_room.html), percent of canvas width/
+    height - same convention as Machine.pos_x/pos_y - only meaningful when
+    room_id is set (a free-location convector just doesn't appear on that
+    map).
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(150), nullable=False)
+    connection_type = db.Column(db.String(10), nullable=False, default='ip')
+    host = db.Column(db.String(100), nullable=True)
+    mqtt_topic = db.Column(db.String(150), nullable=True, unique=True)
+    device_type = db.Column(db.String(20), nullable=False, default='shelly_gen1')
+    relay_channel = db.Column(db.Integer, nullable=False, default=0)
+    room_id = db.Column(db.Integer, db.ForeignKey('room.id'), nullable=True)
+    location_label = db.Column(db.String(150), nullable=True)
+    pos_x = db.Column(db.Float, nullable=True)
+    pos_y = db.Column(db.Float, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    room = db.relationship('Room', backref='convectors')
+
+    @property
+    def place_label(self):
+        if self.room:
+            return f'{self.room.building.name} / {self.room.name}'
+        return self.location_label or '—'
+
+
+class Vehicle(db.Model):
+    """
+    A company vehicle (see admin_vehicles()). Tracks three recurring legal
+    deadlines as plain expiry dates - insurance (ГО - one field, not split
+    civil-liability/casco per user confirmation), vignette, and technical
+    inspection (преглед). Each is classified fresh on every request by
+    vehicle_deadline_status() (ok/warning/expired), never stored as a status
+    - so a warning naturally starts VEHICLE_WARNING_DAYS before expiry and
+    keeps showing every day after, without any cron job. inject_vehicle_alerts()
+    surfaces warning+expired rows app-wide as a navbar banner; this is
+    in-app-only for v1, no email, per explicit user choice (an email
+    delivery path already exists via send_email() if that's wanted later).
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(150), nullable=False)
+    license_plate = db.Column(db.String(20), nullable=False, unique=True)
+    brand = db.Column(db.String(100), nullable=True)
+    model = db.Column(db.String(100), nullable=True)
+    vin = db.Column(db.String(50), nullable=True)
+    responsible_name = db.Column(db.String(150), nullable=True)
+    insurance_expiry = db.Column(db.Date, nullable=True)
+    # Whether ГО is paid quarterly rather than as one annual sum - see
+    # insurance_installment_dates/next_insurance_installment below and
+    # VehicleInsuranceInstallment. Purely a display/reminder toggle; doesn't
+    # change insurance_expiry itself (the policy's actual end date).
+    insurance_installments = db.Column(db.Boolean, nullable=False, default=False)
+    vignette_expiry = db.Column(db.Date, nullable=True)
+    inspection_expiry = db.Column(db.Date, nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    @property
+    def deadlines(self):
+        """[{'label','field','date','status','days'}, ...] for the 3 tracked
+        deadlines - shared by the listing table and inject_vehicle_alerts()
+        so both always agree on what counts as due."""
+        rows = []
+        for label, field in (
+            ('Застраховка (ГО)', 'insurance_expiry'),
+            ('Винетка', 'vignette_expiry'),
+            ('Технически преглед', 'inspection_expiry'),
+        ):
+            d = getattr(self, field)
+            status, days = vehicle_deadline_status(d)
+            rows.append({'label': label, 'field': field, 'date': d, 'status': status, 'days': days})
+        return rows
+
+    @property
+    def insurance_installment_dates(self):
+        """The 4 quarterly ГО due dates for the current policy year,
+        calculated purely from insurance_expiry (assumes a 12-month policy
+        - expiry minus 12/9/6/3 months) per explicit user choice, rather
+        than a separate policy-start field."""
+        if not self.insurance_expiry:
+            return []
+        return [_add_months(self.insurance_expiry, m) for m in (-12, -9, -6, -3)]
+
+    @property
+    def next_insurance_installment(self):
+        """{'due_date','status','days'} for the earliest quarterly
+        installment not yet marked paid (see VehicleInsuranceInstallment),
+        or None if installments aren't tracked for this vehicle or all 4
+        are already paid. Unlike the 3 fixed deadlines above, 'expired'
+        here means unpaid past its due date and keeps showing - per
+        explicit user choice - until someone actually ticks it paid
+        (admin_vehicle_installment_toggle), not auto-cleared once the next
+        quarter starts."""
+        if not self.insurance_installments:
+            return None
+        dues = self.insurance_installment_dates
+        if not dues:
+            return None
+        paid_dates = self.installment_paid_dates
+        for d in dues:
+            if d not in paid_dates:
+                status, days = vehicle_deadline_status(d)
+                return {'due_date': d, 'status': status, 'days': days}
+        return None
+
+    @property
+    def installment_paid_dates(self):
+        """Set of due dates already marked paid - used by
+        next_insurance_installment and installment_rows below."""
+        return {r.due_date for r in self.installment_records if r.paid}
+
+    @property
+    def installment_rows(self):
+        """[{'due_date','paid','status'}, ...] for all 4 quarterly due
+        dates - status is 'ok' once paid, otherwise the normal
+        ok/warning/expired classification of that date. Drives the
+        per-installment paid checkboxes in admin_vehicles.html."""
+        paid_dates = self.installment_paid_dates
+        rows = []
+        for d in self.insurance_installment_dates:
+            paid = d in paid_dates
+            status = 'ok' if paid else vehicle_deadline_status(d)[0]
+            rows.append({'due_date': d, 'paid': paid, 'status': status})
+        return rows
+
+
+class VehicleInsuranceInstallment(db.Model):
+    """
+    Payment ('paid' checkbox) tracking for one quarterly ГО installment of a
+    Vehicle - see Vehicle.insurance_installment_dates/next_insurance_installment.
+    Keyed by (vehicle_id, due_date) rather than an installment index, since
+    due dates are always recomputed fresh from Vehicle.insurance_expiry, never
+    stored - if insurance_expiry ever changes, the due dates shift and any
+    paid marks for the now-stale dates simply stop being matched (harmless
+    leftover rows, not worth cleaning up for this scale of data).
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicle.id'), nullable=False)
+    due_date = db.Column(db.Date, nullable=False)
+    paid = db.Column(db.Boolean, nullable=False, default=False)
+    paid_at = db.Column(db.DateTime, nullable=True)
+
+    vehicle = db.relationship('Vehicle', backref=db.backref('installment_records', cascade='all, delete-orphan'))
+
+    __table_args__ = (db.UniqueConstraint('vehicle_id', 'due_date', name='uq_vehicle_installment_due'),)
 
 
 class ServiceMachineCard(db.Model):
@@ -1521,12 +2483,43 @@ class MeasuringInstrument(db.Model):
     description = db.Column(db.Text, nullable=True)
     accuracy_value = db.Column(db.Float, nullable=True)
     accuracy_unit = db.Column(db.String(20), nullable=True)
+    # Suggested re-calibration interval (ISO 9001 §7.1.5) - only used to
+    # pre-fill the "next due" date when logging a new
+    # InstrumentCalibrationRecord; the record's own next_due_date (as
+    # actually stated on that calibration's certificate) is always the
+    # authoritative source for calibration_status below, not this interval.
+    calibration_interval_months = db.Column(db.Integer, nullable=True)
+
+    calibration_records = db.relationship(
+        'InstrumentCalibrationRecord', backref='instrument', cascade='all, delete-orphan', lazy=True,
+        order_by='InstrumentCalibrationRecord.calibrated_at.desc()'
+    )
 
     @property
     def display_label(self):
         if self.accuracy_value is not None:
             return f'{self.name} (± {self.accuracy_value:g} {self.accuracy_unit or ""})'.strip()
         return self.name
+
+    @property
+    def latest_calibration(self):
+        return self.calibration_records[0] if self.calibration_records else None
+
+    @property
+    def calibration_status(self):
+        """'valid' / 'due_soon' (<=30 days) / 'overdue' / 'not_tracked'
+        (никога калибриран) - based on the latest record's own next_due_date,
+        never recomputed from calibration_interval_months (see that field's
+        docstring)."""
+        latest = self.latest_calibration
+        if not latest or not latest.next_due_date:
+            return 'not_tracked'
+        days_left = (latest.next_due_date - datetime.utcnow().date()).days
+        if days_left < 0:
+            return 'overdue'
+        if days_left <= 30:
+            return 'due_soon'
+        return 'valid'
 
 
 class QualityMeasurement(db.Model):
@@ -1647,6 +2640,472 @@ class QualityCheckTemplateMeasurement(db.Model):
     instrument_id = db.Column(db.Integer, db.ForeignKey('measuring_instrument.id'), nullable=True)
 
     instrument = db.relationship('MeasuringInstrument')
+
+
+class InstrumentCalibrationRecord(db.Model):
+    """
+    One calibration/verification event for a MeasuringInstrument (ISO 9001
+    §7.1.5) - kept permanently (never overwritten) so the instrument's full
+    calibration history stays auditable, same pattern as
+    ControlledDocumentRevision. next_due_date is read directly off the
+    calibration certificate (whatever the calibrating lab/person states),
+    not recomputed from MeasuringInstrument.calibration_interval_months -
+    real certificates occasionally shorten/extend the next interval.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    instrument_id = db.Column(db.Integer, db.ForeignKey('measuring_instrument.id'), nullable=False)
+    calibrated_at = db.Column(db.Date, nullable=False)
+    next_due_date = db.Column(db.Date, nullable=True)
+    calibrated_by = db.Column(db.String(150), nullable=True)
+    certificate_no = db.Column(db.String(100), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    filename = db.Column(db.String(255), nullable=True)
+    original_filename = db.Column(db.String(255), nullable=True)
+    recorded_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    recorded_by = db.relationship('User')
+
+
+CONTROLLED_DOCUMENT_CATEGORIES = {
+    'manual': 'Наръчник по качеството',
+    'policy': 'Политика',
+    'procedure': 'Процедура',
+    'work_instruction': 'Работна инструкция',
+    'form': 'Формуляр',
+    'record': 'Запис',
+}
+CONTROLLED_DOCUMENT_STATUSES = {
+    'draft': 'Чернова',
+    'active': 'Активен',
+    'obsolete': 'Отменен',
+}
+
+
+class ControlledDocument(db.Model):
+    """
+    ISO 9001 §7.5 "documented information" - a controlled quality-system
+    document (manual/policy/procedure/work instruction/form/record). The
+    row's own filename/current_revision always reflect the latest approved
+    version; every prior version is kept in ControlledDocumentRevision
+    (never overwritten/deleted) so changes stay traceable, per §7.5.3's
+    control-of-changes requirement.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    document_no = db.Column(db.String(50), unique=True, nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    category = db.Column(db.String(30), nullable=False, default='procedure')
+    status = db.Column(db.String(20), nullable=False, default='active')
+    current_revision = db.Column(db.String(20), nullable=False, default='1')
+    owner_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    approved_by = db.Column(db.String(100), nullable=True)
+    effective_date = db.Column(db.Date, nullable=True)
+    filename = db.Column(db.String(255), nullable=True)
+    original_filename = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    owner = db.relationship('User')
+    revisions = db.relationship(
+        'ControlledDocumentRevision', backref='document', cascade='all, delete-orphan', lazy=True,
+        order_by='ControlledDocumentRevision.id'
+    )
+
+    @property
+    def category_label(self):
+        return CONTROLLED_DOCUMENT_CATEGORIES.get(self.category, self.category)
+
+    @property
+    def status_label(self):
+        return CONTROLLED_DOCUMENT_STATUSES.get(self.status, self.status)
+
+
+class ControlledDocumentRevision(db.Model):
+    """
+    One historical version of a ControlledDocument, added whenever a new
+    revision is uploaded (see admin_add_document_revision()) - the parent
+    ControlledDocument's own filename/current_revision are updated to match
+    the newest row here, but older rows (and their files on disk) stay
+    around for audit trail.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    document_id = db.Column(db.Integer, db.ForeignKey('controlled_document.id'), nullable=False)
+    revision_label = db.Column(db.String(20), nullable=False)
+    change_description = db.Column(db.Text, nullable=True)
+    filename = db.Column(db.String(255), nullable=True)
+    original_filename = db.Column(db.String(255), nullable=True)
+    approved_by = db.Column(db.String(100), nullable=True)
+    revised_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    revised_by = db.relationship('User')
+
+
+CAPA_STATUSES = {
+    'open': 'Отворен',
+    'in_progress': 'В процес',
+    'closed': 'Затворен',
+    'verified': 'Потвърден',
+}
+
+
+class CapaRecord(db.Model):
+    """
+    ISO 9001 §10.2 corrective/preventive action record - full workflow from
+    problem description through containment, root cause, corrective action,
+    preventive action, and effectiveness verification. source_description
+    is deliberately free text (not a link to a specific QualityCheck/order/
+    complaint row) - a CAPA can originate from an internal nonconformity, a
+    customer complaint, an audit finding, or anywhere else, and forcing a
+    structured link would mean modeling all of those sources up front.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    capa_no = db.Column(db.String(20), unique=True, nullable=False)
+    source_description = db.Column(db.Text, nullable=True)
+    problem_description = db.Column(db.Text, nullable=False)
+    containment_action = db.Column(db.Text, nullable=True)
+    root_cause = db.Column(db.Text, nullable=True)
+    corrective_action = db.Column(db.Text, nullable=True)
+    preventive_action = db.Column(db.Text, nullable=True)
+    responsible_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    due_date = db.Column(db.Date, nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='open')
+    verification_notes = db.Column(db.Text, nullable=True)
+    verified_by = db.Column(db.String(100), nullable=True)
+    verified_at = db.Column(db.Date, nullable=True)
+    opened_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    responsible = db.relationship('User', foreign_keys=[responsible_id])
+    opened_by = db.relationship('User', foreign_keys=[opened_by_id])
+
+    @property
+    def status_label(self):
+        return CAPA_STATUSES.get(self.status, self.status)
+
+    @property
+    def is_overdue(self):
+        return bool(self.due_date and self.status in ('open', 'in_progress') and self.due_date < datetime.utcnow().date())
+
+
+def _next_capa_number():
+    """Sequential 'CAPA-0001' style numbering - same read-then-increment
+    tradeoff as _next_offer_number(), fine for this app's single-admin-at-a-
+    time usage."""
+    last = db.session.query(db.func.max(CapaRecord.capa_no)).scalar()
+    next_n = 1
+    if last and last.startswith('CAPA-'):
+        try:
+            next_n = int(last.rsplit('-', 1)[1]) + 1
+        except ValueError:
+            pass
+    return f'CAPA-{next_n:04d}'
+
+
+AUDIT_STATUSES = {
+    'planned': 'Планиран',
+    'in_progress': 'В процес',
+    'completed': 'Завършен',
+}
+AUDIT_FINDING_TYPES = {
+    'nonconformity': 'Несъответствие',
+    'observation': 'Наблюдение',
+    'improvement': 'Препоръка за подобрение',
+}
+
+
+class InternalAudit(db.Model):
+    """ISO 9001 §9.2 internal audit header - scope, auditor, dates, status,
+    overall conclusion. Individual findings live in AuditFinding below."""
+    id = db.Column(db.Integer, primary_key=True)
+    audit_no = db.Column(db.String(20), unique=True, nullable=False)
+    scope = db.Column(db.Text, nullable=False)
+    auditor_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    planned_date = db.Column(db.Date, nullable=True)
+    actual_date = db.Column(db.Date, nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='planned')
+    summary = db.Column(db.Text, nullable=True)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    auditor = db.relationship('User', foreign_keys=[auditor_id])
+    created_by = db.relationship('User', foreign_keys=[created_by_id])
+    findings = db.relationship(
+        'AuditFinding', backref='audit', cascade='all, delete-orphan', lazy=True, order_by='AuditFinding.id'
+    )
+
+    @property
+    def status_label(self):
+        return AUDIT_STATUSES.get(self.status, self.status)
+
+
+class AuditFinding(db.Model):
+    """
+    One finding from an InternalAudit (nonconformity/observation/
+    improvement opportunity). capa_id is set when "Отвори CAPA" is used to
+    hand this finding off to a new CapaRecord (see admin_add_capa()) - a
+    finding that already has one shows a link to it instead of the button,
+    so the same finding can't spawn a second CAPA by accident.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    audit_id = db.Column(db.Integer, db.ForeignKey('internal_audit.id'), nullable=False)
+    finding_type = db.Column(db.String(20), nullable=False, default='observation')
+    description = db.Column(db.Text, nullable=False)
+    clause_reference = db.Column(db.String(50), nullable=True)
+    capa_id = db.Column(db.Integer, db.ForeignKey('capa_record.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    capa = db.relationship('CapaRecord')
+
+    @property
+    def finding_type_label(self):
+        return AUDIT_FINDING_TYPES.get(self.finding_type, self.finding_type)
+
+
+def _next_audit_number():
+    last = db.session.query(db.func.max(InternalAudit.audit_no)).scalar()
+    next_n = 1
+    if last and last.startswith('AUD-'):
+        try:
+            next_n = int(last.rsplit('-', 1)[1]) + 1
+        except ValueError:
+            pass
+    return f'AUD-{next_n:04d}'
+
+
+# ----------------- ISO 9001 - ПРЕГЛЕД ОТ РЪКОВОДСТВОТО (§9.3) -----------------
+
+class ManagementReview(db.Model):
+    """
+    ISO 9001 §9.3 management review record. The four snapshot_* counters are
+    captured once, at creation time, from the live CAPA/audit/calibration
+    data (see admin_add_management_review()) - deliberately frozen rather
+    than recomputed on every view, so a past review's "what did leadership
+    see" record doesn't silently change after the fact (e.g. once someone
+    closes a CAPA that was still open when the review actually happened).
+    Everything else is free text, same rationale as
+    CapaRecord.source_description - forcing a fully structured model for
+    every ISO §9.3 input (customer feedback, resource adequacy, etc.) would
+    mean modeling all of those sources up front for no real benefit.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    review_date = db.Column(db.Date, nullable=False)
+    participants = db.Column(db.String(255), nullable=True)
+
+    snapshot_open_capa_count = db.Column(db.Integer, nullable=False, default=0)
+    snapshot_overdue_capa_count = db.Column(db.Integer, nullable=False, default=0)
+    snapshot_audit_nonconformity_count = db.Column(db.Integer, nullable=False, default=0)
+    snapshot_overdue_calibration_count = db.Column(db.Integer, nullable=False, default=0)
+
+    customer_feedback = db.Column(db.Text, nullable=True)
+    process_performance = db.Column(db.Text, nullable=True)
+    resource_adequacy = db.Column(db.Text, nullable=True)
+    external_internal_changes = db.Column(db.Text, nullable=True)
+    risk_opportunity_actions = db.Column(db.Text, nullable=True)
+    conclusion = db.Column(db.Text, nullable=True)
+
+    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    created_by = db.relationship('User')
+    actions = db.relationship(
+        'ManagementReviewAction', backref='review', cascade='all, delete-orphan', lazy=True,
+        order_by='ManagementReviewAction.id'
+    )
+
+
+class ManagementReviewAction(db.Model):
+    """
+    One decision/action item coming out of a ManagementReview - mirrors
+    AuditFinding's optional CAPA hand-off (capa_id set when "Отвори CAPA" is
+    used, see admin_add_capa()). Deliberately has no status field of its
+    own, same as AuditFinding - once an action needs real follow-up it gets
+    a CAPA, which is what actually tracks progress/closure.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    review_id = db.Column(db.Integer, db.ForeignKey('management_review.id'), nullable=False)
+    description = db.Column(db.Text, nullable=False)
+    responsible_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    due_date = db.Column(db.Date, nullable=True)
+    capa_id = db.Column(db.Integer, db.ForeignKey('capa_record.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    responsible = db.relationship('User')
+    capa = db.relationship('CapaRecord')
+
+
+# ----------------- ISO 9001 - ОБУЧЕНИЕ НА ПЕРСОНАЛА (§7.2) -----------------
+
+TRAINING_TYPES = {
+    'induction': 'Въвеждащ инструктаж',
+    'on_the_job': 'Инструктаж на работното място',
+    'external_course': 'Външен курс',
+    'safety': 'Безопасност на труда',
+    'quality_procedure': 'Процедура по качеството',
+    'equipment_operation': 'Работа с машина/оборудване',
+    'other': 'Друго',
+}
+
+
+class TrainingRecord(db.Model):
+    """
+    ISO 9001 §7.2 competence record - documented evidence that an employee
+    received a given training/instruction, plus an evaluation of whether it
+    actually worked. trainer_name is free text (not a User FK) since a
+    trainer is often an outside course/provider, not necessarily a system
+    user - same rationale as CapaRecord.verified_by. valid_until is only set
+    for trainings that expire (e.g. a safety certificate needing renewal);
+    left blank it means "permanent" competence, not "unknown".
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    employee_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    topic = db.Column(db.String(200), nullable=False)
+    training_type = db.Column(db.String(30), nullable=False, default='other')
+    trainer_name = db.Column(db.String(150), nullable=True)
+    training_date = db.Column(db.Date, nullable=False)
+    valid_until = db.Column(db.Date, nullable=True)
+    effectiveness_evaluation = db.Column(db.Text, nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    filename = db.Column(db.String(255), nullable=True)
+    original_filename = db.Column(db.String(255), nullable=True)
+    recorded_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    employee = db.relationship('User', foreign_keys=[employee_id])
+    recorded_by = db.relationship('User', foreign_keys=[recorded_by_id])
+
+    @property
+    def training_type_label(self):
+        return TRAINING_TYPES.get(self.training_type, self.training_type)
+
+    @property
+    def is_expired(self):
+        return bool(self.valid_until and self.valid_until < datetime.utcnow().date())
+
+
+# ----------------- ISO 9001 - РЕГИСТЪР НА РИСКА (§6.1) -----------------
+
+RISK_TYPES = {
+    'risk': 'Риск',
+    'opportunity': 'Възможност',
+}
+RISK_CATEGORIES = {
+    'process': 'Процес',
+    'equipment': 'Оборудване',
+    'supplier': 'Доставчик',
+    'personnel': 'Персонал',
+    'financial': 'Финансов',
+    'external': 'Външен фактор',
+    'it_data': 'ИТ / данни',
+    'other': 'Друго',
+}
+RISK_STATUSES = {
+    'identified': 'Идентифициран',
+    'monitoring': 'Наблюдение',
+    'mitigated': 'Овладян',
+    'accepted': 'Приет',
+    'closed': 'Затворен',
+}
+
+
+class RiskRegisterEntry(db.Model):
+    """
+    ISO 9001 §6.1 risk/opportunity register entry. likelihood/impact are each
+    1-5 (standard 5x5 matrix) and multiply into risk_score (1-25), bucketed
+    into low/medium/high by risk_level below - the usual way this gets
+    presented at a management review/audit. capa_id is an optional hand-off
+    to a formal CAPA for entries whose mitigation needs the full corrective/
+    preventive-action workflow, same pattern as AuditFinding/
+    ManagementReviewAction.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    risk_type = db.Column(db.String(20), nullable=False, default='risk')
+    category = db.Column(db.String(20), nullable=False, default='other')
+    likelihood = db.Column(db.Integer, nullable=False)
+    impact = db.Column(db.Integer, nullable=False)
+    owner_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    mitigation_action = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='identified')
+    identified_date = db.Column(db.Date, nullable=False)
+    review_date = db.Column(db.Date, nullable=True)
+    capa_id = db.Column(db.Integer, db.ForeignKey('capa_record.id'), nullable=True)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    owner = db.relationship('User', foreign_keys=[owner_id])
+    created_by = db.relationship('User', foreign_keys=[created_by_id])
+    capa = db.relationship('CapaRecord')
+
+    @property
+    def risk_type_label(self):
+        return RISK_TYPES.get(self.risk_type, self.risk_type)
+
+    @property
+    def category_label(self):
+        return RISK_CATEGORIES.get(self.category, self.category)
+
+    @property
+    def status_label(self):
+        return RISK_STATUSES.get(self.status, self.status)
+
+    @property
+    def risk_score(self):
+        return self.likelihood * self.impact
+
+    @property
+    def risk_level(self):
+        score = self.risk_score
+        if score >= 15:
+            return 'high'
+        if score >= 7:
+            return 'medium'
+        return 'low'
+
+    @property
+    def risk_level_label(self):
+        return {'low': 'Нисък', 'medium': 'Среден', 'high': 'Висок'}[self.risk_level]
+
+
+# ----------------- ISO 9001 - УДОВЛЕТВОРЕНОСТ НА КЛИЕНТИ (§9.1.2) -----------------
+
+SATISFACTION_SOURCES = {
+    'survey': 'Анкета',
+    'complaint': 'Оплакване',
+    'compliment': 'Похвала',
+    'warranty_claim': 'Рекламация',
+    'delivery_review': 'Преглед на доставка',
+    'other': 'Друго',
+}
+
+
+class CustomerSatisfactionRecord(db.Model):
+    """
+    ISO 9001 §9.1.2 monitoring of customer perception. Linked to the
+    existing Client catalog (used for offers/delivery notes) rather than
+    free text, so feedback history rolls up per client - see the module's
+    scoping discussion. capa_id is an optional hand-off to a formal CAPA for
+    negative feedback needing corrective action, same pattern as
+    AuditFinding/ManagementReviewAction/RiskRegisterEntry.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=False)
+    source = db.Column(db.String(20), nullable=False, default='survey')
+    rating = db.Column(db.Integer, nullable=False)
+    comment = db.Column(db.Text, nullable=True)
+    order_reference = db.Column(db.String(100), nullable=True)
+    feedback_date = db.Column(db.Date, nullable=False)
+    capa_id = db.Column(db.Integer, db.ForeignKey('capa_record.id'), nullable=True)
+    recorded_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    client = db.relationship('Client')
+    capa = db.relationship('CapaRecord')
+    recorded_by = db.relationship('User')
+
+    @property
+    def source_label(self):
+        return SATISFACTION_SOURCES.get(self.source, self.source)
 
 
 def _next_offer_number():
@@ -2565,6 +4024,33 @@ def inject_current_year():
     return {'current_year': datetime.now().year}
 
 
+@app.context_processor
+def inject_vehicle_alerts():
+    """Exposes vehicle_alerts (warning/expired Vehicle deadlines) to every
+    template for a navbar banner - see partials/navbar.html. Recomputed on
+    every request from Vehicle.deadlines, so a warning simply keeps showing
+    itself every day until the date is renewed; no cron/email involved."""
+    if not (current_user.is_authenticated and (current_user.is_admin or current_user.is_worker)):
+        return {'vehicle_alerts': []}
+    alerts = []
+    for v in Vehicle.query.all():
+        for d in v.deadlines:
+            if d['status'] in ('warning', 'expired'):
+                alerts.append({
+                    'vehicle_id': v.id, 'vehicle': v.name, 'plate': v.license_plate,
+                    'label': d['label'], 'status': d['status'], 'days': d['days'],
+                })
+        inst = v.next_insurance_installment
+        if inst and inst['status'] in ('warning', 'expired'):
+            alerts.append({
+                'vehicle_id': v.id, 'vehicle': v.name, 'plate': v.license_plate,
+                'label': f'Вноска ГО ({inst["due_date"].strftime("%d.%m.%Y")})',
+                'status': inst['status'], 'days': inst['days'],
+            })
+    alerts.sort(key=lambda a: a['days'])
+    return {'vehicle_alerts': alerts}
+
+
 def _format_material_dims(material):
     """Width/length/thickness as "Wmm, Lmm, Tmm" - "-" per blank slot. Shared
     by format_material_option (which adds brand/#ID around this) and the
@@ -2585,11 +4071,14 @@ def format_material_option(material):
     printing "#None ".
     """
     id_prefix = f"#{material.id} " if material.id is not None else ''
-    return f"{id_prefix}{material.display_name} ({material.brand or '-'}, {_format_material_dims(material)})"
+    return f"{id_prefix}{localized(material, 'display_name')} ({material.brand or '-'}, {_format_material_dims(material)})"
 
 
 app.jinja_env.globals['get_text'] = get_text
-app.jinja_env.globals['material_type_label'] = lambda key: MATERIAL_TYPE_LABELS.get(key, key)
+# MATERIAL_TYPE_LABELS values are looked up dynamically (by type_key), so
+# pybabel can't statically extract them from this lambda - their EN/DE
+# translations are added by hand in translations/*/LC_MESSAGES/messages.po.
+app.jinja_env.globals['material_type_label'] = lambda key: gettext(MATERIAL_TYPE_LABELS.get(key, key))
 app.jinja_env.globals['MATERIAL_TYPE_LABELS'] = MATERIAL_TYPE_LABELS
 app.jinja_env.globals['format_material_option'] = format_material_option
 app.jinja_env.globals['material_dimension_labels'] = material_dimension_labels
@@ -2667,6 +4156,13 @@ def sitemap_xml():
     urls = ''.join(f'<url><loc>{root}{p}</loc></url>' for p in pages)
     xml = f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</urlset>'
     return app.response_class(xml, mimetype='application/xml')
+
+
+@app.route('/set-language/<lang_code>')
+def set_language(lang_code):
+    if lang_code in SUPPORTED_LANGUAGES:
+        session['language'] = lang_code
+    return redirect(request.referrer or url_for('index'))
 
 
 @app.route('/')
@@ -2753,11 +4249,11 @@ def api_generator_presets_save():
     name = request.form.get('name', '').strip()
     settings_json = request.form.get('settings_json', '')
     if not name:
-        return jsonify({'status': 'error', 'message': 'Моля въведете име на пресет.'}), 400
+        return jsonify({'status': 'error', 'message': gettext('Моля въведете име на пресет.')}), 400
     try:
         json.loads(settings_json)
     except ValueError:
-        return jsonify({'status': 'error', 'message': 'Невалидни настройки.'}), 400
+        return jsonify({'status': 'error', 'message': gettext('Невалидни настройки.')}), 400
 
     preset = GeneratorPreset.query.filter_by(user_id=current_user.id, name=name).first()
     if preset:
@@ -2774,7 +4270,7 @@ def api_generator_presets_save():
 def api_generator_presets_delete(preset_id):
     preset = GeneratorPreset.query.get_or_404(preset_id)
     if preset.user_id != current_user.id:
-        return jsonify({'status': 'error', 'message': 'Нямате достъп.'}), 403
+        return jsonify({'status': 'error', 'message': gettext('Нямате достъп.')}), 403
     db.session.delete(preset)
     db.session.commit()
     return jsonify({'status': 'success'})
@@ -2963,7 +4459,7 @@ def login():
             if user.role == 'admin':
                 return redirect(url_for('admin_dashboard'))
             return redirect(url_for('dashboard'))
-        flash('Невалидно потребителско име или парола.')
+        flash(gettext('Невалидно потребителско име или парола.'))
     return render_template('login.html')
 
 
@@ -2985,7 +4481,7 @@ def login_2fa():
             if user.role == 'admin':
                 return redirect(url_for('admin_dashboard'))
             return redirect(url_for('dashboard'))
-        flash('Невалиден код.', 'danger')
+        flash(gettext('Невалиден код.'), 'danger')
     return render_template('login_2fa.html')
 
 
@@ -3012,7 +4508,7 @@ def forgot_password():
             )
         # Same message whether or not the email exists - the form must not
         # be usable to enumerate registered addresses.
-        flash('Ако имейлът съществува в системата, изпратихме връзка за възстановяване на паролата.', 'success')
+        flash(gettext('Ако имейлът съществува в системата, изпратихме връзка за възстановяване на паролата.'), 'success')
         return redirect(url_for('login'))
     return render_template('forgot_password.html')
 
@@ -3025,29 +4521,29 @@ def reset_password(token):
     try:
         user_id = _reset_serializer().loads(token, max_age=PASSWORD_RESET_MAX_AGE)
     except SignatureExpired:
-        flash('Връзката за възстановяване е изтекла. Заявете нова.', 'danger')
+        flash(gettext('Връзката за възстановяване е изтекла. Заявете нова.'), 'danger')
         return redirect(url_for('forgot_password'))
     except BadSignature:
-        flash('Невалидна връзка за възстановяване.', 'danger')
+        flash(gettext('Невалидна връзка за възстановяване.'), 'danger')
         return redirect(url_for('forgot_password'))
 
     user = db.session.get(User, user_id)
     if not user:
-        flash('Невалидна връзка за възстановяване.', 'danger')
+        flash(gettext('Невалидна връзка за възстановяване.'), 'danger')
         return redirect(url_for('forgot_password'))
 
     if request.method == 'POST':
         password = request.form.get('password', '')
         password_confirm = request.form.get('password_confirm', '')
         if len(password) < 8:
-            flash('Паролата трябва да бъде поне 8 символа.', 'danger')
+            flash(gettext('Паролата трябва да бъде поне 8 символа.'), 'danger')
             return render_template('reset_password.html', token=token)
         if password != password_confirm:
-            flash('Паролите не съвпадат.', 'danger')
+            flash(gettext('Паролите не съвпадат.'), 'danger')
             return render_template('reset_password.html', token=token)
         user.password = generate_password_hash(password, method='scrypt')
         db.session.commit()
-        flash('Паролата е сменена успешно. Влезте с новата парола.', 'success')
+        flash(gettext('Паролата е сменена успешно. Влезте с новата парола.'), 'success')
         return redirect(url_for('login'))
 
     return render_template('reset_password.html', token=token)
@@ -3060,7 +4556,7 @@ def register():
         return redirect(url_for('index'))
 
     if registration_closed():
-        flash('Сайтът е в момента на техническа поддръжка. Регистрацията на нови профили е временно спряна.', 'danger')
+        flash(gettext('Сайтът е в момента на техническа поддръжка. Регистрацията на нови профили е временно спряна.'), 'danger')
         return redirect(url_for('login'))
 
     if request.method == 'POST':
@@ -3069,14 +4565,14 @@ def register():
         email, email_error = _validate_email(request.form.get('email'))
 
         if not email:
-            flash(email_error or 'Имейл е задължителен.', 'danger')
+            flash(email_error or gettext('Имейл е задължителен.'), 'danger')
             return redirect(url_for('register'))
 
         # Same 8-character floor migration/change_admin_password.py already enforces
         # for the admin account - short passwords are well within the
         # per-minute brute-force budget /login's rate limit still allows.
         if len(password) < 8:
-            flash('Паролата трябва да бъде поне 8 символа.', 'danger')
+            flash(gettext('Паролата трябва да бъде поне 8 символа.'), 'danger')
             return redirect(url_for('register'))
 
         # Hash the password
@@ -3095,11 +4591,11 @@ def register():
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
-            flash('Това потребителско име или имейл вече съществува.', 'danger')
+            flash(gettext('Това потребителско име или имейл вече съществува.'), 'danger')
             return redirect(url_for('register'))
 
         _send_verification_email(new_user)
-        flash('Регистрацията е успешна! Проверете имейла си, за да потвърдите адреса.', 'success')
+        flash(gettext('Регистрацията е успешна! Проверете имейла си, за да потвърдите адреса.'), 'success')
         return redirect(url_for('login'))
 
     return render_template('register.html')
@@ -3110,20 +4606,20 @@ def verify_email(token):
     try:
         user_id = _verify_serializer().loads(token, max_age=EMAIL_VERIFY_MAX_AGE)
     except SignatureExpired:
-        flash('Връзката за потвърждение е изтекла. Заявете нова от профила си.', 'danger')
+        flash(gettext('Връзката за потвърждение е изтекла. Заявете нова от профила си.'), 'danger')
         return redirect(url_for('login'))
     except BadSignature:
-        flash('Невалидна връзка за потвърждение.', 'danger')
+        flash(gettext('Невалидна връзка за потвърждение.'), 'danger')
         return redirect(url_for('login'))
 
     user = db.session.get(User, user_id)
     if not user:
-        flash('Невалидна връзка за потвърждение.', 'danger')
+        flash(gettext('Невалидна връзка за потвърждение.'), 'danger')
         return redirect(url_for('login'))
 
     user.email_verified = True
     db.session.commit()
-    flash('Имейлът е потвърден успешно.', 'success')
+    flash(gettext('Имейлът е потвърден успешно.'), 'success')
     return redirect(url_for('account') if current_user.is_authenticated else url_for('login'))
 
 
@@ -3138,7 +4634,7 @@ def account():
 def account_update_email():
     email, error = _validate_email(request.form.get('email'))
     if not email:
-        flash(error or 'Имейл е задължителен.', 'danger')
+        flash(error or gettext('Имейл е задължителен.'), 'danger')
         return redirect(url_for('account'))
     current_user.email = email
     current_user.email_verified = False
@@ -3146,10 +4642,10 @@ def account_update_email():
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
-        flash('Този имейл вече се използва от друг акаунт.', 'danger')
+        flash(gettext('Този имейл вече се използва от друг акаунт.'), 'danger')
         return redirect(url_for('account'))
     _send_verification_email(current_user)
-    flash('Имейлът е обновен. Изпратихме връзка за потвърждение на новия адрес.', 'success')
+    flash(gettext('Имейлът е обновен. Изпратихме връзка за потвърждение на новия адрес.'), 'success')
     return redirect(url_for('account'))
 
 
@@ -3158,13 +4654,13 @@ def account_update_email():
 @limiter.limit("5 per hour")
 def account_resend_verification():
     if current_user.email_verified:
-        flash('Имейлът вече е потвърден.', 'success')
+        flash(gettext('Имейлът вече е потвърден.'), 'success')
         return redirect(url_for('account'))
     if not current_user.email:
-        flash('Нямате зададен имейл.', 'danger')
+        flash(gettext('Нямате зададен имейл.'), 'danger')
         return redirect(url_for('account'))
     _send_verification_email(current_user)
-    flash('Изпратихме нова връзка за потвърждение.', 'success')
+    flash(gettext('Изпратихме нова връзка за потвърждение.'), 'success')
     return redirect(url_for('account'))
 
 
@@ -3172,19 +4668,19 @@ def account_resend_verification():
 @login_required
 def account_2fa_setup():
     if current_user.totp_secret:
-        flash('Двуфакторното удостоверяване вече е активирано.', 'danger')
+        flash(gettext('Двуфакторното удостоверяване вече е активирано.'), 'danger')
         return redirect(url_for('account'))
 
     if request.method == 'POST':
         secret = session.get('pending_totp_secret')
         code = (request.form.get('code') or '').strip()
         if not secret or not pyotp.TOTP(secret).verify(code, valid_window=1):
-            flash('Невалиден код. Опитайте отново.', 'danger')
+            flash(gettext('Невалиден код. Опитайте отново.'), 'danger')
             return redirect(url_for('account_2fa_setup'))
         current_user.totp_secret = secret
         db.session.commit()
         session.pop('pending_totp_secret', None)
-        flash('Двуфакторното удостоверяване е активирано.', 'success')
+        flash(gettext('Двуфакторното удостоверяване е активирано.'), 'success')
         return redirect(url_for('account'))
 
     # Reuse a secret already pending in this session so refreshing the page
@@ -3202,12 +4698,12 @@ def account_2fa_setup():
 @login_required
 def account_2fa_disable():
     if not check_password_hash(current_user.password, request.form.get('password', '')):
-        flash('Грешна парола.', 'danger')
+        flash(gettext('Грешна парола.'), 'danger')
         return redirect(url_for('account'))
     current_user.totp_secret = None
     db.session.commit()
     session.pop('pending_totp_secret', None)
-    flash('Двуфакторното удостоверяване е изключено.', 'success')
+    flash(gettext('Двуфакторното удостоверяване е изключено.'), 'success')
     return redirect(url_for('account'))
 
 
@@ -3346,11 +4842,11 @@ def upload():
     if request.method == 'POST':
         file = request.files.get('file')
         if not file or file.filename == '':
-            flash("Моля, изберете файл за качване.", "danger")
+            flash(gettext("Моля, изберете файл за качване."), "danger")
             return redirect(request.url)
 
         if not file.filename.lower().endswith('.dxf'):
-            flash('Невалиден формат! Системата приема само .dxf файлове.', 'danger')
+            flash(gettext('Невалиден формат! Системата приема само .dxf файлове.'), 'danger')
             return redirect(request.url)
 
         try:
@@ -3368,12 +4864,12 @@ def upload():
 
             db.session.add(dxf_file)
             db.session.commit()
-            flash(f'Файлът "{file.filename}" беше качен и обработен успешно!', 'success')
+            flash(gettext('Файлът "%(filename)s" беше качен и обработен успешно!', filename=file.filename), 'success')
             return redirect(url_for('dashboard'))
 
         except Exception as e:
             db.session.rollback()
-            flash(f'Критична грешка при обработка/запис: {str(e)}', 'danger')
+            flash(gettext('Критична грешка при обработка/запис: %(error)s', error=str(e)), 'danger')
             return redirect(request.url)
 
     machines = Machine.query.all()
@@ -3406,7 +4902,16 @@ def admin_dashboard():
         'suppliers': Supplier.query.count(),
         'orders': Order.query.count(),
         'quality_checks': QualityCheck.query.count(),
+        'documents': ControlledDocument.query.count(),
+        'capa': CapaRecord.query.count(),
+        'audits': InternalAudit.query.count(),
+        'management_reviews': ManagementReview.query.count(),
+        'training_records': TrainingRecord.query.count(),
+        'risk_entries': RiskRegisterEntry.query.count(),
+        'satisfaction_records': CustomerSatisfactionRecord.query.count(),
     }
+
+
     return render_template('admin.html', counts=counts, active_page='admin')
 
 
@@ -4938,6 +6443,8 @@ def admin_update_material(key):
     material.type = _parse_material_type(request.form)
     material.brand = request.form.get('brand', '').strip() or None
     material.notes = request.form.get('notes', '').strip() or None
+    material.display_name_en = request.form.get('display_name_en', '').strip() or None
+    material.display_name_de = request.form.get('display_name_de', '').strip() or None
     log_action(describe_changes(f'материал "{material.display_name}"', material, {
         'cost_per_m2': 'цена лв/м²', 'cutting_speed_mm_per_min': 'ск. рязане mm/min',
         'pierce_rate_per_min': 'пробождания/min', 'sheet_length_mm': 'дължинаmm',
@@ -5033,7 +6540,9 @@ def admin_add_material():
         code_number=request.form.get('code_number', '').strip() or None,
         type=material_type,
         brand=brand,
-        notes=request.form.get('notes', '').strip() or None
+        notes=request.form.get('notes', '').strip() or None,
+        display_name_en=request.form.get('display_name_en', '').strip() or None,
+        display_name_de=request.form.get('display_name_de', '').strip() or None,
     )
     db.session.add(new_material)
     db.session.flush()  # assigns new_material.id without a full commit yet
@@ -5114,6 +6623,8 @@ def edit_machine_window(id):
         flash('Нямате достъп до тази страница.', 'danger')
         return redirect(url_for('dashboard'))
     machine = Machine.query.get_or_404(id)
+    rooms = Room.query.join(Building).order_by(Building.name, Room.name).all()
+    panels = ElectricalPanel.query.join(Room).order_by(Room.name, ElectricalPanel.name).all()
     return render_template(
         'edit_window.html', item_label='машина', saved=request.args.get('saved') == '1',
         action=url_for('rename_machine', id=machine.id),
@@ -5121,6 +6632,12 @@ def edit_machine_window(id):
             {'name': 'name', 'label': 'Име на машина', 'value': machine.name, 'type': 'text', 'required': True},
             {'name': 'machine_type', 'label': 'Тип машина (напр. laser, mill_3axis)',
              'value': machine.machine_type or '', 'type': 'datalist', 'options': _known_machine_types()},
+            {'name': 'room_id', 'label': 'Помещение', 'value': machine.room_id or '', 'type': 'select', 'options': [
+                {'value': '', 'label': '-- няма --'}
+            ] + [{'value': r.id, 'label': f'{r.building.name} / {r.name}'} for r in rooms]},
+            {'name': 'panel_id', 'label': 'Свързана към ел. табло', 'value': machine.panel_id or '', 'type': 'select', 'options': [
+                {'value': '', 'label': '-- няма --'}
+            ] + [{'value': p.id, 'label': f'{p.room.name} / {p.name}'} for p in panels]},
         ]
     )
 
@@ -5140,6 +6657,10 @@ def rename_machine(id):
     machine = Machine.query.get_or_404(id)
     machine.name = name
     machine.machine_type = request.form.get('machine_type', '').strip() or None
+    room_id_raw = request.form.get('room_id', '')
+    panel_id_raw = request.form.get('panel_id', '')
+    machine.room_id = int(room_id_raw) if room_id_raw.isdigit() else None
+    machine.panel_id = int(panel_id_raw) if panel_id_raw.isdigit() else None
     log_action(describe_changes(f'машина #{id}', machine, {'name': 'име', 'machine_type': 'тип'}))
     db.session.commit()
     flash('Машината беше преименувана успешно.', 'success')
@@ -5256,6 +6777,10 @@ def admin_add_service():
         pricing_mode=pricing_mode,
         price_per_meter_eur=price_per_meter_eur,
         description=request.form.get('description', '').strip() or None,
+        name_en=request.form.get('name_en', '').strip() or None,
+        name_de=request.form.get('name_de', '').strip() or None,
+        description_en=request.form.get('description_en', '').strip() or None,
+        description_de=request.form.get('description_de', '').strip() or None,
         show_price='show_price' in request.form,
         machines=_selected_machines(request.form),
     )
@@ -5290,6 +6815,10 @@ def admin_update_service(service_id):
     service.pricing_mode = pricing_mode
     service.price_per_meter_eur = price_per_meter_eur
     service.description = request.form.get('description', '').strip() or None
+    service.name_en = request.form.get('name_en', '').strip() or None
+    service.name_de = request.form.get('name_de', '').strip() or None
+    service.description_en = request.form.get('description_en', '').strip() or None
+    service.description_de = request.form.get('description_de', '').strip() or None
     service.show_price = 'show_price' in request.form
     service.machines = _selected_machines(request.form)
     log_action(describe_changes(f'услуга "{service.name}"', service, {
@@ -5598,7 +7127,7 @@ def upload_detail_dxf(detail_id):
     detail = Detail.query.get_or_404(detail_id)
     file = request.files.get('file')
     if not file or file.filename == '':
-        flash('Моля изберете файл.', 'danger')
+        flash(gettext('Моля изберете файл.'), 'danger')
         return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
     original_filename = sanitize_display_filename(file.filename)
@@ -5620,7 +7149,7 @@ def upload_detail_dxf(detail_id):
             detail.calculated_price = calculate_material_price(width, height, detail.material_key)
 
     db.session.commit()
-    flash('Файлът беше качен успешно.', 'success')
+    flash(gettext('Файлът беше качен успешно.'), 'success')
     return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
 
@@ -5962,13 +7491,18 @@ def admin_add_product():
         return redirect(url_for('admin_products'))
 
     description = request.form.get('description', '').strip()
+    name_en = request.form.get('name_en', '').strip() or None
+    name_de = request.form.get('name_de', '').strip() or None
+    description_en = request.form.get('description_en', '').strip() or None
+    description_de = request.form.get('description_de', '').strip() or None
 
     try:
         markup_percent = float(request.form.get('markup_percent', '0') or 0)
     except ValueError:
         markup_percent = 0.0
 
-    new_product = Product(name=name, description=description, markup_percent=round(markup_percent, 2))
+    new_product = Product(name=name, description=description, markup_percent=round(markup_percent, 2),
+                           name_en=name_en, name_de=name_de, description_en=description_en, description_de=description_de)
     db.session.add(new_product)
     db.session.commit()
 
@@ -6039,6 +7573,15 @@ def admin_product_update(product_id):
 
     product.name = name
     product.description = request.form.get('description', '').strip()
+
+    # Translation fields only exist on the full admin edit page, not the
+    # simpler popup content editor - guard so a popup save (which never
+    # submits them) doesn't wipe out translations set earlier.
+    if not is_popup:
+        product.name_en = request.form.get('name_en', '').strip() or None
+        product.name_de = request.form.get('name_de', '').strip() or None
+        product.description_en = request.form.get('description_en', '').strip() or None
+        product.description_de = request.form.get('description_de', '').strip() or None
 
     if edit_pricing:
         try:
@@ -6284,10 +7827,10 @@ def upload_order_item_pdf():
     any other abandoned upload in this app."""
     file = request.files.get('file')
     if not file or file.filename == '':
-        return jsonify({'status': 'error', 'message': 'Няма избран файл.'}), 400
+        return jsonify({'status': 'error', 'message': gettext('Няма избран файл.')}), 400
     stored_filename = _save_upload(file, app.config['ORDER_ITEM_FILE_FOLDER'], allowed_extensions={'pdf'})
     if not stored_filename:
-        return jsonify({'status': 'error', 'message': 'Приемат се само PDF файлове.'}), 400
+        return jsonify({'status': 'error', 'message': gettext('Приемат се само PDF файлове.')}), 400
     return jsonify({
         'status': 'success',
         'filename': stored_filename,
@@ -6304,7 +7847,7 @@ def create_order():
         cart_raw = request.form.get('cart_json', '')
 
         if not customer_name:
-            flash('Моля въведете име на клиент.', 'danger')
+            flash(gettext('Моля въведете име на клиент.'), 'danger')
             return redirect(url_for('create_order'))
 
         try:
@@ -6315,7 +7858,7 @@ def create_order():
             cart = []
 
         if not cart:
-            flash('Моля добавете поне един артикул към поръчката.', 'danger')
+            flash(gettext('Моля добавете поне един артикул към поръчката.'), 'danger')
             return redirect(url_for('create_order'))
 
         machine_id_raw = request.form.get('machine_id', '')
@@ -6394,7 +7937,7 @@ def create_order():
 
         if not added_any:
             db.session.rollback()
-            flash('Невалидни артикули в поръчката.', 'danger')
+            flash(gettext('Невалидни артикули в поръчката.'), 'danger')
             return redirect(url_for('create_order'))
 
         db.session.commit()
@@ -6405,7 +7948,7 @@ def create_order():
         item_lines = [f'{oi.item_name}: {oi.quantity_ordered} бр. x {oi.unit_price:g} лв. = {oi.line_total:g} лв.' for oi in order_items]
         log_action(f'Създадена поръчка {new_order.order_number} за "{customer_name}" ({len(order_items)} артикул(и))',
                    details=header + '\n' + '\n'.join(item_lines))
-        flash(f'Поръчка {new_order.order_number} беше успешно изпратена!', 'success')
+        flash(gettext('Поръчка %(order_number)s беше успешно изпратена!', order_number=new_order.order_number), 'success')
 
         shortfalls = order_missing_items(new_order)
         if shortfalls:
@@ -6413,8 +7956,8 @@ def create_order():
                 f"{s['item_name']} (нужни {s['needed']}, налични {s['available']})" for s in shortfalls
             )
             flash(
-                f'Внимание: поръчка {new_order.order_number} има недостатъчна наличност за: {missing_desc}. '
-                'Виж таблото "Липсваща наличност".',
+                gettext('Внимание: поръчка %(order_number)s има недостатъчна наличност за: %(missing_desc)s. Виж таблото "Липсваща наличност".',
+                        order_number=new_order.order_number, missing_desc=missing_desc),
                 'danger'
             )
         return redirect(url_for('my_orders'))
@@ -6429,13 +7972,13 @@ def create_order():
     # Pre-computed, JSON-friendly catalogs so the cart UI can add items and
     # show live prices/totals client-side without extra round-trips.
     products_data = [
-        {'id': p.id, 'name': p.name, 'price': calculate_product_pricing(p)['sell_price']}
+        {'id': p.id, 'name': localized(p, 'name'), 'price': calculate_product_pricing(p)['sell_price']}
         for p in products
     ]
     details_data = [
         {
             'id': d.id,
-            'name': f"{d.name} ({d.material.display_name})" if d.material else d.name,
+            'name': f"{localized(d, 'name')} ({localized(d.material, 'display_name')})" if d.material else localized(d, 'name'),
             'price': d.total_price
         }
         for d in details
@@ -6443,7 +7986,7 @@ def create_order():
     # JSON-friendly service list so the per-detail operations picker can
     # preview an operation's cost client-side, same convention as
     # admin_details.html's ND_SERVICES.
-    services_data = [{'id': s.id, 'name': s.name, 'price_per_hour_eur': s.price_per_hour_eur} for s in services]
+    services_data = [{'id': s.id, 'name': localized(s, 'name'), 'price_per_hour_eur': s.price_per_hour_eur} for s in services]
     return render_template('order_create.html', products=products_data, details=details_data,
                            machines=machines, materials=materials, services=services, services_data=services_data,
                            clients=clients, deliverers=deliverers,
@@ -6464,18 +8007,18 @@ def cancel_order(order_id):
     order = Order.query.get_or_404(order_id)
 
     if order.user_id != current_user.id and not current_user.is_admin:
-        flash('Нямате достъп до тази поръчка.', 'danger')
+        flash(gettext('Нямате достъп до тази поръчка.'), 'danger')
         return redirect(url_for('my_orders'))
 
     if not order.can_cancel:
-        flash('Поръчката вече е в процес на изработка (или вече е приключена/отменена) и не може да бъде отменена.',
+        flash(gettext('Поръчката вече е в процес на изработка (или вече е приключена/отменена) и не може да бъде отменена.'),
               'danger')
         return redirect(url_for('my_orders'))
 
     order.status = 'cancelled'
     db.session.commit()
     log_action(f'Отменена поръчка {order.order_number}')
-    flash(f'Поръчка {order.order_number} беше отменена.', 'success')
+    flash(gettext('Поръчка %(order_number)s беше отменена.', order_number=order.order_number), 'success')
     return redirect(url_for('my_orders'))
 
 
@@ -7382,11 +8925,13 @@ def admin_add_measuring_instrument():
         return redirect(url_for('admin_measuring_instruments'))
 
     accuracy_value = _parse_optional_float(request.form, 'accuracy_value')
+    interval_raw = request.form.get('calibration_interval_months', '')
     instrument = MeasuringInstrument(
         name=name,
         description=request.form.get('description', '').strip() or None,
         accuracy_value=accuracy_value,
         accuracy_unit=request.form.get('accuracy_unit', '').strip() or None,
+        calibration_interval_months=int(interval_raw) if interval_raw.isdigit() else None,
     )
     db.session.add(instrument)
     db.session.commit()
@@ -7404,10 +8949,12 @@ def admin_update_measuring_instrument(instrument_id):
         flash('Моля въведете име на инструмента.', 'danger')
         return redirect(url_for('admin_measuring_instruments'))
 
+    interval_raw = request.form.get('calibration_interval_months', '')
     instrument.name = name
     instrument.description = request.form.get('description', '').strip() or None
     instrument.accuracy_value = _parse_optional_float(request.form, 'accuracy_value')
     instrument.accuracy_unit = request.form.get('accuracy_unit', '').strip() or None
+    instrument.calibration_interval_months = int(interval_raw) if interval_raw.isdigit() else None
     db.session.commit()
     log_action(f'Обновен измервателен инструмент "{name}"')
     flash(f'Инструментът "{name}" беше обновен успешно.', 'success')
@@ -7428,6 +8975,1020 @@ def admin_delete_measuring_instrument(instrument_id):
     log_action(f'Изтрит измервателен инструмент "{name}"')
     flash(f'Инструментът "{name}" беше изтрит.', 'success')
     return redirect(url_for('admin_measuring_instruments'))
+
+
+@app.route('/admin/quality/instruments/<int:instrument_id>/calibrate', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_add_calibration_record(instrument_id):
+    """
+    Logs a calibration/verification event for an instrument (ISO 9001
+    §7.1.5) - kept forever in InstrumentCalibrationRecord, never edited/
+    overwritten, so the calibration history stays auditable.
+    """
+    instrument = MeasuringInstrument.query.get_or_404(instrument_id)
+
+    calibrated_at_raw = request.form.get('calibrated_at', '').strip()
+    if not calibrated_at_raw:
+        flash('Моля въведете дата на калибриране.', 'danger')
+        return redirect(url_for('admin_measuring_instruments'))
+    try:
+        calibrated_at = datetime.strptime(calibrated_at_raw, '%Y-%m-%d').date()
+    except ValueError:
+        flash('Невалидна дата на калибриране.', 'danger')
+        return redirect(url_for('admin_measuring_instruments'))
+
+    next_due_date = None
+    next_due_raw = request.form.get('next_due_date', '').strip()
+    if next_due_raw:
+        try:
+            next_due_date = datetime.strptime(next_due_raw, '%Y-%m-%d').date()
+        except ValueError:
+            flash('Невалидна дата за следващо калибриране.', 'danger')
+            return redirect(url_for('admin_measuring_instruments'))
+
+    file = request.files.get('file')
+    stored_filename = _save_upload(file, app.config['CALIBRATION_CERT_FOLDER'])
+    original_filename = sanitize_display_filename(file.filename) if stored_filename else None
+
+    db.session.add(InstrumentCalibrationRecord(
+        instrument_id=instrument.id, calibrated_at=calibrated_at, next_due_date=next_due_date,
+        calibrated_by=request.form.get('calibrated_by', '').strip() or None,
+        certificate_no=request.form.get('certificate_no', '').strip() or None,
+        notes=request.form.get('notes', '').strip() or None,
+        filename=stored_filename, original_filename=original_filename, recorded_by_id=current_user.id,
+    ))
+    db.session.commit()
+
+    log_action(f'Записано калибриране на "{instrument.name}" ({calibrated_at.strftime("%d.%m.%Y")})')
+    flash(f'Калибрирането на "{instrument.name}" беше записано.', 'success')
+    return redirect(url_for('admin_measuring_instruments'))
+
+
+@app.route('/admin/quality/instruments/calibration/<int:record_id>/download')
+@role_required(['admin', 'quality_control'])
+def admin_download_calibration_certificate(record_id):
+    record = InstrumentCalibrationRecord.query.get_or_404(record_id)
+    if not record.filename:
+        flash('Този запис няма прикачен сертификат.', 'danger')
+        return redirect(url_for('admin_measuring_instruments'))
+    return send_from_directory(
+        app.config['CALIBRATION_CERT_FOLDER'], record.filename,
+        as_attachment=True, download_name=record.original_filename
+    )
+
+
+# ----------------- ISO 9001 - ДОКУМЕНТАЛЕН КОНТРОЛ (§7.5) -----------------
+
+@app.route('/admin/documents')
+@role_required(['admin', 'worker', 'quality_control'])
+def admin_documents():
+    """
+    Controlled-document catalog (ISO 9001 §7.5) - quality manual/policies/
+    procedures/work instructions/forms/records, each with a full revision
+    history (see ControlledDocumentRevision). Viewable by any staff role;
+    only admin/quality_control may add/edit/upload revisions - see the
+    mutating routes below.
+    """
+    documents = ControlledDocument.query.order_by(ControlledDocument.document_no).all()
+    users = User.query.filter(User.role.in_(['admin', 'worker', 'quality_control'])).order_by(User.username).all()
+    return render_template(
+        'admin_documents.html', documents=documents, users=users,
+        categories=CONTROLLED_DOCUMENT_CATEGORIES, statuses=CONTROLLED_DOCUMENT_STATUSES,
+        active_page='admin_documents'
+    )
+
+
+@app.route('/admin/documents/create', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_add_document():
+    document_no = request.form.get('document_no', '').strip()
+    title = request.form.get('title', '').strip()
+    if not document_no or not title:
+        flash('Моля въведете номер и заглавие на документа.', 'danger')
+        return redirect(url_for('admin_documents'))
+
+    if ControlledDocument.query.filter_by(document_no=document_no).first():
+        flash(f'Вече съществува документ с номер "{document_no}".', 'danger')
+        return redirect(url_for('admin_documents'))
+
+    category = request.form.get('category', 'procedure')
+    if category not in CONTROLLED_DOCUMENT_CATEGORIES:
+        category = 'procedure'
+    status = request.form.get('status', 'active')
+    if status not in CONTROLLED_DOCUMENT_STATUSES:
+        status = 'active'
+
+    owner_id_raw = request.form.get('owner_id', '')
+    owner_id = int(owner_id_raw) if owner_id_raw.isdigit() else None
+
+    effective_date = None
+    effective_date_raw = request.form.get('effective_date', '').strip()
+    if effective_date_raw:
+        try:
+            effective_date = datetime.strptime(effective_date_raw, '%Y-%m-%d').date()
+        except ValueError:
+            flash('Невалидна дата на влизане в сила.', 'danger')
+            return redirect(url_for('admin_documents'))
+
+    revision_label = request.form.get('revision_label', '').strip() or '1'
+    file = request.files.get('file')
+    stored_filename = _save_upload(file, app.config['CONTROLLED_DOCUMENT_FOLDER'])
+    original_filename = sanitize_display_filename(file.filename) if stored_filename else None
+
+    document = ControlledDocument(
+        document_no=document_no, title=title, category=category, status=status,
+        current_revision=revision_label, owner_id=owner_id,
+        approved_by=request.form.get('approved_by', '').strip() or None,
+        effective_date=effective_date, filename=stored_filename, original_filename=original_filename,
+    )
+    db.session.add(document)
+    db.session.flush()
+    db.session.add(ControlledDocumentRevision(
+        document_id=document.id, revision_label=revision_label,
+        change_description='Първоначално издаване', filename=stored_filename, original_filename=original_filename,
+        approved_by=document.approved_by, revised_by_id=current_user.id,
+    ))
+    db.session.commit()
+
+    log_action(f'Създаден документ "{document_no} - {title}" (рев. {revision_label})')
+    flash(f'Документ "{document_no}" беше добавен успешно.', 'success')
+    return redirect(url_for('admin_documents'))
+
+
+@app.route('/admin/documents/<int:document_id>/update', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_update_document(document_id):
+    document = ControlledDocument.query.get_or_404(document_id)
+
+    title = request.form.get('title', '').strip()
+    if not title:
+        flash('Моля въведете заглавие на документа.', 'danger')
+        return redirect(url_for('admin_documents'))
+
+    category = request.form.get('category', document.category)
+    if category not in CONTROLLED_DOCUMENT_CATEGORIES:
+        category = document.category
+    status = request.form.get('status', document.status)
+    if status not in CONTROLLED_DOCUMENT_STATUSES:
+        status = document.status
+
+    owner_id_raw = request.form.get('owner_id', '')
+    document.title = title
+    document.category = category
+    document.status = status
+    document.owner_id = int(owner_id_raw) if owner_id_raw.isdigit() else None
+    document.approved_by = request.form.get('approved_by', '').strip() or None
+
+    effective_date_raw = request.form.get('effective_date', '').strip()
+    if effective_date_raw:
+        try:
+            document.effective_date = datetime.strptime(effective_date_raw, '%Y-%m-%d').date()
+        except ValueError:
+            flash('Невалидна дата на влизане в сила.', 'danger')
+            return redirect(url_for('admin_documents'))
+    else:
+        document.effective_date = None
+
+    db.session.commit()
+    log_action(f'Обновени данни на документ "{document.document_no}"')
+    flash(f'Документ "{document.document_no}" беше обновен.', 'success')
+    return redirect(url_for('admin_documents'))
+
+
+@app.route('/admin/documents/<int:document_id>/new-revision', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_add_document_revision(document_id):
+    """
+    Uploads a new version of a controlled document - the document's own
+    filename/current_revision are updated to this version, but the previous
+    version stays on disk and in ControlledDocumentRevision for the audit
+    trail (§7.5.3 control of changes), never overwritten.
+    """
+    document = ControlledDocument.query.get_or_404(document_id)
+
+    revision_label = request.form.get('revision_label', '').strip()
+    if not revision_label:
+        flash('Моля въведете номер/означение на новата версия.', 'danger')
+        return redirect(url_for('admin_documents'))
+
+    file = request.files.get('file')
+    stored_filename = _save_upload(file, app.config['CONTROLLED_DOCUMENT_FOLDER'])
+    original_filename = sanitize_display_filename(file.filename) if stored_filename else None
+    approved_by = request.form.get('approved_by', '').strip() or None
+
+    db.session.add(ControlledDocumentRevision(
+        document_id=document.id, revision_label=revision_label,
+        change_description=request.form.get('change_description', '').strip() or None,
+        filename=stored_filename, original_filename=original_filename,
+        approved_by=approved_by, revised_by_id=current_user.id,
+    ))
+    document.current_revision = revision_label
+    document.approved_by = approved_by or document.approved_by
+    if stored_filename:
+        document.filename = stored_filename
+        document.original_filename = original_filename
+    db.session.commit()
+
+    log_action(f'Нова версия на документ "{document.document_no}" - рев. {revision_label}')
+    flash(f'Версия {revision_label} на "{document.document_no}" беше записана.', 'success')
+    return redirect(url_for('admin_documents'))
+
+
+@app.route('/admin/documents/<int:document_id>/download')
+@role_required(['admin', 'worker', 'quality_control'])
+def admin_download_document(document_id):
+    document = ControlledDocument.query.get_or_404(document_id)
+    if not document.filename:
+        flash('Този документ няма прикачен файл.', 'danger')
+        return redirect(url_for('admin_documents'))
+    return send_from_directory(
+        app.config['CONTROLLED_DOCUMENT_FOLDER'], document.filename,
+        as_attachment=True, download_name=document.original_filename
+    )
+
+
+@app.route('/admin/documents/revisions/<int:revision_id>/download')
+@role_required(['admin', 'worker', 'quality_control'])
+def admin_download_document_revision(revision_id):
+    revision = ControlledDocumentRevision.query.get_or_404(revision_id)
+    if not revision.filename:
+        flash('Тази версия няма прикачен файл.', 'danger')
+        return redirect(url_for('admin_documents'))
+    return send_from_directory(
+        app.config['CONTROLLED_DOCUMENT_FOLDER'], revision.filename,
+        as_attachment=True, download_name=revision.original_filename
+    )
+
+
+@app.route('/admin/documents/<int:document_id>/delete', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_delete_document(document_id):
+    document = ControlledDocument.query.get_or_404(document_id)
+    for revision in document.revisions:
+        if revision.filename:
+            path = os.path.join(app.config['CONTROLLED_DOCUMENT_FOLDER'], revision.filename)
+            if os.path.exists(path):
+                os.remove(path)
+
+    document_no = document.document_no
+    db.session.delete(document)
+    db.session.commit()
+    log_action(f'Изтрит документ "{document_no}"')
+    flash(f'Документ "{document_no}" беше изтрит.', 'success')
+    return redirect(url_for('admin_documents'))
+
+
+# ----------------- ISO 9001 - CAPA (§10.2) -----------------
+
+def _apply_capa_form(capa, form):
+    """Shared field-assignment for admin_add_capa()/admin_update_capa() -
+    every CapaRecord field is optional except problem_description (a CAPA
+    can be opened with just the problem, filled in over its lifecycle)."""
+    responsible_id_raw = form.get('responsible_id', '')
+    status = form.get('status', 'open')
+    if status not in CAPA_STATUSES:
+        status = 'open'
+
+    capa.source_description = form.get('source_description', '').strip() or None
+    capa.problem_description = form.get('problem_description', '').strip()
+    capa.containment_action = form.get('containment_action', '').strip() or None
+    capa.root_cause = form.get('root_cause', '').strip() or None
+    capa.corrective_action = form.get('corrective_action', '').strip() or None
+    capa.preventive_action = form.get('preventive_action', '').strip() or None
+    capa.responsible_id = int(responsible_id_raw) if responsible_id_raw.isdigit() else None
+    capa.status = status
+    capa.verification_notes = form.get('verification_notes', '').strip() or None
+    capa.verified_by = form.get('verified_by', '').strip() or None
+
+    for field, attr in (('due_date', 'due_date'), ('verified_at', 'verified_at')):
+        raw = form.get(field, '').strip()
+        if raw:
+            setattr(capa, attr, datetime.strptime(raw, '%Y-%m-%d').date())
+        else:
+            setattr(capa, attr, None)
+
+
+@app.route('/admin/capa')
+@role_required(['admin', 'worker', 'quality_control'])
+def admin_capa():
+    """
+    ISO 9001 §10.2 corrective/preventive action log - viewable by any staff
+    role (workers often ARE the responsible party executing an action);
+    only admin/quality_control may create/edit/delete - see the mutating
+    routes below.
+    """
+    status_filter = request.args.get('status', '')
+    query = CapaRecord.query
+    if status_filter in CAPA_STATUSES:
+        query = query.filter_by(status=status_filter)
+    records = query.order_by(CapaRecord.created_at.desc()).all()
+    users = User.query.filter(User.role.in_(['admin', 'worker', 'quality_control'])).order_by(User.username).all()
+    return render_template(
+        'admin_capa.html', records=records, users=users, statuses=CAPA_STATUSES,
+        status_filter=status_filter, active_page='admin_capa',
+        prefill_problem=request.args.get('prefill_problem', ''),
+        prefill_source=request.args.get('prefill_source', ''),
+        from_finding_id=request.args.get('from_finding_id', ''),
+        from_review_action_id=request.args.get('from_review_action_id', ''),
+        from_risk_entry_id=request.args.get('from_risk_entry_id', ''),
+        from_satisfaction_id=request.args.get('from_satisfaction_id', ''),
+    )
+
+
+@app.route('/admin/capa/create', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_add_capa():
+    if not request.form.get('problem_description', '').strip():
+        flash('Моля опишете несъответствието/проблема.', 'danger')
+        return redirect(url_for('admin_capa'))
+
+    try:
+        capa = CapaRecord(capa_no=_next_capa_number(), opened_by_id=current_user.id)
+        _apply_capa_form(capa, request.form)
+    except ValueError:
+        flash('Невалидна дата.', 'danger')
+        return redirect(url_for('admin_capa'))
+
+    db.session.add(capa)
+    db.session.flush()
+
+    from_finding_id = request.form.get('from_finding_id', '')
+    if from_finding_id.isdigit():
+        finding = db.session.get(AuditFinding, int(from_finding_id))
+        if finding and not finding.capa_id:
+            finding.capa_id = capa.id
+
+    from_review_action_id = request.form.get('from_review_action_id', '')
+    if from_review_action_id.isdigit():
+        review_action = db.session.get(ManagementReviewAction, int(from_review_action_id))
+        if review_action and not review_action.capa_id:
+            review_action.capa_id = capa.id
+
+    from_risk_entry_id = request.form.get('from_risk_entry_id', '')
+    if from_risk_entry_id.isdigit():
+        risk_entry = db.session.get(RiskRegisterEntry, int(from_risk_entry_id))
+        if risk_entry and not risk_entry.capa_id:
+            risk_entry.capa_id = capa.id
+
+    from_satisfaction_id = request.form.get('from_satisfaction_id', '')
+    if from_satisfaction_id.isdigit():
+        satisfaction_record = db.session.get(CustomerSatisfactionRecord, int(from_satisfaction_id))
+        if satisfaction_record and not satisfaction_record.capa_id:
+            satisfaction_record.capa_id = capa.id
+
+    db.session.commit()
+    log_action(f'Отворен CAPA запис "{capa.capa_no}"')
+    flash(f'CAPA запис "{capa.capa_no}" беше създаден.', 'success')
+    return redirect(url_for('admin_capa'))
+
+
+@app.route('/admin/capa/<int:capa_id>/edit')
+@role_required(['admin', 'worker', 'quality_control'])
+def admin_edit_capa(capa_id):
+    capa = CapaRecord.query.get_or_404(capa_id)
+    users = User.query.filter(User.role.in_(['admin', 'worker', 'quality_control'])).order_by(User.username).all()
+    return render_template(
+        'admin_capa_edit.html', capa=capa, users=users, statuses=CAPA_STATUSES, active_page='admin_capa'
+    )
+
+
+@app.route('/admin/capa/<int:capa_id>/update', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_update_capa(capa_id):
+    capa = CapaRecord.query.get_or_404(capa_id)
+    if not request.form.get('problem_description', '').strip():
+        flash('Моля опишете несъответствието/проблема.', 'danger')
+        return redirect(url_for('admin_edit_capa', capa_id=capa_id))
+
+    try:
+        _apply_capa_form(capa, request.form)
+    except ValueError:
+        flash('Невалидна дата.', 'danger')
+        return redirect(url_for('admin_edit_capa', capa_id=capa_id))
+
+    db.session.commit()
+    log_action(f'Обновен CAPA запис "{capa.capa_no}" - статус {capa.status_label}')
+    flash(f'CAPA запис "{capa.capa_no}" беше обновен.', 'success')
+    return redirect(url_for('admin_capa'))
+
+
+@app.route('/admin/capa/<int:capa_id>/delete', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_delete_capa(capa_id):
+    capa = CapaRecord.query.get_or_404(capa_id)
+    capa_no = capa.capa_no
+    # Unlink first (not cascade-delete) - an audit finding/review action/risk
+    # entry is its own record independent of whether the CAPA opened from it
+    # still exists; deleting the CAPA should only clear the reference, same
+    # as it never having one.
+    for finding in AuditFinding.query.filter_by(capa_id=capa.id).all():
+        finding.capa_id = None
+    for review_action in ManagementReviewAction.query.filter_by(capa_id=capa.id).all():
+        review_action.capa_id = None
+    for risk_entry in RiskRegisterEntry.query.filter_by(capa_id=capa.id).all():
+        risk_entry.capa_id = None
+    for satisfaction_record in CustomerSatisfactionRecord.query.filter_by(capa_id=capa.id).all():
+        satisfaction_record.capa_id = None
+    db.session.delete(capa)
+    db.session.commit()
+    log_action(f'Изтрит CAPA запис "{capa_no}"')
+    flash(f'CAPA запис "{capa_no}" беше изтрит.', 'success')
+    return redirect(url_for('admin_capa'))
+
+
+# ----------------- ISO 9001 - ВЪТРЕШНИ ОДИТИ (§9.2) -----------------
+
+@app.route('/admin/audits')
+@role_required(['admin', 'worker', 'quality_control'])
+def admin_audits():
+    """ISO 9001 §9.2 internal audit log - viewable by any staff role; only
+    admin/quality_control may create/edit/delete - see the mutating routes
+    on this and admin_edit_audit()."""
+    status_filter = request.args.get('status', '')
+    query = InternalAudit.query
+    if status_filter in AUDIT_STATUSES:
+        query = query.filter_by(status=status_filter)
+    audits = query.order_by(InternalAudit.created_at.desc()).all()
+    users = User.query.filter(User.role.in_(['admin', 'worker', 'quality_control'])).order_by(User.username).all()
+    return render_template(
+        'admin_audits.html', audits=audits, users=users, statuses=AUDIT_STATUSES,
+        status_filter=status_filter, active_page='admin_audits'
+    )
+
+
+@app.route('/admin/audits/create', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_add_audit():
+    scope = request.form.get('scope', '').strip()
+    if not scope:
+        flash('Моля въведете обхват на одита.', 'danger')
+        return redirect(url_for('admin_audits'))
+
+    auditor_id_raw = request.form.get('auditor_id', '')
+    planned_date = None
+    planned_date_raw = request.form.get('planned_date', '').strip()
+    if planned_date_raw:
+        try:
+            planned_date = datetime.strptime(planned_date_raw, '%Y-%m-%d').date()
+        except ValueError:
+            flash('Невалидна планирана дата.', 'danger')
+            return redirect(url_for('admin_audits'))
+
+    audit = InternalAudit(
+        audit_no=_next_audit_number(), scope=scope,
+        auditor_id=int(auditor_id_raw) if auditor_id_raw.isdigit() else None,
+        planned_date=planned_date, created_by_id=current_user.id,
+    )
+    db.session.add(audit)
+    db.session.commit()
+    log_action(f'Създаден одит "{audit.audit_no}"')
+    flash(f'Одит "{audit.audit_no}" беше създаден.', 'success')
+    return redirect(url_for('admin_audits'))
+
+
+@app.route('/admin/audits/<int:audit_id>/edit')
+@role_required(['admin', 'worker', 'quality_control'])
+def admin_edit_audit(audit_id):
+    audit = InternalAudit.query.get_or_404(audit_id)
+    users = User.query.filter(User.role.in_(['admin', 'worker', 'quality_control'])).order_by(User.username).all()
+    return render_template(
+        'admin_audit_edit.html', audit=audit, users=users, statuses=AUDIT_STATUSES,
+        finding_types=AUDIT_FINDING_TYPES, active_page='admin_audits'
+    )
+
+
+@app.route('/admin/audits/<int:audit_id>/update', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_update_audit(audit_id):
+    audit = InternalAudit.query.get_or_404(audit_id)
+    scope = request.form.get('scope', '').strip()
+    if not scope:
+        flash('Моля въведете обхват на одита.', 'danger')
+        return redirect(url_for('admin_edit_audit', audit_id=audit_id))
+
+    status = request.form.get('status', audit.status)
+    if status not in AUDIT_STATUSES:
+        status = audit.status
+    auditor_id_raw = request.form.get('auditor_id', '')
+
+    try:
+        for field in ('planned_date', 'actual_date'):
+            raw = request.form.get(field, '').strip()
+            setattr(audit, field, datetime.strptime(raw, '%Y-%m-%d').date() if raw else None)
+    except ValueError:
+        flash('Невалидна дата.', 'danger')
+        return redirect(url_for('admin_edit_audit', audit_id=audit_id))
+
+    audit.scope = scope
+    audit.status = status
+    audit.auditor_id = int(auditor_id_raw) if auditor_id_raw.isdigit() else None
+    audit.summary = request.form.get('summary', '').strip() or None
+    db.session.commit()
+    log_action(f'Обновен одит "{audit.audit_no}" - статус {audit.status_label}')
+    flash(f'Одит "{audit.audit_no}" беше обновен.', 'success')
+    return redirect(url_for('admin_edit_audit', audit_id=audit_id))
+
+
+@app.route('/admin/audits/<int:audit_id>/delete', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_delete_audit(audit_id):
+    audit = InternalAudit.query.get_or_404(audit_id)
+    audit_no = audit.audit_no
+    db.session.delete(audit)
+    db.session.commit()
+    log_action(f'Изтрит одит "{audit_no}"')
+    flash(f'Одит "{audit_no}" беше изтрит.', 'success')
+    return redirect(url_for('admin_audits'))
+
+
+@app.route('/admin/audits/<int:audit_id>/findings/create', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_add_audit_finding(audit_id):
+    audit = InternalAudit.query.get_or_404(audit_id)
+    description = request.form.get('description', '').strip()
+    if not description:
+        flash('Моля въведете описание на констатацията.', 'danger')
+        return redirect(url_for('admin_edit_audit', audit_id=audit_id))
+
+    finding_type = request.form.get('finding_type', 'observation')
+    if finding_type not in AUDIT_FINDING_TYPES:
+        finding_type = 'observation'
+
+    db.session.add(AuditFinding(
+        audit_id=audit.id, finding_type=finding_type, description=description,
+        clause_reference=request.form.get('clause_reference', '').strip() or None,
+    ))
+    db.session.commit()
+    log_action(f'Нова констатация към одит "{audit.audit_no}"')
+    flash('Констатацията беше добавена.', 'success')
+    return redirect(url_for('admin_edit_audit', audit_id=audit_id))
+
+
+@app.route('/admin/audits/findings/<int:finding_id>/delete', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_delete_audit_finding(finding_id):
+    finding = AuditFinding.query.get_or_404(finding_id)
+    audit_id = finding.audit_id
+    db.session.delete(finding)
+    db.session.commit()
+    flash('Констатацията беше изтрита.', 'success')
+    return redirect(url_for('admin_edit_audit', audit_id=audit_id))
+
+
+# ----------------- ISO 9001 - ПРЕГЛЕД ОТ РЪКОВОДСТВОТО (§9.3) -----------------
+
+@app.route('/admin/management-reviews')
+@role_required(['admin', 'worker', 'quality_control'])
+def admin_management_reviews():
+    """ISO 9001 §9.3 management review log - viewable by any staff role;
+    only admin/quality_control may create/edit/delete - see the mutating
+    routes below."""
+    reviews = ManagementReview.query.order_by(ManagementReview.review_date.desc()).all()
+    return render_template('admin_management_review.html', reviews=reviews, active_page='admin_management_reviews')
+
+
+@app.route('/admin/management-reviews/create', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_add_management_review():
+    review_date_raw = request.form.get('review_date', '').strip()
+    if not review_date_raw:
+        flash('Моля въведете дата на прегледа.', 'danger')
+        return redirect(url_for('admin_management_reviews'))
+    try:
+        review_date = datetime.strptime(review_date_raw, '%Y-%m-%d').date()
+    except ValueError:
+        flash('Невалидна дата.', 'danger')
+        return redirect(url_for('admin_management_reviews'))
+
+    # Snapshot the live QMS data at the moment the review is opened - see
+    # ManagementReview's docstring for why this isn't recomputed later.
+    open_capas = CapaRecord.query.filter(CapaRecord.status.in_(['open', 'in_progress'])).all()
+    latest_audit = (
+        InternalAudit.query.filter(InternalAudit.actual_date.isnot(None))
+        .order_by(InternalAudit.actual_date.desc()).first()
+    )
+    audit_nonconformity_count = (
+        AuditFinding.query.filter_by(audit_id=latest_audit.id, finding_type='nonconformity').count()
+        if latest_audit else 0
+    )
+
+    review = ManagementReview(
+        review_date=review_date,
+        participants=request.form.get('participants', '').strip() or None,
+        snapshot_open_capa_count=len(open_capas),
+        snapshot_overdue_capa_count=sum(1 for c in open_capas if c.is_overdue),
+        snapshot_audit_nonconformity_count=audit_nonconformity_count,
+        snapshot_overdue_calibration_count=sum(
+            1 for i in MeasuringInstrument.query.all() if i.calibration_status == 'overdue'
+        ),
+        created_by_id=current_user.id,
+    )
+    db.session.add(review)
+    db.session.commit()
+    log_action(f'Създаден преглед от ръководството за {review.review_date.strftime("%d.%m.%Y")}')
+    flash('Прегледът беше създаден.', 'success')
+    return redirect(url_for('admin_edit_management_review', review_id=review.id))
+
+
+@app.route('/admin/management-reviews/<int:review_id>/edit')
+@role_required(['admin', 'worker', 'quality_control'])
+def admin_edit_management_review(review_id):
+    review = ManagementReview.query.get_or_404(review_id)
+    users = User.query.filter(User.role.in_(['admin', 'worker', 'quality_control'])).order_by(User.username).all()
+    return render_template(
+        'admin_management_review_edit.html', review=review, users=users, active_page='admin_management_reviews'
+    )
+
+
+@app.route('/admin/management-reviews/<int:review_id>/update', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_update_management_review(review_id):
+    review = ManagementReview.query.get_or_404(review_id)
+    review_date_raw = request.form.get('review_date', '').strip()
+    if not review_date_raw:
+        flash('Моля въведете дата на прегледа.', 'danger')
+        return redirect(url_for('admin_edit_management_review', review_id=review_id))
+    try:
+        review.review_date = datetime.strptime(review_date_raw, '%Y-%m-%d').date()
+    except ValueError:
+        flash('Невалидна дата.', 'danger')
+        return redirect(url_for('admin_edit_management_review', review_id=review_id))
+
+    review.participants = request.form.get('participants', '').strip() or None
+    review.customer_feedback = request.form.get('customer_feedback', '').strip() or None
+    review.process_performance = request.form.get('process_performance', '').strip() or None
+    review.resource_adequacy = request.form.get('resource_adequacy', '').strip() or None
+    review.external_internal_changes = request.form.get('external_internal_changes', '').strip() or None
+    review.risk_opportunity_actions = request.form.get('risk_opportunity_actions', '').strip() or None
+    review.conclusion = request.form.get('conclusion', '').strip() or None
+    db.session.commit()
+    log_action(f'Обновен преглед от ръководството от {review.review_date.strftime("%d.%m.%Y")}')
+    flash('Прегледът беше обновен.', 'success')
+    return redirect(url_for('admin_edit_management_review', review_id=review_id))
+
+
+@app.route('/admin/management-reviews/<int:review_id>/delete', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_delete_management_review(review_id):
+    review = ManagementReview.query.get_or_404(review_id)
+    review_date_label = review.review_date.strftime('%d.%m.%Y')
+    db.session.delete(review)
+    db.session.commit()
+    log_action(f'Изтрит преглед от ръководството от {review_date_label}')
+    flash(f'Прегледът от {review_date_label} беше изтрит.', 'success')
+    return redirect(url_for('admin_management_reviews'))
+
+
+@app.route('/admin/management-reviews/<int:review_id>/actions/create', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_add_management_review_action(review_id):
+    review = ManagementReview.query.get_or_404(review_id)
+    description = request.form.get('description', '').strip()
+    if not description:
+        flash('Моля въведете описание на решението/действието.', 'danger')
+        return redirect(url_for('admin_edit_management_review', review_id=review_id))
+
+    responsible_id_raw = request.form.get('responsible_id', '')
+    due_date = None
+    due_date_raw = request.form.get('due_date', '').strip()
+    if due_date_raw:
+        try:
+            due_date = datetime.strptime(due_date_raw, '%Y-%m-%d').date()
+        except ValueError:
+            flash('Невалиден срок.', 'danger')
+            return redirect(url_for('admin_edit_management_review', review_id=review_id))
+
+    db.session.add(ManagementReviewAction(
+        review_id=review.id, description=description,
+        responsible_id=int(responsible_id_raw) if responsible_id_raw.isdigit() else None,
+        due_date=due_date,
+    ))
+    db.session.commit()
+    log_action(f'Ново действие към преглед от ръководството от {review.review_date.strftime("%d.%m.%Y")}')
+    flash('Действието беше добавено.', 'success')
+    return redirect(url_for('admin_edit_management_review', review_id=review_id))
+
+
+@app.route('/admin/management-reviews/actions/<int:action_id>/delete', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_delete_management_review_action(action_id):
+    action = ManagementReviewAction.query.get_or_404(action_id)
+    review_id = action.review_id
+    db.session.delete(action)
+    db.session.commit()
+    flash('Действието беше изтрито.', 'success')
+    return redirect(url_for('admin_edit_management_review', review_id=review_id))
+
+
+# ----------------- ISO 9001 - ОБУЧЕНИЕ НА ПЕРСОНАЛА (§7.2) -----------------
+
+@app.route('/admin/training')
+@role_required(['admin', 'worker', 'quality_control'])
+def admin_training_records():
+    """ISO 9001 §7.2 competence/training log - viewable by any staff role;
+    only admin/quality_control may add/delete records - see the mutating
+    routes below. Records are never edited once logged, same convention as
+    InstrumentCalibrationRecord - a training either happened as recorded or
+    gets deleted and re-logged, there's no partial-correction workflow."""
+    employee_filter = request.args.get('employee_id', '')
+    query = TrainingRecord.query
+    if employee_filter.isdigit():
+        query = query.filter_by(employee_id=int(employee_filter))
+    records = query.order_by(TrainingRecord.training_date.desc()).all()
+    employees = User.query.filter(User.role.in_(['admin', 'worker', 'quality_control'])).order_by(User.username).all()
+    return render_template(
+        'admin_training.html', records=records, employees=employees, training_types=TRAINING_TYPES,
+        employee_filter=employee_filter, active_page='admin_training'
+    )
+
+
+@app.route('/admin/training/create', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_add_training_record():
+    employee_id_raw = request.form.get('employee_id', '')
+    topic = request.form.get('topic', '').strip()
+    training_date_raw = request.form.get('training_date', '').strip()
+    if not employee_id_raw.isdigit() or not topic or not training_date_raw:
+        flash('Моля попълнете служител, тема и дата на обучението.', 'danger')
+        return redirect(url_for('admin_training_records'))
+
+    try:
+        training_date = datetime.strptime(training_date_raw, '%Y-%m-%d').date()
+    except ValueError:
+        flash('Невалидна дата на обучението.', 'danger')
+        return redirect(url_for('admin_training_records'))
+
+    valid_until = None
+    valid_until_raw = request.form.get('valid_until', '').strip()
+    if valid_until_raw:
+        try:
+            valid_until = datetime.strptime(valid_until_raw, '%Y-%m-%d').date()
+        except ValueError:
+            flash('Невалидна дата "валидно до".', 'danger')
+            return redirect(url_for('admin_training_records'))
+
+    training_type = request.form.get('training_type', 'other')
+    if training_type not in TRAINING_TYPES:
+        training_type = 'other'
+
+    file = request.files.get('file')
+    stored_filename = _save_upload(file, app.config['TRAINING_CERT_FOLDER'])
+    original_filename = sanitize_display_filename(file.filename) if stored_filename else None
+
+    employee = db.session.get(User, int(employee_id_raw))
+    training = TrainingRecord(
+        employee_id=int(employee_id_raw), topic=topic, training_type=training_type,
+        trainer_name=request.form.get('trainer_name', '').strip() or None,
+        training_date=training_date, valid_until=valid_until,
+        effectiveness_evaluation=request.form.get('effectiveness_evaluation', '').strip() or None,
+        notes=request.form.get('notes', '').strip() or None,
+        filename=stored_filename, original_filename=original_filename, recorded_by_id=current_user.id,
+    )
+    db.session.add(training)
+    db.session.commit()
+    log_action(f'Записано обучение "{topic}" за {employee.username if employee else "?"}')
+    flash('Обучението беше записано.', 'success')
+    return redirect(url_for('admin_training_records'))
+
+
+@app.route('/admin/training/<int:record_id>/download')
+@role_required(['admin', 'worker', 'quality_control'])
+def admin_download_training_certificate(record_id):
+    record = TrainingRecord.query.get_or_404(record_id)
+    if not record.filename:
+        flash('Този запис няма прикачен сертификат.', 'danger')
+        return redirect(url_for('admin_training_records'))
+    return send_from_directory(
+        app.config['TRAINING_CERT_FOLDER'], record.filename,
+        as_attachment=True, download_name=record.original_filename
+    )
+
+
+@app.route('/admin/training/<int:record_id>/delete', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_delete_training_record(record_id):
+    record = TrainingRecord.query.get_or_404(record_id)
+    if record.filename:
+        path = os.path.join(app.config['TRAINING_CERT_FOLDER'], record.filename)
+        if os.path.exists(path):
+            os.remove(path)
+    topic = record.topic
+    db.session.delete(record)
+    db.session.commit()
+    log_action(f'Изтрит запис за обучение "{topic}"')
+    flash('Записът за обучение беше изтрит.', 'success')
+    return redirect(url_for('admin_training_records'))
+
+
+# ----------------- ISO 9001 - РЕГИСТЪР НА РИСКА (§6.1) -----------------
+
+@app.route('/admin/risk-register')
+@role_required(['admin', 'worker', 'quality_control'])
+def admin_risk_register():
+    """ISO 9001 §6.1 risk/opportunity register - viewable by any staff role;
+    only admin/quality_control may create/edit/delete - see the mutating
+    routes below."""
+    status_filter = request.args.get('status', '')
+    query = RiskRegisterEntry.query
+    if status_filter in RISK_STATUSES:
+        query = query.filter_by(status=status_filter)
+    entries = query.order_by(RiskRegisterEntry.created_at.desc()).all()
+    users = User.query.filter(User.role.in_(['admin', 'worker', 'quality_control'])).order_by(User.username).all()
+    return render_template(
+        'admin_risk_register.html', entries=entries, users=users, risk_types=RISK_TYPES,
+        categories=RISK_CATEGORIES, statuses=RISK_STATUSES, status_filter=status_filter,
+        active_page='admin_risk_register'
+    )
+
+
+@app.route('/admin/risk-register/create', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_add_risk_entry():
+    title = request.form.get('title', '').strip()
+    identified_date_raw = request.form.get('identified_date', '').strip()
+    likelihood_raw = request.form.get('likelihood', '')
+    impact_raw = request.form.get('impact', '')
+
+    if not title or not identified_date_raw or likelihood_raw not in '12345' or impact_raw not in '12345':
+        flash('Моля попълнете заглавие, дата, вероятност и въздействие (1-5).', 'danger')
+        return redirect(url_for('admin_risk_register'))
+
+    try:
+        identified_date = datetime.strptime(identified_date_raw, '%Y-%m-%d').date()
+    except ValueError:
+        flash('Невалидна дата.', 'danger')
+        return redirect(url_for('admin_risk_register'))
+
+    review_date = None
+    review_date_raw = request.form.get('review_date', '').strip()
+    if review_date_raw:
+        try:
+            review_date = datetime.strptime(review_date_raw, '%Y-%m-%d').date()
+        except ValueError:
+            flash('Невалидна дата за преглед.', 'danger')
+            return redirect(url_for('admin_risk_register'))
+
+    risk_type = request.form.get('risk_type', 'risk')
+    if risk_type not in RISK_TYPES:
+        risk_type = 'risk'
+    category = request.form.get('category', 'other')
+    if category not in RISK_CATEGORIES:
+        category = 'other'
+    owner_id_raw = request.form.get('owner_id', '')
+
+    entry = RiskRegisterEntry(
+        title=title, description=request.form.get('description', '').strip() or None,
+        risk_type=risk_type, category=category,
+        likelihood=int(likelihood_raw), impact=int(impact_raw),
+        owner_id=int(owner_id_raw) if owner_id_raw.isdigit() else None,
+        identified_date=identified_date, review_date=review_date,
+        created_by_id=current_user.id,
+    )
+    db.session.add(entry)
+    db.session.commit()
+    log_action(f'Добавен запис в регистъра на риска: "{title}"')
+    flash('Записът беше добавен в регистъра на риска.', 'success')
+    return redirect(url_for('admin_risk_register'))
+
+
+@app.route('/admin/risk-register/<int:entry_id>/edit')
+@role_required(['admin', 'worker', 'quality_control'])
+def admin_edit_risk_entry(entry_id):
+    entry = RiskRegisterEntry.query.get_or_404(entry_id)
+    users = User.query.filter(User.role.in_(['admin', 'worker', 'quality_control'])).order_by(User.username).all()
+    return render_template(
+        'admin_risk_register_edit.html', entry=entry, users=users, risk_types=RISK_TYPES,
+        categories=RISK_CATEGORIES, statuses=RISK_STATUSES, active_page='admin_risk_register'
+    )
+
+
+@app.route('/admin/risk-register/<int:entry_id>/update', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_update_risk_entry(entry_id):
+    entry = RiskRegisterEntry.query.get_or_404(entry_id)
+    title = request.form.get('title', '').strip()
+    identified_date_raw = request.form.get('identified_date', '').strip()
+    likelihood_raw = request.form.get('likelihood', '')
+    impact_raw = request.form.get('impact', '')
+
+    if not title or not identified_date_raw or likelihood_raw not in '12345' or impact_raw not in '12345':
+        flash('Моля попълнете заглавие, дата, вероятност и въздействие (1-5).', 'danger')
+        return redirect(url_for('admin_edit_risk_entry', entry_id=entry_id))
+
+    try:
+        entry.identified_date = datetime.strptime(identified_date_raw, '%Y-%m-%d').date()
+    except ValueError:
+        flash('Невалидна дата.', 'danger')
+        return redirect(url_for('admin_edit_risk_entry', entry_id=entry_id))
+
+    review_date_raw = request.form.get('review_date', '').strip()
+    if review_date_raw:
+        try:
+            entry.review_date = datetime.strptime(review_date_raw, '%Y-%m-%d').date()
+        except ValueError:
+            flash('Невалидна дата за преглед.', 'danger')
+            return redirect(url_for('admin_edit_risk_entry', entry_id=entry_id))
+    else:
+        entry.review_date = None
+
+    risk_type = request.form.get('risk_type', entry.risk_type)
+    category = request.form.get('category', entry.category)
+    status = request.form.get('status', entry.status)
+    owner_id_raw = request.form.get('owner_id', '')
+
+    entry.title = title
+    entry.description = request.form.get('description', '').strip() or None
+    entry.risk_type = risk_type if risk_type in RISK_TYPES else entry.risk_type
+    entry.category = category if category in RISK_CATEGORIES else entry.category
+    entry.likelihood = int(likelihood_raw)
+    entry.impact = int(impact_raw)
+    entry.owner_id = int(owner_id_raw) if owner_id_raw.isdigit() else None
+    entry.mitigation_action = request.form.get('mitigation_action', '').strip() or None
+    entry.status = status if status in RISK_STATUSES else entry.status
+
+    db.session.commit()
+    log_action(f'Обновен запис в регистъра на риска: "{entry.title}"')
+    flash('Записът беше обновен.', 'success')
+    return redirect(url_for('admin_edit_risk_entry', entry_id=entry_id))
+
+
+@app.route('/admin/risk-register/<int:entry_id>/delete', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_delete_risk_entry(entry_id):
+    entry = RiskRegisterEntry.query.get_or_404(entry_id)
+    title = entry.title
+    db.session.delete(entry)
+    db.session.commit()
+    log_action(f'Изтрит запис от регистъра на риска: "{title}"')
+    flash(f'Записът "{title}" беше изтрит.', 'success')
+    return redirect(url_for('admin_risk_register'))
+
+
+# ----------------- ISO 9001 - УДОВЛЕТВОРЕНОСТ НА КЛИЕНТИ (§9.1.2) -----------------
+
+@app.route('/admin/customer-satisfaction')
+@role_required(['admin', 'worker', 'quality_control'])
+def admin_customer_satisfaction():
+    """ISO 9001 §9.1.2 customer perception monitoring log - viewable by any
+    staff role; only admin/quality_control may add/delete records - see the
+    mutating routes below. Records are never edited once logged, same
+    convention as TrainingRecord/InstrumentCalibrationRecord."""
+    client_filter = request.args.get('client_id', '')
+    query = CustomerSatisfactionRecord.query
+    if client_filter.isdigit():
+        query = query.filter_by(client_id=int(client_filter))
+    records = query.order_by(CustomerSatisfactionRecord.feedback_date.desc()).all()
+    clients = Client.query.order_by(Client.name).all()
+    return render_template(
+        'admin_customer_satisfaction.html', records=records, clients=clients,
+        sources=SATISFACTION_SOURCES, client_filter=client_filter, active_page='admin_customer_satisfaction'
+    )
+
+
+@app.route('/admin/customer-satisfaction/create', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_add_satisfaction_record():
+    client_id_raw = request.form.get('client_id', '')
+    rating_raw = request.form.get('rating', '')
+    feedback_date_raw = request.form.get('feedback_date', '').strip()
+
+    if not client_id_raw.isdigit() or rating_raw not in '12345' or not feedback_date_raw:
+        flash('Моля изберете клиент, оценка (1-5) и дата.', 'danger')
+        return redirect(url_for('admin_customer_satisfaction'))
+
+    try:
+        feedback_date = datetime.strptime(feedback_date_raw, '%Y-%m-%d').date()
+    except ValueError:
+        flash('Невалидна дата.', 'danger')
+        return redirect(url_for('admin_customer_satisfaction'))
+
+    source = request.form.get('source', 'survey')
+    if source not in SATISFACTION_SOURCES:
+        source = 'survey'
+
+    client = db.session.get(Client, int(client_id_raw))
+    record = CustomerSatisfactionRecord(
+        client_id=int(client_id_raw), source=source, rating=int(rating_raw),
+        comment=request.form.get('comment', '').strip() or None,
+        order_reference=request.form.get('order_reference', '').strip() or None,
+        feedback_date=feedback_date, recorded_by_id=current_user.id,
+    )
+    db.session.add(record)
+    db.session.commit()
+    log_action(f'Записана обратна връзка от клиент "{client.name if client else "?"}" ({record.rating}/5)')
+    flash('Обратната връзка беше записана.', 'success')
+    return redirect(url_for('admin_customer_satisfaction'))
+
+
+@app.route('/admin/customer-satisfaction/<int:record_id>/delete', methods=['POST'])
+@role_required(['admin', 'quality_control'])
+def admin_delete_satisfaction_record(record_id):
+    record = CustomerSatisfactionRecord.query.get_or_404(record_id)
+    db.session.delete(record)
+    db.session.commit()
+    log_action('Изтрит запис за удовлетвореност на клиент')
+    flash('Записът беше изтрит.', 'success')
+    return redirect(url_for('admin_customer_satisfaction'))
 
 
 # ----------------- QUICK-CREATE API ENDPOINTS -----------------
@@ -7754,7 +10315,7 @@ def api_quick_create_client():
     """
     name = request.form.get('name', '').strip()
     if not name:
-        return jsonify({'status': 'error', 'message': 'Моля въведете име на клиента.'}), 400
+        return jsonify({'status': 'error', 'message': gettext('Моля въведете име на клиента.')}), 400
 
     eik, eik_error = _validate_eik(request.form.get('eik'))
     if eik_error:
@@ -7783,7 +10344,7 @@ def api_quick_create_deliverer():
     """AJAX endpoint: create a Deliverer on the fly from the order-creation form. See api_quick_create_client()."""
     name = request.form.get('name', '').strip()
     if not name:
-        return jsonify({'status': 'error', 'message': 'Моля въведете име на куриера.'}), 400
+        return jsonify({'status': 'error', 'message': gettext('Моля въведете име на куриера.')}), 400
 
     eik, eik_error = _validate_eik(request.form.get('eik'))
     if eik_error:
@@ -8075,6 +10636,71 @@ def _shelly_get_status_gen1(host, timeout):
         return json.loads(resp.read().decode('utf-8'))
 
 
+def _shelly_convector_status(conv):
+    """
+    Live on/off state (+ power_w, if the relay reports it - a plain Shelly
+    1/Plus 1 has no metering at all, a 1PM/Plus 1PM does) for one Convector,
+    over whichever transport it's configured with (connection_type) - HTTP
+    polled (same LAN approach as the energy meters above) or read from
+    _mqtt_conv_state (populated by _handle_mqtt_convector_message() as
+    messages arrive - see _mqtt_convector_snapshot()). Returns is_on=None
+    (with an error string) rather than raising, same offline-tolerant shape
+    as shelly_device_snapshot(), so one unreachable convector doesn't break
+    the whole page's poll.
+    """
+    if conv.connection_type == 'mqtt':
+        return _mqtt_convector_snapshot(conv)
+    try:
+        if conv.device_type == 'shelly_gen2':
+            # Switch.GetStatus already includes apower (W) in the same
+            # response for a metering-capable switch (Plus/Pro 1PM) - no
+            # separate call needed, it's just absent on a plain Switch.
+            status = shelly_rpc(conv.host, 'Switch.GetStatus', {'id': conv.relay_channel})
+            return {'online': True, 'is_on': bool(status.get('output')),
+                    'power_w': status.get('apower'), 'error': None}
+        data = _shelly_get_status_gen1(conv.host, SHELLY_TIMEOUT)
+        relays = data.get('relays') or []
+        if conv.relay_channel >= len(relays):
+            return {'online': False, 'is_on': None, 'power_w': None,
+                    'error': f'Устройството няма реле №{conv.relay_channel}.'}
+        # Gen1 metering (1PM) reports power in a separate `meters` list,
+        # parallel to `relays` by index - a plain (non-PM) Shelly 1 simply
+        # has no `meters` key at all, so power_w stays None rather than
+        # guessing/defaulting to 0 (which would misleadingly claim "0W" for
+        # a device that can't measure power at all).
+        meters = data.get('meters') or []
+        power_w = meters[conv.relay_channel].get('power') if conv.relay_channel < len(meters) else None
+        return {'online': True, 'is_on': bool(relays[conv.relay_channel]['ison']), 'power_w': power_w, 'error': None}
+    except Exception:
+        return {'online': False, 'is_on': None, 'power_w': None, 'error': 'Устройството не отговаря.'}
+
+
+def _shelly_convector_set(conv, turn_on):
+    """
+    Turns one Convector's relay on/off, over whichever transport it's
+    configured with - the ONE place in this app that switches real
+    hardware. See Convector's docstring for why this device class is
+    exempt from the read-only-by-policy stance that covers Machines/meters
+    (confirmed explicitly with the user, not assumed from the hardware
+    alone). Raises on any network/HTTP failure (the MQTT path can't detect
+    failure the same way - see _mqtt_publish()'s own caveat) - the caller
+    (admin_convector_toggle()) turns an HTTP failure into a flash message
+    instead of silently doing nothing.
+    """
+    if conv.connection_type == 'mqtt':
+        if conv.device_type == 'shelly_gen2':
+            _mqtt_publish(f'{conv.mqtt_topic}/command/switch:{conv.relay_channel}', 'on' if turn_on else 'off')
+        else:
+            _mqtt_publish(f'{conv.mqtt_topic}/relay/{conv.relay_channel}/command', 'on' if turn_on else 'off')
+        return
+    if conv.device_type == 'shelly_gen2':
+        shelly_rpc(conv.host, 'Switch.Set', {'id': conv.relay_channel, 'on': 'true' if turn_on else 'false'})
+    else:
+        url = f'http://{conv.host}/relay/{conv.relay_channel}?turn={"on" if turn_on else "off"}'
+        with urllib.request.urlopen(url, timeout=SHELLY_TIMEOUT) as resp:
+            resp.read()
+
+
 def _shelly_get_status(host, timeout=SHELLY_TIMEOUT):
     """
     Full status for either generation of Shelly device. A host seen for the
@@ -8267,13 +10893,502 @@ def _shelly_readings(status):
     return channels, round(total_power, 1), round(total_energy, 2)
 
 
-def shelly_device_snapshot(name, host):
+# ----------------- MQTT LIVE FEED -----------------
+# Alternative to HTTP polling for Shelly meters that publish readings to an
+# MQTT broker (see ShellyDevice.mqtt_topic). Observed real topic shapes on
+# this shop's broker (both Gen1-style flat scalar-per-topic publishing, one
+# with the default "shellies/<id>" root and one reconfigured to a bare
+# custom prefix with no "shellies/" at all):
+#   <prefix>/online                      "true" / "false"
+#   <prefix>/relay/<N>                   "on" / "off"
+#   <prefix>/emeter/<N>/power             "2535.08"      (W)
+#   <prefix>/emeter/<N>/voltage           "232.51"       (V)
+#   <prefix>/emeter/<N>/current           "14.03"        (A)
+#   <prefix>/emeter/<N>/pf                "0.77"
+#   <prefix>/emeter/<N>/total             "106592.0"     (Watt-minutes, Gen1 units)
+#   <prefix>/emeter/<N>/total_returned    "18686.2"
+#   <prefix>/announce, <prefix>/info      JSON metadata (not needed for live power)
+# Temperature/humidity sensors (TemperatureSensor.mqtt_topic) come in
+# several incompatible shapes depending on TEMP_SENSOR_TYPES - unlike the
+# power side above, these do NOT all self-describe from the topic alone, so
+# sensor_type picks which one _handle_mqtt_temp_message() parses with:
+#   'shelly_ht_gen1' (classic Shelly H&T, flat scalar per topic):
+#     <prefix>/online                       "true" / "false"
+#     <prefix>/sensor/temperature           "21.30"   (deg C)
+#     <prefix>/sensor/humidity              "45.00"   (%)
+#     <prefix>/sensor/battery               "98"      (%)
+#   'shelly_gen2' (Shelly Plus/Pro H&T, JSON per component - same dual
+#   direct-status/events-rpc shape as the Gen2+ power side above):
+#     <prefix>/status/temperature:0         {"id":0,"tC":21.3,"tF":70.3}
+#     <prefix>/status/humidity:0            {"id":0,"rh":45.0}
+#     <prefix>/status/devicepower:0         {"id":0,"battery":{"percent":87}}
+#     <prefix>/events/rpc                   NotifyStatus wrapping any of the above under "params"
+#   'generic_flat' (DIY/ESPHome/Tasmota-with-custom-topic, no "sensor/"
+#   segment - the simplest common convention for these):
+#     <prefix>/temperature                  "21.30"
+#     <prefix>/humidity                     "45.00"
+#     <prefix>/battery                      "98"
+# `mqtt_topic` is exactly the prefix as configured on the device (whatever
+# was typed into the add-device form) - messages are matched by
+# `topic.startswith(mqtt_topic + '/')` regardless of type, then
+# sensor_type decides how the leaf under that prefix gets parsed.
+#
+# Convectors (Convector.connection_type='mqtt') are the ONE thing in this
+# section the app also PUBLISHES to, not just subscribes - see
+# _mqtt_publish()/_shelly_convector_set(). Status still comes in the usual
+# subscribe-and-parse way, by device_type (CONVECTOR_TYPES):
+#   'shelly_gen1':
+#     <prefix>/online                       "true" / "false"
+#     <prefix>/relay/<N>                    "on" / "off"           (status)
+#     <prefix>/relay/<N>/command            "on" / "off"           (PUBLISHED to switch it)
+#   'shelly_gen2' (same dual direct-status/events-rpc shape as elsewhere):
+#     <prefix>/status/switch:<N>            {"id":<N>,"output":true}   (status)
+#     <prefix>/events/rpc                   NotifyStatus wrapping the above under "params"
+#     <prefix>/command/switch:<N>           "on" / "off"           (PUBLISHED - Shelly's
+#                                            documented simple per-component MQTT command
+#                                            channel; NOT yet confirmed against a live Gen2
+#                                            device on this broker - if it doesn't switch
+#                                            anything, the documented fallback is a full
+#                                            JSON-RPC Switch.Set request published to
+#                                            <prefix>/rpc instead).
+
+_mqtt_state = {}
+_mqtt_temp_state = {}
+_mqtt_conv_state = {}
+_mqtt_lock = threading.Lock()
+_mqtt_client_instance = None
+
+
+def _handle_mqtt_message(topic, payload):
+    """Dispatches one incoming message to _mqtt_state (power, ShellyDevice)
+    or _mqtt_temp_state (TemperatureSensor), whichever's configured topic
+    prefixes it matches. Prefixes are looked up fresh per message (cheap, a
+    handful of rows) rather than cached at subscribe time, so adding a new
+    device's topic takes effect without restarting the listener."""
+    with app.app_context():
+        try:
+            power_prefixes = [t for (t,) in db.session.query(ShellyDevice.mqtt_topic)
+                               .filter(ShellyDevice.mqtt_topic.isnot(None)).all()]
+            temp_sensors = db.session.query(TemperatureSensor.mqtt_topic, TemperatureSensor.sensor_type).all()
+            conv_sensors = db.session.query(Convector.mqtt_topic, Convector.device_type) \
+                .filter(Convector.connection_type == 'mqtt', Convector.mqtt_topic.isnot(None)).all()
+        finally:
+            db.session.remove()
+
+    prefix = next((p for p in power_prefixes if topic == f'{p}/online' or topic.startswith(f'{p}/emeter/')
+                   or topic.startswith(f'{p}/relay/') or topic.startswith(f'{p}/status/')
+                   or topic == f'{p}/events/rpc'), None)
+    if prefix:
+        _handle_mqtt_power_message(prefix, topic[len(prefix) + 1:], payload)
+        return
+
+    # Any leaf under the prefix is passed through - sensor_type (not the
+    # topic shape) decides which of them actually mean something, so a
+    # temp sensor doesn't need its own per-type list of leaf patterns here.
+    match = next(((p, st) for p, st in temp_sensors if topic == f'{p}/online' or topic.startswith(f'{p}/')), None)
+    if match:
+        prefix, sensor_type = match
+        _handle_mqtt_temp_message(prefix, sensor_type, topic[len(prefix) + 1:], payload)
+        return
+
+    match = next(((p, dt) for p, dt in conv_sensors if topic == f'{p}/online' or topic.startswith(f'{p}/')), None)
+    if match:
+        prefix, device_type = match
+        _handle_mqtt_convector_message(prefix, device_type, topic[len(prefix) + 1:], payload)
+
+
+def _handle_mqtt_power_message(prefix, leaf, payload):
+    with _mqtt_lock:
+        state = _mqtt_state.setdefault(prefix, {'online': False, 'channels': {}, 'last_seen': None})
+        state['last_seen'] = datetime.utcnow()
+
+        if leaf == 'online':
+            state['online'] = payload.strip().lower() == 'true'
+            return
+
+        # Gen1 (original Shelly EM/3EM): <prefix>/emeter/<idx>/<field>, one
+        # scalar value per leaf topic.
+        m = re.match(r'^emeter/(\d+)/(\w+)$', leaf)
+        if m:
+            idx, field = int(m.group(1)), m.group(2)
+            if field not in ('power', 'voltage', 'current', 'pf', 'total', 'total_returned'):
+                return
+            try:
+                value = float(payload)
+            except ValueError:
+                return
+            state['channels'].setdefault(idx, {})[field] = value
+            # A device publishing emeter readings is implicitly online, even
+            # before/without an explicit .../online message (some firmwares
+            # only send that one on state change, not on every reading).
+            state['online'] = True
+            return
+
+        # Gen2+ (Plus/Pro/Gen3, e.g. Shelly Pro 3EM): one JSON status object
+        # per EM component instead of Gen1's one-scalar-per-topic - either
+        # published directly (<prefix>/status/em:0, when "RPC status over
+        # MQTT" is on) or wrapped in an RPC notification the device always
+        # sends on a reading change (<prefix>/events/rpc). Field names are
+        # from Shelly's published Gen2 RPC schema (stable across their
+        # product line) but - unlike DTSU666_REGISTERS - not yet cross-
+        # checked against a real Pro 3EM; if the numbers look wrong once one
+        # is actually reporting, this is the first place to check.
+        m = re.match(r'^status/(em:\d+|em1:\d+)$', leaf)
+        if m:
+            try:
+                data = json.loads(payload)
+            except ValueError:
+                return
+            _apply_gen2_em_status(state, m.group(1), data)
+            return
+
+        if leaf == 'events/rpc':
+            try:
+                envelope = json.loads(payload)
+            except ValueError:
+                return
+            for key, data in (envelope.get('params') or {}).items():
+                if isinstance(data, dict) and re.match(r'^em:\d+$|^em1:\d+$', key):
+                    _apply_gen2_em_status(state, key, data)
+
+
+def _apply_gen2_em_status(state, component_key, data):
+    """Folds one Gen2+ 'em:N' (3-phase) or 'em1:N' (single-phase) status
+    object into the same {idx: {power, voltage, current, pf}} channel shape
+    _mqtt_snapshot() renders for Gen1 - see the caller's docstring for the
+    empirical-confirmation caveat. Lifetime energy isn't included: Gen2
+    exposes that via a separate 'emdata:N' component in Wh, not the
+    Watt-minute 'total' Gen1 channels carry, so a Gen2-via-MQTT device
+    currently always shows 0 kWh total rather than guessing at a
+    conversion - only live power/voltage/current/pf are wired up here."""
+    if component_key.startswith('em1:'):
+        idx = int(component_key.split(':')[1])
+        channel = state['channels'].setdefault(idx, {})
+        for field, key in (('power', 'act_power'), ('voltage', 'voltage'), ('current', 'current'), ('pf', 'pf')):
+            if key in data:
+                channel[field] = data[key]
+    else:
+        for i, letter in enumerate('abc'):
+            channel = state['channels'].setdefault(i, {})
+            for field, key in (('power', f'{letter}_act_power'), ('voltage', f'{letter}_voltage'),
+                               ('current', f'{letter}_current'), ('pf', f'{letter}_pf')):
+                if key in data:
+                    channel[field] = data[key]
+    state['online'] = True
+
+
+def _mqtt_snapshot(name, prefix):
+    """Render-ready dict for one MQTT-backed device, same shape as
+    shelly_device_snapshot()'s HTTP path - see that function's return value.
+    A device with no cached state yet (broker just started, or it's never
+    published) reads as offline rather than raising, same tolerance as an
+    unreachable HTTP meter."""
+    with _mqtt_lock:
+        state = _mqtt_state.get(prefix)
+        state = dict(state, channels=dict(state['channels'])) if state else None
+
+    if not state or not state['online']:
+        return {
+            'name': name, 'host': prefix, 'online': False,
+            'error': None if state else 'Няма получени данни по MQTT за този префикс още.',
+            'channels': [], 'total_power': 0.0, 'total_energy': 0.0,
+            'temperature': None, 'rssi': None,
+        }
+
+    indices = sorted(state['channels'].keys())
+    labels = [f'Фаза {c}' for c in 'ABC'] if len(indices) == 3 else [f'Вход {i + 1}' for i in indices]
+    channels = []
+    total_power = 0.0
+    total_energy = 0.0
+    for label, idx in zip(labels, indices):
+        c = state['channels'][idx]
+        voltage, current = c.get('voltage'), c.get('current')
+        channels.append({
+            'label': label, 'voltage': voltage, 'current': current,
+            'act_power': c.get('power'),
+            'aprt_power': voltage * current if voltage is not None and current is not None else None,
+            'pf': c.get('pf'), 'freq': None,
+        })
+        total_power += c.get('power') or 0.0
+        # Gen1 energy counters are Watt-minutes, not Wh - /60000 for kWh,
+        # same conversion as _shelly_readings()'s HTTP Gen1 branch.
+        total_energy += (c.get('total') or 0.0) / 60000.0
+
+    return {
+        'name': name, 'host': prefix, 'online': True, 'error': None,
+        'channels': channels, 'total_power': round(total_power, 1), 'total_energy': round(total_energy, 2),
+        'temperature': None, 'rssi': None,
+    }
+
+
+def _handle_mqtt_temp_message(prefix, sensor_type, leaf, payload):
+    with _mqtt_lock:
+        state = _mqtt_temp_state.setdefault(
+            prefix, {'online': False, 'temperature': None, 'humidity': None, 'battery': None, 'last_seen': None}
+        )
+        state['last_seen'] = datetime.utcnow()
+
+        if leaf == 'online':
+            state['online'] = payload.strip().lower() == 'true'
+            return
+
+        if sensor_type == 'shelly_gen2':
+            _apply_gen2_temp_leaf(state, leaf, payload)
+            return
+
+        # 'shelly_ht_gen1': <prefix>/sensor/<field>; 'generic_flat' (default
+        # for anything else): <prefix>/<field> directly, no "sensor/" segment.
+        leaf_pattern = r'^sensor/(temperature|humidity|battery)$' if sensor_type == 'shelly_ht_gen1' \
+            else r'^(temperature|humidity|battery)$'
+        m = re.match(leaf_pattern, leaf)
+        if not m:
+            return
+        try:
+            value = float(payload)
+        except ValueError:
+            return
+        state[m.group(1)] = value
+        # Same reasoning as the power side: a reading implies the sensor is
+        # awake and online, even without/before an explicit .../online message.
+        state['online'] = True
+
+
+def _apply_gen2_temp_leaf(state, leaf, payload):
+    """Shelly Plus/Pro H&T (Gen2+) publishes JSON per component, either
+    directly (<prefix>/status/temperature:0 etc.) or wrapped in a
+    <prefix>/events/rpc NotifyStatus envelope - same dual-path shape as
+    _apply_gen2_em_status() for the 3EM Pro, so a device with "RPC status
+    over MQTT" off still works via the events/rpc notifications it always
+    sends on a reading change."""
+    def apply_component(key, data):
+        if not isinstance(data, dict):
+            return
+        if key.startswith('temperature:') and 'tC' in data:
+            state['temperature'] = data['tC']
+            state['online'] = True
+        elif key.startswith('humidity:') and 'rh' in data:
+            state['humidity'] = data['rh']
+            state['online'] = True
+        elif key.startswith('devicepower:'):
+            battery = (data.get('battery') or {}).get('percent')
+            if battery is not None:
+                state['battery'] = battery
+                state['online'] = True
+
+    m = re.match(r'^status/(temperature:\d+|humidity:\d+|devicepower:\d+)$', leaf)
+    if m:
+        try:
+            data = json.loads(payload)
+        except ValueError:
+            return
+        apply_component(m.group(1), data)
+        return
+
+    if leaf == 'events/rpc':
+        try:
+            envelope = json.loads(payload)
+        except ValueError:
+            return
+        for key, data in (envelope.get('params') or {}).items():
+            if re.match(r'^(temperature|humidity|devicepower):\d+$', key):
+                apply_component(key, data)
+
+
+def _mqtt_temp_snapshot(sensor):
+    """Render-ready dict for one TemperatureSensor - reads as offline (not
+    raising) if the broker hasn't delivered anything yet, same tolerance as
+    _mqtt_snapshot().
+
+    'online' here is the sensor's own last-published LWT state, not "do we
+    have a value to show" - a battery/deep-sleep sensor (Shelly H&T-style)
+    is EXPECTED to publish online=false between wake cycles (could be
+    10-15+ minutes apart), which is normal operation, not a fault. So
+    unlike _mqtt_snapshot()'s power devices, going offline here does NOT
+    blank temperature/humidity/battery/last_seen back to None - they always
+    reflect the last value actually received, and only stay None if nothing
+    has ever come in for this sensor at all. The UI uses 'online' just to
+    dim/mark the reading as not-currently-live, never to hide it."""
+    with _mqtt_lock:
+        state = _mqtt_temp_state.get(sensor.mqtt_topic)
+        state = dict(state) if state else None
+
+    if not state:
+        return {
+            'name': sensor.name, 'online': False,
+            'error': 'Няма получени данни по MQTT за този сензор още.',
+            'temperature': None, 'humidity': None, 'battery': None, 'last_seen': None,
+        }
+    return {
+        'name': sensor.name, 'online': state['online'], 'error': None,
+        'temperature': state['temperature'], 'humidity': state['humidity'], 'battery': state['battery'],
+        'last_seen': state['last_seen'].strftime('%H:%M:%S') if state['last_seen'] else None,
+    }
+
+
+def _handle_mqtt_convector_message(prefix, device_type, leaf, payload):
+    """Tracks relay state PER CHANNEL INDEX (not just the one this specific
+    Convector row cares about) in _mqtt_conv_state, same as the power side
+    keeps a {idx: {...}} channels dict - a multi-relay device sharing one
+    prefix across several Convector rows just works without this function
+    needing per-row context. Each channel is {'is_on', 'power_w'} - power_w
+    stays None for a plain (non-PM) Shelly 1/Plus 1, which never publishes
+    a power reading at all."""
+    with _mqtt_lock:
+        state = _mqtt_conv_state.setdefault(prefix, {'online': False, 'channels': {}, 'last_seen': None})
+        state['last_seen'] = datetime.utcnow()
+
+        if leaf == 'online':
+            state['online'] = payload.strip().lower() == 'true'
+            return
+
+        if device_type == 'shelly_gen2':
+            _apply_gen2_switch_leaf(state, leaf, payload)
+            return
+
+        m = re.match(r'^relay/(\d+)$', leaf)
+        if m:
+            idx = int(m.group(1))
+            channel = state['channels'].setdefault(idx, {'is_on': None, 'power_w': None})
+            channel['is_on'] = payload.strip().lower() == 'on'
+            state['online'] = True
+            return
+
+        # Gen1 1PM-only topic (mirrors <prefix>/emeter/<N>/power on the
+        # energy-meter side) - simply never arrives for a non-metering relay.
+        m = re.match(r'^relay/(\d+)/power$', leaf)
+        if m:
+            try:
+                value = float(payload)
+            except ValueError:
+                return
+            channel = state['channels'].setdefault(int(m.group(1)), {'is_on': None, 'power_w': None})
+            channel['power_w'] = value
+            state['online'] = True
+
+
+def _apply_gen2_switch_leaf(state, leaf, payload):
+    """Shelly Plus/Pro (Gen2+) relay status - same dual direct-status/
+    events-rpc shape as _apply_gen2_temp_leaf()/_apply_gen2_em_status().
+    A metering-capable switch (Plus/Pro 1PM) includes 'apower' in the SAME
+    status object as 'output', so both land in one pass; a plain switch's
+    status simply never has that key, leaving power_w at None."""
+    def apply_component(key, data):
+        if not (isinstance(data, dict) and key.startswith('switch:') and 'output' in data):
+            return
+        channel = state['channels'].setdefault(int(key.split(':')[1]), {'is_on': None, 'power_w': None})
+        channel['is_on'] = bool(data['output'])
+        if 'apower' in data:
+            channel['power_w'] = data['apower']
+        state['online'] = True
+
+    m = re.match(r'^status/(switch:\d+)$', leaf)
+    if m:
+        try:
+            data = json.loads(payload)
+        except ValueError:
+            return
+        apply_component(m.group(1), data)
+        return
+
+    if leaf == 'events/rpc':
+        try:
+            envelope = json.loads(payload)
+        except ValueError:
+            return
+        for key, data in (envelope.get('params') or {}).items():
+            if re.match(r'^switch:\d+$', key):
+                apply_component(key, data)
+
+
+def _mqtt_convector_snapshot(conv):
+    """Render-ready {online, is_on, power_w, error} for one MQTT Convector -
+    same offline-tolerant shape as _shelly_convector_status() (the HTTP
+    path), so admin_convectors_data() doesn't need to care which transport
+    a given row uses."""
+    with _mqtt_lock:
+        state = _mqtt_conv_state.get(conv.mqtt_topic)
+        state = dict(state, channels=dict(state['channels'])) if state else None
+
+    if not state or not state['online']:
+        return {
+            'online': False, 'is_on': None, 'power_w': None,
+            'error': None if state else 'Няма получени данни по MQTT за този конвектор още.',
+        }
+    channel = state['channels'].get(conv.relay_channel)
+    if not channel or channel['is_on'] is None:
+        return {'online': False, 'is_on': None, 'power_w': None, 'error': f'Няма данни за реле №{conv.relay_channel} още.'}
+    return {'online': True, 'is_on': channel['is_on'], 'power_w': channel.get('power_w'), 'error': None}
+
+
+def _mqtt_publish(topic, payload):
+    """Publishes one message to the broker - the ONE place this app's MQTT
+    client sends anything rather than just listening (see
+    _shelly_convector_set()). Silently does nothing if the broker isn't
+    configured/connected (MQTT_BROKER_HOST unset, or connect_async() hasn't
+    finished yet) - the caller in that case just gets a command that never
+    arrives, same practical effect as any other unreachable-device failure."""
+    if _mqtt_client_instance is not None:
+        _mqtt_client_instance.publish(topic, payload)
+
+
+def start_mqtt_listener():
     """
-    Poll one meter (either generation - see _shelly_get_status) and return a
-    render-ready dict. Never raises: an unreachable meter is a normal state on
-    a shop floor (Wi-Fi drop, panel powered down), and one dead device must
-    not blank out the whole dashboard.
+    Background MQTT subscriber - runs for as long as the app process does,
+    updating _mqtt_state as readings arrive (paho's own network thread does
+    the actual socket work; loop_start() just launches it). A no-op if
+    MQTT_BROKER_HOST isn't set, same "optional, off by default" convention
+    as SMTP_HOST/ANTHROPIC_API_KEY. Auto-reconnects on drop (paho's default
+    behavior) - a shop Wi-Fi hiccup shouldn't need an app restart to recover.
     """
+    global _mqtt_client_instance
+    host = os.environ.get('MQTT_BROKER_HOST')
+    if not host:
+        return
+    port = int(os.environ.get('MQTT_BROKER_PORT', '1883'))
+
+    def on_connect(client, userdata, flags, reason_code, properties=None):
+        client.subscribe('#')
+
+    def on_message(client, userdata, msg):
+        try:
+            _handle_mqtt_message(msg.topic, msg.payload.decode('utf-8', errors='replace'))
+        except Exception:
+            pass  # one malformed message shouldn't kill the listener
+
+    client = mqtt_client.Client(mqtt_client.CallbackAPIVersion.VERSION2)
+    username = os.environ.get('MQTT_USERNAME')
+    if username:
+        client.username_pw_set(username, os.environ.get('MQTT_PASSWORD', ''))
+    client.on_connect = on_connect
+    client.on_message = on_message
+    client.connect_async(host, port, keepalive=30)
+    client.loop_start()
+    _mqtt_client_instance = client
+
+
+def shelly_device_snapshot(name, host, mqtt_topic=None, connection_type='ip'):
+    """
+    Snapshot one meter via whichever transport connection_type selects (see
+    CONNECTION_TYPES): MQTT from _mqtt_snapshot()'s cache, or HTTP-polling
+    `host` (either generation - see _shelly_get_status) for 'ip'. 'udp_rpc'/
+    'coiot' aren't implemented yet - see ShellyDevice.connection_type's
+    docstring for why - and report a clear "not implemented" offline state
+    rather than silently falling back to another transport, which would hide
+    a device that's actually misconfigured. Never raises otherwise: an
+    unreachable/silent meter is a normal state on a shop floor (Wi-Fi drop,
+    panel powered down), and one dead device must not blank out the whole
+    dashboard.
+    """
+    if connection_type == 'mqtt':
+        return _mqtt_snapshot(name, mqtt_topic)
+    if connection_type in ('udp_rpc', 'coiot'):
+        label = CONNECTION_TYPES.get(connection_type, connection_type)
+        return {
+            'name': name, 'host': host or mqtt_topic, 'online': False,
+            'error': f'Връзка "{label}" все още не е реализирана в приложението.',
+            'channels': [], 'total_power': 0.0, 'total_energy': 0.0,
+            'temperature': None, 'rssi': None,
+        }
     try:
         status = _shelly_get_status(host)
     except Exception as e:
@@ -8316,12 +11431,21 @@ def shelly_fleet_snapshot(devices):
     page refresh; with it, the wall time is whichever single read is slowest.
     Order of the returned list always matches `devices`, regardless of which
     thread finishes first. Plain ThreadPoolExecutor: these are blocking network
-    reads, not CPU work, so the GIL is a non-issue here.
+    reads, not CPU work, so the GIL is a non-issue here (an MQTT-backed device
+    in the same batch is just an in-memory dict read - see _mqtt_snapshot -
+    so it costs nothing to include, no separate code path needed here).
+
+    `devices` is (name, host, mqtt_topic) triples - see _shelly_snapshot_args().
     """
     if not devices:
         return []
     with ThreadPoolExecutor(max_workers=len(devices)) as pool:
-        return list(pool.map(lambda pair: shelly_device_snapshot(*pair), devices))
+        return list(pool.map(lambda d: shelly_device_snapshot(*d), devices))
+
+
+def _shelly_snapshot_args(devices):
+    """ShellyDevice rows -> (name, host, mqtt_topic, connection_type) tuples for shelly_fleet_snapshot()."""
+    return [(d.name, d.host, d.mqtt_topic, d.connection_type) for d in devices]
 
 
 SHELLY_POLLER_INTERVAL = 60  # seconds - matches Gen2's own minute-resolution history
@@ -8339,7 +11463,7 @@ def _shelly_history_poll_tick():
     devices = ShellyDevice.query.order_by(ShellyDevice.id).all()
     if not devices:
         return
-    snapshots = shelly_fleet_snapshot([(d.name, d.host) for d in devices])
+    snapshots = shelly_fleet_snapshot(_shelly_snapshot_args(devices))
     now_ts = int(datetime.now().timestamp())
     for snap in snapshots:
         if snap['online']:
@@ -8392,6 +11516,58 @@ def start_shelly_history_poller(interval=SHELLY_POLLER_INTERVAL):
     threading.Thread(target=_loop, daemon=True, name='shelly-history-poller').start()
 
 
+SOLIS_POLLER_INTERVAL = 60  # seconds - same cadence as ShellyReadingLog
+_solis_poller_started = False
+
+
+def _solis_history_poll_tick():
+    """One poll-and-log cycle for every configured Solis inverter - same
+    split-out-for-testability shape as _shelly_history_poll_tick(). Logs the
+    full snapshot (see SolisReadingLog), skipping a device that's currently
+    unreachable rather than writing a blank row for it."""
+    devices = ModbusDevice.query.filter_by(device_type='solis_s6').order_by(ModbusDevice.id).all()
+    if not devices:
+        return
+    now_ts = int(datetime.now().timestamp())
+    for device in devices:
+        snap = _solis_snapshot(device)
+        if not snap['online']:
+            continue
+        db.session.add(SolisReadingLog(
+            device_id=device.id, ts=now_ts,
+            ac_power=snap['total_power'], pv_power=snap['pv']['power'],
+            battery_soc=snap['battery']['soc'], battery_power=snap['battery']['power'],
+            temperature=snap['temperature'], battery_temperature=snap['battery']['temperature'],
+            battery_fault_bits=snap['battery']['fault_bits'], snapshot_json=json.dumps(snap),
+        ))
+    db.session.commit()
+
+
+def start_solis_history_poller(interval=SOLIS_POLLER_INTERVAL):
+    """Real always-on Solis equivalent of start_shelly_history_poller() -
+    same idempotent-daemon-thread shape, see that function's docstring for
+    the reasoning (single-worker assumption, reloader guard at the call
+    site, etc.)."""
+    global _solis_poller_started
+    if _solis_poller_started:
+        return
+    _solis_poller_started = True
+
+    def _loop():
+        while True:
+            try:
+                with app.app_context():
+                    try:
+                        _solis_history_poll_tick()
+                    finally:
+                        db.session.remove()
+            except Exception:
+                pass  # one bad tick (inverter/DB hiccup) shouldn't kill the poller
+            time.sleep(interval)
+
+    threading.Thread(target=_loop, daemon=True, name='solis-history-poller').start()
+
+
 @app.route('/admin/power')
 @role_required('admin')
 def admin_power():
@@ -8411,15 +11587,40 @@ def admin_power():
     empty page, same as a fleet with zero configured meters.
     """
     devices = ShellyDevice.query.order_by(ShellyDevice.id).all()
+    modbus_devices = ModbusDevice.query.order_by(ModbusDevice.id).all()
     machines = Machine.query.order_by(Machine.name).all()
+    panels = ElectricalPanel.query.join(Room).order_by(Room.name, ElectricalPanel.name).all()
+    rooms = Room.query.join(Building).order_by(Building.name, Room.name).all()
+    # Just the name lookup for renderBatteryGroup()'s "БМС порт N" labels -
+    # live data itself already comes from each Solis device's own
+    # battery_groups (see _solis_snapshot()), this only attaches a friendly
+    # Cabinet/Stack name where one's been configured.
+    battery_stacks = BatteryStack.query.filter(
+        BatteryStack.source_type == 'inverter',
+        BatteryStack.inverter_device_id.isnot(None), BatteryStack.bms_port.isnot(None),
+    ).all()
     focus_host = request.args.get('host') or None
-    focus_name = next((d.name for d in devices if d.host == focus_host), focus_host)
+    # Modbus devices have no separate "host" identity of their own - their
+    # snapshot/history key is "host:port" (see _dtsu666_snapshot()), so a
+    # focus link to one of them looks like "192.168.18.90:502" instead of a
+    # bare IP. "История за период" only exists for Shelly meters (Gen1/Gen2 -
+    # see admin_power_history()) - a Modbus meter has no logging table to
+    # query, so the template only offers that section when the focused
+    # device really is a Shelly one.
+    focus_modbus_host = lambda d: f'{d.host}:{d.port}'
+    focus_name = next((d.name for d in devices if d.host == focus_host), None)
+    focus_is_shelly = focus_name is not None
+    if focus_name is None:
+        focus_name = next((d.name for d in modbus_devices if focus_modbus_host(d) == focus_host), focus_host)
     # Every device has a working "История за период" now: Gen2 goes through
     # shelly_history() as before, Gen1 through _aggregate_local_shelly_log()
     # (our own ShellyReadingLog, fed by the always-on poller - see
     # start_shelly_history_poller()) instead of the meter's own history API.
-    return render_template('admin_power.html', devices=devices, machines=machines,
-                           active_page='admin_power', focus_host=focus_host, focus_name=focus_name)
+    return render_template('admin_power.html', devices=devices, modbus_devices=modbus_devices,
+                           machines=machines, panels=panels, rooms=rooms, battery_stacks=battery_stacks,
+                           connection_types=CONNECTION_TYPES, modbus_device_types=MODBUS_DEVICE_TYPES,
+                           active_page='admin_power', focus_host=focus_host, focus_name=focus_name,
+                           focus_is_shelly=focus_is_shelly)
 
 
 def _parse_machine_ids(form):
@@ -8452,46 +11653,95 @@ def _resolve_machines_or_none(machine_ids):
 def admin_power_add_device():
     """
     Add a machine to the power dashboard. Takes effect on the very next poll
-    (2s) - no app restart, unlike the old SHELLY_DEVICES env var this
-    replaced. Only a label + IP + any number of linked Machines; nothing
-    about the meter's generation needs declaring, _shelly_get_status()
-    figures that out itself on first contact.
+    (2s)/MQTT message - no app restart, unlike the old SHELLY_DEVICES env var
+    this replaced. A label + at least one of IP/MQTT topic + any number of
+    linked Machines; nothing about the meter's generation needs declaring,
+    _shelly_get_status()/the MQTT topic shape figures that out on contact.
     """
     name = request.form.get('name', '').strip()
     host = request.form.get('host', '').strip()
-    host = re.sub(r'^https?://', '', host).rstrip('/')  # tolerate a pasted URL
-    if not host or ' ' in host:
-        flash('Моля въведете валиден IP адрес на електромера.', 'danger')
+    host = re.sub(r'^https?://', '', host).rstrip('/') if host else ''  # tolerate a pasted URL
+    mqtt_topic = request.form.get('mqtt_topic', '').strip().strip('/')
+    connection_type = request.form.get('connection_type', 'ip')
+    if connection_type not in CONNECTION_TYPES:
+        connection_type = 'ip'
+    if connection_type == 'ip' and not host:
+        flash('Моля въведете IP адрес за връзка тип "IP (HTTP)".', 'danger')
         return redirect(url_for('admin_power'))
-    if ShellyDevice.query.filter_by(host=host).first():
+    if connection_type == 'mqtt' and not mqtt_topic:
+        flash('Моля въведете MQTT тема за връзка тип "MQTT".', 'danger')
+        return redirect(url_for('admin_power'))
+    if host and ' ' in host:
+        flash('Невалиден IP адрес.', 'danger')
+        return redirect(url_for('admin_power'))
+    if host and ShellyDevice.query.filter_by(host=host).first():
         flash(f'Вече има добавена машина с адрес "{host}".', 'danger')
+        return redirect(url_for('admin_power'))
+    if mqtt_topic and ShellyDevice.query.filter_by(mqtt_topic=mqtt_topic).first():
+        flash(f'Вече има добавена машина с MQTT тема "{mqtt_topic}".', 'danger')
         return redirect(url_for('admin_power'))
     machines = _resolve_machines_or_none(_parse_machine_ids(request.form))
     if machines is None:
         flash('Една от избраните машини не съществува.', 'danger')
         return redirect(url_for('admin_power'))
-    device = ShellyDevice(name=name or host, host=host, machines=machines)
+    panel_id_raw = request.form.get('panel_id', '')
+    panel_id = int(panel_id_raw) if panel_id_raw.isdigit() and db.session.get(ElectricalPanel, int(panel_id_raw)) else None
+    display_name = name or host or mqtt_topic
+    device = ShellyDevice(
+        name=display_name, host=host or None, mqtt_topic=mqtt_topic or None,
+        connection_type=connection_type, machines=machines, panel_id=panel_id,
+    )
     db.session.add(device)
     db.session.commit()
-    log_action(f'Добавен електромер "{name or host}" ({host})')
-    flash(f'Машината "{name or host}" беше добавена.', 'success')
+    log_action(f'Добавен електромер "{display_name}"')
+    flash(f'Машината "{display_name}" беше добавена.', 'success')
     return redirect(url_for('admin_power'))
 
 
 @app.route('/admin/power/devices/<int:device_id>/rename', methods=['POST'])
 @role_required('admin')
 def admin_power_rename_device(device_id):
-    """Change a device's display label - host/machines/history all stay put, only the name shown on the dashboard changes."""
+    """Edit a device's full connection details (name/IP/MQTT topic/panel) -
+    machines/history stay put otherwise (see admin_power_set_device_machines()
+    for the linked-machines checklist, a separate form/route)."""
     device = ShellyDevice.query.get_or_404(device_id)
     name = request.form.get('name', '').strip()
     if not name:
         flash('Името не може да бъде празно.', 'danger')
         return redirect(url_for('admin_power'))
+
+    host = request.form.get('host', '').strip()
+    host = re.sub(r'^https?://', '', host).rstrip('/') if host else ''  # tolerate a pasted URL
+    mqtt_topic = request.form.get('mqtt_topic', '').strip().strip('/')
+    connection_type = request.form.get('connection_type', device.connection_type)
+    if connection_type not in CONNECTION_TYPES:
+        connection_type = device.connection_type
+    if connection_type == 'ip' and not host:
+        flash('Моля въведете IP адрес за връзка тип "IP (HTTP)".', 'danger')
+        return redirect(url_for('admin_power'))
+    if connection_type == 'mqtt' and not mqtt_topic:
+        flash('Моля въведете MQTT тема за връзка тип "MQTT".', 'danger')
+        return redirect(url_for('admin_power'))
+    if host and ' ' in host:
+        flash('Невалиден IP адрес.', 'danger')
+        return redirect(url_for('admin_power'))
+    if host and ShellyDevice.query.filter(ShellyDevice.host == host, ShellyDevice.id != device.id).first():
+        flash(f'Вече има друга машина с адрес "{host}".', 'danger')
+        return redirect(url_for('admin_power'))
+    if mqtt_topic and ShellyDevice.query.filter(ShellyDevice.mqtt_topic == mqtt_topic, ShellyDevice.id != device.id).first():
+        flash(f'Вече има друга машина с MQTT тема "{mqtt_topic}".', 'danger')
+        return redirect(url_for('admin_power'))
+
     old_name = device.name
     device.name = name
+    device.host = host or None
+    device.mqtt_topic = mqtt_topic or None
+    device.connection_type = connection_type
+    panel_id_raw = request.form.get('panel_id', '')
+    device.panel_id = int(panel_id_raw) if panel_id_raw.isdigit() and db.session.get(ElectricalPanel, int(panel_id_raw)) else None
     db.session.commit()
-    log_action(f'Преименуван електромер "{old_name}" → "{name}"')
-    flash(f'Машината беше преименувана на "{name}".', 'success')
+    log_action(f'Редактиран електромер "{old_name}" → "{name}"')
+    flash(f'Машината "{name}" беше обновена.', 'success')
     return redirect(url_for('admin_power'))
 
 
@@ -8545,19 +11795,54 @@ def admin_power_data():
     them every 2s just to throw the result away client-side.
     """
     host = request.args.get('host')
-    query = ShellyDevice.query.filter_by(host=host) if host else ShellyDevice.query
-    rows = query.order_by(ShellyDevice.id).all()
-    snapshots = shelly_fleet_snapshot([(d.name, d.host) for d in rows])
+    shelly_rows = ShellyDevice.query.filter_by(host=host).all() if host else ShellyDevice.query.order_by(ShellyDevice.id).all()
+    snapshots = shelly_fleet_snapshot(_shelly_snapshot_args(shelly_rows))
+    for snap in snapshots:
+        snap['kind'] = 'shelly'
+
+    # Modbus meters join the same feed (_dtsu666_snapshot() already returns
+    # the same shape shelly_device_snapshot() does - see its docstring), keyed
+    # by "host:port" since that's the only identity a Modbus device has (no
+    # bare host column). Polled in-line (not thread-pooled like the Shelly
+    # fleet) - same simple sequential approach _collect_power_aggregates()
+    # already uses, since register reads are already serialized per-device
+    # anyway (see _modbus_lock_for()).
+    modbus_rows = ModbusDevice.query.order_by(ModbusDevice.id).all()
+    if host:
+        modbus_rows = [d for d in modbus_rows if f'{d.host}:{d.port}' == host]
+    # 'solis_grid_meter' rows are virtual - no Modbus connection of their
+    # own (see ModbusDevice.source_device_id) - resolved in a second pass
+    # below from the real rows' already-fetched snapshots, rather than
+    # polling the same registers a second time.
+    real_rows = [d for d in modbus_rows if d.device_type != 'solis_grid_meter']
+    real_snapshots = [
+        _solis_snapshot(d) if d.device_type == 'solis_s6' else _dtsu666_snapshot(d)
+        for d in real_rows
+    ]
+    snap_by_device_id = {}
+    for device, snap in zip(real_rows, real_snapshots):
+        snap['kind'] = 'solis' if device.device_type == 'solis_s6' else 'modbus'
+        snap_by_device_id[device.id] = snap
+    modbus_snapshots = []
+    for device in modbus_rows:
+        if device.device_type == 'solis_grid_meter':
+            snap = _solis_grid_meter_view_snapshot(device, snap_by_device_id.get(device.source_device_id))
+            snap['kind'] = 'solis_grid_meter'
+        else:
+            snap = snap_by_device_id[device.id]
+        modbus_snapshots.append(snap)
+
+    rows = list(shelly_rows) + list(modbus_rows)
+    snapshots = snapshots + modbus_snapshots
     # Join the Machine link in at the route layer rather than threading a
     # Machine dependency down into shelly_fleet_snapshot/shelly_device_snapshot -
     # those talk to meters and shouldn't need to know the catalog exists.
-    by_host = {d.host: d for d in rows}
-    for snap in snapshots:
-        device = by_host.get(snap['host'])
+    # Zipped by position since both snapshot lists preserve their `rows`' order.
+    for device, snap in zip(rows, snapshots):
         snap['machines'] = [{
             'name': m.name, 'status': m.status,
             'last_maintenance': m.last_maintenance.strftime('%d.%m.%Y %H:%M') if m.last_maintenance else None,
-        } for m in device.machines] if device else []
+        } for m in device.machines]
 
     return jsonify({
         'ts': datetime.now().strftime('%H:%M:%S'),
@@ -8714,6 +11999,2996 @@ def admin_power_history():
         return jsonify({'error': f'Историята не е налична за това устройство ({type(e).__name__}: {e}).'}), 502
 
     return jsonify(result)
+
+
+# ----------------- СГРАДИ / ПОМЕЩЕНИЯ -----------------
+
+@app.route('/admin/buildings')
+@role_required(['admin', 'worker'])
+def admin_buildings():
+    buildings = Building.query.order_by(Building.name).all()
+    return render_template('admin_buildings.html', buildings=buildings, active_page='admin_buildings')
+
+
+@app.route('/admin/buildings/create', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_add_building():
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Моля въведете име на сградата.', 'danger')
+        return redirect(url_for('admin_buildings'))
+    db.session.add(Building(name=name))
+    db.session.commit()
+    log_action(f'Добавена сграда "{name}"')
+    flash(f'Сграда "{name}" беше добавена.', 'success')
+    return redirect(url_for('admin_buildings'))
+
+
+@app.route('/admin/buildings/<int:building_id>/rename', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_rename_building(building_id):
+    building = Building.query.get_or_404(building_id)
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Името не може да бъде празно.', 'danger')
+        return redirect(url_for('admin_buildings'))
+    building.name = name
+    db.session.commit()
+    flash('Сградата беше преименувана.', 'success')
+    return redirect(url_for('admin_buildings'))
+
+
+@app.route('/admin/buildings/<int:building_id>/delete', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_delete_building(building_id):
+    building = Building.query.get_or_404(building_id)
+    if building.rooms:
+        flash('Тази сграда все още има помещения - изтрийте ги първо.', 'danger')
+        return redirect(url_for('admin_buildings'))
+    name = building.name
+    db.session.delete(building)
+    db.session.commit()
+    log_action(f'Изтрита сграда "{name}"')
+    flash(f'Сграда "{name}" беше изтрита.', 'success')
+    return redirect(url_for('admin_buildings'))
+
+
+@app.route('/admin/buildings/<int:building_id>/rooms/create', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_add_room(building_id):
+    building = Building.query.get_or_404(building_id)
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Моля въведете име на помещението.', 'danger')
+        return redirect(url_for('admin_buildings'))
+    db.session.add(Room(name=name, building_id=building.id))
+    db.session.commit()
+    log_action(f'Добавено помещение "{name}" в сграда "{building.name}"')
+    flash(f'Помещение "{name}" беше добавено.', 'success')
+    return redirect(url_for('admin_buildings'))
+
+
+@app.route('/admin/rooms/<int:room_id>/rename', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_rename_room(room_id):
+    room = Room.query.get_or_404(room_id)
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Името не може да бъде празно.', 'danger')
+        return redirect(url_for('admin_buildings'))
+    room.name = name
+    db.session.commit()
+    flash('Помещението беше преименувано.', 'success')
+    return redirect(url_for('admin_buildings'))
+
+
+@app.route('/admin/rooms/<int:room_id>/delete', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_delete_room(room_id):
+    """
+    Deleting a room un-places (not deletes) any Machine standing in it and
+    removes its ElectricalPanels - panels are this app's own bookkeeping
+    (nothing physical is lost by forgetting where a panel's icon was on the
+    map), unlike Machines, which are the shop's real production catalog and
+    must never disappear as a side effect of tidying up the map.
+    """
+    room = Room.query.get_or_404(room_id)
+    room_name = room.name
+    for machine in Machine.query.filter_by(room_id=room.id).all():
+        machine.room_id = None
+    for panel in ElectricalPanel.query.filter_by(room_id=room.id).all():
+        for machine in Machine.query.filter_by(panel_id=panel.id).all():
+            machine.panel_id = None
+        for device in ShellyDevice.query.filter_by(panel_id=panel.id).all():
+            device.panel_id = None
+        for device in ModbusDevice.query.filter_by(panel_id=panel.id).all():
+            device.panel_id = None
+        for child in ElectricalPanel.query.filter_by(parent_panel_id=panel.id).all():
+            child.parent_panel_id = None
+        db.session.delete(panel)
+    db.session.delete(room)
+    db.session.commit()
+    log_action(f'Изтрито помещение "{room_name}"')
+    flash(f'Помещение "{room_name}" беше изтрито.', 'success')
+    return redirect(url_for('admin_buildings'))
+
+
+# ----------------- ЕЛЕКТРИЧЕСКИ ТАБЛА -----------------
+
+@app.route('/admin/panels')
+@role_required(['admin', 'worker'])
+def admin_panels():
+    panels = ElectricalPanel.query.join(Room).order_by(Room.name, ElectricalPanel.name).all()
+    rooms = Room.query.join(Building).order_by(Building.name, Room.name).all()
+    return render_template('admin_panels.html', panels=panels, rooms=rooms, active_page='admin_panels')
+
+
+@app.route('/admin/panels/create', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_add_panel():
+    name = request.form.get('name', '').strip()
+    room_id_raw = request.form.get('room_id', '')
+    if not name or not room_id_raw.isdigit():
+        flash('Моля въведете име и изберете помещение за таблото.', 'danger')
+        return redirect(url_for('admin_panels'))
+    room = db.session.get(Room, int(room_id_raw))
+    if not room:
+        flash('Избраното помещение не съществува.', 'danger')
+        return redirect(url_for('admin_panels'))
+    db.session.add(ElectricalPanel(name=name, room_id=room.id, notes=request.form.get('notes', '').strip() or None))
+    db.session.commit()
+    log_action(f'Добавено ел. табло "{name}" в помещение "{room.name}"')
+    flash(f'Ел. табло "{name}" беше добавено.', 'success')
+    return redirect(url_for('admin_panels'))
+
+
+def _panel_descendants(panel):
+    """Every panel (in)directly fed FROM `panel` - used to keep the
+    "Захранва се от" choices cycle-free (see edit_panel_window()/
+    admin_update_panel()): a panel can't be set to feed from itself or from
+    anything already downstream of it."""
+    for child in panel.child_panels:
+        yield child
+        yield from _panel_descendants(child)
+
+
+@app.route('/admin/panels/<int:panel_id>/edit')
+@role_required(['admin', 'worker'])
+def edit_panel_window(panel_id):
+    """Popup edit window (see edit_window.html) - opened via the pencil icon on /admin/panels."""
+    panel = ElectricalPanel.query.get_or_404(panel_id)
+    rooms = Room.query.join(Building).order_by(Building.name, Room.name).all()
+    # A panel can't feed from itself or from anything downstream of it (that
+    # would be a cycle in the distribution tree) - excluded from the choices
+    # rather than merely rejected on submit, so there's nothing invalid to pick.
+    excluded_ids = {panel.id} | {p.id for p in _panel_descendants(panel)}
+    other_panels = ElectricalPanel.query.join(Room).order_by(Room.name, ElectricalPanel.name).all()
+    return render_template(
+        'edit_window.html', item_label='ел. табло', saved=request.args.get('saved') == '1',
+        action=url_for('admin_update_panel', panel_id=panel.id),
+        fields=[
+            {'name': 'name', 'label': 'Име на таблото', 'value': panel.name, 'type': 'text', 'required': True},
+            {'name': 'room_id', 'label': 'Помещение', 'value': panel.room_id, 'type': 'select', 'options': [
+                {'value': r.id, 'label': f'{r.building.name} / {r.name}'} for r in rooms
+            ]},
+            {'name': 'parent_panel_id', 'label': 'Захранва се от табло', 'value': panel.parent_panel_id or '', 'type': 'select', 'options': [
+                {'value': '', 'label': '-- директно от мрежата --'}
+            ] + [{'value': p.id, 'label': f'{p.room.name} / {p.name}'} for p in other_panels if p.id not in excluded_ids]},
+            {'name': 'notes', 'label': 'Бележки', 'value': panel.notes or '', 'type': 'textarea'},
+        ]
+    )
+
+
+@app.route('/admin/panels/<int:panel_id>/update', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_update_panel(panel_id):
+    panel = ElectricalPanel.query.get_or_404(panel_id)
+    name = request.form.get('name', '').strip()
+    room_id_raw = request.form.get('room_id', '')
+    if not name or not room_id_raw.isdigit() or not db.session.get(Room, int(room_id_raw)):
+        flash('Моля въведете име и валидно помещение.', 'danger')
+        return redirect(url_for('admin_panels'))
+    parent_id_raw = request.form.get('parent_panel_id', '')
+    parent_id = None
+    if parent_id_raw.isdigit():
+        parent_id = int(parent_id_raw)
+        excluded_ids = {panel.id} | {p.id for p in _panel_descendants(panel)}
+        if parent_id in excluded_ids or not db.session.get(ElectricalPanel, parent_id):
+            flash('Невалидно захранващо табло (води до кръгова връзка).', 'danger')
+            return redirect(url_for('admin_panels'))
+    panel.name = name
+    panel.room_id = int(room_id_raw)
+    panel.parent_panel_id = parent_id
+    panel.notes = request.form.get('notes', '').strip() or None
+    db.session.commit()
+    flash(f'Ел. табло "{panel.name}" беше обновено.', 'success')
+    if request.form.get('popup') == '1':
+        return redirect(url_for('edit_panel_window', panel_id=panel_id, saved='1'))
+    return redirect(url_for('admin_panels'))
+
+
+@app.route('/admin/panels/<int:panel_id>/room', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_update_panel_room(panel_id):
+    """Changes just an ElectricalPanel's room - leaves name/parent_panel_id/
+    notes untouched, unlike posting to admin_update_panel() with only a
+    room_id (which would blank those out). Used by the "Инвертори" section
+    on /admin/power, so an inverter's physical room can be corrected right
+    there without opening the full /admin/panels edit popup."""
+    panel = ElectricalPanel.query.get_or_404(panel_id)
+    room_id_raw = request.form.get('room_id', '')
+    room = db.session.get(Room, int(room_id_raw)) if room_id_raw.isdigit() else None
+    if not room:
+        flash('Невалидно помещение.', 'danger')
+        return redirect(url_for('admin_power'))
+    panel.room_id = room.id
+    db.session.commit()
+    log_action(f'Преместено табло "{panel.name}" в помещение "{room.name}"')
+    flash(f'Табло "{panel.name}" беше преместено в "{room.building.name} / {room.name}".', 'success')
+    return redirect(url_for('admin_power'))
+
+
+@app.route('/admin/panels/<int:panel_id>/delete', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_delete_panel(panel_id):
+    """Unlinks (not cascade-deletes) any Machine/ShellyDevice/ModbusDevice/
+    child-panel pointing at this panel - same reasoning as admin_delete_room().
+    A child panel just becomes root-fed (parent_panel_id = None), same as it
+    never having had a parent - it's still a perfectly real panel on its own."""
+    panel = ElectricalPanel.query.get_or_404(panel_id)
+    name = panel.name
+    for machine in Machine.query.filter_by(panel_id=panel.id).all():
+        machine.panel_id = None
+    for device in ShellyDevice.query.filter_by(panel_id=panel.id).all():
+        device.panel_id = None
+    for device in ModbusDevice.query.filter_by(panel_id=panel.id).all():
+        device.panel_id = None
+    for child in ElectricalPanel.query.filter_by(parent_panel_id=panel.id).all():
+        child.parent_panel_id = None
+    db.session.delete(panel)
+    db.session.commit()
+    log_action(f'Изтрито ел. табло "{name}"')
+    flash(f'Ел. табло "{name}" беше изтрито.', 'success')
+    return redirect(url_for('admin_panels'))
+
+
+# ----------------- СХЕМА НА ЕЛ. ТАБЛО (ВЪТРЕШНОСТ) -----------------
+# One-line schematic INSIDE a single ElectricalPanel - breakers/fuses/
+# contactors/etc. (PanelComponent), connected by drawn wires (PanelWire).
+# A totally separate layer from the factory map (which positions whole
+# panels relative to each other, never their internals) - see
+# PanelComponent's docstring.
+
+def _parse_panel_component_form(form):
+    """Shared by admin_add_panel_component()/admin_update_panel_component() -
+    returns (values_dict, None) or (None, error_message). 'feeds_target' is
+    a single "kind:id" value (e.g. "machine:12") built by
+    _panel_component_fields()'s combined dropdown - at most one of
+    feeds_machine_id/feeds_panel_id/feeds_modbus_device_id ends up set."""
+    name = form.get('name', '').strip()
+    if not name:
+        return None, 'Моля въведете име на елемента.'
+    component_type = form.get('component_type', 'breaker')
+    if component_type not in PANEL_COMPONENT_TYPES:
+        component_type = 'breaker'
+    rated_raw = form.get('rated_current_a', '').strip()
+    poles_raw = form.get('poles', '').strip()
+    try:
+        rated_current_a = float(rated_raw) if rated_raw else None
+    except ValueError:
+        return None, 'Номиналният ток трябва да е число.'
+    try:
+        poles = int(poles_raw) if poles_raw else None
+    except ValueError:
+        return None, 'Броят полюси трябва да е цяло число.'
+    feeds_machine_id = feeds_panel_id = feeds_modbus_device_id = None
+    kind, _, raw_id = form.get('feeds_target', '').partition(':')
+    if raw_id.isdigit():
+        target_id = int(raw_id)
+        if kind == 'machine' and db.session.get(Machine, target_id):
+            feeds_machine_id = target_id
+        elif kind == 'panel' and db.session.get(ElectricalPanel, target_id):
+            feeds_panel_id = target_id
+        elif kind == 'device' and db.session.get(ModbusDevice, target_id):
+            feeds_modbus_device_id = target_id
+    return {
+        'component_type': component_type, 'name': name, 'rated_current_a': rated_current_a, 'poles': poles,
+        'manufacturer': form.get('manufacturer', '').strip() or None, 'model': form.get('model', '').strip() or None,
+        'notes': form.get('notes', '').strip() or None,
+        'feeds_machine_id': feeds_machine_id, 'feeds_panel_id': feeds_panel_id, 'feeds_modbus_device_id': feeds_modbus_device_id,
+    }, None
+
+
+@app.route('/admin/panels/<int:panel_id>/schematic')
+@role_required(['admin', 'worker'])
+def admin_panel_schematic(panel_id):
+    panel = ElectricalPanel.query.get_or_404(panel_id)
+    components = PanelComponent.query.filter_by(panel_id=panel.id).order_by(PanelComponent.id).all()
+    # A wire "belongs" to whichever panel it was drawn FROM (from_component is
+    # always local to that panel - see admin_add_panel_wire()), but must also
+    # show up here when the OTHER end points at one of THIS panel's own
+    # components (a cross-panel link drawn from the other side) - explicit
+    # ask: "да мога да връзвам... към обекти в други табла".
+    wires = (PanelWire.query
+             .join(PanelComponent, PanelWire.to_component_id == PanelComponent.id)
+             .filter(db.or_(PanelWire.panel_id == panel.id, PanelComponent.panel_id == panel.id))
+             .all())
+    other_panels = ElectricalPanel.query.filter(ElectricalPanel.id != panel.id).order_by(ElectricalPanel.name).all()
+    other_panels_data = {
+        p.id: {
+            'name': p.name,
+            # parent_panel_id lets the auto one-line diagram (renderOneLineDiagram()
+            # in admin_panel_schematic.html) resolve which end of an ambiguous
+            # cross-panel wire (e.g. in-to-in, landing two panels' own incoming
+            # main breakers on the same feeder cable) is actually upstream,
+            # using the real distribution hierarchy instead of guessing from
+            # wire side alone.
+            'parent_panel_id': p.parent_panel_id,
+            'components': [
+                {'id': c.id, 'name': c.name, 'poles': c.poles or 1, 'type': c.component_type}
+                for c in sorted(p.components, key=lambda c: c.name)
+            ],
+        }
+        for p in other_panels
+    }
+    # Per-element hover tooltip data ("за всеки елемент да има тоолтип с
+    # параметрите му и описание на връзките") - the connections themselves
+    # aren't included here since they're already fully described client-side
+    # via WIRES (including cross-panel ones) - see buildComponentTooltip()
+    # in admin_panel_schematic.html.
+    components_meta = {
+        c.id: {
+            'name': c.name, 'type': PANEL_COMPONENT_TYPES.get(c.component_type, c.component_type),
+            'rated_current_a': c.rated_current_a, 'poles': c.poles,
+            'manufacturer': c.manufacturer, 'model': c.model, 'notes': c.notes,
+            'feeds_label': c.feeds_label,
+        }
+        for c in components
+    }
+    return render_template(
+        'admin_panel_schematic.html', panel=panel, components=components, wires=wires,
+        feeds_options=_feeds_target_options(panel), component_types=PANEL_COMPONENT_TYPES,
+        phase_types=PANEL_WIRE_PHASE_TYPES, other_panels=other_panels, other_panels_data=other_panels_data,
+        components_meta=components_meta, active_page='admin_panels',
+    )
+
+
+@app.route('/admin/panels/<int:panel_id>/schematic/background', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_upload_panel_background(panel_id):
+    """Uploads (or replaces) the reference photo behind this panel's
+    schematic - see ElectricalPanel.schematic_bg_filename's docstring. A
+    fresh upload resets scale/position back to defaults (1x, centered)
+    since a different photo's framing has nothing to do with the old one's."""
+    panel = ElectricalPanel.query.get_or_404(panel_id)
+    new_filename = _save_upload(request.files.get('image'), app.config['PANEL_BACKGROUND_FOLDER'], IMAGE_EXTENSIONS)
+    if not new_filename:
+        flash('Моля изберете валиден снимков файл (png/jpg/webp/gif).', 'danger')
+        return redirect(url_for('admin_panel_schematic', panel_id=panel_id))
+    if panel.schematic_bg_filename and _UPLOADED_IMAGE_PREFIX_RE.match(panel.schematic_bg_filename):
+        old_path = os.path.join(app.config['PANEL_BACKGROUND_FOLDER'], panel.schematic_bg_filename)
+        if os.path.exists(old_path):
+            os.remove(old_path)
+    panel.schematic_bg_filename = new_filename
+    panel.schematic_bg_scale = 1.0
+    panel.schematic_bg_pos_x = 50.0
+    panel.schematic_bg_pos_y = 50.0
+    panel.schematic_bg_opacity = 0.85
+    db.session.commit()
+    flash('Снимката за подложка беше качена.', 'success')
+    return redirect(url_for('admin_panel_schematic', panel_id=panel_id))
+
+
+@app.route('/admin/panels/<int:panel_id>/schematic/background/transform', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_update_panel_background_transform(panel_id):
+    """AJAX - saves the background photo's dragged position and/or its
+    scale (a plain number input, not a drag handle - see
+    admin_panel_schematic.html)."""
+    panel = ElectricalPanel.query.get_or_404(panel_id)
+    try:
+        if 'pos_x' in request.form:
+            panel.schematic_bg_pos_x = max(0.0, min(100.0, float(request.form['pos_x'])))
+        if 'pos_y' in request.form:
+            panel.schematic_bg_pos_y = max(0.0, min(100.0, float(request.form['pos_y'])))
+        if 'scale' in request.form:
+            panel.schematic_bg_scale = max(0.05, min(10.0, float(request.form['scale'])))
+        if 'opacity' in request.form:
+            panel.schematic_bg_opacity = max(0.0, min(1.0, float(request.form['opacity'])))
+    except ValueError:
+        return jsonify({'error': 'Невалидна стойност.'}), 400
+    db.session.commit()
+    return jsonify({
+        'pos_x': panel.schematic_bg_pos_x, 'pos_y': panel.schematic_bg_pos_y, 'scale': panel.schematic_bg_scale,
+        'opacity': panel.schematic_bg_opacity,
+    })
+
+
+@app.route('/admin/panels/<int:panel_id>/schematic/background/delete', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_delete_panel_background(panel_id):
+    panel = ElectricalPanel.query.get_or_404(panel_id)
+    if panel.schematic_bg_filename and _UPLOADED_IMAGE_PREFIX_RE.match(panel.schematic_bg_filename):
+        old_path = os.path.join(app.config['PANEL_BACKGROUND_FOLDER'], panel.schematic_bg_filename)
+        if os.path.exists(old_path):
+            os.remove(old_path)
+    panel.schematic_bg_filename = None
+    db.session.commit()
+    flash('Снимката за подложка беше премахната.', 'success')
+    return redirect(url_for('admin_panel_schematic', panel_id=panel_id))
+
+
+@app.route('/admin/panels/<int:panel_id>/schematic/components/create', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_add_panel_component(panel_id):
+    panel = ElectricalPanel.query.get_or_404(panel_id)
+    values, error = _parse_panel_component_form(request.form)
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('admin_panel_schematic', panel_id=panel_id))
+    db.session.add(PanelComponent(panel_id=panel.id, **values))
+    db.session.commit()
+    log_action(f'Добавен елемент "{values["name"]}" в таблото "{panel.name}"')
+    flash(f'Елемент "{values["name"]}" беше добавен.', 'success')
+    return redirect(url_for('admin_panel_schematic', panel_id=panel_id))
+
+
+def _feeds_target_options(panel):
+    """Combined dropdown options for PanelComponent.feeds_target ("kind:id",
+    see _parse_panel_component_form()) - every Machine/other-ElectricalPanel/
+    ModbusDevice a component could point at as its downstream side. Shared
+    by admin_panel_schematic()'s add-form and _panel_component_fields()'s
+    edit popup so both offer the exact same choices."""
+    machines = Machine.query.order_by(Machine.name).all()
+    other_panels = ElectricalPanel.query.filter(ElectricalPanel.id != panel.id).join(Room).order_by(Room.name, ElectricalPanel.name).all()
+    modbus_devices = ModbusDevice.query.order_by(ModbusDevice.name).all()
+    options = [{'value': '', 'label': '-- нищо (описателно) --'}]
+    options += [{'value': f'machine:{m.id}', 'label': f'Машина: {m.name}'} for m in machines]
+    options += [{'value': f'panel:{p.id}', 'label': f'Табло: {p.name}'} for p in other_panels]
+    options += [{'value': f'device:{d.id}', 'label': f'Устройство: {d.name}'} for d in modbus_devices]
+    return options
+
+
+def _panel_component_fields(panel, component=None):
+    """Field list for edit_window.html - shared shape by
+    edit_panel_component_window(). 'feeds_target' combines all three
+    possible targets into one dropdown (see _parse_panel_component_form()'s
+    docstring)."""
+    def v(attr, default=''):
+        value = getattr(component, attr) if component is not None else None
+        return value if value is not None else default
+    current_feeds = ''
+    if component is not None:
+        if component.feeds_machine_id:
+            current_feeds = f'machine:{component.feeds_machine_id}'
+        elif component.feeds_panel_id:
+            current_feeds = f'panel:{component.feeds_panel_id}'
+        elif component.feeds_modbus_device_id:
+            current_feeds = f'device:{component.feeds_modbus_device_id}'
+    return [
+        {'name': 'name', 'label': 'Име', 'value': v('name'), 'type': 'text', 'required': True},
+        {'name': 'component_type', 'label': 'Тип', 'value': v('component_type', 'breaker'), 'type': 'select',
+         'options': [{'value': k, 'label': lbl} for k, lbl in PANEL_COMPONENT_TYPES.items()]},
+        {'name': 'rated_current_a', 'label': 'Номинален ток (A)', 'value': v('rated_current_a'), 'type': 'text'},
+        {'name': 'poles', 'label': 'Брой полюси', 'value': v('poles'), 'type': 'text'},
+        {'name': 'manufacturer', 'label': 'Производител (по избор)', 'value': v('manufacturer'), 'type': 'text'},
+        {'name': 'model', 'label': 'Модел (по избор)', 'value': v('model'), 'type': 'text'},
+        {'name': 'feeds_target', 'label': 'Захранва', 'value': current_feeds, 'type': 'select', 'options': _feeds_target_options(panel)},
+        {'name': 'notes', 'label': 'Бележки', 'value': v('notes'), 'type': 'textarea'},
+    ]
+
+
+@app.route('/admin/panel-components/<int:component_id>/edit')
+@role_required(['admin', 'worker'])
+def edit_panel_component_window(component_id):
+    component = PanelComponent.query.get_or_404(component_id)
+    return render_template(
+        'edit_window.html', item_label=component.name, saved=request.args.get('saved') == '1',
+        action=url_for('admin_update_panel_component', component_id=component.id),
+        fields=_panel_component_fields(component.panel, component),
+    )
+
+
+@app.route('/admin/panel-components/<int:component_id>/update', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_update_panel_component(component_id):
+    component = PanelComponent.query.get_or_404(component_id)
+    values, error = _parse_panel_component_form(request.form)
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('edit_panel_component_window', component_id=component_id))
+    for key, value in values.items():
+        setattr(component, key, value)
+    db.session.commit()
+    flash(f'Елемент "{component.name}" беше обновен.', 'success')
+    if request.form.get('popup') == '1':
+        return redirect(url_for('edit_panel_component_window', component_id=component_id, saved='1'))
+    return redirect(url_for('admin_panel_schematic', panel_id=component.panel_id))
+
+
+@app.route('/admin/panel-components/<int:component_id>/position', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_update_panel_component_position(component_id):
+    """Saves a component's dragged (x, y) - see admin_update_machine_position()."""
+    component = PanelComponent.query.get_or_404(component_id)
+    try:
+        pos_x = float(request.form.get('pos_x', ''))
+        pos_y = float(request.form.get('pos_y', ''))
+    except ValueError:
+        return jsonify({'error': 'Невалидна позиция.'}), 400
+    component.pos_x = max(0.0, min(100.0, pos_x))
+    component.pos_y = max(0.0, min(100.0, pos_y))
+    db.session.commit()
+    return jsonify({'pos_x': component.pos_x, 'pos_y': component.pos_y})
+
+
+@app.route('/admin/panel-components/<int:component_id>/scale', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_update_panel_component_scale(component_id):
+    """AJAX - the +/- resize buttons on each card in
+    admin_panel_schematic.html, independent of every other component's own
+    scale (see PanelComponent.scale's docstring)."""
+    component = PanelComponent.query.get_or_404(component_id)
+    try:
+        scale = float(request.form.get('scale', ''))
+    except ValueError:
+        return jsonify({'error': 'Невалиден мащаб.'}), 400
+    component.scale = max(0.4, min(3.0, scale))
+    db.session.commit()
+    return jsonify({'scale': component.scale})
+
+
+@app.route('/admin/panel-components/<int:component_id>/delete', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_delete_panel_component(component_id):
+    component = PanelComponent.query.get_or_404(component_id)
+    panel_id = component.panel_id
+    name = component.name
+    # Wires aren't ORM-cascade-configured (from/to_component_id are plain
+    # NOT NULL FKs) - deleting a component that still has one raises
+    # IntegrityError instead of silently nulling it out, so drop them first.
+    PanelWire.query.filter_by(from_component_id=component_id).delete(synchronize_session=False)
+    PanelWire.query.filter_by(to_component_id=component_id).delete(synchronize_session=False)
+    db.session.delete(component)
+    db.session.commit()
+    log_action(f'Изтрит елемент "{name}" от таблото')
+    flash(f'Елемент "{name}" беше изтрит.', 'success')
+    return redirect(url_for('admin_panel_schematic', panel_id=panel_id))
+
+
+@app.route('/admin/panels/<int:panel_id>/schematic/wires/create', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_add_panel_wire(panel_id):
+    """AJAX (not a form redirect) - see admin_panel_schematic.html's
+    "click one terminal then another" connect mode, which draws the new
+    wire immediately from the response rather than reloading the page.
+    Endpoints are a specific numbered pole + side ('in'/'out'/'tap' - see
+    PanelWire's docstring), not just "this component" - the same two
+    components can have several wires between them (one per pole)."""
+    panel = ElectricalPanel.query.get_or_404(panel_id)
+    try:
+        from_id = int(request.form.get('from_component_id', ''))
+        to_id = int(request.form.get('to_component_id', ''))
+        from_pole = int(request.form.get('from_pole', '1'))
+        to_pole = int(request.form.get('to_pole', '1'))
+    except ValueError:
+        return jsonify({'error': 'Невалидни елементи.'}), 400
+    from_side = request.form.get('from_side', 'out')
+    to_side = request.form.get('to_side', 'in')
+    if from_side not in ('in', 'out', 'tap') or to_side not in ('in', 'out', 'tap'):
+        return jsonify({'error': 'Невалидна страна на полюса.'}), 400
+    if from_pole < 1 or to_pole < 1:
+        return jsonify({'error': 'Невалиден полюс.'}), 400
+    if from_id == to_id and from_pole == to_pole and from_side == to_side:
+        return jsonify({'error': 'Не може да свържете полюс със самия себе си.'}), 400
+    # from_component is always the terminal clicked on THIS panel's own
+    # canvas; to_component may belong to a different panel entirely - a real
+    # cable leaving this cabinet toward another one ("да мога да връзвам
+    # устройства... към обекти в други табла"), shown there as a labeled
+    # stub back to here (see admin_panel_schematic.html's redrawWires()).
+    from_component = PanelComponent.query.filter_by(id=from_id, panel_id=panel.id).first()
+    to_component = PanelComponent.query.get(to_id)
+    if not from_component or not to_component:
+        return jsonify({'error': 'Елементът не принадлежи на това табло.'}), 400
+    phase_type = request.form.get('phase_type', 'three_phase')
+    if phase_type not in PANEL_WIRE_PHASE_TYPES:
+        phase_type = 'three_phase'
+    if phase_type == 'three_phase' and ((from_component.poles or 0) < 3 or (to_component.poles or 0) < 3):
+        return jsonify({'error': 'Трифазна връзка изисква и двата елемента да имат поне 3 полюса.'}), 400
+    type_error = _panel_wire_type_error(phase_type, from_component, to_component)
+    if type_error:
+        return jsonify({'error': type_error}), 400
+    def _same_terminal(w, comp_id, pole, side):
+        return w.from_component_id == comp_id and w.from_pole == pole and w.from_side == side or \
+            w.to_component_id == comp_id and w.to_pole == pole and w.to_side == side
+    # Checked globally, not scoped to this panel - a duplicate could already
+    # exist as a wire "owned" by the OTHER panel if to_component lives there.
+    candidates = PanelWire.query.filter(db.or_(
+        PanelWire.from_component_id.in_([from_id, to_id]), PanelWire.to_component_id.in_([from_id, to_id])
+    )).all()
+    existing = [w for w in candidates
+                if _same_terminal(w, from_id, from_pole, from_side) and _same_terminal(w, to_id, to_pole, to_side)]
+    if existing:
+        return jsonify({'error': 'Вече има връзка между тези полюси.'}), 400
+    wire = PanelWire(
+        panel_id=panel.id, from_component_id=from_id, to_component_id=to_id,
+        from_pole=from_pole, from_side=from_side, to_pole=to_pole, to_side=to_side, phase_type=phase_type,
+    )
+    db.session.add(wire)
+    db.session.commit()
+    return jsonify({
+        'id': wire.id, 'from_component_id': from_id, 'to_component_id': to_id,
+        'from_pole': from_pole, 'from_side': from_side, 'to_pole': to_pole, 'to_side': to_side,
+        'phase_type': phase_type,
+    })
+
+
+@app.route('/admin/panel-wires/<int:wire_id>/delete', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_delete_panel_wire(wire_id):
+    """AJAX, same reasoning as admin_add_panel_wire(). A three-phase wire is
+    always one of 3 rows (one per pole) making up a single physical
+    connection - deleting any one of them deletes the whole bundle, not
+    just that pole ("когато триеш трифазна връзка, една от линиите изтрива
+    и трите")."""
+    wire = PanelWire.query.get_or_404(wire_id)
+    if wire.phase_type == 'three_phase':
+        PanelWire.query.filter_by(
+            from_component_id=wire.from_component_id, from_side=wire.from_side,
+            to_component_id=wire.to_component_id, to_side=wire.to_side, phase_type='three_phase',
+        ).delete(synchronize_session=False)
+    else:
+        db.session.delete(wire)
+    db.session.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/admin/panel-wires/<int:wire_id>/retarget', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_retarget_panel_wire(wire_id):
+    """Changes ONE end (from or to) of an existing wire to a different
+    component/side, in place - lets a connection be redirected without
+    deleting and redrawing it from scratch (explicit ask: "редактиране на
+    връзките... смяна на целта"). For a three-phase wire this applies to
+    the WHOLE bundle (all 3 pole rows) at once, each keeping its own pole
+    number matched against the new target - "когато редактираш трифазно,
+    промяната на един от трите [реда] да променя и трите". AJAX, same
+    reasoning/validation as admin_add_panel_wire(); the OTHER end of each
+    row is left untouched."""
+    wire = PanelWire.query.get_or_404(wire_id)
+    end = request.form.get('end')
+    if end not in ('from', 'to'):
+        return jsonify({'error': 'Невалиден край на връзката.'}), 400
+    try:
+        new_id = int(request.form.get('component_id', ''))
+    except ValueError:
+        return jsonify({'error': 'Невалиден елемент.'}), 400
+    new_side = request.form.get('side', '')
+    if new_side not in ('in', 'out', 'tap'):
+        return jsonify({'error': 'Невалидна страна на полюса.'}), 400
+    new_component = PanelComponent.query.get(new_id)
+    if not new_component:
+        return jsonify({'error': 'Елементът не съществува.'}), 400
+    type_error = _panel_wire_type_error(wire.phase_type, new_component)
+    if type_error:
+        return jsonify({'error': type_error}), 400
+
+    if wire.phase_type == 'three_phase':
+        if (new_component.poles or 0) < 3:
+            return jsonify({'error': 'Трифазна връзка изисква елемент с поне 3 полюса.'}), 400
+        bundle = PanelWire.query.filter_by(
+            from_component_id=wire.from_component_id, from_side=wire.from_side,
+            to_component_id=wire.to_component_id, to_side=wire.to_side, phase_type='three_phase',
+        ).all()
+    else:
+        try:
+            form_pole = int(request.form.get('pole', '1'))
+        except ValueError:
+            return jsonify({'error': 'Невалиден полюс.'}), 400
+        if form_pole < 1:
+            return jsonify({'error': 'Невалиден полюс.'}), 400
+        bundle = [wire]
+
+    def _same_terminal(w, comp_id, pole, side):
+        return w.from_component_id == comp_id and w.from_pole == pole and w.from_side == side or \
+            w.to_component_id == comp_id and w.to_pole == pole and w.to_side == side
+
+    bundle_ids = [w.id for w in bundle]
+    updates = []
+    for w in bundle:
+        pole = (w.from_pole if end == 'from' else w.to_pole) if wire.phase_type == 'three_phase' else form_pole
+        other_id = w.to_component_id if end == 'from' else w.from_component_id
+        other_pole = w.to_pole if end == 'from' else w.from_pole
+        other_side = w.to_side if end == 'from' else w.from_side
+        if new_id == other_id and pole == other_pole and new_side == other_side:
+            return jsonify({'error': 'Не може да свържете полюс със самия себе си.'}), 400
+        candidates = PanelWire.query.filter(
+            PanelWire.id.notin_(bundle_ids),
+            db.or_(PanelWire.from_component_id.in_([new_id, other_id]), PanelWire.to_component_id.in_([new_id, other_id])),
+        ).all()
+        if any(_same_terminal(c, new_id, pole, new_side) and _same_terminal(c, other_id, other_pole, other_side) for c in candidates):
+            return jsonify({'error': 'Вече има връзка между тези полюси.'}), 400
+        updates.append((w, pole))
+
+    for w, pole in updates:
+        if end == 'from':
+            w.from_component_id, w.from_pole, w.from_side = new_id, pole, new_side
+        else:
+            w.to_component_id, w.to_pole, w.to_side = new_id, pole, new_side
+    db.session.commit()
+    return jsonify({'ok': True})
+
+
+# ----------------- БАТЕРИЙНО СТОПАНСТВО (ШКАФ / STACK / БАТЕРИЯ) -----------------
+# Шкаф (Cabinet) holds one or more BatteryStack ("STACK" - a group of
+# series-connected modules behind one BMS port of one Solis inverter, see
+# _solis_snapshot()'s 'battery_groups'), each stack holding individual
+# Battery rows. Purely a catalogue/inventory - none of this is read live off
+# the inverter; battery_count/place_label on BatteryStack are the only
+# derived bits.
+
+@app.route('/admin/battery-cabinets')
+@role_required(['admin', 'worker'])
+def admin_battery_cabinets():
+    cabinets = Cabinet.query.order_by(Cabinet.name).all()
+    solis_devices = ModbusDevice.query.filter_by(device_type='solis_s6').order_by(ModbusDevice.name).all()
+    rooms = Room.query.join(Building).order_by(Building.name, Room.name).all()
+    return render_template(
+        'admin_battery_cabinets.html', cabinets=cabinets, solis_devices=solis_devices, rooms=rooms,
+        bms_ports=BATTERY_STACK_BMS_PORTS, source_types=BATTERY_STACK_SOURCE_TYPES,
+        active_page='admin_battery_cabinets'
+    )
+
+
+@app.route('/admin/battery-cabinets/data')
+@role_required(['admin', 'worker'])
+def admin_battery_cabinets_data():
+    """JSON feed polled by admin_battery_cabinets.html for each stack's live
+    SOC/voltage/temperature - see _battery_stack_snapshots()."""
+    stacks = BatteryStack.query.all()
+    live = _battery_stack_snapshots(stacks)
+    return jsonify({'ts': datetime.now().strftime('%H:%M:%S'), 'stacks': {str(k): v for k, v in live.items()}})
+
+
+@app.route('/admin/battery-cabinets/create', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_add_cabinet():
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Моля въведете име на шкафа.', 'danger')
+        return redirect(url_for('admin_battery_cabinets'))
+    db.session.add(Cabinet(name=name, notes=request.form.get('notes', '').strip() or None))
+    db.session.commit()
+    log_action(f'Добавен шкаф "{name}"')
+    flash(f'Шкаф "{name}" беше добавен.', 'success')
+    return redirect(url_for('admin_battery_cabinets'))
+
+
+@app.route('/admin/battery-cabinets/<int:cabinet_id>/edit')
+@role_required(['admin', 'worker'])
+def edit_cabinet_window(cabinet_id):
+    cabinet = Cabinet.query.get_or_404(cabinet_id)
+    return render_template(
+        'edit_window.html', item_label='шкаф', saved=request.args.get('saved') == '1',
+        action=url_for('admin_update_cabinet', cabinet_id=cabinet.id),
+        fields=[
+            {'name': 'name', 'label': 'Име на шкафа', 'value': cabinet.name, 'type': 'text', 'required': True},
+            {'name': 'notes', 'label': 'Бележки', 'value': cabinet.notes or '', 'type': 'textarea'},
+        ]
+    )
+
+
+@app.route('/admin/battery-cabinets/<int:cabinet_id>/update', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_update_cabinet(cabinet_id):
+    cabinet = Cabinet.query.get_or_404(cabinet_id)
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Моля въведете име на шкафа.', 'danger')
+        return redirect(url_for('admin_battery_cabinets'))
+    cabinet.name = name
+    cabinet.notes = request.form.get('notes', '').strip() or None
+    db.session.commit()
+    flash(f'Шкаф "{cabinet.name}" беше обновен.', 'success')
+    if request.form.get('popup') == '1':
+        return redirect(url_for('edit_cabinet_window', cabinet_id=cabinet_id, saved='1'))
+    return redirect(url_for('admin_battery_cabinets'))
+
+
+@app.route('/admin/battery-cabinets/<int:cabinet_id>/delete', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_delete_cabinet(cabinet_id):
+    cabinet = Cabinet.query.get_or_404(cabinet_id)
+    name = cabinet.name
+    db.session.delete(cabinet)  # cascades to its stacks, which cascade to their batteries
+    db.session.commit()
+    log_action(f'Изтрит шкаф "{name}"')
+    flash(f'Шкаф "{name}" беше изтрит.', 'success')
+    return redirect(url_for('admin_battery_cabinets'))
+
+
+def _parse_stack_form(form):
+    """Shared by admin_add_stack()/admin_update_stack() - returns a dict of
+    column values, or (None, error_message) if something required is missing/
+    invalid."""
+    name = form.get('name', '').strip()
+    if not name:
+        return None, 'Моля въведете име на stack-а.'
+    source_type = form.get('source_type', 'inverter')
+    if source_type not in BATTERY_STACK_SOURCE_TYPES:
+        source_type = 'inverter'
+    inverter_id_raw = form.get('inverter_device_id', '')
+    inverter_id = int(inverter_id_raw) if inverter_id_raw.isdigit() and db.session.get(ModbusDevice, int(inverter_id_raw)) else None
+    bms_port = form.get('bms_port', '')
+    if bms_port not in BATTERY_STACK_BMS_PORTS:
+        bms_port = None
+    room_id_raw = form.get('room_id', '')
+    room_id = int(room_id_raw) if room_id_raw.isdigit() and db.session.get(Room, int(room_id_raw)) else None
+    min_raw = form.get('min_batteries', '').strip()
+    max_raw = form.get('max_batteries', '').strip()
+    return {
+        'name': name,
+        'source_type': source_type,
+        'inverter_device_id': inverter_id,
+        'bms_port': bms_port,
+        'brand': form.get('brand', '').strip() or None,
+        'model': form.get('model', '').strip() or None,
+        'serial_number': form.get('serial_number', '').strip() or None,
+        'min_batteries': int(min_raw) if min_raw.isdigit() else None,
+        'max_batteries': int(max_raw) if max_raw.isdigit() else None,
+        'room_id': room_id,
+    }, None
+
+
+@app.route('/admin/battery-stacks/create', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_add_stack():
+    cabinet_id_raw = request.form.get('cabinet_id', '')
+    cabinet = db.session.get(Cabinet, int(cabinet_id_raw)) if cabinet_id_raw.isdigit() else None
+    if not cabinet:
+        flash('Невалиден шкаф.', 'danger')
+        return redirect(url_for('admin_battery_cabinets'))
+    values, error = _parse_stack_form(request.form)
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('admin_battery_cabinets'))
+    db.session.add(BatteryStack(cabinet_id=cabinet.id, **values))
+    db.session.commit()
+    log_action(f'Добавен stack "{values["name"]}" в шкаф "{cabinet.name}"')
+    flash(f'Stack "{values["name"]}" беше добавен.', 'success')
+    return redirect(url_for('admin_battery_cabinets'))
+
+
+@app.route('/admin/battery-stacks/<int:stack_id>/edit')
+@role_required(['admin', 'worker'])
+def edit_stack_window(stack_id):
+    stack = BatteryStack.query.get_or_404(stack_id)
+    rooms = Room.query.join(Building).order_by(Building.name, Room.name).all()
+    solis_devices = ModbusDevice.query.filter_by(device_type='solis_s6').order_by(ModbusDevice.name).all()
+    return render_template(
+        'edit_window.html', item_label='stack', saved=request.args.get('saved') == '1',
+        action=url_for('admin_update_stack', stack_id=stack.id),
+        fields=[
+            {'name': 'name', 'label': 'Име на stack-а', 'value': stack.name, 'type': 'text', 'required': True},
+            {'name': 'source_type', 'label': 'Източник на живи данни', 'value': stack.source_type, 'type': 'select', 'options': [
+                {'value': k, 'label': v} for k, v in BATTERY_STACK_SOURCE_TYPES.items()
+            ]},
+            {'name': 'inverter_device_id', 'label': 'Инвертор', 'value': stack.inverter_device_id or '', 'type': 'select', 'options': [
+                {'value': '', 'label': '-- няма --'}
+            ] + [{'value': d.id, 'label': d.name} for d in solis_devices]},
+            {'name': 'bms_port', 'label': 'БМС порт', 'value': stack.bms_port or '', 'type': 'select', 'options': [
+                {'value': '', 'label': '-- няма --'}
+            ] + [{'value': k, 'label': v} for k, v in BATTERY_STACK_BMS_PORTS.items()]},
+            {'name': 'brand', 'label': 'Марка (по избор)', 'value': stack.brand or '', 'type': 'text'},
+            {'name': 'model', 'label': 'Модел (по избор)', 'value': stack.model or '', 'type': 'text'},
+            {'name': 'serial_number', 'label': 'Сериен номер (по избор)', 'value': stack.serial_number or '', 'type': 'text'},
+            {'name': 'min_batteries', 'label': 'Минимален брой батерии', 'value': stack.min_batteries or '', 'type': 'text'},
+            {'name': 'max_batteries', 'label': 'Максимален брой батерии', 'value': stack.max_batteries or '', 'type': 'text'},
+            {'name': 'room_id', 'label': 'Помещение', 'value': stack.room_id or '', 'type': 'select', 'options': [
+                {'value': '', 'label': '-- няма --'}
+            ] + [{'value': r.id, 'label': f'{r.building.name} / {r.name}'} for r in rooms]},
+        ]
+    )
+
+
+@app.route('/admin/battery-stacks/<int:stack_id>/update', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_update_stack(stack_id):
+    stack = BatteryStack.query.get_or_404(stack_id)
+    values, error = _parse_stack_form(request.form)
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('admin_battery_cabinets'))
+    for key, value in values.items():
+        setattr(stack, key, value)
+    db.session.commit()
+    flash(f'Stack "{stack.name}" беше обновен.', 'success')
+    if request.form.get('popup') == '1':
+        return redirect(url_for('edit_stack_window', stack_id=stack_id, saved='1'))
+    return redirect(url_for('admin_battery_cabinets'))
+
+
+@app.route('/admin/battery-stacks/<int:stack_id>/delete', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_delete_stack(stack_id):
+    stack = BatteryStack.query.get_or_404(stack_id)
+    name = stack.name
+    db.session.delete(stack)  # cascades to its batteries
+    db.session.commit()
+    log_action(f'Изтрит stack "{name}"')
+    flash(f'Stack "{name}" беше изтрит.', 'success')
+    return redirect(url_for('admin_battery_cabinets'))
+
+
+@app.route('/admin/battery-stacks/<int:stack_id>/position', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_update_stack_position(stack_id):
+    """Saves a stack's dragged (x, y) on its room's map - see admin_update_machine_position()."""
+    stack = BatteryStack.query.get_or_404(stack_id)
+    try:
+        pos_x = float(request.form.get('pos_x', ''))
+        pos_y = float(request.form.get('pos_y', ''))
+    except ValueError:
+        return jsonify({'error': 'Невалидна позиция.'}), 400
+    stack.pos_x = max(0.0, min(100.0, pos_x))
+    stack.pos_y = max(0.0, min(100.0, pos_y))
+    db.session.commit()
+    return jsonify({'pos_x': stack.pos_x, 'pos_y': stack.pos_y})
+
+
+@app.route('/admin/battery-stacks/<int:stack_id>/batteries')
+@role_required(['admin', 'worker'])
+def admin_stack_batteries_window(stack_id):
+    """Small popup (own template, not edit_window.html - a repeating list +
+    add-row form, not a flat field list) for managing the individual
+    Battery rows inside one stack."""
+    stack = BatteryStack.query.get_or_404(stack_id)
+    battery_models = BatteryModel.query.order_by(BatteryModel.name).all()
+    return render_template('admin_stack_batteries.html', stack=stack, battery_models=battery_models)
+
+
+def _parse_battery_form(form):
+    """Shared by admin_add_battery()/admin_update_battery() - returns
+    (model_id, voltage, capacity, serial_number, error). When a model is
+    picked, its nominal voltage/capacity are authoritative (the form's
+    fields are auto-filled by JS from the same model, but this re-derives
+    server-side rather than trust whatever the client sent for those two)."""
+    model_id_raw = form.get('model_id', '').strip()
+    voltage_raw = form.get('voltage', '').strip()
+    capacity_raw = form.get('capacity_ah', '').strip()
+    try:
+        model_id = int(model_id_raw) if model_id_raw else None
+        voltage = float(voltage_raw) if voltage_raw else None
+        capacity = float(capacity_raw) if capacity_raw else None
+    except ValueError:
+        return None, None, None, None, 'Напрежението и капацитетът трябва да са числа.'
+    battery_model = BatteryModel.query.get(model_id) if model_id else None
+    if battery_model:
+        voltage = battery_model.nominal_voltage_v
+        capacity = battery_model.capacity_ah
+    serial_number = form.get('serial_number', '').strip() or None
+    return (battery_model.id if battery_model else None), voltage, capacity, serial_number, None
+
+
+@app.route('/admin/battery-stacks/<int:stack_id>/batteries/create', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_add_battery(stack_id):
+    stack = BatteryStack.query.get_or_404(stack_id)
+    model_id, voltage, capacity, serial_number, error = _parse_battery_form(request.form)
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('admin_stack_batteries_window', stack_id=stack_id))
+    db.session.add(Battery(
+        stack_id=stack.id, model_id=model_id, voltage=voltage, capacity_ah=capacity,
+        serial_number=serial_number,
+    ))
+    db.session.commit()
+    log_action(f'Добавена батерия в stack "{stack.name}"')
+    flash('Батерията беше добавена.', 'success')
+    return redirect(url_for('admin_stack_batteries_window', stack_id=stack_id))
+
+
+@app.route('/admin/batteries/<int:battery_id>/edit')
+@role_required(['admin', 'worker'])
+def edit_battery_window(battery_id):
+    """Own template (not edit_window.html) so it can reuse the exact same
+    model-dropdown/energy-display JS as the add form on
+    admin_stack_batteries.html - stays in the same small popup window
+    (no window.open nesting), navigating back to the battery list on save
+    or cancel."""
+    battery = Battery.query.get_or_404(battery_id)
+    battery_models = BatteryModel.query.order_by(BatteryModel.name).all()
+    return render_template('edit_battery_window.html', battery=battery, battery_models=battery_models)
+
+
+@app.route('/admin/batteries/<int:battery_id>/update', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_update_battery(battery_id):
+    battery = Battery.query.get_or_404(battery_id)
+    model_id, voltage, capacity, serial_number, error = _parse_battery_form(request.form)
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('edit_battery_window', battery_id=battery_id))
+    battery.model_id = model_id
+    battery.voltage = voltage
+    battery.capacity_ah = capacity
+    battery.serial_number = serial_number
+    db.session.commit()
+    log_action(f'Обновена батерия #{battery_id}')
+    flash('Батерията беше обновена.', 'success')
+    return redirect(url_for('admin_stack_batteries_window', stack_id=battery.stack_id))
+
+
+@app.route('/admin/batteries/<int:battery_id>/delete', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_delete_battery(battery_id):
+    battery = Battery.query.get_or_404(battery_id)
+    stack_id = battery.stack_id
+    db.session.delete(battery)
+    db.session.commit()
+    log_action(f'Изтрита батерия #{battery_id}')
+    flash('Батерията беше изтрита.', 'success')
+    return redirect(url_for('admin_stack_batteries_window', stack_id=stack_id))
+
+
+BATTERY_MODEL_FLOAT_FIELDS = [
+    'nominal_voltage_v', 'capacity_ah', 'energy_kwh', 'usable_energy_kwh',
+    'continuous_current_a', 'max_discharge_power_kw', 'round_trip_efficiency_pct',
+    'length_mm', 'width_mm', 'height_mm', 'weight_kg',
+]
+BATTERY_MODEL_TEXT_FIELDS = ['manufacturer', 'chemistry', 'protection_rating', 'communication', 'notes']
+
+
+def _parse_battery_model_form(form):
+    """Shared by admin_add_battery_model()/admin_update_battery_model() -
+    returns a dict of column values, or (None, error_message) if the name or
+    one of the two required numeric fields is missing/invalid."""
+    name = form.get('name', '').strip()
+    if not name:
+        return None, 'Моля въведете име на модела.'
+    values = {'name': name}
+    for field in BATTERY_MODEL_FLOAT_FIELDS:
+        raw = form.get(field, '').strip()
+        if not raw:
+            values[field] = None
+            continue
+        try:
+            values[field] = float(raw)
+        except ValueError:
+            return None, f'Полето "{field}" трябва да е число.'
+    if values['nominal_voltage_v'] is None or values['capacity_ah'] is None:
+        return None, 'Напрежението и капацитетът са задължителни.'
+    cycle_life_raw = form.get('cycle_life', '').strip()
+    if cycle_life_raw:
+        try:
+            values['cycle_life'] = int(cycle_life_raw)
+        except ValueError:
+            return None, 'Броят цикли трябва да е цяло число.'
+    else:
+        values['cycle_life'] = None
+    for field in BATTERY_MODEL_TEXT_FIELDS:
+        values[field] = form.get(field, '').strip() or None
+    if not values['manufacturer']:
+        values['manufacturer'] = 'Dyness'
+    return values, None
+
+
+@app.route('/admin/battery-models')
+@role_required(['admin', 'worker'])
+def admin_battery_models():
+    models = BatteryModel.query.order_by(BatteryModel.name).all()
+    return render_template('admin_battery_models.html', models=models, active_page='admin_battery_cabinets')
+
+
+def _battery_model_fields(model=None):
+    def v(attr, default=''):
+        return getattr(model, attr) if model is not None and getattr(model, attr) is not None else default
+    return [
+        {'name': 'name', 'label': 'Име на модела', 'value': v('name'), 'type': 'text', 'required': True},
+        {'name': 'manufacturer', 'label': 'Производител', 'value': v('manufacturer', 'Dyness'), 'type': 'text'},
+        {'name': 'chemistry', 'label': 'Химия', 'value': v('chemistry'), 'type': 'text'},
+        {'name': 'nominal_voltage_v', 'label': 'Номинално напрежение (V)', 'value': v('nominal_voltage_v'), 'type': 'text', 'required': True},
+        {'name': 'capacity_ah', 'label': 'Капацитет (Ah)', 'value': v('capacity_ah'), 'type': 'text', 'required': True},
+        {'name': 'energy_kwh', 'label': 'Енергийно съдържание (kWh)', 'value': v('energy_kwh'), 'type': 'text'},
+        {'name': 'usable_energy_kwh', 'label': 'Използваема енергия (kWh)', 'value': v('usable_energy_kwh'), 'type': 'text'},
+        {'name': 'continuous_current_a', 'label': 'Продължителен ток (A)', 'value': v('continuous_current_a'), 'type': 'text'},
+        {'name': 'max_discharge_power_kw', 'label': 'Макс. мощност на разряд (kW)', 'value': v('max_discharge_power_kw'), 'type': 'text'},
+        {'name': 'round_trip_efficiency_pct', 'label': 'Ефективност (%)', 'value': v('round_trip_efficiency_pct'), 'type': 'text'},
+        {'name': 'cycle_life', 'label': 'Брой цикли', 'value': v('cycle_life'), 'type': 'text'},
+        {'name': 'length_mm', 'label': 'Дължина (мм)', 'value': v('length_mm'), 'type': 'text'},
+        {'name': 'width_mm', 'label': 'Широчина (мм)', 'value': v('width_mm'), 'type': 'text'},
+        {'name': 'height_mm', 'label': 'Височина (мм)', 'value': v('height_mm'), 'type': 'text'},
+        {'name': 'weight_kg', 'label': 'Тегло (кг)', 'value': v('weight_kg'), 'type': 'text'},
+        {'name': 'protection_rating', 'label': 'Клас на защита', 'value': v('protection_rating'), 'type': 'text'},
+        {'name': 'communication', 'label': 'Комуникация', 'value': v('communication'), 'type': 'text'},
+        {'name': 'notes', 'label': 'Бележки', 'value': v('notes'), 'type': 'textarea'},
+    ]
+
+
+@app.route('/admin/battery-models/new')
+@role_required(['admin', 'worker'])
+def new_battery_model_window():
+    return render_template(
+        'edit_window.html', item_label='нов модел батерия', saved=request.args.get('saved') == '1',
+        action=url_for('admin_add_battery_model'), fields=_battery_model_fields()
+    )
+
+
+@app.route('/admin/battery-models/create', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_add_battery_model():
+    values, error = _parse_battery_model_form(request.form)
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('admin_battery_models'))
+    if BatteryModel.query.filter_by(name=values['name']).first():
+        flash(f'Вече има модел с име "{values["name"]}".', 'danger')
+        return redirect(url_for('admin_battery_models'))
+    model = BatteryModel(**values)
+    db.session.add(model)
+    db.session.commit()
+    log_action(f'Добавен модел батерия "{model.name}"')
+    if request.form.get('popup') == '1':
+        return redirect(url_for('edit_battery_model_window', model_id=model.id, saved='1'))
+    flash(f'Моделът "{model.name}" беше добавен.', 'success')
+    return redirect(url_for('admin_battery_models'))
+
+
+@app.route('/admin/battery-models/<int:model_id>/edit')
+@role_required(['admin', 'worker'])
+def edit_battery_model_window(model_id):
+    model = BatteryModel.query.get_or_404(model_id)
+    return render_template(
+        'edit_window.html', item_label=model.name, saved=request.args.get('saved') == '1',
+        action=url_for('admin_update_battery_model', model_id=model.id), fields=_battery_model_fields(model)
+    )
+
+
+@app.route('/admin/battery-models/<int:model_id>/update', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_update_battery_model(model_id):
+    model = BatteryModel.query.get_or_404(model_id)
+    values, error = _parse_battery_model_form(request.form)
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('admin_battery_models'))
+    existing = BatteryModel.query.filter_by(name=values['name']).first()
+    if existing and existing.id != model.id:
+        flash(f'Вече има модел с име "{values["name"]}".', 'danger')
+        return redirect(url_for('admin_battery_models'))
+    for key, value in values.items():
+        setattr(model, key, value)
+    db.session.commit()
+    flash(f'Моделът "{model.name}" беше обновен.', 'success')
+    if request.form.get('popup') == '1':
+        return redirect(url_for('edit_battery_model_window', model_id=model_id, saved='1'))
+    return redirect(url_for('admin_battery_models'))
+
+
+@app.route('/admin/battery-models/<int:model_id>/delete', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_delete_battery_model(model_id):
+    model = BatteryModel.query.get_or_404(model_id)
+    in_use = Battery.query.filter_by(model_id=model.id).count()
+    if in_use:
+        flash(f'Моделът "{model.name}" се използва от {in_use} батерии и не може да бъде изтрит.', 'danger')
+        return redirect(url_for('admin_battery_models'))
+    name = model.name
+    db.session.delete(model)
+    db.session.commit()
+    log_action(f'Изтрит модел батерия "{name}"')
+    flash(f'Моделът "{name}" беше изтрит.', 'success')
+    return redirect(url_for('admin_battery_models'))
+
+
+# ----------------- ТЕМПЕРАТУРНИ СЕНЗОРИ -----------------
+
+@app.route('/admin/temperature-sensors')
+@role_required(['admin', 'worker'])
+def admin_temperature_sensors():
+    sensors = TemperatureSensor.query.order_by(TemperatureSensor.name).all()
+    rooms = Room.query.join(Building).order_by(Building.name, Room.name).all()
+    return render_template(
+        'admin_temperature_sensors.html', sensors=sensors, rooms=rooms,
+        sensor_types=TEMP_SENSOR_TYPES, active_page='admin_temperature_sensors'
+    )
+
+
+@app.route('/admin/temperature-sensors/data')
+@role_required(['admin', 'worker'])
+def admin_temperature_sensors_data():
+    """JSON feed polled by admin_temperature_sensors.html - live temperature/
+    humidity/battery per sensor, keyed by id."""
+    sensors = TemperatureSensor.query.all()
+    return jsonify({
+        'ts': datetime.now().strftime('%H:%M:%S'),
+        'sensors': {s.id: _mqtt_temp_snapshot(s) for s in sensors},
+    })
+
+
+@app.route('/admin/temperature-sensors/create', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_add_temperature_sensor():
+    name = request.form.get('name', '').strip()
+    mqtt_topic = request.form.get('mqtt_topic', '').strip().strip('/')
+    if not name or not mqtt_topic:
+        flash('Моля въведете име и MQTT тема на сензора.', 'danger')
+        return redirect(url_for('admin_temperature_sensors'))
+    if TemperatureSensor.query.filter_by(mqtt_topic=mqtt_topic).first():
+        flash(f'Вече има сензор с MQTT тема "{mqtt_topic}".', 'danger')
+        return redirect(url_for('admin_temperature_sensors'))
+    room_id_raw = request.form.get('room_id', '')
+    room_id = int(room_id_raw) if room_id_raw.isdigit() and db.session.get(Room, int(room_id_raw)) else None
+    location_label = request.form.get('location_label', '').strip() or None
+    sensor_type = request.form.get('sensor_type', '')
+    if sensor_type not in TEMP_SENSOR_TYPES:
+        sensor_type = 'shelly_ht_gen1'
+    db.session.add(TemperatureSensor(
+        name=name, mqtt_topic=mqtt_topic, sensor_type=sensor_type, room_id=room_id,
+        location_label=None if room_id else location_label,
+    ))
+    db.session.commit()
+    log_action(f'Добавен температурен сензор "{name}"')
+    flash(f'Сензор "{name}" беше добавен.', 'success')
+    return redirect(url_for('admin_temperature_sensors'))
+
+
+@app.route('/admin/temperature-sensors/<int:sensor_id>/edit')
+@role_required(['admin', 'worker'])
+def edit_temperature_sensor_window(sensor_id):
+    """Popup edit window (see edit_window.html) - opened via the pencil icon on /admin/temperature-sensors."""
+    sensor = TemperatureSensor.query.get_or_404(sensor_id)
+    rooms = Room.query.join(Building).order_by(Building.name, Room.name).all()
+    return render_template(
+        'edit_window.html', item_label='температурен сензор', saved=request.args.get('saved') == '1',
+        action=url_for('admin_update_temperature_sensor', sensor_id=sensor.id),
+        fields=[
+            {'name': 'name', 'label': 'Име на сензора', 'value': sensor.name, 'type': 'text', 'required': True},
+            {'name': 'mqtt_topic', 'label': 'MQTT тема', 'value': sensor.mqtt_topic, 'type': 'text', 'required': True},
+            {'name': 'sensor_type', 'label': 'Вид сензор', 'value': sensor.sensor_type, 'type': 'select',
+             'options': [{'value': k, 'label': v} for k, v in TEMP_SENSOR_TYPES.items()]},
+            {'name': 'room_id', 'label': 'Помещение', 'value': sensor.room_id or '', 'type': 'select', 'options': [
+                {'value': '', 'label': '-- няма --'}
+            ] + [{'value': r.id, 'label': f'{r.building.name} / {r.name}'} for r in rooms]},
+            {'name': 'location_label', 'label': 'Или свободно място (ако не е в помещение)',
+             'value': sensor.location_label or '', 'type': 'text'},
+        ]
+    )
+
+
+@app.route('/admin/temperature-sensors/<int:sensor_id>/update', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_update_temperature_sensor(sensor_id):
+    sensor = TemperatureSensor.query.get_or_404(sensor_id)
+    name = request.form.get('name', '').strip()
+    mqtt_topic = request.form.get('mqtt_topic', '').strip().strip('/')
+    if not name or not mqtt_topic:
+        flash('Моля въведете име и MQTT тема на сензора.', 'danger')
+        return redirect(url_for('admin_temperature_sensors'))
+    if TemperatureSensor.query.filter(TemperatureSensor.mqtt_topic == mqtt_topic, TemperatureSensor.id != sensor.id).first():
+        flash(f'Вече има друг сензор с MQTT тема "{mqtt_topic}".', 'danger')
+        return redirect(url_for('admin_temperature_sensors'))
+    room_id_raw = request.form.get('room_id', '')
+    room_id = int(room_id_raw) if room_id_raw.isdigit() and db.session.get(Room, int(room_id_raw)) else None
+    sensor_type = request.form.get('sensor_type', '')
+    if sensor_type not in TEMP_SENSOR_TYPES:
+        sensor_type = sensor.sensor_type
+    sensor.name = name
+    sensor.mqtt_topic = mqtt_topic
+    sensor.sensor_type = sensor_type
+    sensor.room_id = room_id
+    sensor.location_label = None if room_id else (request.form.get('location_label', '').strip() or None)
+    db.session.commit()
+    flash(f'Сензор "{sensor.name}" беше обновен.', 'success')
+    if request.form.get('popup') == '1':
+        return redirect(url_for('edit_temperature_sensor_window', sensor_id=sensor_id, saved='1'))
+    return redirect(url_for('admin_temperature_sensors'))
+
+
+@app.route('/admin/temperature-sensors/<int:sensor_id>/delete', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_delete_temperature_sensor(sensor_id):
+    sensor = TemperatureSensor.query.get_or_404(sensor_id)
+    name = sensor.name
+    db.session.delete(sensor)
+    db.session.commit()
+    log_action(f'Изтрит температурен сензор "{name}"')
+    flash(f'Сензор "{name}" беше изтрит.', 'success')
+    return redirect(url_for('admin_temperature_sensors'))
+
+
+# ----------------- КОНВЕКТОРИ -----------------
+
+@app.route('/admin/convectors')
+@role_required(['admin', 'worker'])
+def admin_convectors():
+    convectors = Convector.query.order_by(Convector.name).all()
+    rooms = Room.query.join(Building).order_by(Building.name, Room.name).all()
+    return render_template(
+        'admin_convectors.html', convectors=convectors, rooms=rooms,
+        convector_types=CONVECTOR_TYPES, connection_types=CONVECTOR_CONNECTION_TYPES,
+        active_page='admin_convectors'
+    )
+
+
+@app.route('/admin/convectors/data')
+@role_required(['admin', 'worker'])
+def admin_convectors_data():
+    """JSON feed polled by admin_convectors.html - live on/off state per convector."""
+    convectors = Convector.query.all()
+    return jsonify({
+        'ts': datetime.now().strftime('%H:%M:%S'),
+        'convectors': {c.id: _shelly_convector_status(c) for c in convectors},
+    })
+
+
+@app.route('/admin/convectors/create', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_add_convector():
+    name = request.form.get('name', '').strip()
+    host = request.form.get('host', '').strip()
+    mqtt_topic = request.form.get('mqtt_topic', '').strip().strip('/')
+    connection_type = request.form.get('connection_type', 'ip')
+    if connection_type not in CONVECTOR_CONNECTION_TYPES:
+        connection_type = 'ip'
+    if not name:
+        flash('Моля въведете име на конвектора.', 'danger')
+        return redirect(url_for('admin_convectors'))
+    if connection_type == 'ip' and not host:
+        flash('Моля въведете адрес (IP) за връзка тип "IP (HTTP)".', 'danger')
+        return redirect(url_for('admin_convectors'))
+    if connection_type == 'mqtt' and not mqtt_topic:
+        flash('Моля въведете MQTT тема за връзка тип "MQTT".', 'danger')
+        return redirect(url_for('admin_convectors'))
+    if mqtt_topic and Convector.query.filter_by(mqtt_topic=mqtt_topic).first():
+        flash(f'Вече има конвектор с MQTT тема "{mqtt_topic}".', 'danger')
+        return redirect(url_for('admin_convectors'))
+    device_type = request.form.get('device_type', '')
+    if device_type not in CONVECTOR_TYPES:
+        device_type = 'shelly_gen1'
+    channel_raw = request.form.get('relay_channel', '0')
+    relay_channel = int(channel_raw) if channel_raw.isdigit() else 0
+    room_id_raw = request.form.get('room_id', '')
+    room_id = int(room_id_raw) if room_id_raw.isdigit() and db.session.get(Room, int(room_id_raw)) else None
+    location_label = request.form.get('location_label', '').strip() or None
+    db.session.add(Convector(
+        name=name, connection_type=connection_type, host=host or None, mqtt_topic=mqtt_topic or None,
+        device_type=device_type, relay_channel=relay_channel, room_id=room_id,
+        location_label=None if room_id else location_label,
+    ))
+    db.session.commit()
+    log_action(f'Добавен конвектор "{name}"')
+    flash(f'Конвектор "{name}" беше добавен.', 'success')
+    return redirect(url_for('admin_convectors'))
+
+
+@app.route('/admin/convectors/<int:conv_id>/edit')
+@role_required(['admin', 'worker'])
+def edit_convector_window(conv_id):
+    """Popup edit window (see edit_window.html) - opened via the pencil icon on /admin/convectors."""
+    conv = Convector.query.get_or_404(conv_id)
+    rooms = Room.query.join(Building).order_by(Building.name, Room.name).all()
+    return render_template(
+        'edit_window.html', item_label='конвектор', saved=request.args.get('saved') == '1',
+        action=url_for('admin_update_convector', conv_id=conv.id),
+        fields=[
+            {'name': 'name', 'label': 'Име на конвектора', 'value': conv.name, 'type': 'text', 'required': True},
+            {'name': 'connection_type', 'label': 'Вид връзка', 'value': conv.connection_type, 'type': 'select',
+             'options': [{'value': k, 'label': v} for k, v in CONVECTOR_CONNECTION_TYPES.items()]},
+            {'name': 'host', 'label': 'Адрес (IP, за връзка тип IP)', 'value': conv.host or '', 'type': 'text'},
+            {'name': 'mqtt_topic', 'label': 'MQTT тема (за връзка тип MQTT)', 'value': conv.mqtt_topic or '', 'type': 'text'},
+            {'name': 'device_type', 'label': 'Вид устройство', 'value': conv.device_type, 'type': 'select',
+             'options': [{'value': k, 'label': v} for k, v in CONVECTOR_TYPES.items()]},
+            {'name': 'relay_channel', 'label': 'Номер на реле (0 за еднoканални)', 'value': conv.relay_channel, 'type': 'text'},
+            {'name': 'room_id', 'label': 'Помещение', 'value': conv.room_id or '', 'type': 'select', 'options': [
+                {'value': '', 'label': '-- няма --'}
+            ] + [{'value': r.id, 'label': f'{r.building.name} / {r.name}'} for r in rooms]},
+            {'name': 'location_label', 'label': 'Или свободно място (ако не е в помещение)',
+             'value': conv.location_label or '', 'type': 'text'},
+        ]
+    )
+
+
+@app.route('/admin/convectors/<int:conv_id>/update', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_update_convector(conv_id):
+    conv = Convector.query.get_or_404(conv_id)
+    name = request.form.get('name', '').strip()
+    host = request.form.get('host', '').strip()
+    mqtt_topic = request.form.get('mqtt_topic', '').strip().strip('/')
+    connection_type = request.form.get('connection_type', '')
+    if connection_type not in CONVECTOR_CONNECTION_TYPES:
+        connection_type = conv.connection_type
+    if not name:
+        flash('Моля въведете име на конвектора.', 'danger')
+        return redirect(url_for('admin_convectors'))
+    if connection_type == 'ip' and not host:
+        flash('Моля въведете адрес (IP) за връзка тип "IP (HTTP)".', 'danger')
+        return redirect(url_for('admin_convectors'))
+    if connection_type == 'mqtt' and not mqtt_topic:
+        flash('Моля въведете MQTT тема за връзка тип "MQTT".', 'danger')
+        return redirect(url_for('admin_convectors'))
+    if mqtt_topic and Convector.query.filter(Convector.mqtt_topic == mqtt_topic, Convector.id != conv.id).first():
+        flash(f'Вече има друг конвектор с MQTT тема "{mqtt_topic}".', 'danger')
+        return redirect(url_for('admin_convectors'))
+    device_type = request.form.get('device_type', '')
+    if device_type not in CONVECTOR_TYPES:
+        device_type = conv.device_type
+    channel_raw = request.form.get('relay_channel', '0')
+    relay_channel = int(channel_raw) if channel_raw.isdigit() else conv.relay_channel
+    room_id_raw = request.form.get('room_id', '')
+    room_id = int(room_id_raw) if room_id_raw.isdigit() and db.session.get(Room, int(room_id_raw)) else None
+    conv.name = name
+    conv.connection_type = connection_type
+    conv.host = host or None
+    conv.mqtt_topic = mqtt_topic or None
+    conv.device_type = device_type
+    conv.relay_channel = relay_channel
+    conv.room_id = room_id
+    conv.location_label = None if room_id else (request.form.get('location_label', '').strip() or None)
+    db.session.commit()
+    flash(f'Конвектор "{conv.name}" беше обновен.', 'success')
+    if request.form.get('popup') == '1':
+        return redirect(url_for('edit_convector_window', conv_id=conv_id, saved='1'))
+    return redirect(url_for('admin_convectors'))
+
+
+@app.route('/admin/convectors/<int:conv_id>/delete', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_delete_convector(conv_id):
+    conv = Convector.query.get_or_404(conv_id)
+    name = conv.name
+    db.session.delete(conv)
+    db.session.commit()
+    log_action(f'Изтрит конвектор "{name}"')
+    flash(f'Конвектор "{name}" беше изтрит.', 'success')
+    return redirect(url_for('admin_convectors'))
+
+
+@app.route('/admin/convectors/<int:conv_id>/toggle', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_convector_toggle(conv_id):
+    """The one control action in this app that switches real hardware - see
+    Convector's docstring/_shelly_convector_set() for why this device class
+    (unlike Machines/meters) is allowed to. Reads current state first so
+    "toggle" always flips from what the device actually reports, not from
+    possibly-stale state in this request."""
+    conv = Convector.query.get_or_404(conv_id)
+    status = _shelly_convector_status(conv)
+    if not status['online']:
+        flash(f'Конвектор "{conv.name}" не отговаря - не може да се превключи.', 'danger')
+        return redirect(url_for('admin_convectors'))
+    turn_on = not status['is_on']
+    try:
+        _shelly_convector_set(conv, turn_on)
+    except Exception:
+        flash(f'Неуспешно превключване на "{conv.name}" - устройството не отговори на командата.', 'danger')
+        return redirect(url_for('admin_convectors'))
+    log_action(f'{"Включен" if turn_on else "Изключен"} конвектор "{conv.name}"')
+    flash(f'Конвектор "{conv.name}" беше {"включен" if turn_on else "изключен"}.', 'success')
+    return redirect(url_for('admin_convectors'))
+
+
+# ----------------- АВТОМОБИЛНО СТОПАНСТВО -----------------
+# Company vehicle fleet - tracks 3 recurring legal deadlines per vehicle
+# (insurance/ГО, vignette, technical inspection). See Vehicle/
+# vehicle_deadline_status()/inject_vehicle_alerts() above for how the
+# warning-then-daily-reminder behaviour works (recomputed per request, no
+# cron/email for v1).
+
+def _parse_form_date(raw):
+    raw = (raw or '').strip()
+    if not raw:
+        return None
+    try:
+        return datetime.strptime(raw, '%Y-%m-%d').date()
+    except ValueError:
+        return None
+
+
+@app.route('/admin/vehicles')
+@role_required(['admin', 'worker'])
+def admin_vehicles():
+    vehicles = Vehicle.query.order_by(Vehicle.name).all()
+    return render_template('admin_vehicles.html', vehicles=vehicles, active_page='admin_vehicles')
+
+
+@app.route('/admin/vehicles/create', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_add_vehicle():
+    name = request.form.get('name', '').strip()
+    license_plate = request.form.get('license_plate', '').strip().upper()
+    if not name:
+        flash('Моля въведете име на автомобила.', 'danger')
+        return redirect(url_for('admin_vehicles'))
+    if not license_plate:
+        flash('Моля въведете регистрационен номер.', 'danger')
+        return redirect(url_for('admin_vehicles'))
+    if Vehicle.query.filter_by(license_plate=license_plate).first():
+        flash(f'Вече има автомобил с номер "{license_plate}".', 'danger')
+        return redirect(url_for('admin_vehicles'))
+    db.session.add(Vehicle(
+        name=name, license_plate=license_plate,
+        brand=request.form.get('brand', '').strip() or None,
+        model=request.form.get('model', '').strip() or None,
+        vin=request.form.get('vin', '').strip() or None,
+        responsible_name=request.form.get('responsible_name', '').strip() or None,
+        insurance_expiry=_parse_form_date(request.form.get('insurance_expiry')),
+        insurance_installments=request.form.get('insurance_installments') == '1',
+        vignette_expiry=_parse_form_date(request.form.get('vignette_expiry')),
+        inspection_expiry=_parse_form_date(request.form.get('inspection_expiry')),
+        notes=request.form.get('notes', '').strip() or None,
+    ))
+    db.session.commit()
+    log_action(f'Добавен автомобил "{name}" ({license_plate})')
+    flash(f'Автомобил "{name}" беше добавен.', 'success')
+    return redirect(url_for('admin_vehicles'))
+
+
+@app.route('/admin/vehicles/<int:vehicle_id>/edit')
+@role_required(['admin', 'worker'])
+def edit_vehicle_window(vehicle_id):
+    """Popup edit window (see edit_window.html) - opened via the pencil icon on /admin/vehicles."""
+    v = Vehicle.query.get_or_404(vehicle_id)
+    return render_template(
+        'edit_window.html', item_label='автомобил', saved=request.args.get('saved') == '1',
+        action=url_for('admin_update_vehicle', vehicle_id=v.id),
+        fields=[
+            {'name': 'name', 'label': 'Име', 'value': v.name, 'type': 'text', 'required': True},
+            {'name': 'license_plate', 'label': 'Регистрационен номер', 'value': v.license_plate, 'type': 'text', 'required': True},
+            {'name': 'brand', 'label': 'Марка', 'value': v.brand or '', 'type': 'text'},
+            {'name': 'model', 'label': 'Модел', 'value': v.model or '', 'type': 'text'},
+            {'name': 'vin', 'label': 'Рама (VIN)', 'value': v.vin or '', 'type': 'text'},
+            {'name': 'responsible_name', 'label': 'Отговорник', 'value': v.responsible_name or '', 'type': 'text'},
+            {'name': 'insurance_expiry', 'label': 'Застраховка (ГО) - валидна до', 'value': v.insurance_expiry or '', 'type': 'date'},
+            {'name': 'insurance_installments', 'label': 'Изплаща се на вноски (тримесечно)', 'value': v.insurance_installments, 'type': 'checkbox'},
+            {'name': 'vignette_expiry', 'label': 'Винетка - валидна до', 'value': v.vignette_expiry or '', 'type': 'date'},
+            {'name': 'inspection_expiry', 'label': 'Технически преглед - валиден до', 'value': v.inspection_expiry or '', 'type': 'date'},
+            {'name': 'notes', 'label': 'Забележка', 'value': v.notes or '', 'type': 'textarea'},
+        ]
+    )
+
+
+@app.route('/admin/vehicles/<int:vehicle_id>/update', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_update_vehicle(vehicle_id):
+    v = Vehicle.query.get_or_404(vehicle_id)
+    name = request.form.get('name', '').strip()
+    license_plate = request.form.get('license_plate', '').strip().upper()
+    if not name:
+        flash('Моля въведете име на автомобила.', 'danger')
+        return redirect(url_for('admin_vehicles'))
+    if not license_plate:
+        flash('Моля въведете регистрационен номер.', 'danger')
+        return redirect(url_for('admin_vehicles'))
+    if Vehicle.query.filter(Vehicle.license_plate == license_plate, Vehicle.id != v.id).first():
+        flash(f'Вече има друг автомобил с номер "{license_plate}".', 'danger')
+        return redirect(url_for('admin_vehicles'))
+    v.name = name
+    v.license_plate = license_plate
+    v.brand = request.form.get('brand', '').strip() or None
+    v.model = request.form.get('model', '').strip() or None
+    v.vin = request.form.get('vin', '').strip() or None
+    v.responsible_name = request.form.get('responsible_name', '').strip() or None
+    v.insurance_expiry = _parse_form_date(request.form.get('insurance_expiry'))
+    v.insurance_installments = request.form.get('insurance_installments') == '1'
+    v.vignette_expiry = _parse_form_date(request.form.get('vignette_expiry'))
+    v.inspection_expiry = _parse_form_date(request.form.get('inspection_expiry'))
+    v.notes = request.form.get('notes', '').strip() or None
+    db.session.commit()
+    flash(f'Автомобил "{v.name}" беше обновен.', 'success')
+    if request.form.get('popup') == '1':
+        return redirect(url_for('edit_vehicle_window', vehicle_id=vehicle_id, saved='1'))
+    return redirect(url_for('admin_vehicles'))
+
+
+@app.route('/admin/vehicles/<int:vehicle_id>/delete', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_delete_vehicle(vehicle_id):
+    v = Vehicle.query.get_or_404(vehicle_id)
+    name, plate = v.name, v.license_plate
+    db.session.delete(v)
+    db.session.commit()
+    log_action(f'Изтрит автомобил "{name}" ({plate})')
+    flash(f'Автомобил "{name}" беше изтрит.', 'success')
+    return redirect(url_for('admin_vehicles'))
+
+
+@app.route('/admin/vehicles/<int:vehicle_id>/installments/toggle', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_vehicle_installment_toggle(vehicle_id):
+    """Marks one auto-calculated quarterly ГО due date paid/unpaid - the
+    due_date form field must be one of Vehicle.insurance_installment_dates
+    for this vehicle (silently ignored otherwise, e.g. a stale checkbox
+    from before insurance_expiry was changed)."""
+    v = Vehicle.query.get_or_404(vehicle_id)
+    due_date = _parse_form_date(request.form.get('due_date'))
+    if not due_date or due_date not in v.insurance_installment_dates:
+        return redirect(url_for('admin_vehicles'))
+    record = VehicleInsuranceInstallment.query.filter_by(vehicle_id=v.id, due_date=due_date).first()
+    if not record:
+        record = VehicleInsuranceInstallment(vehicle_id=v.id, due_date=due_date, paid=False)
+        db.session.add(record)
+    record.paid = not record.paid
+    record.paid_at = datetime.utcnow() if record.paid else None
+    db.session.commit()
+    log_action(f'{"Отбелязана платена" if record.paid else "Отбелязана неплатена"} вноска ГО ({due_date.strftime("%d.%m.%Y")}) за "{v.name}"')
+    return redirect(url_for('admin_vehicles'))
+
+
+# ----------------- MODBUS ЕЛЕКТРОМЕРИ -----------------
+# Read-only register access for Modbus TCP meters (e.g. DTSU666) - a generic
+# raw-register tool (admin_modbus_read_registers()) plus a confirmed decoded
+# view for DTSU666 specifically (_dtsu666_snapshot(), DTSU666_REGISTERS).
+# MODBUS_READ_TIMEOUT mirrors SHELLY_TIMEOUT's reasoning: a slow/dead meter
+# must fail fast, not hang the request.
+
+MODBUS_READ_TIMEOUT = 3.0
+# Cheap WiFi/RS-485-to-TCP gateways (like the one in front of this shop's
+# DTSU666) often can't handle more than one Modbus TCP connection at a time -
+# a second request arriving mid-transaction gets a garbled/short response
+# instead of a clean error (this is what _dtsu666_snapshot()'s length check
+# is defending against). One lock per (host, port) serializes every read
+# against that gateway, regardless of which route/poll triggered it.
+_modbus_locks = {}
+_modbus_locks_guard = threading.Lock()
+
+
+def _modbus_lock_for(host, port):
+    key = (host, port)
+    with _modbus_locks_guard:
+        return _modbus_locks.setdefault(key, threading.Lock())
+
+
+def _modbus_read_raw(host, port, unit_id, address, count, input_type):
+    """
+    Reads `count` 16-bit registers starting at `address` (0-based, matching
+    the offset most meter manuals print - a manual's "40001" style 1-based
+    address is that minus one). Returns (registers, error) - error is a
+    human string, never raises, same tolerance as shelly_device_snapshot()
+    towards a meter that's unreachable or rejects the request (wrong
+    unit_id, wrong function code for that address range, etc.). Serialized
+    per (host, port) - see _modbus_lock_for()'s docstring.
+    """
+    lock = _modbus_lock_for(host, port)
+    with lock:
+        client = ModbusTcpClient(host, port=port, timeout=MODBUS_READ_TIMEOUT)
+        try:
+            if not client.connect():
+                return None, 'Няма връзка с устройството.'
+            if input_type == 'input':
+                result = client.read_input_registers(address, count=count, device_id=unit_id)
+            else:
+                result = client.read_holding_registers(address, count=count, device_id=unit_id)
+            if result.isError():
+                return None, str(result)
+            return result.registers, None
+        except Exception as e:
+            return None, f'{type(e).__name__}: {e}'
+        finally:
+            client.close()
+
+
+def _modbus_decode(registers, data_type):
+    """
+    Reinterprets a flat uint16 list as the requested type, 2 registers per
+    32-bit value, high register first (the most common word order for these
+    meters, per DTSU666-adjacent documentation - swap_words in the UI covers
+    the other one without a code change). Returns a list of decoded values
+    (one per `count`, or one per pair for 32-bit types).
+    """
+    import struct
+    if data_type == 'uint16':
+        return list(registers)
+    if data_type == 'int16':
+        return [r - 0x10000 if r >= 0x8000 else r for r in registers]
+    pairs = list(zip(registers[0::2], registers[1::2]))
+    values = []
+    for hi, lo in pairs:
+        raw = struct.pack('>HH', hi, lo)
+        if data_type == 'uint32':
+            values.append(struct.unpack('>I', raw)[0])
+        elif data_type == 'int32':
+            values.append(struct.unpack('>i', raw)[0])
+        elif data_type == 'float32':
+            values.append(round(struct.unpack('>f', raw)[0], 4))
+    return values
+
+
+# DTSU666 register map, confirmed empirically against a real unit (Unit ID
+# 12 @ 192.168.18.119:26 - "DTSU-666-Главно") via admin_modbus_read_registers():
+# every voltage/current/power value below was read live and cross-checked
+# for internal consistency (S^2 = P^2 + Q^2 per phase matched to within
+# rounding on all three phases), not taken from a datasheet. All holding
+# registers (function 0x03), float32 (2 registers, big-endian words+bytes).
+# Energy registers (0x4000 block) match the expected scale (hundreds of kWh
+# on a running shop meter) and the standard total/forward/reverse layout,
+# but weren't cross-checked as rigorously as the power block - flagged below.
+DTSU666_REGISTERS = {
+    'voltage_ll': (0x2000, 3),   # Uab, Ubc, Uca - line-to-line volts
+    'voltage_ln': (0x2006, 3),   # Ua, Ub, Uc - phase-to-neutral volts
+    'current': (0x200C, 3),      # Ia, Ib, Ic - amps
+    'active_power': (0x2012, 4),   # total, A, B, C - watts
+    'reactive_power': (0x201A, 4),  # total, A, B, C - var
+    'apparent_power': (0x2022, 4),  # total, A, B, C - VA
+    # unverified against the meter's own display - see docstring above
+    'energy_active_total': (0x4000, 1),   # Wh
+    'energy_active_forward': (0x4002, 1),  # Wh (import)
+    'energy_active_reverse': (0x4004, 1),  # Wh (export)
+}
+
+
+def _dtsu666_snapshot(device):
+    """
+    Render-ready dict for a DTSU666, same shape as shelly_device_snapshot()'s
+    return value so it can eventually feed the same kind of dashboard/panel
+    aggregation - see DTSU666_REGISTERS for how each field was confirmed.
+    """
+    def read_block(name):
+        address, count = DTSU666_REGISTERS[name]
+        registers, error = _modbus_read_raw(device.host, device.port, device.unit_id, address, count * 2, 'holding')
+        if error:
+            raise RuntimeError(error)
+        values = _modbus_decode(registers, 'float32')
+        if len(values) != count:
+            # A gateway under concurrent load (e.g. this page's own live poll
+            # racing a manual register read) can return a short/garbled
+            # response without pymodbus flagging it as an error - treat that
+            # the same as a real error rather than indexing into a
+            # too-short list further down.
+            raise RuntimeError(f'Непълен отговор за "{name}" ({len(values)}/{count} стойности).')
+        return values
+
+    try:
+        u_ln = read_block('voltage_ln')
+        i = read_block('current')
+        p = read_block('active_power')
+        q = read_block('reactive_power')
+        s = read_block('apparent_power')
+        energy_total = read_block('energy_active_total')[0]
+
+        labels = ['Фаза A', 'Фаза B', 'Фаза C']
+        channels = [{
+            'label': labels[idx], 'voltage': u_ln[idx], 'current': i[idx],
+            'act_power': p[idx + 1], 'aprt_power': s[idx + 1], 'pf': None, 'freq': None,
+        } for idx in range(3)]
+    except Exception as e:
+        return {
+            'name': device.name, 'host': f'{device.host}:{device.port}', 'online': False,
+            'error': str(e), 'channels': [], 'total_power': 0.0, 'total_energy': 0.0,
+            'temperature': None, 'rssi': None,
+        }
+
+    return {
+        'name': device.name, 'host': f'{device.host}:{device.port}', 'online': True, 'error': None,
+        'channels': channels, 'total_power': round(p[0], 1), 'total_energy': round(energy_total / 1000.0, 2),
+        'temperature': None, 'rssi': None,
+    }
+
+
+# Solis S6 hybrid inverter register map, confirmed against the official
+# manufacturer protocol ("RS485_MODBUS(ESINV-33000ID) Hybrid Inverter",
+# 2020.9.15 - publicly published by Solis/Ginlong) and then cross-checked
+# live against this shop's two units through admin_modbus_read_registers():
+# every field lined up with something independently verifiable, not just
+# "looked reasonable" -
+#   - today/this-month/this-year generation vs. the real elapsed days matched
+#     (2 days into September read ~94kWh/day, August's full-month total
+#     matched ~148kWh/day - the same install)
+#   - sum of the 4 PV string powers matched the documented total DC power
+#   - DC bus half-voltage register read exactly half of DC bus voltage
+#   - AC active power, backup load power, and inverting/rectifying power
+#     (three separately documented registers) all read the identical 1900W
+#   - battery voltage (main register) and battery voltage "from BMS" (a
+#     different register, different scale) matched to within 2V
+# Same empirical-confirmation bar as DTSU666_REGISTERS above, actually
+# stronger (multiple independent cross-checks, not just one). All input
+# registers (function 0x04), read as two contiguous blocks (33089-33092 is
+# reserved/unused but cheap to read along with its neighbors) over a single
+# TCP connection - see _solis_read_blocks(). This shop's WiFi-to-Modbus
+# stick takes seconds to accept each *new* connection (unlike the DTSU666's
+# gateway, which is near-instant) but is fast once connected, so the
+# request count barely matters - the connection count is what was making a
+# live poll take 11-14s per inverter before this was one connection instead
+# of three.
+SOLIS_BLOCK_ENERGY_PV_AC = (33029, 66)    # 33029-33094: PV strings/energy/AC output/temp/freq
+# 33118-33217: fault bits, meter, battery, loads, "fast" (<1s, unsmoothed)
+# battery current - widened from the original 33126-33168 to also cover
+# 33118 (Battery Fault Status Bits) and 33217 (Battery Current Fast), both
+# confirmed against github.com/Pho3niX90/solis_modbus's independently
+# reverse-engineered register map. That project's much larger register set
+# (settings/TOU schedules/fault bits/etc.) still only ever documents ONE
+# aggregate battery reading here - it does NOT document a per-port split.
+SOLIS_BLOCK_METER_BATTERY = (33118, 100)
+SOLIS_BLOCK_GENERATOR = (33530, 6)   # 33530-33535: generator port power/energy (see 'generator' below)
+# 34328-34393: the "Smart Port" block that project documents (voltage/current
+# at 34328-34333, power at 34391-34393 - both all-zero on this shop's units,
+# since no generator is actually wired to the smart port) ALSO contains, in
+# the UNDOCUMENTED registers in between, two identical-shaped 25-register
+# groups (34346-34365 and 34371-34390) found by directly probing this shop's
+# two inverters - each group ends in a constant 11 (matching "11 batteries
+# per port") preceded by a constant 16 (matching Dyness Stack100's 16S/51.2V
+# internal cell count), and otherwise carries a handful of values that vary
+# between the two groups and between inverters in a battery-plausible way
+# (a temperature-like pair, a cell-voltage-like pair) - see
+# _solis_snapshot()'s 'battery_groups' (EXPERIMENTAL - field meaning is this
+# file's own inference from the value patterns, not confirmed documentation
+# or a vendor-provided register map, per explicit user sign-off).
+SOLIS_BLOCK_SMARTPORT = (34328, 66)
+# CONFIRMED (2026-09-06, live cross-check against SolisCloud while the two
+# BMS ports genuinely differed: port 1 94%, port 2 98%): register 34278 is
+# Battery 2's own real SOC, exact match. This also revealed that register
+# 33139 - used everywhere in this file as "the" aggregate battery SOC - is
+# actually NOT an aggregate at all: it read 94 at that exact moment, an
+# exact match for BATTERY 1's own SOC. There is no true aggregate/average
+# register; 33139 and 34278 are the two real, independent per-port SOC
+# readings all along. See SOLIS_INVERTER_MODBUS.md for the full comparison.
+#
+# Read as its OWN separate small spec in _solis_read_extra_blocks rather
+# than folded into SOLIS_BLOCK_SMARTPORT above by widening that block's
+# range - widening IT from 66 to 119 registers to reach backwards to 34275
+# briefly caused exactly that (real symptom: "зацикля когато идеш на
+# страница която чете батериите" right after that change went in) - most
+# likely this device's/gateway's own read-size ceiling sits somewhere
+# between 100 and 119 registers (SOLIS_BLOCK_METER_BATTERY's own 100 reads
+# fine; 119 evidently doesn't), even though the Modbus PDU limit generally
+# allows up to ~125. A few extra registers in the SAME connection (see
+# _solis_read_blocks() - one spec per address range, still one TCP
+# connection) is zero-risk by comparison - this block is only 4 registers.
+#
+# 34275 (u16, /100) = Battery 2's own real voltage - CONFIRMED (2026-09-06,
+# exact match: 587.4V live cross-check against SolisCloud). By the same
+# logic as 33139/33133 turning out to be Battery 1's own SOC/voltage (not
+# an aggregate), 34276 is Battery 2's own current (EXPERIMENTAL - only
+# cross-checked at 0A/idle so far, which every nearby register also reads;
+# needs re-confirming next time the two ports draw genuinely different,
+# non-zero current - see SOLIS_INVERTER_MODBUS.md). 34277 is unidentified
+# (reads ~26, temperature-plausible but not yet checked against anything).
+SOLIS_BLOCK_BATTERY2_EXTRA = (34275, 4)  # 34275=voltage, 34276=current, 34277=?, 34278=soc (CONFIRMED)
+
+# Full per-phase reading of the external grid CT meter (33251-33286,
+# documented in github.com/Pho3niX90/solis_modbus as "Meter 1") - explicit
+# ask: "Виртуалния смарт метър... е трифазен. Записвай всички данни от
+# него за всички фази". A first live read looked wrong (current scaled as
+# /10 implied tens of amps per phase and several kW, while both SolisCloud
+# itself and this app's own already-trusted single-value meter reading
+# (33126-33131, still used for the simple 'meter' dict) showed ~0kW) -
+# CORRECTED per the user's own catch: current here is in MILLIAMPS (/1000),
+# not deciamps. With that fix every field cross-checks internally (each
+# phase's own apparent/reactive power sums EXACTLY to the block's own
+# totals) and frequency reads a plausible 49.96-50.02Hz - all CONFIRMED
+# 2026-09-06 by that consistency, not by an external ground truth (unlike
+# the battery discoveries, SolisCloud's own UI doesn't expose a per-phase
+# meter breakdown to cross-check against).
+SOLIS_BLOCK_METER_3P = (33251, 36)
+
+
+def _solis_u16(regs, base, addr):
+    return regs[addr - base]
+
+
+def _solis_s16(regs, base, addr):
+    v = _solis_u16(regs, base, addr)
+    return v - 0x10000 if v >= 0x8000 else v
+
+
+def _solis_u32(regs, base, addr):
+    hi, lo = regs[addr - base], regs[addr - base + 1]
+    return (hi << 16) | lo
+
+
+def _solis_s32(regs, base, addr):
+    v = _solis_u32(regs, base, addr)
+    return v - 0x100000000 if v >= 0x80000000 else v
+
+
+def _solis_read_blocks(device, specs):
+    """
+    Reads every (start, count) in `specs` as input registers (function 0x04)
+    over a single Modbus TCP connection, instead of _modbus_read_raw()'s one
+    connection per call - see SOLIS_BLOCK_* above for why that matters here.
+    Still serialized per (host, port) via _modbus_lock_for(), same as every
+    other Modbus read, since this shop's two Solis inverters share one WiFi
+    stick (same host:port, different unit_id) and the DTSU666 gateway
+    pattern already established that these cheap gateways choke on
+    concurrent connections. Returns a list of register lists, one per spec;
+    raises RuntimeError on any failure (unreachable device, wrong unit_id,
+    short/garbled response under concurrent load - same tolerance as
+    _dtsu666_snapshot()'s read_block()).
+    """
+    lock = _modbus_lock_for(device.host, device.port)
+    with lock:
+        client = ModbusTcpClient(device.host, port=device.port, timeout=MODBUS_READ_TIMEOUT)
+        try:
+            if not client.connect():
+                raise RuntimeError('Няма връзка с устройството.')
+            blocks = []
+            for start, count in specs:
+                result = client.read_input_registers(start, count=count, device_id=device.unit_id)
+                if result.isError():
+                    raise RuntimeError(str(result))
+                if len(result.registers) != count:
+                    raise RuntimeError(f'Непълен отговор за {start} ({len(result.registers)}/{count} стойности).')
+                blocks.append(result.registers)
+            return blocks
+        finally:
+            client.close()
+
+
+# Generator/smart-port + the experimental per-battery-port data (see
+# SOLIS_BLOCK_GENERATOR/SOLIS_BLOCK_SMARTPORT) changes slowly - reading it
+# on every _solis_snapshot() call briefly overloaded this shop's shared
+# WiFi-to-Modbus gateway once it was added to the hot live-poll path
+# (admin_power.html's refresh picker allows as often as once a second, times
+# 2 inverters sharing one gateway/lock): pymodbus started reporting
+# transaction-ID-mismatch errors and requests hung for 20+ seconds. Cached
+# per-device and only actually re-read once every SOLIS_EXTRA_REFRESH_SECONDS,
+# regardless of how often the live snapshot itself is polled.
+SOLIS_EXTRA_REFRESH_SECONDS = 60
+_solis_extra_cache = {}
+_solis_extra_cache_lock = threading.Lock()
+
+
+def _solis_read_extra_blocks(device):
+    b4_start, b4_count = SOLIS_BLOCK_GENERATOR
+    b5_start, b5_count = SOLIS_BLOCK_SMARTPORT
+    b6_start, b6_count = SOLIS_BLOCK_BATTERY2_EXTRA
+    b7_start, b7_count = SOLIS_BLOCK_METER_3P
+    b4, b5, b6, b7 = _solis_read_blocks(
+        device, [(b4_start, b4_count), (b5_start, b5_count), (b6_start, b6_count), (b7_start, b7_count)]
+    )
+    u16_4 = lambda addr: _solis_u16(b4, b4_start, addr)
+    s16_4 = lambda addr: _solis_s16(b4, b4_start, addr)
+    u32_4 = lambda addr: _solis_u32(b4, b4_start, addr)
+    u16_5 = lambda addr: _solis_u16(b5, b5_start, addr)
+    u16_6 = lambda addr: _solis_u16(b6, b6_start, addr)
+    s16_6 = lambda addr: _solis_s16(b6, b6_start, addr)
+    u16_7 = lambda addr: _solis_u16(b7, b7_start, addr)
+    s16_7 = lambda addr: _solis_s16(b7, b7_start, addr)
+    s32_7 = lambda addr: _solis_s32(b7, b7_start, addr)
+    u32_7 = lambda addr: _solis_u32(b7, b7_start, addr)
+
+    # EXPERIMENTAL - one entry per battery port, decoded from a pattern found
+    # by directly probing this shop's two inverters (see
+    # SOLIS_BLOCK_SMARTPORT's docstring), not from any documented register
+    # map. Shown to the user labeled as such, not as confirmed data -
+    # correct on the strength of "ends in 11, matches 11 batteries per port"
+    # plus plausible voltage/temperature variation between the two groups,
+    # nothing more. base_addr+15 was originally guessed as SOC, but a live
+    # probe while the bank was actively discharging (aggregate SOC 90%/89%
+    # per inverter - see 'battery'.'soc' below) showed it pinned at a flat
+    # 100 on BOTH ports of BOTH inverters regardless - implausible for a
+    # live SOC, but it exactly matches the aggregate SOH (also 100 on both
+    # units), so it's relabeled 'soh' here instead ("не показва коректно
+    # soc на батериите").
+    #
+    # The REAL per-port SOC turned out to live elsewhere entirely (34278,
+    # not in this 25-register group at all) - see SOLIS_BLOCK_SMARTPORT's
+    # docstring for the full story. _battery_stack_live_data() below wires
+    # port 1's SOC from register 33139 and port 2's from 34278 - both
+    # confirmed exact matches against SolisCloud, not from this dict.
+    #
+    # base_addr+0 (labeled 'voltage' here previously) was likewise cross-
+    # checked against SolisCloud's own per-battery detail page (real user
+    # comparison, 2026-09-06): it reads a constant 501.6 on BOTH ports of
+    # this inverter, identical to SolisCloud's own "BMS Discharge Voltage
+    # Limit Value" setting - NOT the live pack voltage (583-586V there,
+    # varying and different per port) that the old key name implied.
+    # Renamed to what it actually is; cell_voltage_min/max below are
+    # confirmed correct against the same page (exact/near-exact match) and
+    # remain the real live per-port voltage indicator.
+    def _decode_battery_group(base_addr):
+        return {
+            'discharge_voltage_limit': round(u16_5(base_addr) / 10.0, 1),
+            'cell_voltage_min': round(u16_5(base_addr + 2) / 1000.0, 3),
+            'cell_voltage_max': round(u16_5(base_addr + 3) / 1000.0, 3),
+            'temperature_min': round(u16_5(base_addr + 4) / 10.0, 1),
+            'temperature_max': round(u16_5(base_addr + 5) / 10.0, 1),
+            'soh': u16_5(base_addr + 15),
+            'cycles': u16_5(base_addr + 16),
+            'module_count': u16_5(base_addr + 19),
+        }
+
+    generator = {
+        # All-zero on this shop's units - nothing is actually wired to the
+        # smart/generator port right now, which is the honest, correct
+        # reading (not a decoding bug).
+        'power_a': s16_4(33530) * 10,
+        'power_b': s16_4(33534) * 10,
+        'power_c': s16_4(33535) * 10,
+        'today_kwh': round(u16_4(33531) / 10.0, 1),
+        'total_kwh': u32_4(33532),
+        'smartport_voltage_a': round(u16_5(34328) / 10.0, 1),
+        'smartport_voltage_b': round(u16_5(34329) / 10.0, 1),
+        'smartport_voltage_c': round(u16_5(34330) / 10.0, 1),
+        'smartport_current_a': round(u16_5(34331) / 10.0, 1),
+        'smartport_current_b': round(u16_5(34332) / 10.0, 1),
+        'smartport_current_c': round(u16_5(34333) / 10.0, 1),
+    }
+    battery_groups = [_decode_battery_group(34346), _decode_battery_group(34371)]
+    # CONFIRMED (2026-09-06, live cross-check against SolisCloud with the
+    # ports genuinely at different SOC - port 1 94%, port 2 98%): 34278 is
+    # port 2's own real SOC (exact match), 34275 its own real voltage (exact
+    # match, 587.4V) - and the "aggregate" battery.* fields read elsewhere
+    # (33133 voltage, 33134 current, 33139 SOC, 33149 power, in
+    # _solis_snapshot()'s main block) are actually port 1's own readings,
+    # not a true aggregate. Port 1's values aren't available in this
+    # function's own register block, so only port 2's group gets them set
+    # here - _battery_stack_live_data() fills port 1's in from the main
+    # block's reading instead of sharing port 2's or vice versa.
+    battery_groups[1]['voltage'] = round(u16_6(34275) / 100.0, 1)
+    # EXPERIMENTAL - only cross-checked at 0A/idle so far (see
+    # SOLIS_BLOCK_BATTERY2_EXTRA's docstring); power is current x voltage,
+    # not its own register, so it inherits the same confidence level as
+    # current does.
+    battery_groups[1]['current'] = round(s16_6(34276) / 10.0, 1)
+    battery_groups[1]['power'] = round(battery_groups[1]['voltage'] * battery_groups[1]['current'])
+    battery_groups[1]['direction'] = (
+        'charge' if battery_groups[1]['current'] > 0 else
+        'discharge' if battery_groups[1]['current'] < 0 else 'idle'
+    )
+    battery_groups[1]['soc'] = u16_6(34278)
+
+    # Full per-phase grid meter reading - see SOLIS_BLOCK_METER_3P's
+    # docstring for the /1000 (not /10) current scale correction and the
+    # internal-consistency check that confirmed it. Direction sign follows
+    # the SAME convention already established and used elsewhere in this
+    # app for the inverter's own AC terminal power (admin_power.html's
+    # "W активна мощност към мрежата (+ подава, - тегли)" - i.e. + =
+    # exporting/feeding the grid, - = importing/drawing from it) rather
+    # than the opposite, more common utility-meter convention - kept
+    # consistent for the user's own sake even though this specific field
+    # (a genuinely different measurement point, the external CT, not the
+    # inverter's own terminal) hasn't been independently confirmed against
+    # a real, clearly non-zero import or export event (this device read
+    # ~0 net active power, mostly reactive, at the time this was decoded).
+    # The separate cumulative energy_from_grid/energy_to_grid totals below
+    # are unambiguous either way (each only ever counts up).
+    active_total = s32_7(33263) / 10.0
+    meter_3p = {
+        'voltage_a': round(u16_7(33251) / 10.0, 1),
+        'current_a': round(u16_7(33252) / 1000.0, 3),
+        'voltage_b': round(u16_7(33253) / 10.0, 1),
+        'current_b': round(u16_7(33254) / 1000.0, 3),
+        'voltage_c': round(u16_7(33255) / 10.0, 1),
+        'current_c': round(u16_7(33256) / 1000.0, 3),
+        'active_power_a': round(s32_7(33257) / 10.0, 1),
+        'active_power_b': round(s32_7(33259) / 10.0, 1),
+        'active_power_c': round(s32_7(33261) / 10.0, 1),
+        'active_power': round(active_total, 1),
+        'reactive_power_a': round(s32_7(33265) / 10.0, 1),
+        'reactive_power_b': round(s32_7(33267) / 10.0, 1),
+        'reactive_power_c': round(s32_7(33269) / 10.0, 1),
+        'reactive_power': round(s32_7(33271) / 10.0, 1),
+        'apparent_power_a': round(s32_7(33273) / 10.0, 1),
+        'apparent_power_b': round(s32_7(33275) / 10.0, 1),
+        'apparent_power_c': round(s32_7(33277) / 10.0, 1),
+        'apparent_power': round(s32_7(33279) / 10.0, 1),
+        'power_factor': round(s16_7(33281) / 1000.0, 3),
+        'frequency': round(u16_7(33282) / 100.0, 2),
+        'energy_from_grid_kwh': round(u32_7(33283) / 1000.0, 2),
+        'energy_to_grid_kwh': round(u32_7(33285) / 1000.0, 2),
+        'direction': 'export' if active_total > 0 else 'import' if active_total < 0 else 'idle',
+    }
+    return generator, battery_groups, meter_3p
+
+
+def _solis_extra_cached(device):
+    now = time.time()
+    with _solis_extra_cache_lock:
+        cached = _solis_extra_cache.get(device.id)
+    if cached and now - cached['ts'] < SOLIS_EXTRA_REFRESH_SECONDS:
+        return cached['generator'], cached['battery_groups'], cached['meter_3p']
+    try:
+        generator, battery_groups, meter_3p = _solis_read_extra_blocks(device)
+    except Exception:
+        # Keep serving the last known-good value instead of blanking the UI
+        # just because this slow-refresh read happened to fail once (e.g.
+        # the gateway was mid-busy with the hot path) - same
+        # don't-change-on-a-failed-check preference as the temperature
+        # sensors' MQTT snapshot.
+        if cached:
+            return cached['generator'], cached['battery_groups'], cached['meter_3p']
+        return None, None, None
+    with _solis_extra_cache_lock:
+        _solis_extra_cache[device.id] = {'ts': now, 'generator': generator, 'battery_groups': battery_groups, 'meter_3p': meter_3p}
+    return generator, battery_groups, meter_3p
+
+
+def _battery_stack_live_data(stack, source_snap):
+    """
+    Live SOC/voltage/temperature for a BatteryStack with source_type=
+    'inverter' - just picks out source_snap['battery_groups'][0 or 1] (see
+    _solis_read_extra_blocks()'s _decode_battery_group()), already fetched
+    for stack.inverter_device_id elsewhere in the same poll pass by the
+    caller (admin_battery_cabinets_data()/admin_power_data()/
+    admin_factory_map_room_data()) - no Modbus read happens here.
+
+    'soc'/'voltage'/'current'/'power'/'direction' are genuinely per-port
+    (CONFIRMED 2026-09-06 for soc/voltage, see SOLIS_BLOCK_BATTERY2_EXTRA's
+    docstring) - there was never a true combined/aggregate reading for any
+    of these, just two independent per-port ones all along ("не показва
+    коректно soc на батериите", "трябва да се вижда с какъв ток се
+    зареждат/разреждат, каква мощност", "добавим в данните за батериите
+    напрежението за всяка батерия"). Port 1's come from source_snap
+    ['battery'] (registers 33139/33133/33134/33149, read in the main block
+    so not present in groups[0] itself); port 2's are already baked into
+    groups[1] by _solis_read_extra_blocks() (registers 34278/34275/34276,
+    power derived as voltage*current). Also drives the battery icon's fill
+    animation and in-icon SOC label on the map.
+
+    None whenever there's nothing to show: source_type isn't 'inverter' (the
+    only working option - see the model's docstring), inverter_device_id/
+    bms_port aren't both set, or the inverter's own snapshot has no
+    battery_groups (offline, or the 60s-cache read hasn't succeeded yet).
+    """
+    if stack.source_type != 'inverter' or not stack.inverter_device_id or stack.bms_port not in BATTERY_STACK_BMS_PORTS:
+        return None
+    if not source_snap or not source_snap.get('online') or not source_snap.get('battery_groups'):
+        return None
+    idx = 0 if stack.bms_port == '1' else 1
+    groups = source_snap['battery_groups']
+    if idx >= len(groups):
+        return None
+    result = dict(groups[idx])
+    if idx == 0:
+        battery = source_snap.get('battery') or {}
+        result.update(soc=battery.get('soc'), voltage=battery.get('voltage'), current=battery.get('current'),
+                       power=battery.get('power'), direction=battery.get('direction'))
+    return result
+
+
+def _battery_stack_snapshots(stacks):
+    """Fetches each distinct source_type='inverter' inverter referenced by
+    `stacks` exactly once, however many stacks share it (both BMS ports of
+    the same inverter, or multiple pollers) - shared by every page that
+    shows stack live data (admin_battery_cabinets_data()/admin_power_data()/
+    admin_factory_map_room_data()). Returns {stack.id: live_data_or_None}."""
+    inverter_ids = {s.inverter_device_id for s in stacks if s.source_type == 'inverter' and s.inverter_device_id}
+    snap_by_inverter_id = {
+        device.id: _solis_snapshot(device)
+        for device in ModbusDevice.query.filter(ModbusDevice.id.in_(inverter_ids)).all()
+    } if inverter_ids else {}
+    return {s.id: _battery_stack_live_data(s, snap_by_inverter_id.get(s.inverter_device_id)) for s in stacks}
+
+
+def _solis_snapshot(device):
+    """
+    Render-ready dict for a Solis S6 hybrid inverter - same top-level shape
+    as shelly_device_snapshot()/_dtsu666_snapshot() (name/host/online/error/
+    channels/total_power/total_energy/temperature), plus nested 'pv'/'ac'/
+    'battery'/'load'/'meter'/'generator' blocks with everything the register
+    map exposes (see SOLIS_BLOCK_* above) - admin_power.html renders these
+    with a dedicated card layout instead of the generic channel grid.
+    `channels` is always [] - a hybrid inverter's per-phase AC figures live
+    in the 'ac' block instead, since they don't fit the Shelly/DTSU666
+    per-channel shape (no per-channel power factor here). `total_power` is
+    the AC active power at the grid port (+ exporting to grid, - importing).
+
+    The inverter's 4 physical AC "ports" map onto existing/new blocks rather
+    than a separate structure: Grid -> 'meter' (external CT), Основен/Main
+    -> 'load.household_w', Backup -> 'load.backup_w', Generator/smart port
+    -> the new 'generator' block. `battery_groups` is a separate,
+    EXPERIMENTAL, best-effort decode of the two 11-module battery ports -
+    see its assignment below for what that confidence level actually means.
+    """
+    try:
+        b1_start, b1_count = SOLIS_BLOCK_ENERGY_PV_AC
+        b3_start, b3_count = SOLIS_BLOCK_METER_BATTERY
+        b1, b3 = _solis_read_blocks(device, [(b1_start, b1_count), (b3_start, b3_count)])
+
+        u16_1 = lambda addr: _solis_u16(b1, b1_start, addr)
+        s16_1 = lambda addr: _solis_s16(b1, b1_start, addr)
+        u32_1 = lambda addr: _solis_u32(b1, b1_start, addr)
+        s32_1 = lambda addr: _solis_s32(b1, b1_start, addr)
+        u16_3 = lambda addr: _solis_u16(b3, b3_start, addr)
+        s16_3 = lambda addr: _solis_s16(b3, b3_start, addr)
+        u32_3 = lambda addr: _solis_u32(b3, b3_start, addr)
+        s32_3 = lambda addr: _solis_s32(b3, b3_start, addr)
+
+        dc_input_count = u16_1(33048) + 1  # 0 = 1 input, 1 = 2 inputs, ...
+        pv_strings = [{
+            'voltage': round(u16_1(33049 + idx * 2) / 10.0, 1),
+            'current': round(u16_1(33050 + idx * 2) / 10.0, 1),
+        } for idx in range(min(dc_input_count, 4))]
+
+        ac_active_power = s32_1(33079)
+        battery_power = s32_3(33149)
+        direction = 'charge' if battery_power > 0 else 'discharge' if battery_power < 0 else 'idle'
+
+        result = {
+            'name': device.name, 'device_id': device.id, 'host': f'{device.host}:{device.port}', 'online': True, 'error': None,
+            'channels': [], 'total_power': ac_active_power, 'total_energy': u32_1(33029),
+            'temperature': round(s16_1(33093) / 10.0, 1),
+            'pv': {
+                'strings': pv_strings,
+                'power': u32_1(33057),
+                'today_kwh': round(u16_1(33035) / 10.0, 1),
+                'yesterday_kwh': round(u16_1(33036) / 10.0, 1),
+                'month_kwh': u32_1(33031),
+                'total_kwh': u32_1(33029),
+            },
+            'ac': {
+                'voltage_a': round(u16_1(33073) / 10.0, 1),
+                'voltage_b': round(u16_1(33074) / 10.0, 1),
+                'voltage_c': round(u16_1(33075) / 10.0, 1),
+                'current_a': round(u16_1(33076) / 10.0, 1),
+                'current_b': round(u16_1(33077) / 10.0, 1),
+                'current_c': round(u16_1(33078) / 10.0, 1),
+                'active_power': ac_active_power,
+                'reactive_power': s32_1(33081),
+                'apparent_power': s32_1(33083),
+                'frequency': round(u16_1(33094) / 100.0, 2),
+            },
+            'battery': {
+                'soc': u16_3(33139),
+                'soh': u16_3(33140),
+                'voltage': round(u16_3(33133) / 10.0, 1),
+                'current': round(s16_3(33134) / 10.0, 1),
+                # <1s, unsmoothed (33134 above is the smoothed reading) - reads
+                # 0 when the battery DC/DC stage is off, not necessarily idle.
+                'current_fast': round(s16_3(33217) / 10.0, 1),
+                'power': battery_power,
+                'direction': direction,
+                'temperature': round(s16_1(33043) / 10.0, 1),
+                'fault_bits': u16_3(33118),
+                'total_charge_kwh': u32_3(33161),
+                'total_discharge_kwh': u32_3(33165),
+                'today_charge_kwh': round(u16_3(33163) / 10.0, 1),
+                'today_discharge_kwh': round(u16_3(33167) / 10.0, 1),
+            },
+            'load': {
+                'household_w': u16_3(33147),
+                'backup_w': u16_3(33148),
+            },
+            'meter': {
+                'voltage': round(u16_3(33128) / 10.0, 1),
+                'current': round(u16_3(33129) / 10.0, 1),
+                'power': s32_3(33130),
+                'total_energy_kwh': round(u32_3(33126) / 1000.0, 2),
+            },
+        }
+        # Generator/smart-port + the experimental battery-port breakdown are
+        # deliberately NOT read here on every call - see _solis_extra_cached()'s
+        # docstring for why (this hot path can be polled as often as once a
+        # second per admin_power.html's refresh picker, times 2 inverters
+        # sharing one gateway; the extra blocks are read at most once every
+        # SOLIS_EXTRA_REFRESH_SECONDS regardless of poll frequency).
+        result['generator'], result['battery_groups'], result['meter_3p'] = _solis_extra_cached(device)
+    except Exception as e:
+        return {
+            'name': device.name, 'host': f'{device.host}:{device.port}', 'online': False,
+            'error': str(e), 'channels': [], 'total_power': 0.0, 'total_energy': 0.0,
+            'temperature': None, 'pv': None, 'ac': None, 'battery': None, 'load': None, 'meter': None,
+            'generator': None, 'battery_groups': None, 'meter_3p': None,
+        }
+
+    return result
+
+
+def _solis_grid_meter_view_snapshot(device, source_snap):
+    """
+    Standalone Consumption/map card for a ModbusDevice with
+    device_type='solis_grid_meter' - a *virtual* row with no Modbus
+    connection of its own (see its docstring on the model). Just reshapes
+    source_snap['meter']/['meter_3p'] (the external grid CT physically
+    wired into `device.source_device`'s own Modbus network - genuinely
+    three-phase, explicit ask: "Виртуалния смарт метър... е трифазен.
+    Записвай всички данни от него за всички фази") into the same
+    name/host/online/error/channels/total_power/total_energy/temperature
+    shape every other snapshot function returns, so it renders in
+    admin_power.html and factory-map cards exactly like a real meter - one
+    real per-phase channel each (same {label, voltage, current, act_power,
+    aprt_power, pf, freq} shape as _dtsu666_snapshot()'s channels) instead
+    of a single synthetic one, whenever meter_3p is available.
+
+    'meter_3p' (see SOLIS_BLOCK_METER_3P in app.py) is also attached
+    directly for callers that want the full per-phase/reactive/frequency/
+    energy-import-export detail beyond what the generic channel shape
+    carries - it's also what gets historically logged (SolisReadingLog.
+    snapshot_json dumps the WHOLE snapshot dict every minute, meter_3p
+    included, with zero extra logging code needed).
+
+    source_snap is whatever the caller already fetched for source_device in
+    this same poll pass (see admin_power_data()/_collect_power_aggregates())
+    - this function does no Modbus I/O of its own, by design (reusing an
+    already-fetched reading was the whole point, see ModbusDevice.
+    source_device_id's docstring).
+    """
+    if not source_snap or not source_snap.get('online') or not source_snap.get('meter'):
+        return {
+            'name': device.name, 'host': f'{device.host}:{device.port}', 'online': False,
+            'error': 'Няма данни от инвертора, през който се измерва.', 'channels': [],
+            'total_power': 0.0, 'total_energy': 0.0, 'temperature': None, 'meter_3p': None,
+        }
+    m = source_snap['meter']
+    m3 = source_snap.get('meter_3p')
+    if m3:
+        channels = [{
+            'label': label, 'voltage': m3[f'voltage_{ph}'], 'current': m3[f'current_{ph}'],
+            'act_power': m3[f'active_power_{ph}'], 'aprt_power': m3[f'apparent_power_{ph}'],
+            'pf': None, 'freq': m3['frequency'],
+        } for ph, label in (('a', 'Фаза A'), ('b', 'Фаза B'), ('c', 'Фаза C'))]
+        # meter_3p's own 'active_power' (+import/-export, see its own
+        # docstring on the UNCONFIRMED sign assumption) is used here instead
+        # of the older single-value m['power'] - haven't independently
+        # verified the two agree on sign/direction, and meter_3p is the one
+        # carrying the explicit 'direction' the user asked for.
+        total_power, total_energy = m3['active_power'], m3['energy_from_grid_kwh'] + m3['energy_to_grid_kwh']
+    else:
+        channels = [{'label': 'Мрежа', 'act_power': m['power'], 'voltage': m['voltage'], 'current': m['current'],
+                      'aprt_power': None, 'pf': None, 'freq': None}]
+        total_power, total_energy = m['power'], m['total_energy_kwh']
+    return {
+        'name': device.name, 'host': f'{device.host}:{device.port}', 'online': True, 'error': None,
+        'channels': channels, 'total_power': total_power, 'total_energy': total_energy,
+        'temperature': None, 'meter_3p': m3,
+    }
+
+
+@app.route('/admin/modbus-devices/create', methods=['POST'])
+@role_required('admin')
+def admin_add_modbus_device():
+    """Adds a Modbus meter straight onto the Consumption page (/admin/power) -
+    Modbus devices no longer have a standalone management page, they join
+    the same list/live-dashboard ShellyDevice rows already use there."""
+    name = request.form.get('name', '').strip()
+    device_type = request.form.get('device_type', 'dtsu666')
+    if device_type not in MODBUS_DEVICE_TYPES:
+        device_type = 'dtsu666'
+    if not name:
+        flash('Моля въведете име.', 'danger')
+        return redirect(url_for('admin_power'))
+    machines = _resolve_machines_or_none(_parse_machine_ids(request.form))
+    if machines is None:
+        flash('Една от избраните машини не съществува.', 'danger')
+        return redirect(url_for('admin_power'))
+    panel_id_raw = request.form.get('panel_id', '')
+    panel_id = int(panel_id_raw) if panel_id_raw.isdigit() and db.session.get(ElectricalPanel, int(panel_id_raw)) else None
+
+    if device_type == 'solis_grid_meter':
+        # Virtual row, no Modbus connection of its own - see
+        # ModbusDevice.source_device_id's docstring. host/port/unit_id are
+        # copied from the source purely for cosmetic display consistency
+        # (never actually connected to for this type).
+        source_device_id_raw = request.form.get('source_device_id', '')
+        source_device = (
+            db.session.get(ModbusDevice, int(source_device_id_raw))
+            if source_device_id_raw.isdigit() else None
+        )
+        if not source_device or source_device.device_type != 'solis_s6':
+            flash('Моля изберете инвертор, през който се измерва.', 'danger')
+            return redirect(url_for('admin_power'))
+        host, port, unit_id, source_device_id = source_device.host, source_device.port, source_device.unit_id, source_device.id
+    else:
+        host = request.form.get('host', '').strip()
+        if not host:
+            flash('Моля въведете IP адрес.', 'danger')
+            return redirect(url_for('admin_power'))
+        try:
+            port = int(request.form.get('port', '502') or 502)
+            unit_id = int(request.form.get('unit_id', '1') or 1)
+        except ValueError:
+            flash('Портът и Unit ID трябва да са числа.', 'danger')
+            return redirect(url_for('admin_power'))
+        source_device_id = None
+
+    db.session.add(ModbusDevice(
+        name=name, host=host, port=port, unit_id=unit_id, device_type=device_type, panel_id=panel_id, machines=machines,
+        source_device_id=source_device_id, notes=request.form.get('notes', '').strip() or None,
+    ))
+    db.session.commit()
+    log_action(f'Добавен Modbus електромер "{name}" ({host}:{port})')
+    flash(f'Устройство "{name}" беше добавено.', 'success')
+    return redirect(url_for('admin_power'))
+
+
+@app.route('/admin/modbus-devices/<int:device_id>/update', methods=['POST'])
+@role_required('admin')
+def admin_update_modbus_device(device_id):
+    """Full edit (name/host/port/unit id/notes/panel/machines) in one form -
+    same field coverage as admin_power_rename_device() gives a ShellyDevice,
+    so a Modbus row on /admin/power can be edited the same way as any other."""
+    device = ModbusDevice.query.get_or_404(device_id)
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Името не може да бъде празно.', 'danger')
+        return redirect(url_for('admin_power'))
+    machines = _resolve_machines_or_none(_parse_machine_ids(request.form))
+    if machines is None:
+        flash('Една от избраните машини не съществува.', 'danger')
+        return redirect(url_for('admin_power'))
+    device_type = request.form.get('device_type', device.device_type)
+    if device_type not in MODBUS_DEVICE_TYPES:
+        device_type = device.device_type
+    panel_id_raw = request.form.get('panel_id', '')
+
+    if device_type == 'solis_grid_meter':
+        source_device_id_raw = request.form.get('source_device_id', '')
+        source_device = (
+            db.session.get(ModbusDevice, int(source_device_id_raw))
+            if source_device_id_raw.isdigit() else None
+        )
+        if not source_device or source_device.device_type != 'solis_s6' or source_device.id == device.id:
+            flash('Моля изберете инвертор, през който се измерва.', 'danger')
+            return redirect(url_for('admin_power'))
+        host, port, unit_id, source_device_id = source_device.host, source_device.port, source_device.unit_id, source_device.id
+    else:
+        host = request.form.get('host', '').strip()
+        if not host:
+            flash('IP адресът не може да бъде празен.', 'danger')
+            return redirect(url_for('admin_power'))
+        try:
+            port = int(request.form.get('port', '502') or 502)
+            unit_id = int(request.form.get('unit_id', '1') or 1)
+        except ValueError:
+            flash('Портът и Unit ID трябва да са числа.', 'danger')
+            return redirect(url_for('admin_power'))
+        source_device_id = None
+
+    old_name = device.name
+    device.name = name
+    device.host = host
+    device.port = port
+    device.unit_id = unit_id
+    device.device_type = device_type
+    device.source_device_id = source_device_id
+    device.notes = request.form.get('notes', '').strip() or None
+    device.panel_id = int(panel_id_raw) if panel_id_raw.isdigit() and db.session.get(ElectricalPanel, int(panel_id_raw)) else None
+    device.machines = machines
+    db.session.commit()
+    log_action(f'Редактиран Modbus електромер "{old_name}" → "{name}"')
+    flash(f'Устройство "{name}" беше обновено.', 'success')
+    return redirect(url_for('admin_power'))
+
+
+@app.route('/admin/modbus-devices/<int:device_id>/ports', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_update_device_ports(device_id):
+    """Sets which ElectricalPanel each of a Solis inverter's 4 AC ports
+    (Мрежа/Основен/Бекъп/Генератор) connects to - a focused update touching
+    only these 4 columns, same reasoning as admin_update_panel_room() (posting
+    to the general admin_update_modbus_device() form would require resending
+    every other field or lose them)."""
+    device = ModbusDevice.query.get_or_404(device_id)
+
+    def _panel_or_none(field):
+        raw = request.form.get(field, '')
+        return int(raw) if raw.isdigit() and db.session.get(ElectricalPanel, int(raw)) else None
+
+    device.grid_panel_id = _panel_or_none('grid_panel_id')
+    device.main_panel_id = _panel_or_none('main_panel_id')
+    device.backup_panel_id = _panel_or_none('backup_panel_id')
+    device.generator_panel_id = _panel_or_none('generator_panel_id')
+    db.session.commit()
+    log_action(f'Обновени портове на "{device.name}"')
+    flash(f'Портовете на "{device.name}" бяха обновени.', 'success')
+    return redirect(url_for('admin_power'))
+
+
+@app.route('/admin/modbus-devices/<int:device_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_delete_modbus_device(device_id):
+    device = ModbusDevice.query.get_or_404(device_id)
+    name = device.name
+    db.session.delete(device)
+    db.session.commit()
+    log_action(f'Изтрито Modbus устройство "{name}"')
+    flash(f'Устройство "{name}" беше изтрито.', 'success')
+    return redirect(url_for('admin_power'))
+
+
+@app.route('/admin/modbus-devices/<int:device_id>/read', methods=['POST'])
+@role_required('admin')
+def admin_modbus_read_registers(device_id):
+    """
+    Diagnostic register dump - read N registers starting at a given address
+    and show them as raw uint16 plus every plausible decoding, so a real
+    reading (e.g. a voltage that should read ~230) can be matched by eye
+    against the meter's own display. This is how the actual register map
+    for a given meter gets confirmed - see ModbusDevice's docstring.
+    """
+    device = ModbusDevice.query.get_or_404(device_id)
+    try:
+        address = int(request.form.get('address', ''))
+        count = int(request.form.get('count', '2'))
+    except ValueError:
+        return jsonify({'error': 'Невалиден адрес или брой регистри.'}), 400
+    if count < 1 or count > 64:
+        return jsonify({'error': 'Броят регистри трябва да е между 1 и 64.'}), 400
+    input_type = 'input' if request.form.get('input_type') == 'input' else 'holding'
+
+    registers, error = _modbus_read_raw(device.host, device.port, device.unit_id, address, count, input_type)
+    if error:
+        return jsonify({'error': error})
+
+    return jsonify({
+        'address': address, 'raw': registers,
+        'uint16': _modbus_decode(registers, 'uint16'),
+        'int16': _modbus_decode(registers, 'int16'),
+        'uint32': _modbus_decode(registers, 'uint32') if count >= 2 else [],
+        'int32': _modbus_decode(registers, 'int32') if count >= 2 else [],
+        'float32': _modbus_decode(registers, 'float32') if count >= 2 else [],
+    })
+
+
+# ----------------- ИНТЕРАКТИВНА КАРТА НА ФАБРИКАТА -----------------
+# Shop-floor map, one canvas per Room (Building -> Room -> Machine/Panel
+# hierarchy - see Room's docstring for why the map isn't one single canvas).
+# Every Machine/ElectricalPanel in a room can be placed on a schematic grid
+# (a real floor-plan background can replace the grid later - pos_x/pos_y are
+# percentages of the room's own canvas either way, so nothing about the
+# position model has to change when that happens). Live power draw is
+# pulled from whichever ShellyDevice(s) are linked to a Machine, or - for a
+# panel - summed across every meter mounted inside it, reusing
+# shelly_fleet_snapshot(), the same poll machinery /admin/power runs on.
+
+# Below this, a reading is noise/standby draw, not real flow - mirrors the
+# client-side POWER_ACTIVE_THRESHOLD_W in admin_factory_map_overview.html/
+# admin_factory_map_room.html (kept as separate constants since one's
+# Python and one's JS, but same value/reasoning).
+POWER_ACTIVE_THRESHOLD_W = 5.0
+
+
+def _collect_power_aggregates(machine_ok, panel_ok):
+    """
+    Shared by admin_factory_map_room_data() and admin_factory_map_overview_data():
+    polls every ShellyDevice/ModbusDevice once and buckets live power into
+    by_machine/by_panel dicts (keyed by id: {'online', 'total_power',
+    'devices'}), including only machines/panels for which `machine_ok`/
+    `panel_ok` return True - the room-scoped view passes "is this in room
+    X", the site-wide overview passes "always" (a lambda returning True).
+    A machine/panel with no linked meter simply gets no entry, same as
+    machines.html shows for status alone.
+    """
+    by_machine = {}
+    by_panel = {}
+
+    def accumulate(device, snap):
+        for machine in device.machines:
+            if not machine_ok(machine):
+                continue
+            entry = by_machine.setdefault(machine.id, {'online': False, 'total_power': 0.0, 'devices': [], 'snapshots': []})
+            entry['devices'].append(device.name)
+            entry['online'] = entry['online'] or snap['online']
+            entry['total_power'] += snap['total_power'] if snap['online'] else 0.0
+            entry['snapshots'].append(snap)
+        if device.panel_id and panel_ok(device.panel):
+            entry = by_panel.setdefault(device.panel_id, {'online': False, 'total_power': 0.0, 'devices': [], 'snapshots': []})
+            entry['devices'].append(device.name)
+            entry['online'] = entry['online'] or snap['online']
+            entry['total_power'] += snap['total_power'] if snap['online'] else 0.0
+            # The full snapshot (channels / pv / ac / battery / load / meter -
+            # whichever apply to this device kind) is passed through as-is, so
+            # the factory map's hover tooltip can show the exact same detail
+            # as /admin/power without a second round of Modbus reads. 'host'
+            # is already on snap itself (used for the ?host= focus link).
+            entry['snapshots'].append(snap)
+            if snap.get('battery'):
+                entry['battery'] = dict(snap['battery'], host=snap['host'])
+
+    shelly_devices = ShellyDevice.query.order_by(ShellyDevice.id).all()
+    # Zipped by position (shelly_fleet_snapshot preserves `devices`' order)
+    # since a purely-MQTT device has no host to key by.
+    for device, snap in zip(shelly_devices, shelly_fleet_snapshot(_shelly_snapshot_args(shelly_devices))):
+        accumulate(device, snap)
+
+    # 'solis_grid_meter' rows are virtual (see ModbusDevice.source_device_id) -
+    # resolved in a second pass below from whatever was already fetched for
+    # their source in the loop above, never polled directly.
+    modbus_devices = ModbusDevice.query.all()
+    snap_by_device_id = {}
+    for device in modbus_devices:
+        if device.device_type == 'solis_grid_meter':
+            continue
+        if (device.panel_id and panel_ok(device.panel)) or any(machine_ok(m) for m in device.machines):
+            snap = _solis_snapshot(device) if device.device_type == 'solis_s6' else _dtsu666_snapshot(device)
+            snap_by_device_id[device.id] = snap
+            accumulate(device, snap)
+
+    for device in modbus_devices:
+        if device.device_type != 'solis_grid_meter':
+            continue
+        if not ((device.panel_id and panel_ok(device.panel)) or any(machine_ok(m) for m in device.machines)):
+            continue
+        source_snap = snap_by_device_id.get(device.source_device_id)
+        if source_snap is None:
+            continue
+        accumulate(device, _solis_grid_meter_view_snapshot(device, source_snap))
+
+    # A panel with no meter of its own (by_panel has no entry for it, since
+    # accumulate() above only creates one from an actual attached device)
+    # shows the sum of its nearest meter-equipped descendant panel(s)
+    # instead, labeled "Преминаваща" (passthrough) - recurses past any
+    # meterless panel in between, so a 2+-level-deep sub-panel's own meter
+    # still surfaces at a meterless panel further up (e.g. a root panel
+    # that's just a bus-bar with no meter of its own, only sub-panels that
+    # actually have one). Machines aren't included - this is specifically
+    # about the panel hierarchy (parent_panel_id).
+    # Direction: an inverter (identifiable by its snapshot having a
+    # 'battery' block, same as the connections' own reverse logic elsewhere)
+    # is a generator - it feeds power up/out, so it counts as - in the net.
+    # Everything else (a plain meter reading a panel's machines) is a
+    # consumer and counts as + (draws power through). net < 0 means more is
+    # being generated below than consumed, so the flow at this panel is
+    # actually outward (e.g. towards the grid via a root panel's pole).
+    def _descendant_meter_power(panel):
+        net = 0.0
+        online = False
+        for child in panel.child_panels:
+            if not panel_ok(child):
+                continue
+            entry = by_panel.get(child.id)
+            if entry:
+                if entry['online']:
+                    online = True
+                    if entry.get('battery') and entry['total_power'] > POWER_ACTIVE_THRESHOLD_W:
+                        net -= entry['total_power']
+                    else:
+                        net += entry['total_power']
+            else:
+                sub_net, sub_online = _descendant_meter_power(child)
+                net += sub_net
+                online = online or sub_online
+        return net, online
+
+    for panel in ElectricalPanel.query.all():
+        if not panel_ok(panel) or panel.id in by_panel:
+            continue
+        net, online = _descendant_meter_power(panel)
+        by_panel[panel.id] = {
+            'online': False, 'total_power': 0.0, 'devices': [], 'snapshots': [],
+            'passthrough_power': abs(net), 'passthrough_online': online, 'passthrough_reverse': net < 0,
+        }
+
+    return by_machine, by_panel
+
+
+@app.route('/admin/factory-map')
+@role_required(['admin', 'worker'])
+def admin_factory_map():
+    """Room picker - the detailed map is drawn one room at a time (see
+    admin_factory_map_room()); admin_factory_map_overview() is the site-wide
+    panel-to-panel distribution diagram."""
+    buildings = Building.query.order_by(Building.name).all()
+    return render_template('admin_factory_map.html', buildings=buildings, active_page='admin_factory_map')
+
+
+@app.route('/admin/factory-map/room/<int:room_id>')
+@role_required(['admin', 'worker'])
+def admin_factory_map_room(room_id):
+    room = Room.query.get_or_404(room_id)
+    machines = Machine.query.filter_by(room_id=room.id).order_by(Machine.id).all()
+    panels = ElectricalPanel.query.filter_by(room_id=room.id).order_by(ElectricalPanel.id).all()
+    convectors = Convector.query.filter_by(room_id=room.id).order_by(Convector.id).all()
+    battery_stacks = BatteryStack.query.filter_by(room_id=room.id).order_by(BatteryStack.id).all()
+    return render_template(
+        'admin_factory_map_room.html', room=room, machines=machines, panels=panels, convectors=convectors,
+        battery_stacks=battery_stacks, active_page='admin_factory_map'
+    )
+
+
+@app.route('/admin/factory-map/convector/<int:conv_id>/position', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_update_convector_position(conv_id):
+    """Saves a convector's dragged (x, y) - see admin_update_machine_position()."""
+    conv = Convector.query.get_or_404(conv_id)
+    try:
+        pos_x = float(request.form.get('pos_x', ''))
+        pos_y = float(request.form.get('pos_y', ''))
+    except ValueError:
+        return jsonify({'error': 'Невалидна позиция.'}), 400
+
+    conv.pos_x = max(0.0, min(100.0, pos_x))
+    conv.pos_y = max(0.0, min(100.0, pos_y))
+    db.session.commit()
+    return jsonify({'pos_x': conv.pos_x, 'pos_y': conv.pos_y})
+
+
+@app.route('/admin/factory-map/room/<int:room_id>/data')
+@role_required(['admin', 'worker'])
+def admin_factory_map_room_data(room_id):
+    """JSON feed polled by admin_factory_map_room.html - live power per
+    Machine/ElectricalPanel plus live on/off per Convector (each keyed by
+    id) in this room."""
+    room = Room.query.get_or_404(room_id)
+    by_machine, by_panel = _collect_power_aggregates(
+        lambda m: m.room_id == room.id, lambda p: p.room_id == room.id
+    )
+    convectors = Convector.query.filter_by(room_id=room.id).all()
+    by_convector = {c.id: _shelly_convector_status(c) for c in convectors}
+    # Only this room's own stacks - same reasoning as by_machine/by_panel
+    # above (REMOTE_LINKS' 'stack' entries always key off the LOCAL stack,
+    # never a remote one - see admin_factory_map_room.html).
+    by_stack = _battery_stack_snapshots(BatteryStack.query.filter_by(room_id=room.id).all())
+    return jsonify({
+        'ts': datetime.now().strftime('%H:%M:%S'), 'machines': by_machine, 'panels': by_panel,
+        'convectors': by_convector, 'stacks': by_stack,
+    })
+
+
+@app.route('/admin/factory-map/overview')
+@role_required(['admin', 'worker'])
+def admin_factory_map_overview():
+    """
+    Site-wide distribution diagram: every ElectricalPanel across every
+    Building/Room, positioned on its own canvas (overview_pos_x/y - separate
+    from each panel's position on its own room's map), connected by lines
+    following parent_panel_id (which panel feeds which). This is the "main
+    map" showing how the Building -> Room -> Panel sub-hierarchies relate to
+    each other, as distinct from admin_factory_map_room() which shows one
+    room's machines in physical-layout detail.
+    """
+    panels = ElectricalPanel.query.join(Room).join(Building).order_by(Building.name, Room.name, ElectricalPanel.name).all()
+    # One dashed group box per room represented here (see ROOM_GROUPS/
+    # redrawRoomGroups() in the template) - {'room': Room, 'panel_ids': [...]}
+    # in first-appearance order, which is already building/room-name order
+    # thanks to the query above.
+    room_groups = []
+    room_groups_by_id = {}
+    for p in panels:
+        entry = room_groups_by_id.get(p.room_id)
+        if entry is None:
+            entry = {'room': p.room, 'panel_ids': []}
+            room_groups_by_id[p.room_id] = entry
+            room_groups.append(entry)
+        entry['panel_ids'].append(p.id)
+    return render_template('admin_factory_map_overview.html', panels=panels, room_groups=room_groups, active_page='admin_factory_map')
+
+
+@app.route('/admin/factory-map/overview/data')
+@role_required(['admin', 'worker'])
+def admin_factory_map_overview_data():
+    """JSON feed polled by admin_factory_map_overview.html - live power per
+    ElectricalPanel (keyed by id), site-wide (no room filter)."""
+    _, by_panel = _collect_power_aggregates(lambda m: True, lambda p: True)
+    return jsonify({'ts': datetime.now().strftime('%H:%M:%S'), 'panels': by_panel})
+
+
+@app.route('/admin/factory-map/panel/<int:panel_id>/overview-position', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_update_panel_overview_position(panel_id):
+    """Saves a panel's dragged (x, y) on the site-wide overview canvas - see
+    ElectricalPanel.overview_pos_x/y."""
+    panel = ElectricalPanel.query.get_or_404(panel_id)
+    try:
+        pos_x = float(request.form.get('pos_x', ''))
+        pos_y = float(request.form.get('pos_y', ''))
+    except ValueError:
+        return jsonify({'error': 'Невалидна позиция.'}), 400
+
+    panel.overview_pos_x = max(0.0, min(100.0, pos_x))
+    panel.overview_pos_y = max(0.0, min(100.0, pos_y))
+    db.session.commit()
+    return jsonify({'pos_x': panel.overview_pos_x, 'pos_y': panel.overview_pos_y})
+
+
+@app.route('/admin/factory-map/machine/<int:machine_id>/position', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_update_machine_position(machine_id):
+    """Saves a machine's dragged (x, y) as a percentage of its room's map
+    canvas - see Machine.pos_x/pos_y."""
+    machine = Machine.query.get_or_404(machine_id)
+    try:
+        pos_x = float(request.form.get('pos_x', ''))
+        pos_y = float(request.form.get('pos_y', ''))
+    except ValueError:
+        return jsonify({'error': 'Невалидна позиция.'}), 400
+
+    machine.pos_x = max(0.0, min(100.0, pos_x))
+    machine.pos_y = max(0.0, min(100.0, pos_y))
+    db.session.commit()
+    return jsonify({'pos_x': machine.pos_x, 'pos_y': machine.pos_y})
+
+
+@app.route('/admin/factory-map/panel/<int:panel_id>/position', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_update_panel_position(panel_id):
+    """Saves an electrical panel's dragged (x, y) - see admin_update_machine_position()."""
+    panel = ElectricalPanel.query.get_or_404(panel_id)
+    try:
+        pos_x = float(request.form.get('pos_x', ''))
+        pos_y = float(request.form.get('pos_y', ''))
+    except ValueError:
+        return jsonify({'error': 'Невалидна позиция.'}), 400
+
+    panel.pos_x = max(0.0, min(100.0, pos_x))
+    panel.pos_y = max(0.0, min(100.0, pos_y))
+    db.session.commit()
+    return jsonify({'pos_x': panel.pos_x, 'pos_y': panel.pos_y})
+
+
+# Site coordinates (ТРАФКОМ ООД's own roof) for the sun-position compass on
+# the roof map below - a Google Maps pin the user gave directly, not a guess.
+SITE_LATITUDE = 42.9223667
+SITE_LONGITUDE = 24.2480123
+
+
+def _sun_position(dt_utc, lat_deg=SITE_LATITUDE, lon_deg=SITE_LONGITUDE):
+    """
+    Sun's azimuth (degrees, 0=North, clockwise - compass bearing) and
+    altitude (degrees above the horizon, negative = below) for a naive-UTC
+    datetime and site coordinates. Low-precision solar position formula
+    (accurate to a small fraction of a degree - the standard approximation
+    from Meeus' "Astronomical Algorithms", no ephemeris library needed) -
+    plenty for a "where's the sun right now" compass widget.
+    """
+    rad = math.pi / 180
+    d = (dt_utc - datetime(2000, 1, 1, 12, 0, 0)).total_seconds() / 86400.0
+
+    mean_lon = (280.460 + 0.9856474 * d) % 360
+    mean_anomaly = rad * ((357.528 + 0.9856003 * d) % 360)
+    ecliptic_lon = rad * (mean_lon + 1.915 * math.sin(mean_anomaly) + 0.020 * math.sin(2 * mean_anomaly))
+    obliquity = rad * (23.439 - 0.0000004 * d)
+
+    declination = math.asin(math.sin(obliquity) * math.sin(ecliptic_lon))
+    right_ascension = math.degrees(math.atan2(math.cos(obliquity) * math.sin(ecliptic_lon), math.cos(ecliptic_lon))) % 360
+
+    gmst = (280.46061837 + 360.98564736629 * d) % 360
+    hour_angle = rad * ((gmst + lon_deg - right_ascension) % 360)
+
+    lat = rad * lat_deg
+    altitude = math.asin(math.sin(lat) * math.sin(declination) + math.cos(lat) * math.cos(declination) * math.cos(hour_angle))
+    az_from_south = math.atan2(math.sin(hour_angle), math.cos(hour_angle) * math.sin(lat) - math.tan(declination) * math.cos(lat))
+    azimuth = (math.degrees(az_from_south) + 180) % 360
+
+    return {'azimuth': azimuth, 'altitude': math.degrees(altitude)}
+
+
+def _sun_rise_set(dt_local_naive):
+    """
+    Returns (sunrise, sunset, path):
+      - sunrise/sunset: {'time': 'HH:MM' (local), 'azimuth': degrees}, or
+        None on a day with no sunrise/sunset (not reachable at this site's
+        latitude, but harmless if SITE_LATITUDE/SITE_LONGITUDE ever change).
+        Found by scanning _sun_position()'s altitude across the UTC day in
+        15-minute steps and bisecting the -0.833 degree crossing (standard
+        "sun's upper limb at the horizon" definition, correcting for
+        atmospheric refraction) - reuses the exact same position formula as
+        the live compass dot, rather than a second formula that could
+        disagree with it at the edges.
+      - path: today's above-horizon {azimuth, altitude} points (same
+        15-minute samples), for the compass's dashed daylight-trajectory
+        line.
+    """
+    HORIZON = -0.833
+    utc_offset = dt_local_naive.astimezone().utcoffset()
+    day_start_utc = datetime(dt_local_naive.year, dt_local_naive.month, dt_local_naive.day) - utc_offset
+    samples = [day_start_utc + timedelta(minutes=15 * i) for i in range(97)]
+    positions = [_sun_position(t) for t in samples]
+    altitudes = [p['altitude'] for p in positions]
+
+    def bisect(t_lo, t_hi, alt_hi):
+        for _ in range(20):
+            t_mid = t_lo + (t_hi - t_lo) / 2
+            alt_mid = _sun_position(t_mid)['altitude']
+            if (alt_mid > HORIZON) == (alt_hi > HORIZON):
+                t_hi = t_mid
+            else:
+                t_lo = t_mid
+        return t_lo + (t_hi - t_lo) / 2
+
+    def describe(t):
+        if t is None:
+            return None
+        return {'time': (t + utc_offset).strftime('%H:%M'), 'azimuth': round(_sun_position(t)['azimuth'], 1)}
+
+    sunrise = sunset = None
+    for i in range(len(samples) - 1):
+        lo, hi = altitudes[i], altitudes[i + 1]
+        if lo <= HORIZON < hi and sunrise is None:
+            sunrise = bisect(samples[i], samples[i + 1], hi)
+        elif lo > HORIZON >= hi and sunset is None:
+            sunset = bisect(samples[i], samples[i + 1], hi)
+
+    # Today's daylight path (for the compass's dashed trajectory line) -
+    # same 15-minute samples already computed above for sunrise/sunset,
+    # just kept wherever they're above the horizon, so the line and the
+    # rise/set markers can never disagree with each other.
+    path = [{'azimuth': round(p['azimuth'], 1), 'altitude': round(p['altitude'], 1)}
+            for p in positions if p['altitude'] > HORIZON]
+
+    return describe(sunrise), describe(sunset), path
+
+
+# ----------------- ПОКРИВ СЪС СОЛАРНИ ПАНЕЛИ -----------------
+
+@app.route('/admin/solar-roof')
+@role_required('admin')
+def admin_solar_roof():
+    """
+    Roof map: every SolarPanel grouped by inverter (one roof slope each),
+    row by row, so admins can see and bulk-reassign which of the 4 DC
+    inputs each physical module is wired into. See SolarPanel's docstring
+    and migration/seed_solar_roof.py (the one-off script that generated the
+    172 rows for this shop's real 56m x 13m roof).
+    """
+    inverters = ModbusDevice.query.filter_by(device_type='solis_s6').order_by(ModbusDevice.id).all()
+    panels_by_inverter = {}
+    for inv in inverters:
+        panels_by_inverter[inv.id] = SolarPanel.query.filter_by(inverter_device_id=inv.id) \
+            .order_by(SolarPanel.row, SolarPanel.col).all()
+    return render_template('admin_solar_roof.html', inverters=inverters, panels_by_inverter=panels_by_inverter,
+                           site_lat=SITE_LATITUDE, site_lon=SITE_LONGITUDE, active_page='admin_solar_roof')
+
+
+@app.route('/admin/solar-roof/data')
+@role_required('admin')
+# The app-wide default limiter (300/hour per IP, meant for public/auth
+# endpoints) was blocking this page's own 10s live poll after well under an
+# hour open (360 req/hour on its own) - admins already have to be logged in
+# to reach it, so exempt it rather than throttle a dashboard against itself.
+@limiter.exempt
+def admin_solar_roof_data():
+    """
+    Live power for the roof map's legend/tooltips, keyed
+    "<inverter_device_id>-<string_number>" (1-8, matching SolarPanel.
+    string_number). Each Solis MPPT tracker (_solis_snapshot()'s pv.strings,
+    0-indexed, 4 entries) physically combines 2 wired-in-parallel strings
+    into one measurement - the inverter has no way to see the two halves
+    separately, so both of a tracker's string numbers (1&2, 3&4, 5&6, 7&8)
+    report that same shared reading here, not an assumed 50/50 split.
+
+    Also includes 'inverters' (keyed by device id) with each inverter's
+    whole-array PV summary (current power, today/yesterday/month/lifetime
+    kWh) for the "Анализ на слънцегреенето" section at the bottom of the
+    roof map - built from the same snapshot already fetched for 'strings',
+    not a second round of Modbus reads.
+    """
+    strings = {}
+    inverter_summaries = {}
+    for device in ModbusDevice.query.filter_by(device_type='solis_s6').order_by(ModbusDevice.id).all():
+        snap = _solis_snapshot(device)
+        if snap['online']:
+            for tracker_idx, s in enumerate(snap['pv']['strings']):
+                reading = {
+                    'voltage': s['voltage'], 'current': s['current'],
+                    'power': round(s['voltage'] * s['current']),
+                    'mppt': tracker_idx + 1,
+                }
+                strings[f'{device.id}-{tracker_idx * 2 + 1}'] = reading
+                strings[f'{device.id}-{tracker_idx * 2 + 2}'] = reading
+            inverter_summaries[device.id] = {
+                'name': device.name, 'online': True, 'power': round(snap['pv']['power']),
+                'today_kwh': snap['pv']['today_kwh'], 'yesterday_kwh': snap['pv']['yesterday_kwh'],
+                'month_kwh': snap['pv']['month_kwh'], 'total_kwh': snap['pv']['total_kwh'],
+            }
+        else:
+            inverter_summaries[device.id] = {'name': device.name, 'online': False}
+
+    sun_now = _sun_position(datetime.utcnow())
+    sunrise, sunset, sun_path = _sun_rise_set(datetime.now())
+    sun_info = {
+        'azimuth': round(sun_now['azimuth'], 1), 'altitude': round(sun_now['altitude'], 1),
+        'is_day': sun_now['altitude'] > -0.833, 'sunrise': sunrise, 'sunset': sunset, 'path': sun_path,
+    }
+    return jsonify({'ts': datetime.now().strftime('%H:%M:%S'), 'strings': strings,
+                    'inverters': inverter_summaries, 'sun': sun_info})
+
+
+@app.route('/admin/solar-roof/assign', methods=['POST'])
+@role_required('admin')
+def admin_solar_roof_assign():
+    """Bulk-assigns every selected panel to one string (or clears the
+    assignment, if string_number is left blank) - the roof map's multi-
+    select tool posts here once per "Присвои" click rather than one
+    request per panel, since a real edit here is routinely 15-20+ panels
+    at once (a whole string). 1-8: 4 MPPT trackers x 2 strings each - see
+    admin_solar_roof_data()."""
+    panel_ids = request.form.getlist('panel_ids')
+    if not panel_ids:
+        flash('Няма избрани панели.', 'danger')
+        return redirect(url_for('admin_solar_roof'))
+    string_raw = request.form.get('string_number', '')
+    string_number = int(string_raw) if string_raw.isdigit() and 1 <= int(string_raw) <= 8 else None
+    panels = SolarPanel.query.filter(SolarPanel.id.in_(panel_ids)).all()
+    for p in panels:
+        p.string_number = string_number
+    db.session.commit()
+    label = f'стринг {string_number}' if string_number else 'без стринг'
+    log_action(f'Присвоени {len(panels)} соларни панела към {label}')
+    flash(f'{len(panels)} панела бяха присвоени към {label}.', 'success')
+    return redirect(url_for('admin_solar_roof'))
 
 
 # ----------------- ОФЕРТИ (Offer generator) -----------------
@@ -9490,34 +15765,34 @@ def api_chat():
 # of a near-duplicate page per code.
 @app.errorhandler(404)
 def handle_404(e):
-    return render_template('error.html', code=404, title='Страницата не е намерена',
-                            message='Проверете адреса или се върнете към началото.'), 404
+    return render_template('error.html', code=404, title=gettext('Страницата не е намерена'),
+                            message=gettext('Проверете адреса или се върнете към началото.')), 404
 
 
 @app.errorhandler(403)
 def handle_403(e):
-    return render_template('error.html', code=403, title='Нямате достъп',
-                            message='Нямате права за тази страница.'), 403
+    return render_template('error.html', code=403, title=gettext('Нямате достъп'),
+                            message=gettext('Нямате права за тази страница.')), 403
 
 
 @app.errorhandler(429)
 def handle_429(e):
-    return render_template('error.html', code=429, title='Твърде много опити',
-                            message='Изчакайте малко и опитайте отново.'), 429
+    return render_template('error.html', code=429, title=gettext('Твърде много опити'),
+                            message=gettext('Изчакайте малко и опитайте отново.')), 429
 
 
 @app.errorhandler(500)
 def handle_500(e):
-    return render_template('error.html', code=500, title='Възникна грешка',
-                            message='Нещо се обърка от наша страна. Опитайте отново по-късно.'), 500
+    return render_template('error.html', code=500, title=gettext('Възникна грешка'),
+                            message=gettext('Нещо се обърка от наша страна. Опитайте отново по-късно.')), 500
 
 
 @app.errorhandler(CSRFError)
 def handle_csrf_error(e):
     # Expired/missing CSRF token - most often a form left open too long
     # across a login-session boundary, not an attack in the normal case.
-    return render_template('error.html', code=400, title='Изтекла сесия на формата',
-                            message='Презаредете страницата и опитайте отново.'), 400
+    return render_template('error.html', code=400, title=gettext('Изтекла сесия на формата'),
+                            message=gettext('Презаредете страницата и опитайте отново.')), 400
 
 
 if __name__ == '__main__':
@@ -9568,5 +15843,7 @@ if __name__ == '__main__':
         # this whole script in a subprocess, and without the guard both the
         # watcher and the reloaded process would start their own poller.
         start_shelly_history_poller()
+        start_solis_history_poller()
+        start_mqtt_listener()
 
     app.run(debug=debug_mode)

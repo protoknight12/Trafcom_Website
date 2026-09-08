@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Електрически табла - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Ново ел. табло</h3>
+        <p class="section-subtitle">Електромерите (Shelly) се монтират в табло - вижте "Консумация" за да свържете електромер към табло. Кои машини са свързани към таблото се посочва при редакция на самата машина.</p>
+        {% if rooms %}
+        <form action="{{ url_for('admin_add_panel') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="new_panel_name">Име на таблото</label>
+                <input type="text" id="new_panel_name" name="name" required placeholder="напр. Табло А">
+            </div>
+            <div class="form-group">
+                <label for="new_panel_room">Помещение</label>
+                <select id="new_panel_room" name="room_id" required>
+                    {% for r in rooms %}
+                    <option value="{{ r.id }}">{{ r.building.name }} / {{ r.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="new_panel_notes">Бележки (незадължително)</label>
+                <input type="text" id="new_panel_notes" name="notes" style="width: 100%;">
+            </div>
+            <button type="submit" class="btn-submit">Добави табло</button>
+        </form>
+        {% else %}
+        <p class="no-data text-center">Няма добавени помещения - <a href="{{ url_for('admin_buildings') }}">добавете първо сграда и помещение</a>.</p>
+        {% endif %}
+    </section>
+
+    <section class="admin-card">
+        <h3>Ел. табла</h3>
+        {% if panels %}
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Име</th>
+                    <th>Помещение</th>
+                    <th>Захранва се от</th>
+                    <th>Свързани машини</th>
+                    <th>Електромери</th>
+                    <th>Бележки</th>
+                    <th class="text-right">Схема</th>
+                    <th class="text-right">Действие</th>
+                    <th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for p in panels %}
+                <tr>
+                    <td><strong>{{ p.name }}</strong></td>
+                    <td>{{ p.room.building.name }} / {{ p.room.name }}</td>
+                    <td>{{ p.parent_panel.name if p.parent_panel else 'директно от мрежата' }}</td>
+                    <td>{{ p.wired_machines|map(attribute='name')|join(', ') or '—' }}</td>
+                    <td>{{ (p.shelly_devices|map(attribute='name')|list + p.modbus_devices|map(attribute='name')|list)|join(', ') or '—' }}</td>
+                    <td>{{ p.notes or '—' }}</td>
+                    <td class="text-right">
+                        <a href="{{ url_for('admin_panel_schematic', panel_id=p.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem; text-decoration:none;">Схема на таблото</a>
+                    </td>
+                    <td class="text-right">
+                        <a href="{{ url_for('edit_panel_window', panel_id=p.id) }}" onclick="window.open(this.href, 'editPanel', 'width=520,height=520'); return false;" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
+                    </td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_delete_panel', panel_id=p.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на табло &quot;{{ p.name|e }}&quot;?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма добавени табла.</p>
+        {% endif %}
+    </section>
+
+</main>
+
+</body>
+</html>

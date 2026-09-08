@@ -63,6 +63,50 @@
         .history-form .form-group { margin-bottom: 0; }
         .history-result { margin-top: 18px; }
         .history-error { color: var(--danger-text); }
+
+        .modbus-read-form { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin: 10px 0; }
+        .modbus-read-form .form-group { margin-bottom: 0; }
+        .modbus-read-form input, .modbus-read-form select {
+            padding: 6px 8px; background-color: var(--bg-input); color: var(--text-main);
+            border: 1px solid var(--border-color); border-radius: 4px; width: 110px;
+        }
+        .modbus-result-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        .modbus-result-table th, .modbus-result-table td { border: 1px solid var(--border-color); padding: 6px 10px; text-align: left; }
+        .modbus-error { color: var(--danger-text); font-size: 0.88rem; }
+
+        .solis-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-top: 16px; }
+        .solis-section { background: var(--bg-input); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); padding: 14px 16px; }
+        .solis-section-title { font-weight: 700; font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 10px; }
+        .solis-row { display: flex; justify-content: space-between; padding: 2px 0; font-size: 0.85rem; color: var(--text-muted); }
+        .solis-row span { color: var(--text-main); }
+        .solis-sub { font-weight: 700; font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; margin: 10px 0 3px 0; }
+        .solis-sub:first-of-type { margin-top: 0; }
+        .battery-gauge { width: 100%; height: 20px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 10px; overflow: hidden; margin: 6px 0; }
+        .battery-gauge-fill { height: 100%; background: linear-gradient(90deg, #10b981, #34d399); transition: width 0.4s ease; }
+        .battery-gauge-fill.low { background: linear-gradient(90deg, #ef4444, #f87171); }
+        .battery-gauge-fill.mid { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+        .battery-soc-label { display: flex; justify-content: space-between; font-size: 1rem; font-weight: 700; margin-bottom: 2px; }
+        .battery-direction { font-size: 0.8rem; font-weight: 600; padding: 3px 10px; border-radius: 10px; display: inline-block; margin-top: 8px; }
+        .battery-direction.charge { background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid #10b981; }
+        .battery-direction.discharge { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid #ef4444; }
+        .battery-direction.idle { background: rgba(148,163,184,0.15); color: var(--text-muted); border: 1px solid var(--border-color); }
+
+        /* Device-type hero banner - icon (see iconBox() in JS) as a
+           translucent watermark with the name/state/headline number
+           overlaid on top, per device kind. */
+        .device-hero {
+            position: relative;
+            display: flex; justify-content: space-between; align-items: flex-start;
+            flex-wrap: wrap; gap: 12px;
+            padding: 16px 18px; margin: -4px -4px 18px -4px;
+            border-radius: var(--border-radius-sm);
+            overflow: hidden;
+            background: linear-gradient(135deg, var(--bg-input) 0%, var(--bg-surface) 100%);
+            border: 1px solid var(--border-color);
+        }
+        .device-hero-body { position: relative; z-index: 1; }
+        .device-hero-name { font-size: 1.15rem; font-weight: 700; }
+        .device-hero-sub { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; }
     </style>
 </head>
 <body>
@@ -71,15 +115,28 @@
 <main class="admin-container" style="max-width: 1100px; margin: 30px auto; padding: 0 15px;">
 
     {% if focus_host %}
-    <p><a href="{{ url_for('admin_power') }}">&larr; Всички машини</a></p>
+    <p><a href="{{ url_for('admin_power') }}" id="backLink">&larr; Назад</a></p>
     <h2 style="margin-bottom: 6px;">{{ focus_name }}</h2>
     {% else %}
     <h2 style="margin-bottom: 6px;">Консумация на машините</h2>
     {% endif %}
     <p class="section-subtitle" style="margin-top: 0;">
-        Данни на живо от електромерите Shelly в цеха. Само отчитане &mdash; от тази страница не може да
+        Данни на живо от електромерите (Shelly и Modbus) в цеха. Само отчитане &mdash; от тази страница не може да
         се включва или изключва машина. <span id="lastUpdate" class="text-muted"></span>
     </p>
+    {% if devices or modbus_devices %}
+    <div class="text-muted text-small" style="margin: -8px 0 14px 0;">
+        Интервал на опресняване:
+        <select id="pollIntervalSelect" style="padding: 3px 6px; background-color: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); border-radius: 4px;">
+            <option value="1">1 сек.</option>
+            <option value="2">2 сек.</option>
+            <option value="5">5 сек.</option>
+            <option value="10">10 сек.</option>
+            <option value="30">30 сек.</option>
+            <option value="60">60 сек.</option>
+        </select>
+    </div>
+    {% endif %}
 
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
@@ -101,8 +158,30 @@
                 <input type="text" name="name" placeholder="напр. Лазер CO2" maxlength="100">
             </div>
             <div class="form-group">
-                <label>IP адрес</label>
-                <input type="text" name="host" placeholder="напр. 192.168.18.80" maxlength="100" required>
+                <label>Вид връзка</label>
+                <select name="connection_type">
+                    {% for key, label in connection_types.items() %}
+                    <option value="{{ key }}" {% if key == 'ip' %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>IP адрес (за HTTP)</label>
+                <input type="text" name="host" placeholder="напр. 192.168.18.80" maxlength="100">
+            </div>
+            <div class="form-group">
+                <label>MQTT тема (за живо предаване по MQTT)</label>
+                <input type="text" name="mqtt_topic" placeholder="напр. shellies/thermopump_em3" maxlength="150">
+            </div>
+            <p class="text-muted text-small" style="width: 100%; margin: -8px 0 8px 0;">За "IP (HTTP)" е нужен IP адрес, за "MQTT" - MQTT тема. "RPC през UDP" и "CoIoT" все още не са реализирани в приложението (проверено - няма как да получим пакети по тях от този dev сървър в момента).</p>
+            <div class="form-group">
+                <label>Монтиран в ел. табло (по избор)</label>
+                <select name="panel_id">
+                    <option value="">-- няма --</option>
+                    {% for p in panels %}
+                    <option value="{{ p.id }}">{{ p.room.name }} / {{ p.name }}</option>
+                    {% endfor %}
+                </select>
             </div>
             <div class="form-group">
                 <label>Свързани машини (по избор, може повече от една)</label>
@@ -119,14 +198,88 @@
             <button type="submit" class="btn-submit">Добави машина</button>
         </form>
 
-        {% if devices %}
+        <form action="{{ url_for('admin_add_modbus_device') }}" method="POST" class="admin-form" style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border-color);">
+            {% include 'partials/csrf_field.html' %}
+            <p class="section-subtitle" style="width: 100%; margin-top: 0;">Ново Modbus TCP устройство (DTSU666 електромер или Solis S6 инвертор). Регистровите карти на двата модела са потвърдени и се показват автоматично в живия изглед по-долу.</p>
+            <div class="form-group">
+                <label>Име</label>
+                <input type="text" name="name" placeholder="напр. DTSU666 - главно табло" maxlength="100">
+            </div>
+            <div class="form-group">
+                <label>Модел</label>
+                <select name="device_type" class="new-modbus-type" onchange="toggleNewModbusFields(this)">
+                    {% for key, label in modbus_device_types.items() %}
+                    <option value="{{ key }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group new-modbus-real-fields">
+                <label>IP адрес</label>
+                <input type="text" name="host" placeholder="напр. 192.168.18.90" maxlength="100">
+            </div>
+            <div class="form-group new-modbus-real-fields">
+                <label>Порт</label>
+                <input type="number" name="port" value="502">
+            </div>
+            <div class="form-group new-modbus-real-fields">
+                <label>Unit / Slave ID</label>
+                <input type="number" name="unit_id" value="1">
+            </div>
+            <div class="form-group new-modbus-virtual-fields" style="display:none;">
+                <label>Измерва се през (инвертор)</label>
+                <select name="source_device_id">
+                    <option value="">-- изберете инвертор --</option>
+                    {% for d in modbus_devices if d.device_type == 'solis_s6' %}
+                    <option value="{{ d.id }}">{{ d.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Монтирано в ел. табло (по избор)</label>
+                <select name="panel_id">
+                    <option value="">-- няма --</option>
+                    {% for p in panels %}
+                    <option value="{{ p.id }}">{{ p.room.name }} / {{ p.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label>Бележки (незадължително)</label>
+                <input type="text" name="notes" style="width: 100%;">
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label>Свързани машини (по избор, може повече от една)</label>
+                <div class="machine-checklist">
+                    {% for m in machines %}
+                    <label class="machine-checklist-item">
+                        <input type="checkbox" name="machine_ids" value="{{ m.id }}"> {{ m.name }}
+                    </label>
+                    {% else %}
+                    <span class="text-muted text-small">Няма добавени машини в списъка с машини.</span>
+                    {% endfor %}
+                </div>
+            </div>
+            <button type="submit" class="btn-submit">Добави Modbus устройство</button>
+        </form>
+        <script>
+            // "Виртуален измервател" няма собствена Modbus връзка - показва
+            // "Измерва се през" вместо IP/порт/unit id (виж
+            // ModbusDevice.source_device_id в app.py).
+            function toggleNewModbusFields(sel) {
+                const isVirtual = sel.value === 'solis_grid_meter';
+                document.querySelectorAll('.new-modbus-real-fields').forEach(el => el.style.display = isVirtual ? 'none' : '');
+                document.querySelectorAll('.new-modbus-virtual-fields').forEach(el => el.style.display = isVirtual ? '' : 'none');
+            }
+        </script>
+
+        {% if devices or modbus_devices %}
         <div class="table-responsive" style="margin-top: 18px;">
             <table class="data-table">
                 <thead>
                 <tr>
-                    <th>Име</th>
-                    <th>IP адрес</th>
+                    <th>Устройство</th>
                     <th>Свързана машина</th>
+                    <th>Диагностика</th>
                     <th></th>
                 </tr>
                 </thead>
@@ -135,14 +288,28 @@
                 <tr>
                     <td>
                         <form action="{{ url_for('admin_power_rename_device', device_id=d.id) }}" method="POST"
-                              style="display:flex; gap: 6px;">
+                              style="display:flex; flex-direction: column; gap: 6px;">
                             {% include 'partials/csrf_field.html' %}
                             <input type="text" name="name" value="{{ d.name }}" maxlength="100" required
+                                   class="rename-input" style="width: 140px;" placeholder="Име">
+                            <select name="connection_type" style="width: 140px;">
+                                {% for key, label in connection_types.items() %}
+                                <option value="{{ key }}" {% if d.connection_type == key %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                            <input type="text" name="host" value="{{ d.host or '' }}" placeholder="IP адрес"
                                    class="rename-input" style="width: 140px;">
+                            <input type="text" name="mqtt_topic" value="{{ d.mqtt_topic or '' }}" placeholder="MQTT тема (по избор)"
+                                   class="rename-input" style="width: 140px;">
+                            <select name="panel_id" style="width: 140px;">
+                                <option value="">-- без табло --</option>
+                                {% for p in panels %}
+                                <option value="{{ p.id }}" {% if d.panel_id == p.id %}selected{% endif %}>{{ p.room.name }} / {{ p.name }}</option>
+                                {% endfor %}
+                            </select>
                             <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Запази</button>
                         </form>
                     </td>
-                    <td>{{ d.host }}</td>
                     <td>
                         <form action="{{ url_for('admin_power_set_device_machines', device_id=d.id) }}" method="POST">
                             {% include 'partials/csrf_field.html' %}
@@ -159,9 +326,96 @@
                             <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem; margin-top: 6px;">Запази</button>
                         </form>
                     </td>
+                    <td class="text-muted text-small">&mdash;</td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_power_delete_device', device_id=d.id) }}" method="POST"
                               onsubmit="return confirm('Премахване на машина &quot;{{ d.name|e }}&quot;?');"
+                              style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Премахни</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                {% for d in modbus_devices if d.device_type != 'solis_s6' %}
+                {% set form_id = 'modbus-form-' ~ d.id %}
+                <tr>
+                    <td>
+                        <form id="{{ form_id }}" action="{{ url_for('admin_update_modbus_device', device_id=d.id) }}" method="POST">
+                            {% include 'partials/csrf_field.html' %}
+                        </form>
+                        <div style="display:flex; flex-direction: column; gap: 6px;">
+                            <input type="text" name="name" form="{{ form_id }}" value="{{ d.name }}" maxlength="100" required
+                                   class="rename-input" style="width: 140px;" placeholder="Име">
+                            <input type="text" name="host" form="{{ form_id }}" value="{{ d.host }}" placeholder="IP адрес" required
+                                   class="rename-input" style="width: 140px;">
+                            <input type="number" name="port" form="{{ form_id }}" value="{{ d.port }}" placeholder="Порт"
+                                   class="rename-input" style="width: 140px;">
+                            <input type="number" name="unit_id" form="{{ form_id }}" value="{{ d.unit_id }}" placeholder="Unit ID"
+                                   class="rename-input" style="width: 140px;">
+                            <select name="device_type" form="{{ form_id }}" style="width: 140px;">
+                                {% for key, label in modbus_device_types.items() %}
+                                <option value="{{ key }}" {% if d.device_type == key %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                            {% if d.device_type == 'solis_grid_meter' %}
+                            <select name="source_device_id" form="{{ form_id }}" style="width: 140px;" title="Измерва се през (само за виртуален измервател)">
+                                <option value="">-- изберете инвертор --</option>
+                                {% for sd in modbus_devices if sd.device_type == 'solis_s6' %}
+                                <option value="{{ sd.id }}" {% if d.source_device_id == sd.id %}selected{% endif %}>{{ sd.name }}</option>
+                                {% endfor %}
+                            </select>
+                            {% endif %}
+                            <input type="text" name="notes" form="{{ form_id }}" value="{{ d.notes or '' }}" placeholder="Бележки (по избор)"
+                                   class="rename-input" style="width: 140px;">
+                            <select name="panel_id" form="{{ form_id }}" style="width: 140px;">
+                                <option value="">-- без табло --</option>
+                                {% for p in panels %}
+                                <option value="{{ p.id }}" {% if d.panel_id == p.id %}selected{% endif %}>{{ p.room.name }} / {{ p.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </td>
+                    <td>
+                        <div class="machine-checklist">
+                            {% for m in machines %}
+                            <label class="machine-checklist-item">
+                                <input type="checkbox" name="machine_ids" form="{{ form_id }}" value="{{ m.id }}"
+                                       {% if m in d.machines %}checked{% endif %}> {{ m.name }}
+                            </label>
+                            {% else %}
+                            <span class="text-muted text-small">Няма добавени машини в списъка с машини.</span>
+                            {% endfor %}
+                        </div>
+                        <button type="submit" form="{{ form_id }}" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem; margin-top: 6px;">Запази</button>
+                    </td>
+                    <td>
+                        <details>
+                            <summary class="text-small text-muted" style="cursor: pointer;">Сурови регистри</summary>
+                            <form class="modbus-read-form" data-device-id="{{ d.id }}" data-read-url="{{ url_for('admin_modbus_read_registers', device_id=d.id) }}">
+                                <div class="form-group">
+                                    <label>Адрес</label>
+                                    <input type="number" name="address" value="0" min="0">
+                                </div>
+                                <div class="form-group">
+                                    <label>Брой</label>
+                                    <input type="number" name="count" value="10" min="1" max="64">
+                                </div>
+                                <div class="form-group">
+                                    <label>Тип</label>
+                                    <select name="input_type">
+                                        <option value="holding">Holding (0x03)</option>
+                                        <option value="input">Input (0x04)</option>
+                                    </select>
+                                </div>
+                                <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Прочети</button>
+                            </form>
+                            <div class="modbus-result-area" data-result-for="{{ d.id }}"></div>
+                        </details>
+                    </td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_delete_modbus_device', device_id=d.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на &quot;{{ d.name|e }}&quot;?');"
                               style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Премахни</button>
@@ -176,7 +430,144 @@
     </section>
     {% endif %}
 
-    {% if not devices %}
+    {% set solis_devices = modbus_devices | selectattr('device_type', 'equalto', 'solis_s6') | list %}
+    {% if solis_devices %}
+    <section class="admin-card">
+        <h3 style="margin-top: 0;">Инвертори</h3>
+        <p class="section-subtitle" style="margin-top: 0;">Solis инверторите са отделени от общото управление по-горе - тук може и да местите таблото им в друго помещение (за картата на фабриката), независимо от захранващите машини.</p>
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                <tr>
+                    <th>Устройство</th>
+                    <th>Помещение</th>
+                    <th>Портове &rarr; табла</th>
+                    <th>Свързана машина</th>
+                    <th>Диагностика</th>
+                    <th></th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for d in solis_devices %}
+                {% set form_id = 'modbus-form-' ~ d.id %}
+                {% set ports_form_id = 'ports-form-' ~ d.id %}
+                <tr>
+                    <td>
+                        <form id="{{ form_id }}" action="{{ url_for('admin_update_modbus_device', device_id=d.id) }}" method="POST">
+                            {% include 'partials/csrf_field.html' %}
+                        </form>
+                        <div style="display:flex; flex-direction: column; gap: 6px;">
+                            <input type="text" name="name" form="{{ form_id }}" value="{{ d.name }}" maxlength="100" required
+                                   class="rename-input" style="width: 140px;" placeholder="Име">
+                            <input type="text" name="host" form="{{ form_id }}" value="{{ d.host }}" placeholder="IP адрес" required
+                                   class="rename-input" style="width: 140px;">
+                            <input type="number" name="port" form="{{ form_id }}" value="{{ d.port }}" placeholder="Порт"
+                                   class="rename-input" style="width: 140px;">
+                            <input type="number" name="unit_id" form="{{ form_id }}" value="{{ d.unit_id }}" placeholder="Unit ID"
+                                   class="rename-input" style="width: 140px;">
+                            <input type="hidden" name="device_type" form="{{ form_id }}" value="solis_s6">
+                            <input type="text" name="notes" form="{{ form_id }}" value="{{ d.notes or '' }}" placeholder="Бележки (по избор)"
+                                   class="rename-input" style="width: 140px;">
+                            <select name="panel_id" form="{{ form_id }}" style="width: 140px;">
+                                <option value="">-- без табло --</option>
+                                {% for p in panels %}
+                                <option value="{{ p.id }}" {% if d.panel_id == p.id %}selected{% endif %}>{{ p.room.name }} / {{ p.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </td>
+                    <td>
+                        {% if d.panel %}
+                        <p class="text-small text-muted" style="margin: 0 0 6px 0;">Сега: {{ d.panel.room.building.name }} / {{ d.panel.room.name }}</p>
+                        <form action="{{ url_for('admin_update_panel_room', panel_id=d.panel.id) }}" method="POST" style="display:flex; flex-direction: column; gap: 6px;">
+                            {% include 'partials/csrf_field.html' %}
+                            <select name="room_id" style="width: 140px;">
+                                {% for r in rooms %}
+                                <option value="{{ r.id }}" {% if d.panel.room_id == r.id %}selected{% endif %}>{{ r.building.name }} / {{ r.name }}</option>
+                                {% endfor %}
+                            </select>
+                            <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Премести</button>
+                        </form>
+                        {% else %}
+                        <span class="text-muted text-small">Няма свързано табло за картата - изберете от "Устройство".</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <form id="{{ ports_form_id }}" action="{{ url_for('admin_update_device_ports', device_id=d.id) }}" method="POST" style="display:flex; flex-direction: column; gap: 6px;">
+                            {% include 'partials/csrf_field.html' %}
+                            {% for port_key, port_label, current_panel_id in [
+                                ('grid_panel_id', 'Мрежа', d.grid_panel_id),
+                                ('main_panel_id', 'Основен', d.main_panel_id),
+                                ('backup_panel_id', 'Бекъп', d.backup_panel_id),
+                                ('generator_panel_id', 'Генератор', d.generator_panel_id),
+                            ] %}
+                            <div style="display:flex; align-items:center; gap:6px;">
+                                <label class="text-small text-muted" style="width: 62px; flex-shrink:0;">{{ port_label }}</label>
+                                <select name="{{ port_key }}" style="width: 140px;">
+                                    <option value="">-- няма --</option>
+                                    {% for p in panels %}
+                                    <option value="{{ p.id }}" {% if current_panel_id == p.id %}selected{% endif %}>{{ p.room.name }} / {{ p.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            {% endfor %}
+                            <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Запази портовете</button>
+                        </form>
+                    </td>
+                    <td>
+                        <div class="machine-checklist">
+                            {% for m in machines %}
+                            <label class="machine-checklist-item">
+                                <input type="checkbox" name="machine_ids" form="{{ form_id }}" value="{{ m.id }}"
+                                       {% if m in d.machines %}checked{% endif %}> {{ m.name }}
+                            </label>
+                            {% else %}
+                            <span class="text-muted text-small">Няма добавени машини в списъка с машини.</span>
+                            {% endfor %}
+                        </div>
+                        <button type="submit" form="{{ form_id }}" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem; margin-top: 6px;">Запази</button>
+                    </td>
+                    <td>
+                        <details>
+                            <summary class="text-small text-muted" style="cursor: pointer;">Сурови регистри</summary>
+                            <form class="modbus-read-form" data-device-id="{{ d.id }}" data-read-url="{{ url_for('admin_modbus_read_registers', device_id=d.id) }}">
+                                <div class="form-group">
+                                    <label>Адрес</label>
+                                    <input type="number" name="address" value="0" min="0">
+                                </div>
+                                <div class="form-group">
+                                    <label>Брой</label>
+                                    <input type="number" name="count" value="10" min="1" max="64">
+                                </div>
+                                <div class="form-group">
+                                    <label>Тип</label>
+                                    <select name="input_type">
+                                        <option value="holding">Holding (0x03)</option>
+                                        <option value="input">Input (0x04)</option>
+                                    </select>
+                                </div>
+                                <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Прочети</button>
+                            </form>
+                            <div class="modbus-result-area" data-result-for="{{ d.id }}"></div>
+                        </details>
+                    </td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_delete_modbus_device', device_id=d.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на &quot;{{ d.name|e }}&quot;?');"
+                              style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Премахни</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    {% endif %}
+
+    {% if not devices and not modbus_devices %}
     <section class="admin-card">
         <p class="no-data text-center">Няма добавени машини. Добавете първата от формата по-горе.</p>
     </section>
@@ -197,9 +588,14 @@
                 <div class="spark-caption">Обща мощност на цеха, последните ~3 минути</div>
                 <div class="summary-breakdown" id="summaryBreakdown"></div>
             </section>
+            <section class="admin-card" id="batteriesCard" style="display: none;">
+                <h3 style="margin-top: 0;">Батерии</h3>
+                <p class="section-subtitle" style="margin-top: 0;">Отделени от инверторните картички по-долу - едно батерийно състояние (агрегирано + по БМС порт) на инвертор.</p>
+                <div class="solis-grid" id="batteriesBody"></div>
+            </section>
             <div id="meters"></div>
 
-            {% if focus_host %}
+            {% if focus_host and focus_is_shelly %}
             <section class="admin-card" id="historySection">
                 <h3 style="margin-top: 0;">История за период</h3>
                 <p class="section-subtitle" style="margin-top: 0;">
@@ -234,12 +630,31 @@
 
 </main>
 
-{% if devices %}
+{% if devices or modbus_devices %}
 <script>
     // Poll the server-side feed; the meters themselves are never contacted
-    // from the browser (they're LAN-only and have no auth).
-    const POLL_MS = 2000;
-    const HISTORY = 90;            // ~3 minutes of samples at POLL_MS
+    // from the browser (they're LAN-only and have no auth). Interval is
+    // user-selectable (see #pollIntervalSelect below) - some Modbus gateways
+    // on this page (e.g. the Solis WiFi stick) are slow/flaky under back-
+    // to-back reads, so a slower interval can be picked to avoid piling up
+    // requests. Remembered per-browser via localStorage.
+    const POLL_INTERVAL_KEY = 'admin_power_poll_seconds';
+    const pollIntervalSelect = document.getElementById('pollIntervalSelect');
+    function loadPollSeconds() {
+        try {
+            const saved = Number(localStorage.getItem(POLL_INTERVAL_KEY));
+            if (saved && pollIntervalSelect && [...pollIntervalSelect.options].some(o => Number(o.value) === saved)) {
+                return saved;
+            }
+        } catch (e) { /* localStorage unavailable - fall through to default */ }
+        return 2;
+    }
+    let POLL_MS = loadPollSeconds() * 1000;
+    if (pollIntervalSelect) pollIntervalSelect.value = String(POLL_MS / 1000);
+    // Sample count is derived from the interval so the spark chart always
+    // covers ~3 minutes of wall-clock time, matching its "последните ~3
+    // минути" caption regardless of which interval is selected.
+    let HISTORY = Math.max(10, Math.round(180000 / POLL_MS));
     const history = {};            // host -> array of total_act_power readings
     const totalHistory = [];       // sum across all online machines, same window
     const container = document.getElementById('meters');
@@ -251,6 +666,49 @@
     const FOCUS_HOST = {{ focus_host|tojson }};
 
     const fmt = (v, digits) => (v === null || v === undefined) ? '—' : Number(v).toFixed(digits);
+
+    // Flat-line device-type icons (plain <svg>, no positioning of their own -
+    // every call site wraps them in a div that sets position/size/opacity/
+    // color, see iconBox() below) - own artwork rather than hot-linked
+    // manufacturer photos, so it can't break and stays on-theme (currentColor).
+    const ICON_INVERTER = `<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="14" y="6" width="36" height="52" rx="4" stroke="currentColor" stroke-width="2.5"/>
+        <circle cx="32" cy="20" r="7" stroke="currentColor" stroke-width="2.5"/>
+        <path d="M32 15v10M27 20h10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M20 34h9l-3 8h9l-9 12 3-10h-9z" fill="currentColor"/>
+        <path d="M20 50h24M20 44h10M34 44h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </svg>`;
+    const ICON_BATTERY = `<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="10" y="10" width="38" height="12" rx="2.5" stroke="currentColor" stroke-width="2.5"/>
+        <rect x="10" y="26" width="38" height="12" rx="2.5" stroke="currentColor" stroke-width="2.5"/>
+        <rect x="10" y="42" width="38" height="12" rx="2.5" stroke="currentColor" stroke-width="2.5"/>
+        <rect x="48" y="14" width="5" height="4" fill="currentColor"/>
+        <rect x="48" y="30" width="5" height="4" fill="currentColor"/>
+        <rect x="48" y="46" width="5" height="4" fill="currentColor"/>
+        <path d="M31 14l-4 6h6l-4 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
+    const ICON_METER = `<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="32" cy="34" r="24" stroke="currentColor" stroke-width="2.5"/>
+        <path d="M18 34a14 14 0 0 1 28 0" stroke="currentColor" stroke-width="2.5"/>
+        <path d="M32 34l9-11" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+        <circle cx="32" cy="34" r="2.5" fill="currentColor"/>
+        <rect x="24" y="6" width="16" height="8" rx="2" stroke="currentColor" stroke-width="2.5"/>
+    </svg>`;
+    const ICON_PLUG = `<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M22 26V12M42 26V12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M16 26h32v10a16 16 0 0 1-32 0z" stroke="currentColor" stroke-width="2.5"/>
+        <path d="M32 52v8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+    </svg>`;
+    function deviceIcon(d) {
+        if (d.kind === 'solis') return ICON_INVERTER;
+        if (d.kind === 'modbus' || d.kind === 'solis_grid_meter') return ICON_METER;
+        return ICON_PLUG;
+    }
+    // Positions/sizes/tints an icon absolutely within its nearest positioned
+    // ancestor - the caller's element needs position:relative + overflow:hidden.
+    function iconBox(svg, { size = 130, right = -10, top = '50%', translateY = '-50%', opacity = 0.14, color = 'var(--accent-primary)' } = {}) {
+        return `<div style="position:absolute; right:${right}px; top:${top}; transform:translateY(${translateY}); width:${size}px; height:${size}px; opacity:${opacity}; color:${color}; pointer-events:none;">${svg}</div>`;
+    }
 
     // Same three states/labels as templates/machines.html's Machine.status badge.
     const MACHINE_STATUS_LABELS = { idle: 'Свободна', running: 'Работи', maintenance: 'Поддръжка' };
@@ -326,12 +784,164 @@
         </div>`;
     }
 
+    // Solis S6 hybrid inverter card - PV strings, AC output, battery (SOC
+    // gauge + charge/discharge), household/backup load, meter. See
+    // _solis_snapshot() in app.py for where every field comes from.
+    const DIRECTION_LABELS = { charge: 'Зарежда се', discharge: 'Разрежда се', idle: 'В покой' };
+    function batteryGaugeClass(soc) {
+        if (soc === null || soc === undefined) return '';
+        if (soc < 20) return 'low';
+        if (soc < 50) return 'mid';
+        return '';
+    }
+    // Each entry is one MPPT tracker's reading - the tracker combines 2
+    // physical strings in parallel, so this is shared between them, not a
+    // per-string figure (see SolarPanel's docstring in app.py).
+    function renderPvStrings(strings) {
+        return strings.map((s, i) => `
+            <div class="solis-row">MPPT${i + 1} <span title="Общо за стрингове ${i * 2 + 1} и ${i * 2 + 2}">${fmt(s.voltage, 1)} V &middot; ${fmt(s.current, 1)} A</span></div>
+        `).join('');
+    }
+    // {deviceId::port -> stack name} - just a friendly label lookup (see
+    // BatteryStack in app.py); the live reading itself always comes from
+    // this same device's own battery_groups regardless of whether a stack
+    // has been catalogued for it.
+    const STACK_NAMES = {
+        {% for st in battery_stacks %}'{{ st.inverter_device_id }}::{{ st.bms_port }}': {{ st.name | tojson }},
+        {% endfor %}
+    };
+    function renderBatteryGroup(g, idx, deviceId, port1) {
+        const stackName = STACK_NAMES[deviceId + '::' + (idx + 1)];
+        const label = 'БМС порт ' + (idx + 1) + (stackName ? ' &middot; ' + stackName : '') + ' &middot; 11&times; Dyness Stack100';
+        // Port 1's soc/voltage/current/power/direction come from the
+        // inverter's main battery block (registers 33139/33133/33134/33149,
+        // passed in as `port1` - see renderBatteryBlock); port 2's are
+        // registers 34278/34275/34276, already sitting directly on `g`.
+        // CONFIRMED 2026-09-06 (live cross-check against SolisCloud while
+        // the two ports genuinely differed, 94%/98%, 587-589V) for soc and
+        // voltage - there is no single combined/aggregate reading for any
+        // of these, two independent per-port ones all along ("не показва
+        // коректно soc на батериите", "добавим... напрежението за всяка
+        // батерия", "направи същото и за токовете и мощността"). Current/
+        // power for port 2 are EXPERIMENTAL still (see
+        // SOLIS_BLOCK_BATTERY2_EXTRA's docstring in app.py).
+        const d = idx === 0 ? port1 : g;
+        return `
+            <div class="solis-sub">${label}</div>
+            <div class="solis-row">Заряд <span>${fmt(d.soc, 0)}% (SOH ${fmt(g.soh, 0)}%)</span></div>
+            <div class="solis-row">Напрежение / Ток <span>${fmt(d.voltage, 1)} V / ${fmt(d.current, 1)} A</span></div>
+            <div class="solis-row">Мощност <span>${fmt(Math.abs(d.power), 0)} W (${DIRECTION_LABELS[d.direction] || d.direction || '—'})</span></div>
+            <div class="solis-row">Клетка мин/макс <span>${fmt(g.cell_voltage_min, 3)} / ${fmt(g.cell_voltage_max, 3)} V</span></div>
+            <div class="solis-row">Температура мин/макс <span>${fmt(g.temperature_min, 1)} / ${fmt(g.temperature_max, 1)} &deg;C</span></div>
+            <div class="solis-row">Цикли на зареждане <span>${fmt(g.cycles, 0)}</span></div>`;
+    }
+    // Batteries live in their own top-level "Батерии" card (#batteriesBody),
+    // separate from each inverter's own live card below - one block per
+    // Solis device: its aggregate battery reading (soc/voltage/direction)
+    // plus the 2 БМС-port breakdowns (see _solis_snapshot()'s
+    // 'battery'/'battery_groups' in app.py).
+    function renderBatteryBlock(d) {
+        const b = d.battery, groups = d.battery_groups;
+        if (!d.online || !b) {
+            return `<div class="solis-section"><div class="solis-section-title">${d.name}</div><p class="no-data" style="margin:0;">Без връзка.</p></div>`;
+        }
+        // The top summary must reflect BOTH BMS ports of this inverter, not
+        // just port 1 - explicit bug report: "общото зареждане на инвертора
+        // ... показва само числото на първия бмс". `b` above (soc/voltage/
+        // current/power/direction) is ENTIRELY port 1's own reading
+        // (registers 33139/33133/33134/33149 - see renderBatteryGroup's own
+        // docstring and _battery_stack_live_data() in app.py); it was never
+        // a true combined figure, so reusing it directly here silently
+        // dropped port 2 whenever one was actually wired and diverging.
+        // Power/current sum plainly (same DC bus feeding one inverter
+        // battery stage); SOC/voltage are averaged since neither is a
+        // "total" quantity across two independent stacks. today/total
+        // charge-discharge kWh counters have no known separate port-2
+        // register yet (see SOLIS_BLOCK_BATTERY2_EXTRA in app.py) so those
+        // stay port-1-only for now - labeled as such below rather than
+        // silently implying they cover both ports too.
+        const port2 = groups && groups[1] && groups[1].soc != null ? groups[1] : null;
+        const soc = port2 ? (b.soc + port2.soc) / 2 : b.soc;
+        const power = port2 ? b.power + port2.power : b.power;
+        const current = port2 ? b.current + port2.current : b.current;
+        const voltage = port2 ? (b.voltage + port2.voltage) / 2 : b.voltage;
+        const direction = power > 0 ? 'charge' : power < 0 ? 'discharge' : 'idle';
+        return `
+            <div class="solis-section" style="position: relative; overflow: hidden;">
+                ${iconBox(ICON_BATTERY, { size: 74, right: -14, top: '-10px', translateY: '0', opacity: 0.12, color: '#10b981' })}
+                <div class="solis-section-title">${d.name} &middot; 2 порта &times; 11&times; Dyness Stack100 (22 общо)</div>
+                <div class="battery-soc-label"><span>${fmt(soc, 0)}% заряд${port2 ? ' &middot; средно за 2-та порта' : ''}</span><span class="text-muted">SOH ${fmt(b.soh, 0)}%</span></div>
+                <div class="battery-gauge"><div class="battery-gauge-fill ${batteryGaugeClass(soc)}" style="width: ${soc === null ? 0 : soc}%;"></div></div>
+                <span class="battery-direction ${direction}">${DIRECTION_LABELS[direction] || direction} &middot; ${fmt(Math.abs(power), 0)} W${port2 ? ' &middot; 2-та порта' : ''}</span>
+                <div class="solis-row" style="margin-top: 10px;">Напрежение <span>${fmt(voltage, 1)} V</span></div>
+                <div class="solis-row">Ток <span>${fmt(current, 1)} A</span></div>
+                <div class="solis-row">Заредено днес (БМС 1) <span>${fmt(b.today_charge_kwh, 1)} kWh</span></div>
+                <div class="solis-row">Разредено днес (БМС 1) <span>${fmt(b.today_discharge_kwh, 1)} kWh</span></div>
+                <div class="solis-row">Общо заредено/разредено (БМС 1) <span>${fmt(b.total_charge_kwh, 0)} / ${fmt(b.total_discharge_kwh, 0)} kWh</span></div>
+                ${groups && groups.length ? groups.map((g, idx) => renderBatteryGroup(g, idx, d.device_id, b)).join('') : ''}
+            </div>`;
+    }
+    function renderBatteries(allDevices) {
+        const solis = allDevices.filter(d => d.kind === 'solis');
+        const card = document.getElementById('batteriesCard');
+        if (!solis.length) { card.style.display = 'none'; return; }
+        card.style.display = '';
+        document.getElementById('batteriesBody').innerHTML = solis.map(renderBatteryBlock).join('');
+    }
+
+    function renderSolisBody(d) {
+        const pv = d.pv, ac = d.ac, load = d.load, meter = d.meter, gen = d.generator;
+        return `
+            <div class="total-row">
+                <span class="total-power">${fmt(d.total_power, 0)}</span>
+                <span class="total-unit">W активна мощност към мрежата (+ подава, &minus; тегли)</span>
+            </div>
+            <canvas class="spark" id="spark-${d.host}"></canvas>
+            <div class="spark-caption">Мощност към мрежата, последните ~3 минути</div>
+            <div class="solis-grid">
+                <div class="solis-section">
+                    <div class="solis-section-title">Соларно (PV) &middot; 4 MPPT &times; 2 стринга</div>
+                    <div class="channel-power" style="margin-bottom: 8px;">${fmt(pv.power, 0)} <span class="total-unit">W в момента</span></div>
+                    ${renderPvStrings(pv.strings)}
+                    <div class="solis-row" style="margin-top: 8px;">Днес <span>${fmt(pv.today_kwh, 1)} kWh</span></div>
+                    <div class="solis-row">Вчера <span>${fmt(pv.yesterday_kwh, 1)} kWh</span></div>
+                    <div class="solis-row">Този месец <span>${fmt(pv.month_kwh, 0)} kWh</span></div>
+                    <div class="solis-row">Общо <span>${fmt(pv.total_kwh, 0)} kWh</span></div>
+                </div>
+                <div class="solis-section">
+                    <div class="solis-section-title">AC изход</div>
+                    <div class="solis-row">Активна мощност <span>${fmt(ac.active_power, 0)} W</span></div>
+                    <div class="solis-row">Реактивна мощност <span>${fmt(ac.reactive_power, 0)} VAR</span></div>
+                    <div class="solis-row">Пълна мощност <span>${fmt(ac.apparent_power, 0)} VA</span></div>
+                    <div class="solis-row">Честота <span>${fmt(ac.frequency, 2)} Hz</span></div>
+                    <div class="solis-row" style="margin-top: 8px;">Фаза A <span>${fmt(ac.voltage_a, 1)} V &middot; ${fmt(ac.current_a, 1)} A</span></div>
+                    <div class="solis-row">Фаза B <span>${fmt(ac.voltage_b, 1)} V &middot; ${fmt(ac.current_b, 1)} A</span></div>
+                    <div class="solis-row">Фаза C <span>${fmt(ac.voltage_c, 1)} V &middot; ${fmt(ac.current_c, 1)} A</span></div>
+                </div>
+                <div class="solis-section">
+                    <div class="solis-section-title">Портове</div>
+                    <div class="solis-sub" style="margin-top:0;">Мрежа (Grid)</div>
+                    <div class="solis-row">Мощност <span>${fmt(meter.power, 0)} W</span></div>
+                    <div class="solis-row">Напрежение / Ток <span>${fmt(meter.voltage, 1)} V / ${fmt(meter.current, 1)} A</span></div>
+                    <div class="solis-row">Общо <span>${fmt(meter.total_energy_kwh, 1)} kWh</span></div>
+                    <div class="solis-sub">Основен (инвертор + мрежа)</div>
+                    <div class="solis-row">Мощност <span>${fmt(load.household_w, 0)} W</span></div>
+                    <div class="solis-sub">Бекъп (само инвертор)</div>
+                    <div class="solis-row">Мощност <span>${fmt(load.backup_w, 0)} W</span></div>
+                    <div class="solis-sub">Генератор (смарт порт)</div>
+                    <div class="solis-row">Мощност A/B/C <span>${fmt(gen.power_a, 0)} / ${fmt(gen.power_b, 0)} / ${fmt(gen.power_c, 0)} W</span></div>
+                    <div class="solis-row">Днес / Общо <span>${fmt(gen.today_kwh, 1)} / ${fmt(gen.total_kwh, 0)} kWh</span></div>
+                    <div class="solis-row" style="margin-top: 8px;">Температура <span>${fmt(d.temperature, 1)} &deg;C</span></div>
+                </div>
+            </div>`;
+    }
+
     function renderMeter(d) {
         const state = d.online
             ? '<span class="meter-state state-online">НА ЛИНИЯ</span>'
             : '<span class="meter-state state-offline">НЯМА ВРЪЗКА</span>';
 
-        const body = d.online ? `
+        const body = !d.online ? `<p class="no-data">Електромерът не отговаря: ${d.error}</p>` : d.kind === 'solis' ? renderSolisBody(d) : `
             <div class="total-row">
                 <span class="total-power">${fmt(d.total_power, 0)}</span>
                 <span class="total-unit">W обща активна мощност</span>
@@ -340,22 +950,25 @@
             <canvas class="spark" id="spark-${d.host}"></canvas>
             <div class="spark-caption">Обща мощност, последните ~3 минути</div>
             <div class="channel-grid">${d.channels.map(renderChannel).join('')}</div>
+            ${(d.kind === 'modbus' || d.kind === 'solis_grid_meter') ? '' : `
             <div class="meter-foot">
                 Температура на уреда: ${fmt(d.temperature, 1)} °C &middot;
                 Wi-Fi сигнал: ${d.rssi === null ? '—' : d.rssi + ' dBm'}
-            </div>`
-            : `<p class="no-data">Електромерът не отговаря: ${d.error}</p>`;
+            </div>`}`;
+
+        const iconColor = d.kind === 'solis' ? 'var(--accent-primary)' : (d.kind === 'modbus' || d.kind === 'solis_grid_meter') ? '#17a2b8' : 'var(--accent-secondary)';
 
         // Name links into the single-machine view (?host=) - a no-op link
         // when a page is already focused on this machine.
         return `<section class="admin-card">
-            <div class="meter-header">
-                <div>
-                    <a href="${POWER_URL}?host=${encodeURIComponent(d.host)}" style="font-size: 1.1rem; font-weight: 700;">${d.name}</a>
-                    <div class="text-muted text-small">${d.host}</div>
+            <div class="device-hero">
+                ${iconBox(deviceIcon(d), { color: iconColor })}
+                <div class="device-hero-body">
+                    <a class="device-hero-name" href="${POWER_URL}?host=${encodeURIComponent(d.host)}">${d.name}</a>
+                    <div class="device-hero-sub">${d.host}</div>
                     ${machineLinkHtml(d)}
                 </div>
-                ${state}
+                <div class="device-hero-body">${state}</div>
             </div>
             ${body}
         </section>`;
@@ -373,6 +986,7 @@
             return;
         }
 
+        renderBatteries(payload.devices);
         container.innerHTML = payload.devices.map(renderMeter).join('');
         lastUpdate.textContent = '· обновено в ' + payload.ts;
 
@@ -390,7 +1004,14 @@
         renderSummary(payload.devices);
     }
 
-    function renderSummary(devices) {
+    function renderSummary(allDevices) {
+        // Solis inverters are excluded from "обща консумация" - they
+        // generate/store power rather than consume it, so folding their
+        // total_power (grid feed-in/draw) into a shop-wide consumption sum
+        // would misrepresent the number rather than clarify it. A
+        // 'solis_grid_meter' view is the same grid-feed reading (+
+        // exporting/- importing) under a different name, same reasoning.
+        const devices = allDevices.filter(d => d.kind !== 'solis' && d.kind !== 'solis_grid_meter');
         // Only meaningful with 2+ machines reporting - with exactly one
         // meter the number would just repeat that meter's own card.
         if (devices.length < 2) {
@@ -418,7 +1039,7 @@
         drawSpark(document.getElementById('summarySpark'), totalHistory);
     }
 
-    if (FOCUS_HOST) {
+    if (FOCUS_HOST && document.getElementById('historyForm')) {
         const historyForm = document.getElementById('historyForm');
         const historyStart = document.getElementById('historyStart');
         const historyEnd = document.getElementById('historyEnd');
@@ -510,6 +1131,69 @@
             timer = setInterval(poll, POLL_MS);
         }
     });
+
+    if (pollIntervalSelect) {
+        pollIntervalSelect.addEventListener('change', () => {
+            const seconds = Number(pollIntervalSelect.value) || 2;
+            POLL_MS = seconds * 1000;
+            HISTORY = Math.max(10, Math.round(180000 / POLL_MS));
+            try { localStorage.setItem(POLL_INTERVAL_KEY, String(seconds)); } catch (e) { /* ignore */ }
+            clearInterval(timer);
+            timer = setInterval(poll, POLL_MS);
+        });
+    }
+
+    // Modbus diagnostics - raw register dump, see admin_modbus_read_registers().
+    document.querySelectorAll('.modbus-read-form').forEach(function (form) {
+        form.addEventListener('submit', function (e) {
+            e.preventDefault();
+            const deviceId = form.getAttribute('data-device-id');
+            const resultArea = document.querySelector('[data-result-for="' + deviceId + '"]');
+            resultArea.innerHTML = '<p class="text-muted text-small">Чета...</p>';
+
+            const fd = new FormData(form);
+            fd.append('csrf_token', window.CSRF_TOKEN);
+            fetch(form.getAttribute('data-read-url'), { method: 'POST', body: fd })
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    if (data.error) {
+                        resultArea.innerHTML = '<p class="modbus-error">' + data.error + '</p>';
+                        return;
+                    }
+                    const rows = data.raw.map(function (val, i) {
+                        const addr = data.address + i;
+                        const pairIdx = Math.floor(i / 2);
+                        const isFirstOfPair = i % 2 === 0;
+                        return '<tr>' +
+                            '<td>' + addr + '</td>' +
+                            '<td>' + val + '</td>' +
+                            '<td>' + (data.int16[i] !== undefined ? data.int16[i] : '') + '</td>' +
+                            '<td>' + (isFirstOfPair && data.uint32[pairIdx] !== undefined ? data.uint32[pairIdx] : '') + '</td>' +
+                            '<td>' + (isFirstOfPair && data.int32[pairIdx] !== undefined ? data.int32[pairIdx] : '') + '</td>' +
+                            '<td>' + (isFirstOfPair && data.float32[pairIdx] !== undefined ? data.float32[pairIdx] : '') + '</td>' +
+                            '</tr>';
+                    }).join('');
+                    resultArea.innerHTML =
+                        '<div class="table-responsive"><table class="modbus-result-table">' +
+                        '<thead><tr><th>Адрес</th><th>uint16</th><th>int16</th>' +
+                        '<th>uint32 (тук+следв.)</th><th>int32</th><th>float32</th></tr></thead>' +
+                        '<tbody>' + rows + '</tbody></table></div>';
+                })
+                .catch(function () {
+                    resultArea.innerHTML = '<p class="modbus-error">Грешка при четене.</p>';
+                });
+        });
+    });
+
+    // "Назад" goes to wherever actually linked here (Главна карта, картата
+    // на покрива, картата по помещения, ...) instead of always the fleet
+    // view - falls back to that when there's no same-origin referrer.
+    (function () {
+        var backLink = document.getElementById('backLink');
+        if (backLink && document.referrer && document.referrer.indexOf(window.location.origin) === 0) {
+            backLink.href = document.referrer;
+        }
+    })();
 </script>
 {% endif %}
 </body>

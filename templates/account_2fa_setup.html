@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="bg">
+<html lang="{{ get_locale() }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     {% include 'partials/favicon.html' %}
-    <title>Активиране на 2FA - TRAFCOM</title>
+    <title>{{ _('Активиране на 2FA') }} - TRAFCOM</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <style>
         .qr-box { background: #fff; padding: 16px; border-radius: 8px; width: 220px; margin: 20px auto; }
@@ -28,23 +28,23 @@
     {% endwith %}
 
     <div class="admin-card">
-        <h2 style="margin-top: 0; text-align: center;">Сканирайте с приложението за удостоверяване</h2>
-        <p class="section-subtitle" style="text-align: center;">Google Authenticator, Authy или подобно.</p>
+        <h2 style="margin-top: 0; text-align: center;">{{ _('Сканирайте с приложението за удостоверяване') }}</h2>
+        <p class="section-subtitle" style="text-align: center;">Google Authenticator, Authy {{ _('или подобно.') }}</p>
 
         <div class="qr-box">{{ qr_svg | safe }}</div>
-        <p class="secret-fallback">Или въведете ръчно: {{ secret }}</p>
+        <p class="secret-fallback">{{ _('Или въведете ръчно:') }} {{ secret }}</p>
 
         <form method="POST" action="{{ url_for('account_2fa_setup') }}" class="admin-form">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
-                <label for="code">Код от приложението</label>
+                <label for="code">{{ _('Код от приложението') }}</label>
                 <input type="text" id="code" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="123456" required autofocus autocomplete="one-time-code">
             </div>
-            <button type="submit" class="btn-submit" style="width: 100%;">Потвърди и активирай</button>
+            <button type="submit" class="btn-submit" style="width: 100%;">{{ _('Потвърди и активирай') }}</button>
         </form>
 
         <div class="auth-footer" style="margin-top: 20px; text-align: center;">
-            <a href="{{ url_for('account') }}">Отказ</a>
+            <a href="{{ url_for('account') }}">{{ _('Отказ') }}</a>
         </div>
     </div>
 </main>

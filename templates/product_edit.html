@@ -49,6 +49,22 @@
                 <input type="text" id="description" name="description" value="{{ product.description or '' }}">
             </div>
             <div class="form-group">
+                <label for="name_en">Име (EN, незадължително)</label>
+                <input type="text" id="name_en" name="name_en" value="{{ product.name_en or '' }}">
+            </div>
+            <div class="form-group">
+                <label for="name_de">Име (DE, незадължително)</label>
+                <input type="text" id="name_de" name="name_de" value="{{ product.name_de or '' }}">
+            </div>
+            <div class="form-group">
+                <label for="description_en">Описание (EN, незадължително)</label>
+                <input type="text" id="description_en" name="description_en" value="{{ product.description_en or '' }}">
+            </div>
+            <div class="form-group">
+                <label for="description_de">Описание (DE, незадължително)</label>
+                <input type="text" id="description_de" name="description_de" value="{{ product.description_de or '' }}">
+            </div>
+            <div class="form-group">
                 <label for="markup_percent">Надценка (%)</label>
                 <input type="number" id="markup_percent" name="markup_percent" step="0.1" min="0" value="{{ product.markup_percent }}">
             </div>

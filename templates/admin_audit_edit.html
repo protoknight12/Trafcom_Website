@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>{{ audit.audit_no }} - Одит - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .capa-textarea {
+            width: 100%;
+            padding: 0.6rem 0.75rem;
+            background-color: var(--bg-input);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-sm);
+        }
+        .badge-nonconformity {
+            background-color: rgba(239, 68, 68, 0.12);
+            color: var(--danger-text);
+            border: 1px solid var(--danger-border);
+        }
+        .badge-observation {
+            background-color: rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
+            border: 1px solid var(--border-color);
+        }
+        .badge-improvement {
+            background-color: rgba(16, 185, 129, 0.12);
+            color: var(--success-text);
+            border: 1px solid var(--success-border);
+        }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    {% set readonly = not (current_user.is_admin or current_user.role == 'quality_control') %}
+
+    <section class="admin-card">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px;">
+            <h3 style="margin: 0;">{{ audit.audit_no }}</h3>
+            <a href="{{ url_for('admin_audits') }}" class="text-small">&larr; Обратно към одитите</a>
+        </div>
+        <form action="{{ url_for('admin_update_audit', audit_id=audit.id) }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group" style="width: 100%;">
+                <label for="scope">Обхват на одита</label>
+                <input type="text" id="scope" name="scope" value="{{ audit.scope }}" required {{ 'readonly' if readonly }} style="width: 100%;">
+            </div>
+            <div class="form-group">
+                <label for="auditor_id">Одитор</label>
+                <select id="auditor_id" name="auditor_id" {{ 'disabled' if readonly }}>
+                    <option value="">-- няма --</option>
+                    {% for u in users %}
+                    <option value="{{ u.id }}" {% if audit.auditor_id == u.id %}selected{% endif %}>{{ u.username }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="planned_date">Планирана дата</label>
+                <input type="date" id="planned_date" name="planned_date" value="{{ audit.planned_date.strftime('%Y-%m-%d') if audit.planned_date else '' }}" {{ 'readonly' if readonly }}>
+            </div>
+            <div class="form-group">
+                <label for="actual_date">Дата на провеждане</label>
+                <input type="date" id="actual_date" name="actual_date" value="{{ audit.actual_date.strftime('%Y-%m-%d') if audit.actual_date else '' }}" {{ 'readonly' if readonly }}>
+            </div>
+            <div class="form-group">
+                <label for="status">Статус</label>
+                <select id="status" name="status" {{ 'disabled' if readonly }}>
+                    {% for key, label in statuses.items() %}
+                    <option value="{{ key }}" {% if audit.status == key %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="summary">Обобщено заключение</label>
+                <textarea id="summary" name="summary" rows="2" class="capa-textarea" {{ 'readonly' if readonly }}>{{ audit.summary or '' }}</textarea>
+            </div>
+            {% if not readonly %}
+            <button type="submit" class="btn-submit">Запази промените</button>
+            {% endif %}
+        </form>
+    </section>
+
+    {% if not readonly %}
+    <section class="admin-card">
+        <h3>Нова констатация</h3>
+        <form action="{{ url_for('admin_add_audit_finding', audit_id=audit.id) }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="finding_type">Вид</label>
+                <select id="finding_type" name="finding_type">
+                    {% for key, label in finding_types.items() %}
+                    <option value="{{ key }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="clause_reference">Клауза от стандарта (незадължително)</label>
+                <input type="text" id="clause_reference" name="clause_reference" placeholder="напр. §7.5.3">
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="description">Описание</label>
+                <textarea id="description" name="description" rows="2" required class="capa-textarea"></textarea>
+            </div>
+            <button type="submit" class="btn-submit">Добави констатация</button>
+        </form>
+    </section>
+    {% endif %}
+
+    <section class="admin-card">
+        <h3>Констатации ({{ audit.findings|length }})</h3>
+        {% if audit.findings %}
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Вид</th>
+                    <th>Клауза</th>
+                    <th>Описание</th>
+                    <th>CAPA</th>
+                    <th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for finding in audit.findings %}
+                <tr>
+                    <td>
+                        {% if finding.finding_type == 'nonconformity' %}
+                        <span class="badge badge-nonconformity">{{ finding.finding_type_label }}</span>
+                        {% elif finding.finding_type == 'improvement' %}
+                        <span class="badge badge-improvement">{{ finding.finding_type_label }}</span>
+                        {% else %}
+                        <span class="badge badge-observation">{{ finding.finding_type_label }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ finding.clause_reference or '—' }}</td>
+                    <td style="max-width: 340px;">{{ finding.description }}</td>
+                    <td>
+                        {% if finding.capa %}
+                        <a href="{{ url_for('admin_edit_capa', capa_id=finding.capa.id) }}">{{ finding.capa.capa_no }}</a>
+                        {% elif not readonly %}
+                        <a href="{{ url_for('admin_capa', prefill_problem=finding.description, prefill_source='Одит ' ~ audit.audit_no ~ ' - констатация', from_finding_id=finding.id) }}" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Отвори CAPA</a>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td class="text-right">
+                        {% if not readonly %}
+                        <form action="{{ url_for('admin_delete_audit_finding', finding_id=finding.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на констатацията?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма добавени констатации.</p>
+        {% endif %}
+    </section>
+
+</main>
+
+</body>
+</html>

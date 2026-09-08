@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Обучение на персонала - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .capa-textarea {
+            width: 100%;
+            padding: 0.6rem 0.75rem;
+            background-color: var(--bg-input);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-sm);
+        }
+        .badge-expired {
+            background-color: rgba(239, 68, 68, 0.12);
+            color: var(--danger-text);
+            border: 1px solid var(--danger-border);
+        }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    {% if current_user.is_admin or current_user.role == 'quality_control' %}
+    <section class="admin-card">
+        <h3>Ново обучение</h3>
+        <p class="section-subtitle">ISO 9001 §7.2 - запис за проведено обучение/инструктаж на служител, като доказателство за компетентност.</p>
+        <form action="{{ url_for('admin_add_training_record') }}" method="POST" class="admin-form" enctype="multipart/form-data">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="new_employee_id">Служител</label>
+                <select id="new_employee_id" name="employee_id" required>
+                    <option value="">-- изберете --</option>
+                    {% for u in employees %}
+                    <option value="{{ u.id }}">{{ u.username }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="new_topic">Тема на обучението</label>
+                <input type="text" id="new_topic" name="topic" required placeholder="напр. Работа с 5-осен обработващ център" style="width: 100%;">
+            </div>
+            <div class="form-group">
+                <label for="new_training_type">Вид</label>
+                <select id="new_training_type" name="training_type">
+                    {% for key, label in training_types.items() %}
+                    <option value="{{ key }}" {% if key == 'other' %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="new_trainer_name">Обучител/доставчик</label>
+                <input type="text" id="new_trainer_name" name="trainer_name" placeholder="напр. admin, външна фирма...">
+            </div>
+            <div class="form-group">
+                <label for="new_training_date">Дата на обучението</label>
+                <input type="date" id="new_training_date" name="training_date" required>
+            </div>
+            <div class="form-group">
+                <label for="new_valid_until">Валидно до (незадължително)</label>
+                <input type="date" id="new_valid_until" name="valid_until">
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="new_effectiveness_evaluation">Оценка на ефективността</label>
+                <textarea id="new_effectiveness_evaluation" name="effectiveness_evaluation" rows="2" class="capa-textarea"></textarea>
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label for="new_notes">Бележки</label>
+                <textarea id="new_notes" name="notes" rows="2" class="capa-textarea"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="new_file">Сертификат (файл, незадължително)</label>
+                <input type="file" id="new_file" name="file">
+            </div>
+            <button type="submit" class="btn-submit">Запиши обучението</button>
+        </form>
+    </section>
+    {% endif %}
+
+    <section class="admin-card">
+        <h3>Записи за обучения</h3>
+
+        <form method="GET" class="admin-form" style="margin-bottom: 0.5rem;">
+            <div class="form-group">
+                <label for="employee_filter">Филтър по служител</label>
+                <select id="employee_filter" name="employee_id" onchange="this.form.submit()">
+                    <option value="">-- всички --</option>
+                    {% for u in employees %}
+                    <option value="{{ u.id }}" {% if employee_filter == u.id|string %}selected{% endif %}>{{ u.username }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </form>
+
+        {% if records %}
+        <div class="table-responsive" style="margin-top: 1rem;">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Служител</th>
+                    <th>Тема</th>
+                    <th>Вид</th>
+                    <th>Обучител</th>
+                    <th>Дата</th>
+                    <th>Валидно до</th>
+                    <th>Оценка на ефективността</th>
+                    <th>Сертификат</th>
+                    <th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for record in records %}
+                <tr>
+                    <td>{{ record.employee.username if record.employee else '—' }}</td>
+                    <td style="max-width: 260px;">{{ record.topic }}</td>
+                    <td>{{ record.training_type_label }}</td>
+                    <td>{{ record.trainer_name or '—' }}</td>
+                    <td>{{ record.training_date.strftime('%d.%m.%Y') }}</td>
+                    <td>
+                        {% if record.valid_until %}
+                        {{ record.valid_until.strftime('%d.%m.%Y') }}
+                        {% if record.is_expired %}<br><span class="badge badge-expired">Изтекло</span>{% endif %}
+                        {% else %}—{% endif %}
+                    </td>
+                    <td style="max-width: 260px;">{{ record.effectiveness_evaluation or '—' }}</td>
+                    <td>
+                        {% if record.filename %}
+                        <a href="{{ url_for('admin_download_training_certificate', record_id=record.id) }}">Изтегли</a>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td class="text-right">
+                        {% if current_user.is_admin or current_user.role == 'quality_control' %}
+                        <form action="{{ url_for('admin_delete_training_record', record_id=record.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на записа за обучение?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма записи за обучения{{ ' за този служител' if employee_filter }}.</p>
+        {% endif %}
+    </section>
+
+</main>
+
+</body>
+</html>

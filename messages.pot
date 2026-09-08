@@ -1,0 +1,1497 @@
+# Translations template for PROJECT.
+# Copyright (C) 2026 ORGANIZATION
+# This file is distributed under the same license as the PROJECT project.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: PROJECT VERSION\n"
+"Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
+"POT-Creation-Date: 2026-09-02 13:29+0300\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: app.py:485
+msgid "ЕИК трябва да съдържа точно 9 цифри."
+msgstr ""
+
+#: app.py:500
+msgid "Невалиден имейл адрес."
+msgstr ""
+
+#: app.py:3510
+msgid "Моля въведете име на пресет."
+msgstr ""
+
+#: app.py:3514
+msgid "Невалидни настройки."
+msgstr ""
+
+#: app.py:3531
+msgid "Нямате достъп."
+msgstr ""
+
+#: app.py:3720
+msgid "Невалидно потребителско име или парола."
+msgstr ""
+
+#: app.py:3742
+msgid "Невалиден код."
+msgstr ""
+
+#: app.py:3769
+msgid ""
+"Ако имейлът съществува в системата, изпратихме връзка за възстановяване "
+"на паролата."
+msgstr ""
+
+#: app.py:3782
+msgid "Връзката за възстановяване е изтекла. Заявете нова."
+msgstr ""
+
+#: app.py:3785 app.py:3790
+msgid "Невалидна връзка за възстановяване."
+msgstr ""
+
+#: app.py:3797 app.py:3833
+msgid "Паролата трябва да бъде поне 8 символа."
+msgstr ""
+
+#: app.py:3800 templates/reset_password.html:42
+msgid "Паролите не съвпадат."
+msgstr ""
+
+#: app.py:3804
+msgid "Паролата е сменена успешно. Влезте с новата парола."
+msgstr ""
+
+#: app.py:3817
+msgid ""
+"Сайтът е в момента на техническа поддръжка. Регистрацията на нови профили"
+" е временно спряна."
+msgstr ""
+
+#: app.py:3826 app.py:3895
+msgid "Имейл е задължителен."
+msgstr ""
+
+#: app.py:3852
+msgid "Това потребителско име или имейл вече съществува."
+msgstr ""
+
+#: app.py:3856
+msgid "Регистрацията е успешна! Проверете имейла си, за да потвърдите адреса."
+msgstr ""
+
+#: app.py:3867
+msgid "Връзката за потвърждение е изтекла. Заявете нова от профила си."
+msgstr ""
+
+#: app.py:3870 app.py:3875
+msgid "Невалидна връзка за потвърждение."
+msgstr ""
+
+#: app.py:3880
+msgid "Имейлът е потвърден успешно."
+msgstr ""
+
+#: app.py:3903
+msgid "Този имейл вече се използва от друг акаунт."
+msgstr ""
+
+#: app.py:3906
+msgid "Имейлът е обновен. Изпратихме връзка за потвърждение на новия адрес."
+msgstr ""
+
+#: app.py:3915
+msgid "Имейлът вече е потвърден."
+msgstr ""
+
+#: app.py:3918
+msgid "Нямате зададен имейл."
+msgstr ""
+
+#: app.py:3921
+msgid "Изпратихме нова връзка за потвърждение."
+msgstr ""
+
+#: app.py:3929
+msgid "Двуфакторното удостоверяване вече е активирано."
+msgstr ""
+
+#: app.py:3936
+msgid "Невалиден код. Опитайте отново."
+msgstr ""
+
+#: app.py:3941
+msgid "Двуфакторното удостоверяване е активирано."
+msgstr ""
+
+#: app.py:3959
+msgid "Грешна парола."
+msgstr ""
+
+#: app.py:3964
+msgid "Двуфакторното удостоверяване е изключено."
+msgstr ""
+
+#: app.py:4103
+msgid "Моля, изберете файл за качване."
+msgstr ""
+
+#: app.py:4107
+msgid "Невалиден формат! Системата приема само .dxf файлове."
+msgstr ""
+
+#: app.py:4125
+#, python-format
+msgid "Файлът \"%(filename)s\" беше качен и обработен успешно!"
+msgstr ""
+
+#: app.py:4130
+#, python-format
+msgid "Критична грешка при обработка/запис: %(error)s"
+msgstr ""
+
+#: app.py:6388
+msgid "Моля изберете файл."
+msgstr ""
+
+#: app.py:6410
+msgid "Файлът беше качен успешно."
+msgstr ""
+
+#: app.py:7088
+msgid "Няма избран файл."
+msgstr ""
+
+#: app.py:7091
+msgid "Приемат се само PDF файлове."
+msgstr ""
+
+#: app.py:7108
+msgid "Моля въведете име на клиент."
+msgstr ""
+
+#: app.py:7119 templates/order_create.html:675
+msgid "Моля добавете поне един артикул към поръчката."
+msgstr ""
+
+#: app.py:7198
+msgid "Невалидни артикули в поръчката."
+msgstr ""
+
+#: app.py:7209
+#, python-format
+msgid "Поръчка %(order_number)s беше успешно изпратена!"
+msgstr ""
+
+#: app.py:7217
+#, python-format
+msgid ""
+"Внимание: поръчка %(order_number)s има недостатъчна наличност за: "
+"%(missing_desc)s. Виж таблото \"Липсваща наличност\"."
+msgstr ""
+
+#: app.py:7268
+msgid "Нямате достъп до тази поръчка."
+msgstr ""
+
+#: app.py:7272
+msgid ""
+"Поръчката вече е в процес на изработка (или вече е приключена/отменена) и"
+" не може да бъде отменена."
+msgstr ""
+
+#: app.py:7279
+#, python-format
+msgid "Поръчка %(order_number)s беше отменена."
+msgstr ""
+
+#: app.py:9576
+msgid "Моля въведете име на клиента."
+msgstr ""
+
+#: app.py:9605
+msgid "Моля въведете име на куриера."
+msgstr ""
+
+#: app.py:12366
+msgid "Страницата не е намерена"
+msgstr ""
+
+#: app.py:12367
+msgid "Проверете адреса или се върнете към началото."
+msgstr ""
+
+#: app.py:12372
+msgid "Нямате достъп"
+msgstr ""
+
+#: app.py:12373
+msgid "Нямате права за тази страница."
+msgstr ""
+
+#: app.py:12378
+msgid "Твърде много опити"
+msgstr ""
+
+#: app.py:12379
+msgid "Изчакайте малко и опитайте отново."
+msgstr ""
+
+#: app.py:12384
+msgid "Възникна грешка"
+msgstr ""
+
+#: app.py:12385
+msgid "Нещо се обърка от наша страна. Опитайте отново по-късно."
+msgstr ""
+
+#: app.py:12392
+msgid "Изтекла сесия на формата"
+msgstr ""
+
+#: app.py:12393
+msgid "Презаредете страницата и опитайте отново."
+msgstr ""
+
+#: templates/about.html:7 templates/partials/footer.html:16
+#: templates/partials/navbar.html:20
+msgid "За нас"
+msgstr ""
+
+#: templates/about.html:34
+msgid "ИСТОРИЯ НА ФИРМАТА"
+msgstr ""
+
+#: templates/about.html:35
+msgid "ЗА"
+msgstr ""
+
+#: templates/about.html:35
+msgid "ТРАФКОМ"
+msgstr ""
+
+#: templates/about.html:35
+msgid "ООД"
+msgstr ""
+
+#: templates/about.html:36
+msgid ""
+"Трафком ООД е основана през 1997 г. в гр. Тетевен. Първоначално фирмата "
+"произвежда трансформатори и електроника за радиотехника. От 2021 г. "
+"разполага с изцяло нов механичен цех (≈ 4 000 m²), чиято основна дейност "
+"е механична обработка на детайли."
+msgstr ""
+
+#: templates/about.html:41 templates/index.html:42
+msgid "Основана в гр. Тетевен"
+msgstr ""
+
+#: templates/about.html:45 templates/index.html:46
+msgid "Механичен цех (от 2021 г.)"
+msgstr ""
+
+#: templates/about.html:48 templates/index.html:49
+msgid "5-осно"
+msgstr ""
+
+#: templates/about.html:49 templates/index.html:50
+msgid "Фрезоване и струговане"
+msgstr ""
+
+#: templates/about.html:57
+msgid "КОМПЕТЕНЦИИ"
+msgstr ""
+
+#: templates/about.html:58
+msgid "С КАКВО СЕ ЗАНИМАВАМЕ"
+msgstr ""
+
+#: templates/about.html:64
+msgid ""
+"Високоточна механична обработка на стомани, алуминиеви сплави и цветни "
+"метали"
+msgstr ""
+
+#: templates/about.html:65
+msgid "5-осно фрезоване и многоосно струговане със задвижвани инструменти"
+msgstr ""
+
+#: templates/about.html:66
+msgid "Лазерно рязане и нишкова електроерозия (Wire EDM)"
+msgstr ""
+
+#: templates/about.html:67
+msgid "Огъване и формоване на листов материал"
+msgstr ""
+
+#: templates/about.html:68
+msgid "3D измерване и контрол на качеството (CMM)"
+msgstr ""
+
+#: templates/about.html:69
+msgid "3D лазерно сканиране и reverse engineering"
+msgstr ""
+
+#: templates/about.html:76
+msgid "ЛОКАЦИИ"
+msgstr ""
+
+#: templates/about.html:77
+msgid "КЪДЕ СМЕ"
+msgstr ""
+
+#: templates/about.html:84
+msgid "Офис и кореспонденция"
+msgstr ""
+
+#: templates/about.html:85 templates/contact.html:41
+msgid "гр. Тетевен, ул. „Александър Стамболийски“ 36"
+msgstr ""
+
+#: templates/about.html:88 templates/contact.html:44
+msgid "Производствена база"
+msgstr ""
+
+#: templates/about.html:89
+msgid "гр. Тетевен, ул. „Воловийте“ · механичен цех ≈ 4 000 m²"
+msgstr ""
+
+#: templates/account.html:7 templates/account.html:25
+msgid "Моят профил"
+msgstr ""
+
+#: templates/account.html:28 templates/contact.html:52
+#: templates/forgot_password.html:40 templates/order_create.html:371
+#: templates/order_create.html:414 templates/register.html:64
+msgid "Имейл"
+msgstr ""
+
+#: templates/account.html:29
+msgid "Използва се за възстановяване на паролата."
+msgstr ""
+
+#: templates/account.html:32
+msgid "Потвърден."
+msgstr ""
+
+#: templates/account.html:34
+msgid "Непотвърден."
+msgstr ""
+
+#: templates/account.html:37
+msgid "Изпрати връзка за потвърждение отново"
+msgstr ""
+
+#: templates/account.html:46
+msgid "Смени имейла"
+msgstr ""
+
+#: templates/account.html:46
+msgid "Добави имейл"
+msgstr ""
+
+#: templates/account.html:51
+msgid "Двуфакторно удостоверяване (2FA)"
+msgstr ""
+
+#: templates/account.html:53
+msgid ""
+"Активирано е. При вход ще се изисква код от приложението за "
+"удостоверяване."
+msgstr ""
+
+#: templates/account.html:57
+msgid "Парола (за потвърждение)"
+msgstr ""
+
+#: templates/account.html:60
+msgid "Изключи 2FA"
+msgstr ""
+
+#: templates/account.html:63
+msgid "Не е активирано. Добавете допълнителен слой защита на входа."
+msgstr ""
+
+#: templates/account.html:64
+msgid "Активирай 2FA"
+msgstr ""
+
+#: templates/account_2fa_setup.html:7
+msgid "Активиране на 2FA"
+msgstr ""
+
+#: templates/account_2fa_setup.html:31
+msgid "Сканирайте с приложението за удостоверяване"
+msgstr ""
+
+#: templates/account_2fa_setup.html:32
+msgid "или подобно."
+msgstr ""
+
+#: templates/account_2fa_setup.html:35
+msgid "Или въведете ръчно:"
+msgstr ""
+
+#: templates/account_2fa_setup.html:40
+msgid "Код от приложението"
+msgstr ""
+
+#: templates/account_2fa_setup.html:43
+msgid "Потвърди и активирай"
+msgstr ""
+
+#: templates/account_2fa_setup.html:47
+msgid "Отказ"
+msgstr ""
+
+#: templates/contact.html:7 templates/partials/footer.html:8
+#: templates/partials/footer.html:17 templates/partials/navbar.html:21
+msgid "Контакти"
+msgstr ""
+
+#: templates/contact.html:34
+msgid "ВРЪЗКА С НАС"
+msgstr ""
+
+#: templates/contact.html:35
+msgid "КОНТАКТИ"
+msgstr ""
+
+#: templates/contact.html:36
+msgid ""
+"За запитвания, оферти и въпроси относно механична обработка, лазерно "
+"рязане или производство на детайли - свържете се с нас директно."
+msgstr ""
+
+#: templates/contact.html:40
+msgid "Административен адрес"
+msgstr ""
+
+#: templates/contact.html:45
+msgid "ул. „Воловийте“, 5700 гр. Тетевен"
+msgstr ""
+
+#: templates/contact.html:48 templates/order_create.html:375
+#: templates/order_create.html:418
+msgid "Телефон"
+msgstr ""
+
+#: templates/dashboard.html:7
+msgid "Табло"
+msgstr ""
+
+#: templates/dashboard.html:111
+msgid "Услуги и цени на час"
+msgstr ""
+
+#: templates/dashboard.html:112
+msgid ""
+"Часовите ставки, използвани при изчисляване на цената на чертежите "
+"по-долу."
+msgstr ""
+
+#: templates/dashboard.html:117 templates/dashboard.html:168
+msgid "Услуга"
+msgstr ""
+
+#: templates/dashboard.html:118 templates/services.html:179
+msgid "Тип машина"
+msgstr ""
+
+#: templates/dashboard.html:119 templates/services.html:182
+msgid "Цена на час"
+msgstr ""
+
+#: templates/dashboard.html:139
+msgid "Вашата библиотека с изчисления"
+msgstr ""
+
+#: templates/dashboard.html:140
+msgid ""
+"Списък на всички обработени от вас CAD чертежи, съобразени с размерите и "
+"материала."
+msgstr ""
+
+#: templates/dashboard.html:141
+msgid "Кликнете върху име на файл за 2D визуализация."
+msgstr ""
+
+#: templates/dashboard.html:144
+msgid "Нов чертеж"
+msgstr ""
+
+#: templates/dashboard.html:147
+#, python-format
+msgid ""
+"Да се изтрият ли всички %(count)s файла от библиотеката? Действието е "
+"необратимо."
+msgstr ""
+
+#: templates/dashboard.html:149
+msgid "Изтрий всички"
+msgstr ""
+
+#: templates/dashboard.html:157
+msgid "Търсене по име на файл, материал..."
+msgstr ""
+
+#: templates/dashboard.html:166
+msgid "Име на файл"
+msgstr ""
+
+#: templates/dashboard.html:167
+msgid "Материал"
+msgstr ""
+
+#: templates/dashboard.html:169
+msgid "Размери (Габарити)"
+msgstr ""
+
+#: templates/dashboard.html:170
+msgid "Дължина на рязане"
+msgstr ""
+
+#: templates/dashboard.html:171
+msgid "Изчислена цена"
+msgstr ""
+
+#: templates/dashboard.html:172 templates/detail_dxf_dashboard.html:136
+#: templates/order_create.html:129
+msgid "Действие"
+msgstr ""
+
+#: templates/dashboard.html:197
+msgid "мм"
+msgstr ""
+
+#: templates/dashboard.html:204
+msgid "Изтрий"
+msgstr ""
+
+#: templates/dashboard.html:211
+msgid "Вашата библиотека е празна."
+msgstr ""
+
+#: templates/dashboard.html:211
+msgid "Качете първия си чертеж"
+msgstr ""
+
+#: templates/dashboard.html:216 templates/my_orders.html:119
+msgid "Няма съвпадения."
+msgstr ""
+
+#: templates/dashboard.html:228 templates/detail_dxf_dashboard.html:640
+msgid "Визуализация"
+msgstr ""
+
+#: templates/dashboard.html:232 templates/detail_dxf_dashboard.html:644
+msgid "Зареждане..."
+msgstr ""
+
+#: templates/detail_dxf_dashboard.html:7
+msgid "Файлове"
+msgstr ""
+
+#: templates/detail_dxf_dashboard.html:114
+msgid "Файлове:"
+msgstr ""
+
+#: templates/detail_dxf_dashboard.html:116
+msgid ""
+"Хранилище на файлове за този детайл - всякакъв тип (DXF чертежи, снимки, "
+"спецификации...)."
+msgstr ""
+
+#: templates/detail_dxf_dashboard.html:123
+msgid "Качване на нов файл"
+msgstr ""
+
+#: templates/detail_dxf_dashboard.html:126
+msgid "Качи"
+msgstr ""
+
+#: templates/detail_dxf_dashboard.html:133
+msgid "Файл"
+msgstr ""
+
+#: templates/detail_dxf_dashboard.html:134
+msgid "Качен от"
+msgstr ""
+
+#: templates/detail_dxf_dashboard.html:135
+msgid "Дата"
+msgstr ""
+
+#: templates/detail_dxf_dashboard.html:160
+msgid "Само за администратори"
+msgstr ""
+
+#: templates/detail_dxf_dashboard.html:166
+msgid "Няма качени файлове."
+msgstr ""
+
+#: templates/error.html:7
+msgid "Грешка"
+msgstr ""
+
+#: templates/error.html:41
+msgid "Към началото"
+msgstr ""
+
+#: templates/forgot_password.html:7 templates/forgot_password.html:23
+msgid "Забравена парола"
+msgstr ""
+
+#: templates/forgot_password.html:7 templates/login.html:7
+#: templates/login_2fa.html:7 templates/register.html:7
+#: templates/reset_password.html:7
+msgid "CNC Портал"
+msgstr ""
+
+#: templates/forgot_password.html:25
+msgid ""
+"Въведете имейла, с който сте се регистрирали, за да получите връзка за "
+"смяна на паролата."
+msgstr ""
+
+#: templates/forgot_password.html:44
+msgid "Изпрати връзка"
+msgstr ""
+
+#: templates/forgot_password.html:49
+msgid "Обратно към вход"
+msgstr ""
+
+#: templates/generator.html:7
+msgid "Генератор на Панели"
+msgstr ""
+
+#: templates/generator.html:190
+msgid "Стандартни размери"
+msgstr ""
+
+#: templates/generator.html:200
+msgid "Пресети"
+msgstr ""
+
+#: templates/generator.html:202 templates/generator.html:404
+msgid "Избери пресет"
+msgstr ""
+
+#: templates/generator.html:203
+msgid "Зареди"
+msgstr ""
+
+#: templates/generator.html:207
+msgid "Име на пресет"
+msgstr ""
+
+#: templates/generator.html:208
+msgid "Запази"
+msgstr ""
+
+#: templates/generator.html:211
+msgid "Панел & Материал"
+msgstr ""
+
+#: templates/generator.html:212
+msgid "Ширина (mm)"
+msgstr ""
+
+#: templates/generator.html:214
+msgid "Височина (mm)"
+msgstr ""
+
+#: templates/generator.html:216
+msgid "Дебелина (mm)"
+msgstr ""
+
+#: templates/generator.html:219
+msgid "Геометрия (Изберете няколко)"
+msgstr ""
+
+#: templates/generator.html:229
+msgid "Макс. Отвор (mm)"
+msgstr ""
+
+#: templates/generator.html:231
+msgid "Мин. Отвор (mm)"
+msgstr ""
+
+#: templates/generator.html:233
+msgid "Луфт (Spacing mm)"
+msgstr ""
+
+#: templates/generator.html:235
+msgid "Ротация (°)"
+msgstr ""
+
+#: templates/generator.html:237
+msgid "Рамка (Border mm)"
+msgstr ""
+
+#: templates/generator.html:240
+msgid "Градиент & Органичност"
+msgstr ""
+
+#: templates/generator.html:243
+msgid "Плътност: Горе -> Долу"
+msgstr ""
+
+#: templates/generator.html:244
+msgid "Плътност: Долу -> Горе"
+msgstr ""
+
+#: templates/generator.html:247
+msgid "Плътна Зона (%)"
+msgstr ""
+
+#: templates/generator.html:249
+msgid "Крива (Falloff)"
+msgstr ""
+
+#: templates/generator.html:251
+msgid "Празнота (Sparseness %)"
+msgstr ""
+
+#: templates/generator.html:253
+msgid "Разпръскване (Jitter %)"
+msgstr ""
+
+#: templates/generator.html:255
+msgid "Горна Случайност (%)"
+msgstr ""
+
+#: templates/generator.html:260
+msgid "Изтегли DXF Модел"
+msgstr ""
+
+#: templates/generator.html:262
+msgid "Изчисляване на цена"
+msgstr ""
+
+#: templates/generator.html:275
+msgid "Изчисли цена в Калкулатора"
+msgstr ""
+
+#: templates/generator.html:285
+msgid "Панел"
+msgstr ""
+
+#: templates/generator.html:286
+msgid "Брой отвори"
+msgstr ""
+
+#: templates/generator.html:287
+msgid "Линеен сряз"
+msgstr ""
+
+#: templates/generator.html:444
+msgid "Възникна грешка при запазването."
+msgstr ""
+
+#: templates/index.html:7
+msgid "Индустриален ЦПУ Портал"
+msgstr ""
+
+#: templates/index.html:35
+msgid "ОПТИМИЗАЦИЯ НА ПРОИЗВОДСТВОТО"
+msgstr ""
+
+#: templates/index.html:36
+msgid "ИНДУСТРИАЛЕН"
+msgstr ""
+
+#: templates/index.html:36
+msgid "ЦПУ ПОРТАЛ"
+msgstr ""
+
+#: templates/index.html:37
+msgid ""
+"Автоматизирано изчисляване на производствени оферти и технически анализ "
+"на DXF чертежи. Системата осигурява точност при обработка на детайли и "
+"листов материал в реалния машинен парк на Трафком ООД - гр. Тетевен."
+msgstr ""
+
+#: templates/index.html:55
+msgid "Проект, съфинансиран от Европейския съюз - виж пълния постер (PDF)"
+msgstr ""
+
+#: templates/index.html:56
+msgid "Съфинансиран от Европейския съюз - постер на проект на ТРАФКОМ ООД"
+msgstr ""
+
+#: templates/index.html:63
+msgid "ТЕХНОЛОГИЧНО ОБОРУДВАНЕ"
+msgstr ""
+
+#: templates/index.html:64 templates/services.html:47
+msgid "МАШИНЕН ПАРК"
+msgstr ""
+
+#: templates/index.html:112
+msgid "Пълен машинен парк"
+msgstr ""
+
+#: templates/index.html:119
+msgid "ЗА ФИРМАТА"
+msgstr ""
+
+#: templates/index.html:120
+msgid "ТРАФКОМ ООД"
+msgstr ""
+
+#: templates/index.html:125
+msgid ""
+"Основана през 1997 г. в гр. Тетевен, първоначално с производство на "
+"трансформатори и електроника за радиотехника. От 2021 г. разполага с "
+"изцяло нов механичен цех (≈ 4 000 m²), а основната дейност днес е "
+"високоточна механична обработка на стомани, алуминиеви сплави и цветни "
+"метали."
+msgstr ""
+
+#: templates/index.html:128
+msgid "Научете повече за нас"
+msgstr ""
+
+#: templates/login.html:7 templates/partials/navbar.html:123
+msgid "Вход"
+msgstr ""
+
+#: templates/login.html:24 templates/partials/navbar.html:12
+#: templates/register.html:24
+msgid "Приложения"
+msgstr ""
+
+#: templates/login.html:26 templates/partials/navbar.html:14
+#: templates/register.html:26 templates/upload.html:50
+msgid "DXF CNC Калкулатор"
+msgstr ""
+
+#: templates/login.html:27 templates/partials/navbar.html:15
+#: templates/register.html:27
+msgid "Параметричен Генератор"
+msgstr ""
+
+#: templates/login.html:38 templates/register.html:38
+msgid "Към начална страница"
+msgstr ""
+
+#: templates/login.html:41
+msgid "Вход в CNC Портал"
+msgstr ""
+
+#: templates/login.html:59 templates/register.html:60
+msgid "Потребителско име"
+msgstr ""
+
+#: templates/login.html:60
+msgid "Въведете потребителско име..."
+msgstr ""
+
+#: templates/login.html:63 templates/register.html:68
+msgid "Парола"
+msgstr ""
+
+#: templates/login.html:64
+msgid "Въведете вашата парола..."
+msgstr ""
+
+#: templates/login.html:67
+msgid "Влез в системата"
+msgstr ""
+
+#: templates/login.html:72
+msgid "Забравена парола?"
+msgstr ""
+
+#: templates/login.html:75
+msgid "Нямате профил?"
+msgstr ""
+
+#: templates/login.html:75
+msgid "Регистрирайте се тук"
+msgstr ""
+
+#: templates/login_2fa.html:7
+msgid "Двуфакторно удостоверяване"
+msgstr ""
+
+#: templates/login_2fa.html:20
+msgid "Въведете код от приложението"
+msgstr ""
+
+#: templates/login_2fa.html:22
+msgid ""
+"Отворете приложението за удостоверяване (Google Authenticator и др.) и "
+"въведете 6-цифрения код."
+msgstr ""
+
+#: templates/login_2fa.html:37
+msgid "Код"
+msgstr ""
+
+#: templates/login_2fa.html:41
+msgid "Потвърди"
+msgstr ""
+
+#: templates/my_orders.html:7 templates/my_orders.html:36
+#: templates/partials/navbar.html:26
+msgid "Моите Поръчки"
+msgstr ""
+
+#: templates/my_orders.html:40
+msgid "Търсене по № поръчка, клиент, артикул..."
+msgstr ""
+
+#: templates/my_orders.html:62 templates/order_create.html:124
+msgid "Артикул"
+msgstr ""
+
+#: templates/my_orders.html:63 templates/order_create.html:126
+msgid "Кол."
+msgstr ""
+
+#: templates/my_orders.html:64 templates/order_create.html:127
+msgid "Ед. цена"
+msgstr ""
+
+#: templates/my_orders.html:65 templates/order_create.html:128
+msgid "Общо"
+msgstr ""
+
+#: templates/my_orders.html:66
+msgid "Прогрес"
+msgstr ""
+
+#: templates/my_orders.html:75 templates/order_create.html:648
+msgid "Продукт"
+msgstr ""
+
+#: templates/my_orders.html:77 templates/order_create.html:648
+msgid "Детайл"
+msgstr ""
+
+#: templates/my_orders.html:85
+msgid "бр."
+msgstr ""
+
+#: templates/my_orders.html:101
+msgid "Общ напредък на поръчката:"
+msgstr ""
+
+#: templates/my_orders.html:104
+msgid "Обща сума:"
+msgstr ""
+
+#: templates/my_orders.html:107
+#, python-format
+msgid "Наистина ли искате да отмените поръчка %(order_number)s?"
+msgstr ""
+
+#: templates/my_orders.html:109
+msgid "Отмени поръчка"
+msgstr ""
+
+#: templates/my_orders.html:116
+msgid "Нямате направени поръчки все още."
+msgstr ""
+
+#: templates/my_orders.html:116
+msgid "Направете първата си поръчка"
+msgstr ""
+
+#: templates/order_create.html:7 templates/partials/navbar.html:25
+msgid "Нова Поръчка"
+msgstr ""
+
+#: templates/order_create.html:34
+msgid "Добавяне на артикул към поръчката"
+msgstr ""
+
+#: templates/order_create.html:35
+msgid ""
+"Добавете един или няколко продукта / детайла, след което изпратете цялата"
+" поръчка наведнъж."
+msgstr ""
+
+#: templates/order_create.html:38
+msgid "Тип артикул"
+msgstr ""
+
+#: templates/order_create.html:40
+msgid "Цялостен продукт (Модул)"
+msgstr ""
+
+#: templates/order_create.html:41
+msgid "Отделен детайл (Компонент)"
+msgstr ""
+
+#: templates/order_create.html:48
+msgid "Продукт *"
+msgstr ""
+
+#: templates/order_create.html:54
+msgid "Продукти"
+msgstr ""
+
+#: templates/order_create.html:58
+msgid "Няма налични продукти"
+msgstr ""
+
+#: templates/order_create.html:65
+msgid "Детайл *"
+msgstr ""
+
+#: templates/order_create.html:71
+msgid "Детайли"
+msgstr ""
+
+#: templates/order_create.html:75
+msgid "Няма налични детайли"
+msgstr ""
+
+#: templates/order_create.html:81
+msgid "Количество"
+msgstr ""
+
+#: templates/order_create.html:85
+msgid "Добави"
+msgstr ""
+
+#: templates/order_create.html:90
+msgid "Операции за този детайл (незадължително - рязане, огъване, пробиване...)"
+msgstr ""
+
+#: templates/order_create.html:91
+msgid "Приложени само към детайла, който ще бъде добавен към количката по-долу."
+msgstr ""
+
+#: templates/order_create.html:94
+msgid "Изберете услуга"
+msgstr ""
+
+#: templates/order_create.html:96 templates/upload.html:67
+msgid "час"
+msgstr ""
+
+#: templates/order_create.html:99
+msgid "Описание (незадължително, напр. външно лазерно рязане)"
+msgstr ""
+
+#: templates/order_create.html:100
+msgid "Продължителност (мин)"
+msgstr ""
+
+#: templates/order_create.html:101
+msgid "Добави операция"
+msgstr ""
+
+#: templates/order_create.html:105 templates/order_create.html:489
+msgid "Няма избрани операции за този детайл."
+msgstr ""
+
+#: templates/order_create.html:111
+msgid "Приложен PDF (незадължително - чертеж, спецификация...)"
+msgstr ""
+
+#: templates/order_create.html:119
+msgid "Съдържание на поръчката"
+msgstr ""
+
+#: templates/order_create.html:125
+msgid "Тип"
+msgstr ""
+
+#: templates/order_create.html:133 templates/order_create.html:625
+msgid "Все още няма добавени артикули."
+msgstr ""
+
+#: templates/order_create.html:137
+msgid "Обща стойност:"
+msgstr ""
+
+#: templates/order_create.html:148
+msgid "Назначи машина (по избор)"
+msgstr ""
+
+#: templates/order_create.html:150 templates/upload.html:82
+msgid "Без конкретна машина"
+msgstr ""
+
+#: templates/order_create.html:152 templates/upload.html:84
+msgid "Свободна"
+msgstr ""
+
+#: templates/order_create.html:152 templates/upload.html:84
+msgid "Работи"
+msgstr ""
+
+#: templates/order_create.html:152 templates/upload.html:84
+msgid "Поддръжка"
+msgstr ""
+
+#: templates/order_create.html:158
+msgid "Клиент / Фирма *"
+msgstr ""
+
+#: templates/order_create.html:159 templates/order_create.html:172
+msgid "Бързо създаване"
+msgstr ""
+
+#: templates/order_create.html:162
+msgid "Изберете клиент"
+msgstr ""
+
+#: templates/order_create.html:171
+msgid "Куриер (по избор)"
+msgstr ""
+
+#: templates/order_create.html:175
+msgid "Без конкретен куриер"
+msgstr ""
+
+#: templates/order_create.html:182
+msgid "Изпрати Поръчка"
+msgstr ""
+
+#: templates/order_create.html:352
+msgid "Бързо създаване на клиент"
+msgstr ""
+
+#: templates/order_create.html:356
+msgid "Тип клиент"
+msgstr ""
+
+#: templates/order_create.html:359
+msgid "Физическо лице"
+msgstr ""
+
+#: templates/order_create.html:362
+msgid "Юридическо лице"
+msgstr ""
+
+#: templates/order_create.html:367 templates/order_create.html:410
+msgid "Име *"
+msgstr ""
+
+#: templates/order_create.html:368
+msgid "напр. Иван Иванов / Фирма ЕООД"
+msgstr ""
+
+#: templates/order_create.html:376 templates/order_create.html:419
+msgid "напр. 0888 123 456"
+msgstr ""
+
+#: templates/order_create.html:380 templates/order_create.html:422
+msgid "ЕИК / Булстат"
+msgstr ""
+
+#: templates/order_create.html:382 templates/order_create.html:424
+msgid "Точно 9 цифри"
+msgstr ""
+
+#: templates/order_create.html:385 templates/order_create.html:427
+msgid "ИН по ДДС"
+msgstr ""
+
+#: templates/order_create.html:389 templates/order_create.html:431
+msgid "Адрес на управление"
+msgstr ""
+
+#: templates/order_create.html:390 templates/order_create.html:432
+msgid "напр. София, бул. ..."
+msgstr ""
+
+#: templates/order_create.html:393 templates/order_create.html:435
+msgid "МОЛ"
+msgstr ""
+
+#: templates/order_create.html:394 templates/order_create.html:436
+msgid "напр. Иван Иванов"
+msgstr ""
+
+#: templates/order_create.html:397 templates/order_create.html:740
+#: templates/order_create.html:757
+msgid "Добави клиент"
+msgstr ""
+
+#: templates/order_create.html:406
+msgid "Бързо създаване на куриер"
+msgstr ""
+
+#: templates/order_create.html:411
+msgid "напр. Спиди / Еконт"
+msgstr ""
+
+#: templates/order_create.html:438 templates/order_create.html:777
+#: templates/order_create.html:793
+msgid "Добави куриер"
+msgstr ""
+
+#: templates/order_create.html:464
+msgid "Моля изберете услуга."
+msgstr ""
+
+#: templates/order_create.html:465
+msgid "Моля въведете валидна продължителност в минути."
+msgstr ""
+
+#: templates/order_create.html:498 templates/order_create.html:658
+msgid "Премахни"
+msgstr ""
+
+#: templates/order_create.html:502 templates/order_create.html:637
+msgid "мин"
+msgstr ""
+
+#: templates/order_create.html:511
+msgid "Операции общо:"
+msgstr ""
+
+#: templates/order_create.html:511
+msgid "€ на брой (плюс базовата цена на детайла)"
+msgstr ""
+
+#: templates/order_create.html:534
+msgid "Моля въведете валидно количество."
+msgstr ""
+
+#: templates/order_create.html:540
+msgid "Няма избран продукт."
+msgstr ""
+
+#: templates/order_create.html:553
+msgid "Няма избран детайл."
+msgstr ""
+
+#: templates/order_create.html:591
+msgid "Качване на PDF файла..."
+msgstr ""
+
+#: templates/order_create.html:601
+msgid "Грешка при качване на PDF файла."
+msgstr ""
+
+#: templates/order_create.html:605
+msgid "Връзката със сървъра беше прекъсната при качване на PDF файла."
+msgstr ""
+
+#: templates/order_create.html:682
+msgid "Моля изберете или създайте клиент."
+msgstr ""
+
+#: templates/order_create.html:730 templates/order_create.html:767
+msgid "Обработване..."
+msgstr ""
+
+#: templates/order_create.html:751 templates/order_create.html:787
+msgid "Грешка при създаване."
+msgstr ""
+
+#: templates/order_create.html:758 templates/order_create.html:794
+msgid "Връзката със сървъра беше прекъсната."
+msgstr ""
+
+#: templates/partials/navbar.html:124 templates/register.html:7
+#: templates/register.html:41
+msgid "Регистрация"
+msgstr ""
+
+#: templates/register.html:43
+msgid "Създайте нов профил, за да управлявате вашите чертежи."
+msgstr ""
+
+#: templates/register.html:61
+msgid "Изберете потребителско име..."
+msgstr ""
+
+#: templates/register.html:69
+msgid "Изберете сигурна парола..."
+msgstr ""
+
+#: templates/register.html:72
+msgid "Създай профил"
+msgstr ""
+
+#: templates/register.html:77
+msgid "Вече имате профил?"
+msgstr ""
+
+#: templates/register.html:77
+msgid "Влезте оттук"
+msgstr ""
+
+#: templates/reset_password.html:7 templates/reset_password.html:20
+#: templates/reset_password.html:36
+msgid "Нова парола"
+msgstr ""
+
+#: templates/reset_password.html:37
+msgid "Поне 8 символа..."
+msgstr ""
+
+#: templates/reset_password.html:40
+msgid "Потвърдете паролата"
+msgstr ""
+
+#: templates/reset_password.html:41
+msgid "Повторете паролата..."
+msgstr ""
+
+#: templates/reset_password.html:45
+msgid "Смени паролата"
+msgstr ""
+
+#: templates/partials/footer.html:15 templates/partials/navbar.html:19
+#: templates/services.html:7
+msgid "Услуги"
+msgstr ""
+
+#: templates/services.html:46
+msgid "МЕХАНИЧНА ОБРАБОТКА, ЛАЗЕР, ИЗМЕРВАНЕ"
+msgstr ""
+
+#: templates/services.html:47
+msgid "УСЛУГИ И"
+msgstr ""
+
+#: templates/services.html:48
+msgid ""
+"Високоточна механична обработка на стомани, алуминиеви сплави и цветни "
+"метали, 5-осно фрезоване и многоосно струговане, лазерно рязане, огъване "
+"на листов материал и пълен контрол на качеството - на собствен машинен "
+"парк."
+msgstr ""
+
+#: templates/services.html:115 templates/services.html:116
+msgid "ПРОДУКТИ"
+msgstr ""
+
+#: templates/services.html:120
+msgid ""
+"Освен изработка на детайли по чертеж, предлагаме и следните готови "
+"продукти от собствено производство."
+msgstr ""
+
+#: templates/services.html:166 templates/services.html:167
+msgid "ЦЕНИ НА УСЛУГИ"
+msgstr ""
+
+#: templates/services.html:171
+msgid ""
+"Часова ставка за изработка по услуга - използвана при изчисляване на "
+"цената на всеки чертеж/детайл."
+msgstr ""
+
+#: templates/upload.html:7
+msgid "Качване на DXF"
+msgstr ""
+
+#: templates/upload.html:51
+msgid ""
+"Качете чертеж, изберете материал за ценообразуване и го свържете с "
+"конкретна машина по избор."
+msgstr ""
+
+#: templates/upload.html:52
+msgid "Резултатът се добавя към вашата"
+msgstr ""
+
+#: templates/upload.html:52
+msgid "лична библиотека"
+msgstr ""
+
+#: templates/upload.html:57
+msgid "Материал за изчисление *"
+msgstr ""
+
+#: templates/upload.html:64
+msgid "Услуги (рязане) * - изберете една или повече, цената се сумира съответно"
+msgstr ""
+
+#: templates/upload.html:69
+msgid "Няма добавени услуги."
+msgstr ""
+
+#: templates/upload.html:75
+msgid "DXF файл *"
+msgstr ""
+
+#: templates/upload.html:80
+msgid "Свържи с машина (незадължително)"
+msgstr ""
+
+#: templates/upload.html:89
+msgid "Качи и изчисли"
+msgstr ""
+
+#: templates/upload.html:99
+msgid "Моля изберете поне една услуга."
+msgstr ""
+
+#: templates/partials/footer.html:5 templates/partials/footer.html:20
+msgid "Трафком ООД"
+msgstr ""
+
+#: templates/partials/footer.html:5
+msgid "гр. Тетевен"
+msgstr ""
+
+#: templates/partials/footer.html:5
+msgid "Прецизна ЦПУ обработка от 1997 г."
+msgstr ""
+
+#: templates/partials/footer.html:9
+msgid "ул. „Александър Стамболийски“ 36, гр. Тетевен"
+msgstr ""
+
+#: templates/partials/footer.html:9
+msgid "ул. „Воловийте“, 5700 гр. Тетевен (производствена база)"
+msgstr ""
+
+#: templates/partials/footer.html:14
+msgid "Навигация"
+msgstr ""
+
+#: templates/partials/footer.html:20
+msgid "Всички права запазени."
+msgstr ""
+
+#: templates/partials/footer.html:25
+msgid "Отвори чат"
+msgstr ""
+
+#: templates/partials/footer.html:29
+msgid "Асистент на Трафком"
+msgstr ""
+
+#: templates/partials/footer.html:32
+msgid "Напишете съобщение..."
+msgstr ""
+
+#: templates/partials/navbar.html:5
+msgid "Отвори менюто"
+msgstr ""
+
+#: templates/partials/navbar.html:24
+msgid "Лична Библиотека"
+msgstr ""
+
+#: templates/partials/navbar.html:120
+msgid "Профил"
+msgstr ""
+
+#: templates/partials/navbar.html:121
+msgid "Изход"
+msgstr ""
+

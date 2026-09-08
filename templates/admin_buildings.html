@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Сгради и помещения - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .building-block {
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-md);
+            padding: 16px 18px;
+            margin-bottom: 16px;
+        }
+        .building-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .building-header form {
+            display: flex;
+            gap: 8px;
+        }
+        .room-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 8px 0;
+            border-top: 1px solid var(--border-color);
+        }
+        .room-row form {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .inline-input {
+            padding: 5px 8px;
+            background-color: var(--bg-input);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Нова сграда</h3>
+        <form action="{{ url_for('admin_add_building') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="new_building_name">Име на сградата</label>
+                <input type="text" id="new_building_name" name="name" required placeholder="напр. Цех 1">
+            </div>
+            <button type="submit" class="btn-submit">Добави сграда</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Сгради и помещения</h3>
+        <p class="section-subtitle">Йерархията, по която се организира интерактивната карта на фабриката: Сграда → Помещение → Машини/Ел. табла.</p>
+
+        {% if buildings %}
+        {% for b in buildings %}
+        <div class="building-block">
+            <div class="building-header">
+                <form action="{{ url_for('admin_rename_building', building_id=b.id) }}" method="POST" style="display:flex; gap: 8px; align-items: center;">
+                    {% include 'partials/csrf_field.html' %}
+                    <strong>Сграда:</strong>
+                    <input type="text" name="name" value="{{ b.name }}" class="inline-input" required>
+                    <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Запази</button>
+                </form>
+                <form action="{{ url_for('admin_delete_building', building_id=b.id) }}" method="POST"
+                      onsubmit="return confirm('Изтриване на сграда &quot;{{ b.name|e }}&quot;?');">
+                    {% include 'partials/csrf_field.html' %}
+                    <button type="submit" class="btn-delete">Изтрий сградата</button>
+                </form>
+            </div>
+
+            {% for r in b.rooms %}
+            <div class="room-row">
+                <form action="{{ url_for('admin_rename_room', room_id=r.id) }}" method="POST" style="display:flex; gap: 8px; align-items: center;">
+                    {% include 'partials/csrf_field.html' %}
+                    <span class="text-muted text-small">Помещение:</span>
+                    <input type="text" name="name" value="{{ r.name }}" class="inline-input" required>
+                    <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Запази</button>
+                </form>
+                <div style="display: flex; gap: 8px;">
+                    <a href="{{ url_for('admin_factory_map_room', room_id=r.id) }}" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Карта</a>
+                    <form action="{{ url_for('admin_delete_room', room_id=r.id) }}" method="POST"
+                          onsubmit="return confirm('Изтриване на помещение &quot;{{ r.name|e }}&quot;? Машините в него ще останат, но без помещение; таблата в него ще бъдат изтрити.');">
+                        {% include 'partials/csrf_field.html' %}
+                        <button type="submit" class="btn-delete">Изтрий</button>
+                    </form>
+                </div>
+            </div>
+            {% endfor %}
+
+            <form action="{{ url_for('admin_add_room', building_id=b.id) }}" method="POST" style="display:flex; gap: 8px; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color);">
+                {% include 'partials/csrf_field.html' %}
+                <input type="text" name="name" placeholder="Ново помещение..." class="inline-input" required>
+                <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Добави помещение</button>
+            </form>
+        </div>
+        {% endfor %}
+        {% else %}
+        <p class="no-data text-center">Няма добавени сгради.</p>
+        {% endif %}
+    </section>
+
+</main>
+
+</body>
+</html>

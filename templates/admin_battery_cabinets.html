@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Батерийно стопанство - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .cabinet-card { border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 16px; margin-bottom: 16px; background: var(--bg-input); }
+        .cabinet-header { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+        .cabinet-header h4 { margin: 0; }
+        .stack-table-wrap { margin-top: 10px; }
+        .stack-count-pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); font-size: 0.8rem; font-weight: 600; }
+        .stack-count-pill.out-of-range { background: rgba(239, 68, 68, 0.15); color: #ef4444; border-color: rgba(239, 68, 68, 0.4); }
+        .add-stack-form { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border-color); }
+        .add-stack-form .form-group { margin-bottom: 0; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px;">
+            <h3 style="margin:0;">Батерийно стопанство</h3>
+            <a href="{{ url_for('admin_battery_models') }}" class="btn-secondary" style="padding: 8px 16px; font-size: 0.85rem; text-decoration:none;">Модели батерии</a>
+        </div>
+    </section>
+
+    <section class="admin-card">
+        <h3>Нов шкаф</h3>
+        <p class="section-subtitle">Шкаф (Cabinet) е физическото тяло, в което седят един или повече stack-а батерии.</p>
+        <form action="{{ url_for('admin_add_cabinet') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="new_cab_name">Име на шкафа</label>
+                <input type="text" id="new_cab_name" name="name" required placeholder="напр. Шкаф батерии - Хале 1">
+            </div>
+            <div class="form-group" style="flex-basis: 100%;">
+                <label for="new_cab_notes">Бележки</label>
+                <textarea id="new_cab_notes" name="notes" rows="2"></textarea>
+            </div>
+            <button type="submit" class="btn-submit">Добави шкаф</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Шкафове и stack-ове</h3>
+        {% if cabinets %}
+        {% for cab in cabinets %}
+        <div class="cabinet-card">
+            <div class="cabinet-header">
+                <h4>{{ cab.name }}</h4>
+                <div style="display:flex; gap:8px;">
+                    <a href="{{ url_for('edit_cabinet_window', cabinet_id=cab.id) }}" onclick="window.open(this.href, 'editCabinet', 'width=480,height=420'); return false;" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
+                    <form action="{{ url_for('admin_delete_cabinet', cabinet_id=cab.id) }}" method="POST"
+                          onsubmit="return confirm('Изтриване на шкаф &quot;{{ cab.name|e }}&quot; заедно с всички негови stack-ове и батерии?');" style="display:inline;">
+                        {% include 'partials/csrf_field.html' %}
+                        <button type="submit" class="btn-delete">Изтрий</button>
+                    </form>
+                </div>
+            </div>
+            {% if cab.notes %}<p class="text-muted text-small">{{ cab.notes }}</p>{% endif %}
+
+            {% if cab.stacks %}
+            <div class="stack-table-wrap table-responsive">
+                <table class="users-table">
+                    <thead>
+                    <tr>
+                        <th>Stack</th>
+                        <th>Инвертор / БМС</th>
+                        <th>Живи данни</th>
+                        <th>Марка / Модел / С/Н</th>
+                        <th>Батерии</th>
+                        <th>Енергия</th>
+                        <th>Помещение</th>
+                        <th class="text-right">Действие</th>
+                        <th class="text-right">Изтриване</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for st in cab.stacks %}
+                    {% set count = st.battery_count %}
+                    {% set out_of_range = (st.min_batteries and count < st.min_batteries) or (st.max_batteries and count > st.max_batteries) %}
+                    <tr>
+                        <td><strong>{{ st.name }}</strong></td>
+                        <td class="text-small text-muted">
+                            {{ st.inverter.name if st.inverter else '—' }}
+                            {% if st.bms_port %}&middot; {{ bms_ports.get(st.bms_port, st.bms_port) }}{% endif %}
+                        </td>
+                        <td class="text-small" data-live-for="{{ st.id }}">&mdash;</td>
+                        <td class="text-small text-muted">{{ [st.brand, st.model, st.serial_number] | select | join(' / ') or '—' }}</td>
+                        <td>
+                            <a href="{{ url_for('admin_stack_batteries_window', stack_id=st.id) }}" onclick="window.open(this.href, 'stackBatteries', 'width=520,height=560'); return false;"
+                               class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 6px; text-decoration: none;">
+                                <span>Батерии</span>
+                                <span class="stack-count-pill {{ 'out-of-range' if out_of_range else '' }}">{{ count }}{% if st.min_batteries or st.max_batteries %} / {{ st.min_batteries or '?' }}-{{ st.max_batteries or '?' }}{% endif %}</span>
+                            </a>
+                        </td>
+                        <td class="text-small text-muted">{{ (st.total_energy_kwh ~ ' kWh') if st.total_energy_kwh is not none else '—' }}</td>
+                        <td class="text-small text-muted">{{ st.place_label }}</td>
+                        <td class="text-right">
+                            <a href="{{ url_for('edit_stack_window', stack_id=st.id) }}" onclick="window.open(this.href, 'editStack', 'width=480,height=620'); return false;" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
+                        </td>
+                        <td class="text-right">
+                            <form action="{{ url_for('admin_delete_stack', stack_id=st.id) }}" method="POST"
+                                  onsubmit="return confirm('Изтриване на stack &quot;{{ st.name|e }}&quot;?');" style="display:inline;">
+                                {% include 'partials/csrf_field.html' %}
+                                <button type="submit" class="btn-delete">Изтрий</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="no-data text-center">Няма добавени stack-ове в този шкаф.</p>
+            {% endif %}
+
+            <form action="{{ url_for('admin_add_stack') }}" method="POST" class="add-stack-form">
+                {% include 'partials/csrf_field.html' %}
+                <input type="hidden" name="cabinet_id" value="{{ cab.id }}">
+                <div class="form-group">
+                    <label>Нов stack - име</label>
+                    <input type="text" name="name" required placeholder="напр. Stack A" style="width: 140px;">
+                </div>
+                <div class="form-group">
+                    <label>Източник на живи данни</label>
+                    <select name="source_type" style="width: 160px;">
+                        {% for k, v in source_types.items() %}
+                        <option value="{{ k }}">{{ v }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Инвертор</label>
+                    <select name="inverter_device_id" style="width: 160px;">
+                        <option value="">-- няма --</option>
+                        {% for d in solis_devices %}
+                        <option value="{{ d.id }}">{{ d.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>БМС порт</label>
+                    <select name="bms_port" style="width: 120px;">
+                        <option value="">-- няма --</option>
+                        {% for k, v in bms_ports.items() %}
+                        <option value="{{ k }}">{{ v }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Марка (по избор)</label>
+                    <input type="text" name="brand" style="width: 120px;">
+                </div>
+                <div class="form-group">
+                    <label>Модел (по избор)</label>
+                    <input type="text" name="model" style="width: 120px;">
+                </div>
+                <div class="form-group">
+                    <label>Сериен номер (по избор)</label>
+                    <input type="text" name="serial_number" style="width: 140px;">
+                </div>
+                <div class="form-group">
+                    <label>Мин. батерии</label>
+                    <input type="text" name="min_batteries" style="width: 80px;" placeholder="напр. 3">
+                </div>
+                <div class="form-group">
+                    <label>Макс. батерии</label>
+                    <input type="text" name="max_batteries" style="width: 80px;" placeholder="напр. 11">
+                </div>
+                <div class="form-group">
+                    <label>Помещение</label>
+                    <select name="room_id" style="width: 160px;">
+                        <option value="">-- няма --</option>
+                        {% for r in rooms %}
+                        <option value="{{ r.id }}">{{ r.building.name }} / {{ r.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <button type="submit" class="btn-submit">Добави stack</button>
+            </form>
+        </div>
+        {% endfor %}
+        {% else %}
+        <p class="no-data text-center">Няма добавени шкафове.</p>
+        {% endif %}
+    </section>
+
+</main>
+<script>
+    // Live SOC/voltage/temperature per stack - see admin_battery_cabinets_data()/
+    // _battery_stack_live_data() in app.py. Only stacks with source_type=
+    // 'inverter' and inverter_device_id/bms_port set ever get a value here;
+    // everything else just keeps showing "—".
+    const STACK_DIR_LABELS = {charge: 'Зарежда', discharge: 'Разрежда', idle: 'В покой'};
+    function renderStackLive(g) {
+        if (!g) return '—';
+        // g.voltage/current/power are the real per-port BMS readings
+        // (CONFIRMED for soc/voltage - see _battery_stack_live_data() in
+        // app.py) - "добавим... напрежението за всяка батерия от bms",
+        // "направи същото и за токовете и мощността".
+        return `${g.soc}% SOC &middot; ${g.voltage.toFixed(1)} V &middot; ${g.current.toFixed(1)} A &middot; `
+            + `${Math.abs(g.power).toFixed(0)} W (${STACK_DIR_LABELS[g.direction] || g.direction}) &middot; `
+            + `${g.cell_voltage_min.toFixed(2)}-${g.cell_voltage_max.toFixed(2)} V/cell &middot; ${g.temperature_min.toFixed(0)}-${g.temperature_max.toFixed(0)} °C`;
+    }
+    function pollStackLive() {
+        fetch('{{ url_for("admin_battery_cabinets_data") }}')
+            .then(r => r.json())
+            .then(data => {
+                document.querySelectorAll('[data-live-for]').forEach(el => {
+                    const id = el.getAttribute('data-live-for');
+                    el.innerHTML = renderStackLive(data.stacks[id]);
+                });
+            })
+            .catch(() => {});
+    }
+    pollStackLive();
+    setInterval(pollStackLive, 10000);
+</script>
+</body>
+</html>

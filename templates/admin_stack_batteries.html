@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Батерии - {{ stack.name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        body { margin: 0; padding: 20px; background-color: var(--bg-main); }
+        .battery-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border-color); font-size: 0.88rem; }
+        .battery-row:last-of-type { border-bottom: none; }
+        .battery-info span { color: var(--text-muted); margin-right: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="admin-card" style="max-width: 480px; margin: 0 auto;">
+    <h3 style="margin-top:0;">Батерии &middot; {{ stack.name }}</h3>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    {% if stack.batteries %}
+    <div style="margin-bottom: 14px;">
+        {% for b in stack.batteries %}
+        <div class="battery-row">
+            <div class="battery-info">
+                <strong>#{{ loop.index }}</strong>
+                <span>{{ b.voltage ~ ' V' if b.voltage is not none else '— V' }}</span>
+                <span>{{ b.capacity_ah ~ ' Ah' if b.capacity_ah is not none else '— Ah' }}</span>
+                <span>С/Н: {{ b.serial_number or '—' }}</span>
+                {% if b.model %}<span>{{ b.model.name }}</span>{% endif %}
+            </div>
+            <div style="display:flex; gap:6px; flex-shrink:0;">
+                <a href="{{ url_for('edit_battery_window', battery_id=b.id) }}" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem; text-decoration:none;">Редактирай</a>
+                <form action="{{ url_for('admin_delete_battery', battery_id=b.id) }}" method="POST"
+                      onsubmit="return confirm('Изтриване на батерия #{{ loop.index }}?');" style="display:inline;">
+                    {% include 'partials/csrf_field.html' %}
+                    <button type="submit" class="btn-delete" style="padding: 4px 10px; font-size: 0.78rem;">Изтрий</button>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="no-data text-center">Няма добавени батерии.</p>
+    {% endif %}
+
+    <form action="{{ url_for('admin_add_battery', stack_id=stack.id) }}" method="POST" class="admin-form" style="border-top: 1px dashed var(--border-color); padding-top: 14px;">
+        {% include 'partials/csrf_field.html' %}
+        <div class="form-group" style="flex-basis: 100%;">
+            <label for="bat_model">Модел батерия</label>
+            <select id="bat_model" name="model_id" onchange="applyBatteryModel(this)">
+                <option value="">-- без модел (ръчно въвеждане) --</option>
+                {% for m in battery_models %}
+                <option value="{{ m.id }}" data-voltage="{{ m.nominal_voltage_v }}" data-capacity="{{ m.capacity_ah }}" data-energy="{{ m.energy_kwh if m.energy_kwh is not none else '' }}">{{ m.name }} ({{ m.nominal_voltage_v }}V / {{ m.capacity_ah }}Ah)</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="bat_voltage">Напрежение (V)</label>
+            <input type="text" id="bat_voltage" name="voltage" placeholder="напр. 51.2" oninput="updateEnergyDisplay()">
+        </div>
+        <div class="form-group">
+            <label for="bat_capacity">Капацитет (Ah)</label>
+            <input type="text" id="bat_capacity" name="capacity_ah" placeholder="напр. 100" oninput="updateEnergyDisplay()">
+        </div>
+        <div class="form-group">
+            <label>Енергия</label>
+            <div id="bat_energy_display" style="padding: 10px 0; color: var(--text-muted);">—</div>
+        </div>
+        <div class="form-group" style="flex-basis: 100%;">
+            <label for="bat_serial">Сериен номер</label>
+            <input type="text" id="bat_serial" name="serial_number">
+        </div>
+        <button type="submit" class="btn-submit">Добави батерия</button>
+    </form>
+    <script>
+        function applyBatteryModel(sel) {
+            const opt = sel.options[sel.selectedIndex];
+            const voltageInput = document.getElementById('bat_voltage');
+            const capacityInput = document.getElementById('bat_capacity');
+            if (opt.value) {
+                voltageInput.value = opt.dataset.voltage;
+                capacityInput.value = opt.dataset.capacity;
+                voltageInput.readOnly = true;
+                capacityInput.readOnly = true;
+            } else {
+                voltageInput.readOnly = false;
+                capacityInput.readOnly = false;
+            }
+            updateEnergyDisplay();
+        }
+        function updateEnergyDisplay() {
+            const sel = document.getElementById('bat_model');
+            const opt = sel.options[sel.selectedIndex];
+            const display = document.getElementById('bat_energy_display');
+            if (opt.value && opt.dataset.energy) {
+                display.textContent = parseFloat(opt.dataset.energy).toFixed(2) + ' kWh';
+                return;
+            }
+            const v = parseFloat(document.getElementById('bat_voltage').value);
+            const c = parseFloat(document.getElementById('bat_capacity').value);
+            display.textContent = (!isNaN(v) && !isNaN(c)) ? (v * c / 1000).toFixed(2) + ' kWh' : '—';
+        }
+    </script>
+
+    <button type="button" class="btn-secondary" style="margin-top: 12px; width: 100%;" onclick="window.opener && window.opener.location.reload(); window.close();">Затвори</button>
+</div>
+
+</body>
+</html>

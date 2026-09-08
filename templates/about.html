@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="bg">
+<html lang="{{ get_locale() }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     {% include 'partials/favicon.html' %}
-    <title>За нас - Trafcom</title>
+    <title>{{ _('За нас') }} - Trafcom</title>
     <meta name="description" content="Трафком ООД - основана през 1997 г. в гр. Тетевен. CNC обработка на стомани и алуминиеви сплави в механичен цех от 4 000 m².">
     <meta name="keywords" content="Трафком ООД, история, CNC цех, механична обработка, Тетевен, България, обработка на стомана, обработка на алуминиеви сплави, механичен цех Ловешка област, производство на детайли Ловеч, производство на детайли Плевен">
     <meta name="robots" content="index, follow">
@@ -31,22 +31,22 @@
 <main class="dmg-container">
 
     <section class="dmg-hero">
-        <div class="hero-tag"><span>01</span> // ИСТОРИЯ НА ФИРМАТА</div>
-        <h1 class="hero-title">ЗА <span class="text-glow">ТРАФКОМ</span> ООД</h1>
-        <p class="hero-lead">{{ text('about.hero_lead', 'Трафком ООД е основана през 1997 г. в гр. Тетевен. Първоначално фирмата произвежда трансформатори и електроника за радиотехника. От 2021 г. разполага с изцяло нов механичен цех (≈ 4 000 m²), чиято основна дейност е механична обработка на детайли.') }}</p>
+        <div class="hero-tag"><span>01</span> // {{ _('ИСТОРИЯ НА ФИРМАТА') }}</div>
+        <h1 class="hero-title">{{ _('ЗА') }} <span class="text-glow">{{ _('ТРАФКОМ') }}</span> {{ _('ООД') }}</h1>
+        <p class="hero-lead">{{ text('about.hero_lead', _('Трафком ООД е основана през 1997 г. в гр. Тетевен. Първоначално фирмата произвежда трансформатори и електроника за радиотехника. От 2021 г. разполага с изцяло нов механичен цех (≈ 4 000 m²), чиято основна дейност е механична обработка на детайли.')) }}</p>
 
         <div class="hero-stats">
             <div class="stat-item">
                 <span class="stat-num">1997</span>
-                <span class="stat-label">Основана в гр. Тетевен</span>
+                <span class="stat-label">{{ _('Основана в гр. Тетевен') }}</span>
             </div>
             <div class="stat-item">
                 <span class="stat-num">4 000 m²</span>
-                <span class="stat-label">Механичен цех (от 2021 г.)</span>
+                <span class="stat-label">{{ _('Механичен цех (от 2021 г.)') }}</span>
             </div>
             <div class="stat-item">
-                <span class="stat-num">5-осно</span>
-                <span class="stat-label">Фрезоване и струговане</span>
+                <span class="stat-num">{{ _('5-осно') }}</span>
+                <span class="stat-label">{{ _('Фрезоване и струговане') }}</span>
             </div>
         </div>
     </section>
@@ -54,39 +54,39 @@
     <section class="dmg-showcase-section">
         <div class="section-header-dmg">
             <div>
-                <div class="hero-tag"><span>02</span> // КОМПЕТЕНЦИИ</div>
-                <h2 class="dmg-section-title">С КАКВО СЕ ЗАНИМАВАМЕ</h2>
+                <div class="hero-tag"><span>02</span> // {{ _('КОМПЕТЕНЦИИ') }}</div>
+                <h2 class="dmg-section-title">{{ _('С КАКВО СЕ ЗАНИМАВАМЕ') }}</h2>
             </div>
             <span class="dmg-line-decorative"></span>
         </div>
 
         <div class="competency-grid">
-            <div class="competency-item">Високоточна механична обработка на стомани, алуминиеви сплави и цветни метали</div>
-            <div class="competency-item">5-осно фрезоване и многоосно струговане със задвижвани инструменти</div>
-            <div class="competency-item">Лазерно рязане и нишкова електроерозия (Wire EDM)</div>
-            <div class="competency-item">Огъване и формоване на листов материал</div>
-            <div class="competency-item">3D измерване и контрол на качеството (CMM)</div>
-            <div class="competency-item">3D лазерно сканиране и reverse engineering</div>
+            <div class="competency-item">{{ _('Високоточна механична обработка на стомани, алуминиеви сплави и цветни метали') }}</div>
+            <div class="competency-item">{{ _('5-осно фрезоване и многоосно струговане със задвижвани инструменти') }}</div>
+            <div class="competency-item">{{ _('Лазерно рязане и нишкова електроерозия (Wire EDM)') }}</div>
+            <div class="competency-item">{{ _('Огъване и формоване на листов материал') }}</div>
+            <div class="competency-item">{{ _('3D измерване и контрол на качеството (CMM)') }}</div>
+            <div class="competency-item">{{ _('3D лазерно сканиране и reverse engineering') }}</div>
         </div>
     </section>
 
     <section class="dmg-showcase-section">
         <div class="section-header-dmg">
             <div>
-                <div class="hero-tag"><span>03</span> // ЛОКАЦИИ</div>
-                <h2 class="dmg-section-title">КЪДЕ СМЕ</h2>
+                <div class="hero-tag"><span>03</span> // {{ _('ЛОКАЦИИ') }}</div>
+                <h2 class="dmg-section-title">{{ _('КЪДЕ СМЕ') }}</h2>
             </div>
             <span class="dmg-line-decorative"></span>
         </div>
 
         <div class="info-grid">
             <div class="info-card">
-                <h3>Офис и кореспонденция</h3>
-                <p>{{ text('about.office_address', 'гр. Тетевен, ул. „Александър Стамболийски“ 36') }}</p>
+                <h3>{{ _('Офис и кореспонденция') }}</h3>
+                <p>{{ text('about.office_address', _('гр. Тетевен, ул. „Александър Стамболийски“ 36')) }}</p>
             </div>
             <div class="info-card">
-                <h3>Производствена база</h3>
-                <p>{{ text('about.production_address', 'гр. Тетевен, ул. „Воловийте“ · механичен цех ≈ 4 000 m²') }}</p>
+                <h3>{{ _('Производствена база') }}</h3>
+                <p>{{ text('about.production_address', _('гр. Тетевен, ул. „Воловийте“ · механичен цех ≈ 4 000 m²')) }}</p>
             </div>
         </div>
     </section>

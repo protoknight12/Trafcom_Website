@@ -595,6 +595,31 @@ div[id$="Modal"] > .admin-card {
     white-space: nowrap;
 }
 
+.lang-switcher {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+}
+.lang-switcher a {
+    text-decoration: none;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    color: var(--text-muted);
+    padding: 5px 8px;
+    border-radius: var(--border-radius-sm);
+    transition: all 0.2s ease;
+}
+.lang-switcher a:hover {
+    color: var(--text-main);
+    background-color: rgba(255, 255, 255, 0.06);
+}
+.lang-switcher a.lang-active {
+    color: var(--text-main);
+    background-color: var(--accent-primary);
+}
+
 /* Hero / intro strip above the app grid */
 .hero-section {
     padding: 56px 0 40px;
@@ -768,6 +793,51 @@ div[id$="Modal"] > .admin-card {
 }
 .dropdown-content-grouped > .dropdown-group-label:first-child {
     padding-top: 4px;
+}
+
+/* Second-level accordion (each group in "Управление" is now its own
+   collapsible section instead of a long flat list under a plain label) -
+   click-toggled (see the script at the bottom of navbar.html), not hover:
+   a sideways flyout off a dropdown already pinned to the right edge of the
+   navbar kept running off-screen, and a hover accordion that pushes
+   content down as the mouse moves is fiddly on both desktop and touch.
+   Expands in place, indented, within the same scrollable panel. */
+.dropdown-sub-trigger {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 12px 20px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    justify-content: space-between;
+    color: var(--text-muted);
+}
+.dropdown-sub-trigger:hover {
+    background-color: var(--bg-input);
+    color: var(--text-main);
+}
+.dropdown-sub-trigger .dropdown-arrow {
+    font-size: 0.6rem;
+    transition: transform 0.2s ease;
+}
+.dropdown-sub.open > .dropdown-sub-trigger {
+    color: var(--text-main);
+}
+.dropdown-sub.open > .dropdown-sub-trigger .dropdown-arrow {
+    transform: rotate(180deg);
+    color: var(--accent-secondary);
+}
+.dropdown-content-sub {
+    display: none !important;
+    position: static !important;
+    box-shadow: none;
+    border: none;
+    background: none;
+    padding-left: 14px;
+    margin: 0;
+    transform: none;
+}
+.dropdown-sub.open > .dropdown-content-sub {
+    display: block !important;
 }
 .dropdown-home-link {
     font-weight: 700 !important;
@@ -1319,7 +1389,7 @@ div[id$="Modal"] > .admin-card {
        menu looks broken - just always expand it inline on small screens. */
     .dropdown-content {
         position: static;
-        display: block;
+        display: block !important;
         box-shadow: none;
         border: none;
         background: none;
@@ -1329,6 +1399,18 @@ div[id$="Modal"] > .admin-card {
     }
     .dropdown-content::before {
         display: none;
+    }
+    /* The generic rule above would otherwise force every accordion section
+       open at once here too - keep respecting .open (click-toggled, same
+       script as desktop) on mobile instead of always-expanding it. */
+    .dropdown-content-sub {
+        display: none !important;
+    }
+    .dropdown-sub.open > .dropdown-content-sub {
+        display: block !important;
+    }
+    .dropdown-content-sub {
+        padding-left: 12px;
     }
 }
 
