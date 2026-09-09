@@ -361,6 +361,7 @@
                 <button type="button" id="btn-bg-upload" class="view-toggle-btn">{{ _('+ Фон') }}</button>
                 <button type="button" id="btn-bg-clear" class="view-toggle-btn" style="display: none;">{{ _('✕ Фон') }}</button>
                 <button type="button" id="btn-overlay-reset" class="view-toggle-btn" style="display: none;">{{ _('⟲ Нулирай') }}</button>
+                <button type="button" id="btn-3d-reset" class="view-toggle-btn" style="display: none;">{{ _('⟲ Нулирай изглед') }}</button>
             </div>
             <div class="preview-bg-layer" id="preview-bg-layer"></div>
             <canvas id="genCanvas"></canvas>
@@ -564,6 +565,8 @@
         btn.addEventListener('click', () => {
             viewMode = btn.getAttribute('data-view');
             document.querySelectorAll('.view-toggle-btn[data-view]').forEach(b => b.classList.toggle('active', b === btn));
+            document.getElementById('btn-3d-reset').style.display = viewMode === '3d' ? '' : 'none';
+            applyOverlayTransform();
             render();
         });
     });
@@ -621,14 +624,21 @@
         overlayOffsetY = 0;
     }
 
-    function applyOverlayTransform() {
+    function updateCanvasCursor() {
         if (overlayInteractive()) {
-            canvas.style.transform = `translate(${overlayOffsetX}px, ${overlayOffsetY}px) scale(${overlayScale})`;
             canvas.style.cursor = isDraggingOverlay ? 'grabbing' : 'grab';
+        } else if (orbitInteractive()) {
+            canvas.style.cursor = isDragging3D ? 'grabbing' : 'grab';
         } else {
-            canvas.style.transform = 'none';
             canvas.style.cursor = '';
         }
+    }
+
+    function applyOverlayTransform() {
+        canvas.style.transform = overlayInteractive()
+            ? `translate(${overlayOffsetX}px, ${overlayOffsetY}px) scale(${overlayScale})`
+            : 'none';
+        updateCanvasCursor();
     }
 
     canvas.addEventListener('mousedown', (e) => {
@@ -662,6 +672,68 @@
     document.getElementById('btn-overlay-reset').addEventListener('click', () => {
         resetOverlayTransform();
         applyOverlayTransform();
+    });
+
+    /**
+     * Drag-to-orbit + scroll-to-zoom for the 3D view - lets the camera be
+     * rotated and tilted around the panel and zoomed in/out, instead of the
+     * single fixed 30deg corner shot this used to be stuck with. Purely a
+     * camera transform read by draw3D() every frame (see view3DAzimuth/
+     * view3DElevation/view3DZoom below) - never touches the generated
+     * geometry, panel dimensions, or the DXF export.
+     */
+    let view3DAzimuth = Math.PI / 4;
+    let view3DElevation = 35 * Math.PI / 180;
+    let view3DZoom = 1;
+    // Clamped well short of straight-down/straight-up: past those the box
+    // degenerates to a flat silhouette (top face edge-on or a plan view
+    // with no side walls at all to show its thickness).
+    const VIEW3D_ELEVATION_MIN = 8 * Math.PI / 180;
+    const VIEW3D_ELEVATION_MAX = 82 * Math.PI / 180;
+    let isDragging3D = false, drag3DStartX = 0, drag3DStartY = 0, drag3DStartAzimuth = 0, drag3DStartElevation = 0;
+
+    function orbitInteractive() {
+        return viewMode === '3d';
+    }
+
+    function reset3DView() {
+        view3DAzimuth = Math.PI / 4;
+        view3DElevation = 35 * Math.PI / 180;
+        view3DZoom = 1;
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+        if (!orbitInteractive()) return;
+        isDragging3D = true;
+        drag3DStartX = e.clientX;
+        drag3DStartY = e.clientY;
+        drag3DStartAzimuth = view3DAzimuth;
+        drag3DStartElevation = view3DElevation;
+        updateCanvasCursor();
+        e.preventDefault();
+    });
+    window.addEventListener('mousemove', (e) => {
+        if (!isDragging3D) return;
+        view3DAzimuth = drag3DStartAzimuth + (e.clientX - drag3DStartX) * 0.01;
+        view3DElevation = Math.min(VIEW3D_ELEVATION_MAX, Math.max(VIEW3D_ELEVATION_MIN,
+            drag3DStartElevation - (e.clientY - drag3DStartY) * 0.01));
+        render();
+    });
+    window.addEventListener('mouseup', () => {
+        if (!isDragging3D) return;
+        isDragging3D = false;
+        updateCanvasCursor();
+    });
+    canvas.addEventListener('wheel', (e) => {
+        if (!orbitInteractive()) return;
+        e.preventDefault();
+        const factor = e.deltaY < 0 ? 1.08 : 1 / 1.08;
+        view3DZoom = Math.min(4, Math.max(0.4, view3DZoom * factor));
+        render();
+    }, { passive: false });
+    document.getElementById('btn-3d-reset').addEventListener('click', () => {
+        reset3DView();
+        render();
     });
 
     const inputs = ['width', 'height', 'thickness', 'cellsize', 'minsize', 'spacing', 'rotation', 'clustercomplete', 'rhombusgap', 'border', 'densezone', 'falloff', 'sparseness', 'jitter', 'randomness', 'seed',
@@ -1414,18 +1486,39 @@
         ctx.globalCompositeOperation = 'source-over';
     }
 
-    // ponytail: fixed 30deg isometric angle rather than a user-orbitable
-    // camera - gives the classic "corner view" that shows the top face plus
-    // the two thickness edges nearest the viewer, which is the whole point
-    // of this view. A free-rotate control would also need to work out which
-    // walls face the camera at each angle (face-normal test); add that if a
-    // fixed angle ever stops being enough.
-    const ISO_ANGLE = Math.PI / 6;
-    function projectIso(x, y, z) {
-        return [
-            (x - y) * Math.cos(ISO_ANGLE),
-            (x + y) * Math.sin(ISO_ANGLE) - z,
-        ];
+    /**
+     * General axonometric projection driven by the current camera orbit
+     * state (view3DAzimuth/view3DElevation - see the drag/wheel handlers
+     * above). Rotates around the box's own center (not the origin corner)
+     * so dragging orbits around the panel itself instead of swinging
+     * around one corner of it. Returns screen-space x/y plus `depth`
+     * (distance from camera, growing away from the viewer) - depth isn't
+     * drawn, only used for face culling/painter's-algorithm ordering below.
+     */
+    function project3D(x, y, z, W, H, T) {
+        const px = x - W / 2, py = y - H / 2, pz = z - T / 2;
+        const cosA = Math.cos(view3DAzimuth), sinA = Math.sin(view3DAzimuth);
+        const x1 = px * cosA - py * sinA;
+        const y1 = px * sinA + py * cosA;
+        const cosE = Math.cos(view3DElevation), sinE = Math.sin(view3DElevation);
+        const y2 = y1 * cosE - pz * sinE;
+        const z2 = y1 * sinE + pz * cosE;
+        return { x: x1, y: -z2, depth: y2 };
+    }
+
+    /**
+     * Depth-facing component of a face's outward normal, rotated the same
+     * way as project3D() (direction only, no translate/z-flip needed).
+     * Negative means the face points toward the camera (visible); positive
+     * means it faces away (hidden behind the box itself) - lets draw3D()
+     * work out which of the 4 side walls are actually facing the camera at
+     * the current orbit angle, instead of always drawing the same two.
+     */
+    function faceFacing(nx, ny, nz) {
+        const cosA = Math.cos(view3DAzimuth), sinA = Math.sin(view3DAzimuth);
+        const y1 = nx * sinA + ny * cosA;
+        const cosE = Math.cos(view3DElevation), sinE = Math.sin(view3DElevation);
+        return y1 * cosE - nz * sinE;
     }
 
     // ponytail: real sheet thickness (0.1-5mm) is invisible against a panel
@@ -1440,22 +1533,32 @@
         const T = parseFloat(document.getElementById('in-thickness').value) * THICKNESS_VISUAL_SCALE;
 
         const corners = [];
-        [0, W].forEach(x => [0, H].forEach(y => [0, T].forEach(z => corners.push(projectIso(x, y, z)))));
-        const xs = corners.map(c => c[0]), ys = corners.map(c => c[1]);
+        [0, W].forEach(x => [0, H].forEach(y => [0, T].forEach(z => corners.push(project3D(x, y, z, W, H, T)))));
+        const xs = corners.map(c => c.x), ys = corners.map(c => c.y);
         const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
-        const target = 720;
-        const scale = Math.min(target / (maxX - minX), target / (maxY - minY));
-        const pad = 20;
-        const offX = -minX * scale + pad;
-        const offY = -minY * scale + pad;
+        const centerX = (minX + maxX) / 2, centerY = (minY + maxY) / 2;
 
-        canvas.width = (maxX - minX) * scale + pad * 2;
-        canvas.height = (maxY - minY) * scale + pad * 2;
+        // A fixed square viewport, unlike the old exact-fit-to-content
+        // canvas: the bounding box's own aspect ratio keeps changing as the
+        // camera orbits, and a canvas that resized every frame would also
+        // fight the CSS max-width/max-height cap on the element (zooming
+        // in would grow the canvas, which the CSS cap then scales back
+        // down, cancelling the zoom out again). Fit-to-viewport happens at
+        // zoom 1; view3DZoom then scales in/out from the box's own center.
+        const viewport = 720;
+        const pad = 20;
+        const baseScale = Math.min((viewport - pad * 2) / (maxX - minX), (viewport - pad * 2) / (maxY - minY));
+        const scale = baseScale * view3DZoom;
+        const offX = viewport / 2 - centerX * scale;
+        const offY = viewport / 2 - centerY * scale;
+
+        canvas.width = viewport;
+        canvas.height = viewport;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         function pt(x, y, z) {
-            const [ix, iy] = projectIso(x, y, z);
-            return [ix * scale + offX, iy * scale + offY];
+            const p = project3D(x, y, z, W, H, T);
+            return [p.x * scale + offX, p.y * scale + offY];
         }
         function fillPoly(points, fillStyle, stroke) {
             ctx.beginPath();
@@ -1470,23 +1573,39 @@
             }
         }
 
-        // Only the two walls touching the nearest (front) corner are ever
-        // visible from this fixed angle - the other two sit behind the top
-        // face. The front corner is (W,H,0): with this projection, screen-Y
-        // grows with (x+y), so the corner that maximizes x+y is the one
-        // closest to the viewer (bottom of the diamond on screen), not (0,0).
-        // With a RAL color chosen, that becomes the top face's color and the
-        // two side walls are shaded darker off it, same relative darkness as
-        // the original fixed palette; with nothing chosen the original
-        // fixed colors are unchanged.
+        // Which (up to) two of the 4 side walls are actually facing the
+        // camera changes continuously as the camera orbits - unlike the
+        // old fixed-angle view, where it was always the same two. A wall's
+        // own outward normal (faceFacing()) says whether it points toward
+        // the camera (visible) or away (hidden behind the box). Drawn
+        // farthest-first (painter's algorithm) so a nearer wall correctly
+        // overdraws the farther one along their shared vertical edge. With
+        // a RAL color chosen, that becomes the top face's color and the
+        // walls are shaded darker off it, same relative darkness as the
+        // original fixed palette; with nothing chosen the original fixed
+        // colors are unchanged.
         const ralHex = document.getElementById('in-ralcolor').value;
         const topColor = ralHex || '#94a1b8';
-        const wallColor1 = ralHex ? shadeColor(ralHex, -0.32) : '#4b525f';
-        const wallColor2 = ralHex ? shadeColor(ralHex, -0.24) : '#5b6472';
-        fillPoly([pt(W, H, 0), pt(W, 0, 0), pt(W, 0, T), pt(W, H, T)], wallColor1);
-        fillPoly([pt(W, H, 0), pt(0, H, 0), pt(0, H, T), pt(W, H, T)], wallColor2);
+        const wallColorX = ralHex ? shadeColor(ralHex, -0.32) : '#4b525f';
+        const wallColorY = ralHex ? shadeColor(ralHex, -0.24) : '#5b6472';
+        const sideFaces = [
+            { normal: [1, 0, 0], color: wallColorX, pts: [[W, 0, 0], [W, H, 0], [W, H, T], [W, 0, T]] },
+            { normal: [-1, 0, 0], color: wallColorX, pts: [[0, H, 0], [0, 0, 0], [0, 0, T], [0, H, T]] },
+            { normal: [0, 1, 0], color: wallColorY, pts: [[W, H, 0], [0, H, 0], [0, H, T], [W, H, T]] },
+            { normal: [0, -1, 0], color: wallColorY, pts: [[0, 0, 0], [W, 0, 0], [W, 0, T], [0, 0, T]] },
+        ];
+        sideFaces
+            .map(f => ({
+                ...f,
+                facing: faceFacing(f.normal[0], f.normal[1], f.normal[2]),
+                depth: f.pts.reduce((s, p) => s + project3D(p[0], p[1], p[2], W, H, T).depth, 0) / f.pts.length,
+            }))
+            .filter(f => f.facing < -0.05)
+            .sort((a, b) => b.depth - a.depth)
+            .forEach(f => fillPoly(f.pts.map(([x, y, z]) => pt(x, y, z)), f.color));
 
-        // Top face
+        // Top face - the camera's elevation is always clamped above 0, so
+        // it's never behind a side wall; always drawn last.
         fillPoly([pt(0, 0, T), pt(W, 0, T), pt(W, H, T), pt(0, H, T)], topColor);
 
         // Holes - flat dark cutouts on the top face.
