@@ -270,6 +270,10 @@
                 <input type="range" id="in-spacing" min="0.1" max="30" step="0.1" value="6">
                 <div class="slider-row"><span class="slider-label">{{ _('Ротация (°)') }}</span><input type="number" class="slider-num" id="num-rotation" min="0" max="180" value="0"></div>
                 <input type="range" id="in-rotation" min="0" max="180" value="0">
+                <div class="slider-row"><span class="slider-label">{{ _('Пълнота на Hex Cluster (%%)') }}</span><input type="number" class="slider-num" id="num-clustercomplete" min="0" max="100" value="100"></div>
+                <input type="range" id="in-clustercomplete" min="0" max="100" value="100">
+                <div class="slider-row"><span class="slider-label">{{ _('Разстояние между ромбовете (mm)') }}</span><input type="number" class="slider-num" id="num-rhombusgap" min="0.4" max="20" step="0.01" value="4"></div>
+                <input type="range" id="in-rhombusgap" min="0.4" max="20" step="0.01" value="4">
             </div>
 
             <div id="honeycomb-gradient-controls">
@@ -327,6 +331,11 @@
             </div>
 
             <button id="btn-download" class="btn-submit" style="width: 100%; margin-top: 20px;">{{ _('Изтегли DXF Модел') }}</button>
+            <div class="size-preset-grid" style="grid-template-columns: repeat(3, 1fr); margin-top: 8px;">
+                <button type="button" id="btn-download-svg" class="size-btn">SVG</button>
+                <button type="button" id="btn-download-png" class="size-btn">PNG</button>
+                <button type="button" id="btn-download-jpg" class="size-btn">JPG</button>
+            </div>
 
             <div class="control-group-title">{{ _('Изчисляване на цена') }}</div>
             <div class="form-group" style="margin-bottom: 12px;">
@@ -351,6 +360,7 @@
                 <input type="file" id="in-bgimage" accept="image/*" style="display: none;">
                 <button type="button" id="btn-bg-upload" class="view-toggle-btn">{{ _('+ Фон') }}</button>
                 <button type="button" id="btn-bg-clear" class="view-toggle-btn" style="display: none;">{{ _('✕ Фон') }}</button>
+                <button type="button" id="btn-overlay-reset" class="view-toggle-btn" style="display: none;">{{ _('⟲ Нулирай') }}</button>
             </div>
             <div class="preview-bg-layer" id="preview-bg-layer"></div>
             <canvas id="genCanvas"></canvas>
@@ -574,6 +584,8 @@
             bgImageDataUrl = reader.result;
             bgLayer.style.backgroundImage = `url(${bgImageDataUrl})`;
             document.getElementById('btn-bg-clear').style.display = '';
+            document.getElementById('btn-overlay-reset').style.display = '';
+            resetOverlayTransform();
             render();
         };
         reader.readAsDataURL(file);
@@ -582,11 +594,77 @@
         bgImageDataUrl = null;
         bgLayer.style.backgroundImage = '';
         document.getElementById('btn-bg-clear').style.display = 'none';
+        document.getElementById('btn-overlay-reset').style.display = 'none';
         document.getElementById('in-bgimage').value = '';
+        resetOverlayTransform();
         render();
     });
 
-    const inputs = ['width', 'height', 'thickness', 'cellsize', 'minsize', 'spacing', 'rotation', 'border', 'densezone', 'falloff', 'sparseness', 'jitter', 'randomness', 'seed',
+    /**
+     * Drag-to-pan + scroll-to-zoom on the canvas itself, active only while
+     * there's a background photo to line it up against (in 2D - see
+     * overlayInteractive()) - lets the panel be nudged/scaled purely
+     * visually to match the photo underneath. Pure CSS transform on the
+     * canvas element; never touches the generated geometry, panel
+     * dimensions, or the DXF export - this is preview-only positioning.
+     */
+    let overlayScale = 1, overlayOffsetX = 0, overlayOffsetY = 0;
+    let isDraggingOverlay = false, dragStartX = 0, dragStartY = 0, dragStartOffsetX = 0, dragStartOffsetY = 0;
+
+    function overlayInteractive() {
+        return viewMode === '2d' && !!bgImageDataUrl;
+    }
+
+    function resetOverlayTransform() {
+        overlayScale = 1;
+        overlayOffsetX = 0;
+        overlayOffsetY = 0;
+    }
+
+    function applyOverlayTransform() {
+        if (overlayInteractive()) {
+            canvas.style.transform = `translate(${overlayOffsetX}px, ${overlayOffsetY}px) scale(${overlayScale})`;
+            canvas.style.cursor = isDraggingOverlay ? 'grabbing' : 'grab';
+        } else {
+            canvas.style.transform = 'none';
+            canvas.style.cursor = '';
+        }
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+        if (!overlayInteractive()) return;
+        isDraggingOverlay = true;
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+        dragStartOffsetX = overlayOffsetX;
+        dragStartOffsetY = overlayOffsetY;
+        applyOverlayTransform();
+        e.preventDefault();
+    });
+    window.addEventListener('mousemove', (e) => {
+        if (!isDraggingOverlay) return;
+        overlayOffsetX = dragStartOffsetX + (e.clientX - dragStartX);
+        overlayOffsetY = dragStartOffsetY + (e.clientY - dragStartY);
+        applyOverlayTransform();
+    });
+    window.addEventListener('mouseup', () => {
+        if (!isDraggingOverlay) return;
+        isDraggingOverlay = false;
+        applyOverlayTransform();
+    });
+    canvas.addEventListener('wheel', (e) => {
+        if (!overlayInteractive()) return;
+        e.preventDefault();
+        const factor = e.deltaY < 0 ? 1.08 : 1 / 1.08;
+        overlayScale = Math.min(6, Math.max(0.2, overlayScale * factor));
+        applyOverlayTransform();
+    }, { passive: false });
+    document.getElementById('btn-overlay-reset').addEventListener('click', () => {
+        resetOverlayTransform();
+        applyOverlayTransform();
+    });
+
+    const inputs = ['width', 'height', 'thickness', 'cellsize', 'minsize', 'spacing', 'rotation', 'clustercomplete', 'rhombusgap', 'border', 'densezone', 'falloff', 'sparseness', 'jitter', 'randomness', 'seed',
         'rainwidth', 'rainminlen', 'rainmaxlen', 'raingap', 'rainvgap', 'raindensity', 'rainstagger',
         'mosaicmax', 'mosaicmin', 'mosaicgap', 'mosaicdensity'];
 
@@ -646,8 +724,13 @@
     });
     document.getElementById('in-direction').addEventListener('change', render);
 
-    // Standard panel sizes
-    document.querySelectorAll('.size-btn').forEach(btn => {
+    // Standard panel sizes - scoped to #size-preset-grid so it doesn't also
+    // match the SVG/PNG/JPG export buttons, which reuse .size-btn purely
+    // for styling but carry no data-w/data-h of their own. Without this,
+    // clicking one of those set width/height to null, which a <input
+    // type=range> silently resets to the midpoint of its min/max (1300 for
+    // width's 100-2500, 1550 for height's 100-3000) instead of erroring.
+    document.querySelectorAll('#size-preset-grid .size-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             document.getElementById('in-width').value = btn.getAttribute('data-w');
             document.getElementById('num-width').value = btn.getAttribute('data-w');
@@ -756,39 +839,61 @@
      * illusion motif. A regular hexagon's center, connected to 3 alternating
      * vertices, splits it into exactly 3 congruent 60/120-degree rhombi
      * (each side length equals the hexagon's own circumradius) - that's what
-     * creates the 3D cube illusion. Since this needs to be 3 SEPARATE cut
-     * holes (a single hexagon hole with internal lines would have nothing
-     * left to show those lines - the material there would just be gone),
-     * each rhombus is shrunk slightly toward its own centroid, leaving a
-     * thin material kerf between adjacent holes. Shared by the canvas
-     * preview, the cut-length estimate, and the DXF export, so all three
-     * always agree with each other.
+     * creates the 3D cube illusion. At full completeness this needs to be 3
+     * SEPARATE cut holes (a single hexagon hole with internal lines would
+     * have nothing left to show those lines - the material there would just
+     * be gone), so each rhombus is shrunk toward its own centroid, leaving a
+     * thin material kerf between them. `gapMm` (real millimetres,
+     * "Разстояние между ромбовете") is what that kerf's width slider
+     * actually controls - converted to the shrink fraction the geometry
+     * below is built from, rather than exposing that abstract 0-1 fraction
+     * directly. Reads the live slider itself when omitted (a safety
+     * fallback - every real call site now threads through a hole's own,
+     * already-computed `rhombusGap`, see generateHoneycombHoles(): the
+     * slider value applies as-is to the largest holes, and is scaled down
+     * proportionally to a hole's own size for smaller ones elsewhere in the
+     * gradient, floored at 0.4mm so it never gets unrealistically tight).
+     *
+     * When `clusterMask` drops one or two rhombi ("Пълнота на Hex
+     * Cluster"), each of the remaining rhombi is still shrunk toward its OWN
+     * centroid independently, exactly like the classic 3-piece cube - two
+     * surviving rhombi that happen to sit next to each other stay two
+     * separate pieces with the same `gapMm` kerf between them as every other
+     * pair, rather than being merged into one seamless piece. A partial
+     * cluster should read as clearly-separated pieces at any completeness,
+     * same as a full one.
      */
-    function hexClusterRhombi(r, shrink) {
-        shrink = shrink === undefined ? 0.88 : shrink;
-        // Shrinking each rhombus toward its OWN centroid (below) also pulls
-        // the cluster's outer corners in - by exactly (1+shrink)/2, a fixed
-        // ratio independent of r - leaving it visibly smaller than a plain
-        // hexagon at the same nominal "size" (~6% smaller at the default
-        // 0.88). That matters beyond looks: "size" is what the spacing
-        // formula in generateHoles() treats as this hole's true diameter,
-        // so an undersized cluster reads as extra gap around it that isn't
-        // really there for any other shape. Scale the hexagon this is built
-        // from up by the inverse so the cluster's actual outer reach - not
-        // just its nominal size - matches a real hexagon's.
-        r = r * 2 / (1 + shrink);
+    function hexClusterRhombi(r, gapMm, clusterMask) {
+        if (gapMm === undefined) gapMm = parseFloat(document.getElementById('in-rhombusgap').value);
+        // A fixed mm gap is a much bigger fraction of a small cluster than a
+        // large one, so clamp the derived shrink to a safe range instead of
+        // letting a large gap invert or collapse tiny clusters entirely.
+        const shrink = Math.max(0.3, Math.min(0.98, 1 - gapMm / Math.max(r, 1)));
+        // Shrinking a piece toward its OWN centroid (below) also pulls its
+        // outer corners in - leaving it visibly smaller than a plain hexagon
+        // at the same nominal "size". That matters beyond looks: "size" is
+        // what the spacing formula in generateHoles() treats as this hole's
+        // true diameter, so an undersized cluster reads as extra gap around
+        // it that isn't really there for any other shape. Scale the hexagon
+        // this is built from up by the inverse so the cluster's actual outer
+        // reach - not just its nominal size - matches a real hexagon's.
+        const rHex = r * 2 / (1 + shrink);
         const V = [];
         for (let k = 0; k < 6; k++) {
-            let a = k * Math.PI / 3;
-            V.push([r * Math.cos(a), r * Math.sin(a)]);
+            const a = k * Math.PI / 3;
+            V.push([rHex * Math.cos(a), rHex * Math.sin(a)]);
         }
-        const idxSets = [[0, 1, 2], [2, 3, 4], [4, 5, 0]];
-        return idxSets.map(([a, b, c]) => {
-            const pts = [[0, 0], V[a], V[b], V[c]];
-            const cx = pts.reduce((s, p) => s + p[0], 0) / 4;
-            const cy = pts.reduce((s, p) => s + p[1], 0) / 4;
+        function shrinkToward(pts) {
+            const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+            const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length;
             return pts.map(p => [cx + (p[0] - cx) * shrink, cy + (p[1] - cy) * shrink]);
-        });
+        }
+
+        const kept = clusterMask ? [!!clusterMask[0], !!clusterMask[1], !!clusterMask[2]] : [true, true, true];
+        const idxSets = [[0, 1, 2], [2, 3, 4], [4, 5, 0]];
+        return idxSets
+            .filter((_, i) => kept[i])
+            .map(([a, b, c]) => shrinkToward([[0, 0], V[a], V[b], V[c]]));
     }
 
     /**
@@ -813,7 +918,7 @@
         return pts;
     }
 
-    function drawShapePath(type, r, length) {
+    function drawShapePath(type, r, length, clusterMask, rhombusGap) {
         if (type === 'slot') {
             const hl = Math.max(0, ((length !== undefined ? length : r * 2) - r * 2) / 2);
             ctx.moveTo(r, -hl);
@@ -845,9 +950,9 @@
             ctx.lineTo(-r / 1.5, 0);
             ctx.closePath();
         } else if (type === 'hexcluster') {
-            hexClusterRhombi(r).forEach(pts => {
+            hexClusterRhombi(r, rhombusGap, clusterMask).forEach(pts => {
                 ctx.moveTo(pts[0][0], pts[0][1]);
-                for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+                for (let i2 = 1; i2 < pts.length; i2++) ctx.lineTo(pts[i2][0], pts[i2][1]);
                 ctx.closePath();
             });
         }
@@ -859,7 +964,7 @@
      * "Линеен сряз" stat actually reflects what gets cut, instead of always
      * reading 0.00 m regardless of the generated pattern.
      */
-    function shapePerimeter(type, size, length) {
+    function shapePerimeter(type, size, length, clusterMask, rhombusGap) {
         const r = size / 2;
         if (type === 'slot') {
             const straight = Math.max(0, (length !== undefined ? length : size) - size);
@@ -869,7 +974,7 @@
             return 2 * Math.PI * r;
         }
         if (type === 'hexcluster') {
-            return hexClusterRhombi(r).reduce((total, pts) => {
+            return hexClusterRhombi(r, rhombusGap, clusterMask).reduce((total, pts) => {
                 let p = 0;
                 for (let i = 0; i < pts.length; i++) {
                     const p1 = pts[i], p2 = pts[(i + 1) % pts.length];
@@ -902,7 +1007,7 @@
      * below is a linear transform of real vertices (turning a circle into an
      * ellipse), not something a canvas arc/rect primitive can do.
      */
-    function shapeOutlineLoops(type, size, length) {
+    function shapeOutlineLoops(type, size, length, clusterMask, rhombusGap) {
         const r = size / 2;
         if (type === 'slot') {
             const hl = Math.max(0, ((length !== undefined ? length : size) - size) / 2);
@@ -917,7 +1022,7 @@
             }
             return [pts];
         }
-        if (type === 'hexcluster') return hexClusterRhombi(r);
+        if (type === 'hexcluster') return hexClusterRhombi(r, rhombusGap, clusterMask);
         if (type === 'square') return [[[-r, -r], [r, -r], [r, r], [-r, r]]];
         if (type === 'hexagon') {
             const pts = [];
@@ -1121,6 +1226,8 @@
         const minSize = parseFloat(document.getElementById('in-minsize').value);
         const spacing = parseFloat(document.getElementById('in-spacing').value);
         const rotRad = parseFloat(document.getElementById('in-rotation').value) * Math.PI / 180;
+        const clusterCompleteness = parseFloat(document.getElementById('in-clustercomplete').value) / 100;
+        const rhombusGapMm = parseFloat(document.getElementById('in-rhombusgap').value);
         const border = parseFloat(document.getElementById('in-border').value);
         const dir = document.getElementById('in-direction').value;
         const densePct = parseFloat(document.getElementById('in-densezone').value) / 100;
@@ -1139,17 +1246,33 @@
         const endX = W - border - maxSize / 2;
         const endY = H - border - maxSize / 2;
 
-        // "Spacing" is meant as the real gap between adjacent hole edges.
-        // Holes shrink toward minSize away from the dense zone (see
-        // scaleFactor below), so a step sized off the fixed maxSize would
-        // leave far more than `spacing` of daylight between small holes -
-        // exactly backwards from what the slider says. Each row's step is
-        // sized off THAT row's actual hole size instead, so 0.1mm reads as
-        // 0.1mm regardless of how far into the falloff it's drawn. Row
-        // height reuses the same row's size for its neighbor too - not
-        // exact if the next row lands somewhere the gradient is changing
-        // fast, but rows are close enough together that it holds up.
-        //
+        // The grid step (row-to-row and hole-to-hole within a row) is fixed
+        // off maxSize, never off the shrinking rowSize. Sizing it off each
+        // row's actual (smaller) hole size used to let a lower minSize pack
+        // more rows/columns into the same panel - i.e. it added holes and
+        // shifted the whole matrix out of alignment with itself, rather than
+        // just drawing the existing grid's holes smaller. Lowering minSize
+        // now only shrinks the holes in the sparse zone; the row/column
+        // layout - and therefore hole count - stays exactly what maxSize
+        // alone would produce.
+        const refStep = maxSize + spacing;
+
+        // Helper shared by the row walk below and its one-step lookahead:
+        // the gradient's hole size at a given absolute Y.
+        function gradientSizeAt(yAbs) {
+            let normY = (yAbs - startY) / (endY - startY || 1);
+            if (dir === 'bottom-top') normY = 1.0 - normY;
+            let scaleFactor = 1.0;
+            let activeSparseness = 0;
+            if (normY > densePct) {
+                const falloffDomain = (normY - densePct) / (1.0 - densePct);
+                scaleFactor = 1.0 - Math.pow(falloffDomain, falloff);
+                activeSparseness = sparseness * falloffDomain;
+            }
+            const rowSize = minSize + (maxSize - minSize) * Math.max(0, scaleFactor);
+            return { normY, scaleFactor, activeSparseness, rowSize };
+        }
+
         // First pass: walk the rows purely to find out where they land and
         // how tall the whole stack ends up - row height varies with the
         // gradient, so there's no way to know how much vertical space is
@@ -1160,21 +1283,9 @@
             let ySim = startY;
             let rowIdxSim = 0;
             while (ySim <= endY) {
-                let normY = (ySim - startY) / (endY - startY || 1);
-                if (dir === 'bottom-top') normY = 1.0 - normY;
-
-                let scaleFactor = 1.0;
-                let activeSparseness = 0;
-                if (normY > densePct) {
-                    let falloffDomain = (normY - densePct) / (1.0 - densePct);
-                    scaleFactor = 1.0 - Math.pow(falloffDomain, falloff);
-                    activeSparseness = sparseness * falloffDomain;
-                }
-
-                let rowSize = minSize + (maxSize - minSize) * Math.max(0, scaleFactor);
-                let rowStep = rowSize + spacing;
-                rows.push({ yOffset: ySim - startY, rowIdx: rowIdxSim, normY, scaleFactor, activeSparseness, rowSize, rowStep });
-                ySim += rowStep * 0.866;
+                const { normY, scaleFactor, activeSparseness, rowSize } = gradientSizeAt(ySim);
+                rows.push({ yOffset: ySim - startY, rowIdx: rowIdxSim, normY, scaleFactor, activeSparseness, rowSize, rowStep: refStep });
+                ySim += refStep * 0.866;
                 rowIdxSim++;
             }
         }
@@ -1225,18 +1336,46 @@
                 let jX = x;
                 let jY = y;
                 if (jitterPct > 0 && scaleFactor < 0.9) {
-                    // Same bug as the old spacing formula: sizing this off
-                    // the fixed maxSize instead of this row's actual cell
-                    // size (rowStep) makes jitter dwarf small holes in the
-                    // sparse zone, shoving them off-grid into each other
-                    // instead of a gentle nudge - the "strange offset" look.
-                    let jitterAmt = rowStep * jitterPct * (1.0 - scaleFactor);
+                    // jitterPct scales with how far a hole has shrunk
+                    // (1 - scaleFactor), so small holes in the sparse zone
+                    // wander more than full-size ones near the dense zone.
+                    // At a high jitter % this could exceed `spacing`
+                    // outright, and since neighbors jitter independently,
+                    // two could each get shoved toward each other and
+                    // visibly overlap. Capping the per-axis amount to half
+                    // of spacing bounds the worst case (both neighbors
+                    // jittering straight at each other) to "touching",
+                    // never crossing.
+                    let jitterAmt = Math.min(refStep * jitterPct * (1.0 - scaleFactor), spacing / 2);
                     jX += (rand() * 2 - 1) * jitterAmt;
                     jY += (rand() * 2 - 1) * jitterAmt;
                 }
 
-                generatedHoles.push({ x: jX, y: jY, size: rowSize, rot: rotRad, type: shapeType });
-                totalCutLength += shapePerimeter(shapeType, rowSize);
+                // Hex-cluster "completeness": each of the 3 tumbling-block
+                // rhombi independently has a chance of being left out, so
+                // not every cluster renders as a full cube - a lower
+                // completeness reads as a more broken-up, varied field of
+                // partial clusters. Never lets all 3 drop out (that would be
+                // an invisible hole that still counts toward the stats).
+                let clusterMask;
+                if (shapeType === 'hexcluster' && clusterCompleteness < 1) {
+                    clusterMask = [0, 1, 2].map(() => rand() < clusterCompleteness);
+                    if (!clusterMask.some(Boolean)) clusterMask[Math.floor(rand() * 3)] = true;
+                }
+
+                // "Разстояние между ромбовете" is set for the largest holes
+                // (maxSize); smaller holes elsewhere in the gradient scale
+                // it down proportionally to their own size, same reasoning
+                // as the shrink-fraction clamp in hexClusterRhombi() - a
+                // fixed mm gap set for a big hole would be a much bigger,
+                // clumsier-looking fraction of a small one. Never scales
+                // below 0.4mm - the smallest gap that still reliably cuts
+                // clean on this shop's laser.
+                const rhombusGap = shapeType === 'hexcluster'
+                    ? Math.max(0.4, rhombusGapMm * (rowSize / Math.max(maxSize, 1)))
+                    : undefined;
+                generatedHoles.push({ x: jX, y: jY, size: rowSize, rot: rotRad, type: shapeType, clusterMask, rhombusGap });
+                totalCutLength += shapePerimeter(shapeType, rowSize, undefined, clusterMask, rhombusGap);
             }
         });
 
@@ -1267,7 +1406,7 @@
             ctx.translate(h.x * drawScale, h.y * drawScale);
             ctx.rotate(h.rot);
             ctx.beginPath();
-            drawShapePath(h.type, (h.size * drawScale) / 2, h.length !== undefined ? h.length * drawScale : undefined);
+            drawShapePath(h.type, (h.size * drawScale) / 2, h.length !== undefined ? h.length * drawScale : undefined, h.clusterMask, h.rhombusGap);
             ctx.fill();
             ctx.restore();
         });
@@ -1352,7 +1491,7 @@
 
         // Holes - flat dark cutouts on the top face.
         holes.forEach(h => {
-            shapeOutlineLoops(h.type, h.size, h.length).forEach(loop => {
+            shapeOutlineLoops(h.type, h.size, h.length, h.clusterMask, h.rhombusGap).forEach(loop => {
                 if (!loop.length) return;
                 const worldPts = rotateTranslatePts(loop, h.rot, h.x, h.y);
                 fillPoly(worldPts.map(([x, y]) => pt(x, y, T)), '#0a0b0e');
@@ -1369,6 +1508,7 @@
         const showBg = viewMode === '2d' && !!bgImageDataUrl;
         canvas.classList.toggle('has-bg-image', showBg);
         bgLayer.style.display = showBg ? 'block' : 'none';
+        applyOverlayTransform();
         if (viewMode === '3d') draw3D(layout); else draw2D(layout);
         document.getElementById('stat-panel').innerText = `${layout.W} x ${layout.H} mm`;
         document.getElementById('stat-holes').innerText = layout.holes.length;
@@ -1403,6 +1543,115 @@
         link.download = `Panel_${W}x${H}_Mixed.dxf`;
         link.click();
     });
+
+    function downloadBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        link.click();
+        URL.revokeObjectURL(url);
+    }
+
+    /**
+     * Builds a real vector SVG of the current pattern - one <path> combining
+     * the panel outline plus every hole loop with fill-rule="evenodd", so
+     * the holes are genuinely transparent cutouts (not just a dark-filled
+     * shape) if this gets opened in Illustrator/Inkscape or dropped on a
+     * web page. Reuses shapeOutlineLoops()/rotateTranslatePts() - the exact
+     * same per-shape geometry the 3D view and DXF export already agree on -
+     * so this never has to be kept in sync by hand with a fourth copy of
+     * the shape math. Unlike the PNG/JPG export below, this is pattern-only
+     * (no background photo baked in) since it's meant as reusable cut
+     * geometry, not a mockup screenshot.
+     */
+    function generateSvgString(W, H, holes) {
+        let d = `M 0,0 L ${W},0 L ${W},${H} L 0,${H} Z `;
+        holes.forEach(h => {
+            shapeOutlineLoops(h.type, h.size, h.length, h.clusterMask, h.rhombusGap).forEach(loop => {
+                if (!loop.length) return;
+                const pts = rotateTranslatePts(loop, h.rot, h.x, h.y);
+                d += `M ${pts[0][0].toFixed(2)},${pts[0][1].toFixed(2)} `;
+                for (let i = 1; i < pts.length; i++) d += `L ${pts[i][0].toFixed(2)},${pts[i][1].toFixed(2)} `;
+                d += 'Z ';
+            });
+        });
+        const fillColor = document.getElementById('in-ralcolor').value || '#94a1b8';
+        return `<?xml version="1.0" encoding="UTF-8"?>\n` +
+            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}mm" height="${H}mm">\n` +
+            `<path d="${d.trim()}" fill="${fillColor}" fill-rule="evenodd" stroke="#000000" stroke-width="0.3"/>\n` +
+            `</svg>\n`;
+    }
+
+    document.getElementById('btn-download-svg').addEventListener('click', () => {
+        const W = parseFloat(document.getElementById('in-width').value);
+        const H = parseFloat(document.getElementById('in-height').value);
+        const svg = generateSvgString(W, H, generatedHoles);
+        downloadBlob(new Blob([svg], { type: 'image/svg+xml' }), `Panel_${W}x${H}.svg`);
+    });
+
+    function loadImageAsync(src) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => resolve(img);
+            img.onerror = reject;
+            img.src = src;
+        });
+    }
+
+    /** Draws `img` into the destination rect the same way CSS background-size:cover does - scale to fill, crop the overflow, centered. */
+    function drawImageCover(ctx2d, img, dx, dy, dw, dh) {
+        const scale = Math.max(dw / img.width, dh / img.height);
+        const sw = dw / scale, sh = dh / scale;
+        const sx = (img.width - sw) / 2, sy = (img.height - sh) / 2;
+        ctx2d.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+    }
+
+    /**
+     * Renders a raster snapshot of exactly what the 2D preview currently
+     * shows - including the background photo (in CSS "cover" fit) and the
+     * panel's current pan/zoom transform - onto an offscreen canvas sized
+     * to the preview area's actual on-screen box, then exports that. Reads
+     * position/size straight from getBoundingClientRect() rather than
+     * re-deriving the CSS transform math by hand, so it can never drift out
+     * of sync with what's visually on screen.
+     */
+    async function exportRasterImage(format) {
+        const previewArea = document.querySelector('.preview-area');
+        const areaRect = previewArea.getBoundingClientRect();
+        const exportCanvas = document.createElement('canvas');
+        exportCanvas.width = Math.max(1, Math.round(areaRect.width));
+        exportCanvas.height = Math.max(1, Math.round(areaRect.height));
+        const ectx = exportCanvas.getContext('2d');
+
+        ectx.fillStyle = '#0b0c10';
+        ectx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+
+        if (viewMode === '2d' && bgImageDataUrl) {
+            try {
+                const img = await loadImageAsync(bgImageDataUrl);
+                drawImageCover(ectx, img, 0, 0, exportCanvas.width, exportCanvas.height);
+            } catch (e) { /* background photo failed to decode - fall through with just the panel */ }
+        }
+
+        const canvasRect = canvas.getBoundingClientRect();
+        ectx.drawImage(canvas, canvasRect.left - areaRect.left, canvasRect.top - areaRect.top, canvasRect.width, canvasRect.height);
+
+        const W = parseFloat(document.getElementById('in-width').value);
+        const H = parseFloat(document.getElementById('in-height').value);
+        const mime = format === 'jpg' ? 'image/jpeg' : 'image/png';
+        // toDataURL (synchronous) instead of toBlob (callback-based) - both
+        // are standard, but toDataURL sidesteps any environment where an
+        // async canvas callback doesn't reliably fire back to the caller.
+        const dataUrl = exportCanvas.toDataURL(mime, format === 'jpg' ? 0.92 : undefined);
+        const link = document.createElement('a');
+        link.href = dataUrl;
+        link.download = `Panel_${W}x${H}.${format}`;
+        link.click();
+    }
+
+    document.getElementById('btn-download-png').addEventListener('click', () => exportRasterImage('png'));
+    document.getElementById('btn-download-jpg').addEventListener('click', () => exportRasterImage('jpg'));
 
     document.getElementById('btn-calculate').addEventListener('click', async () => {
         const W = parseFloat(document.getElementById('in-width').value);

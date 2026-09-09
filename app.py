@@ -4302,14 +4302,24 @@ def _generator_stadium_loop(r, hl, segments=10):
     return pts
 
 
-def _generator_hole_polygon(hole_type, rad, length=None):
+def _generator_hole_polygon(hole_type, rad, length=None, cluster_mask=None, rhombus_gap=None):
     """
     Same shape-outline math as shapeOutlineLoops() in templates/generator.html,
     kept in sync by hand since it's static per-shape geometry (not the
     randomized layout, which stays client-side). Returns a list of
     point-loops - more than one only for 'hexcluster'. `length` is only used
     by 'slot' (the full end-to-end slot length, cap-to-cap; falls back to
-    2*rad - a plain circle - when omitted).
+    2*rad - a plain circle - when omitted). `cluster_mask` is only used by
+    'hexcluster' - a 3-element true/false list (client-generated, see
+    "Пълнота на Hex Cluster" in generateHoneycombHoles()). Each kept rhombus
+    is shrunk toward its own centroid independently, same as the classic
+    3-piece cube - two surviving rhombi that happen to sit next to each
+    other stay two separate pieces with the same kerf as any other pair,
+    never merged into one seamless piece. Mirrors hexClusterRhombi() in
+    templates/generator.html by hand. `rhombus_gap` (mm, "Разстояние между
+    ромбовете") is likewise hexcluster-only - converted to the same shrink
+    fraction, clamped the same way for the same reason (a fixed mm gap would
+    otherwise invert/collapse a small enough cluster).
     """
     if hole_type == 'square':
         return [[(-rad, -rad), (rad, -rad), (rad, rad), (-rad, rad)]]
@@ -4323,16 +4333,20 @@ def _generator_hole_polygon(hole_type, rad, length=None):
         hl = max(0.0, ((length if length is not None else rad * 2) - rad * 2) / 2)
         return [_generator_stadium_loop(rad, hl)]
     if hole_type == 'hexcluster':
-        shrink = 0.88
+        gap_mm = 4.0 if rhombus_gap is None else rhombus_gap
+        shrink = max(0.3, min(0.98, 1 - gap_mm / max(rad, 1)))
         r = rad * 2 / (1 + shrink)
         v = [(r * math.cos(k * math.pi / 3), r * math.sin(k * math.pi / 3)) for k in range(6)]
-        loops = []
-        for a, b, c in ((0, 1, 2), (2, 3, 4), (4, 5, 0)):
-            pts = [(0, 0), v[a], v[b], v[c]]
-            cx = sum(p[0] for p in pts) / 4
-            cy = sum(p[1] for p in pts) / 4
-            loops.append([(cx + (x - cx) * shrink, cy + (y - cy) * shrink) for x, y in pts])
-        return loops
+
+        def shrink_toward_own_centroid(pts):
+            cx = sum(p[0] for p in pts) / len(pts)
+            cy = sum(p[1] for p in pts) / len(pts)
+            return [(cx + (x - cx) * shrink, cy + (y - cy) * shrink) for x, y in pts]
+
+        kept = [bool(cluster_mask[i]) for i in range(3)] if cluster_mask and len(cluster_mask) >= 3 else [True, True, True]
+        idx_sets = ((0, 1, 2), (2, 3, 4), (4, 5, 0))
+        return [shrink_toward_own_centroid([(0, 0), v[a], v[b], v[c]])
+                for keep, (a, b, c) in zip(kept, idx_sets) if keep]
     return []
 
 
@@ -4356,6 +4370,11 @@ def api_generator_dxf():
     holes = data.get('holes') or []
 
     doc = ezdxf.new('R2000')
+    # Every coordinate this endpoint writes is already in millimetres (the
+    # generator works in mm throughout) - without this, $INSUNITS defaults
+    # to 0 (unitless) and CAD software that assumes inches on an unitless
+    # drawing opens the panel at 25.4x the intended size.
+    doc.units = ezdxf.units.MM
     msp = doc.modelspace()
     msp.add_lwpolyline([(0, 0), (width, 0), (width, height), (0, height)], close=True)
 
@@ -4372,8 +4391,15 @@ def api_generator_dxf():
             hole_length = float(hole['length']) if hole.get('length') is not None else None
         except (TypeError, ValueError):
             hole_length = None
+        cluster_mask = hole.get('clusterMask')
+        if not (isinstance(cluster_mask, list) and all(isinstance(v, bool) for v in cluster_mask)):
+            cluster_mask = None
+        try:
+            rhombus_gap = float(hole['rhombusGap']) if hole.get('rhombusGap') is not None else None
+        except (TypeError, ValueError):
+            rhombus_gap = None
         cos_r, sin_r = math.cos(rot), math.sin(rot)
-        for loop in _generator_hole_polygon(hole.get('type'), rad, hole_length):
+        for loop in _generator_hole_polygon(hole.get('type'), rad, hole_length, cluster_mask, rhombus_gap):
             pts = [(hx + x * cos_r - y * sin_r, hy + x * sin_r + y * cos_r) for x, y in loop]
             if pts:
                 msp.add_lwpolyline(pts, close=True)
