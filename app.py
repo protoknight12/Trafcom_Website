@@ -4302,6 +4302,42 @@ def _generator_stadium_loop(r, hl, segments=10):
     return pts
 
 
+def _generator_tri_half_pts(hole_type, rad, gap_mm):
+    """
+    Point list for one "Триъгълници" corner-triangle half of a square cell -
+    the Python mirror of triHalfPts() in templates/generator.html. Vertices
+    are 3 of the cell's own 4 corners (±rad, ±rad), the one dropped by this
+    variant; pts[0] is always the right-angle corner. Both diagonals of a
+    square pass through its center, so the hypotenuse (the other two
+    vertices) always runs straight through (0, 0) - meaning a rigid
+    translation straight from center toward pts[0] moves the WHOLE triangle
+    uniformly away from the diagonal without resizing it at all (unlike
+    shrinking toward a centroid, which would shorten the legs too). When
+    `gap_mm` is truthy (only passed for a "double" cell's two halves, which
+    share an edge), each half is nudged `gap_mm / 2` that way, so the two
+    together end up `gap_mm` apart along the diagonal but each still exactly
+    the same size as a lone "single" triangle (which gets `None`/0 and is
+    returned untranslated).
+    """
+    if hole_type == 'tritl':
+        pts = [(-rad, -rad), (rad, -rad), (-rad, rad)]
+    elif hole_type == 'tritr':
+        pts = [(rad, -rad), (-rad, -rad), (rad, rad)]
+    elif hole_type == 'tribr':
+        pts = [(rad, rad), (rad, -rad), (-rad, rad)]
+    elif hole_type == 'tribl':
+        pts = [(-rad, rad), (-rad, -rad), (rad, rad)]
+    else:
+        return []
+    if not gap_mm:
+        return pts
+    cx, cy = pts[0]
+    length = math.hypot(cx, cy) or 1
+    dx = (cx / length) * (gap_mm / 2)
+    dy = (cy / length) * (gap_mm / 2)
+    return [(x + dx, y + dy) for x, y in pts]
+
+
 def _generator_hole_polygon(hole_type, rad, length=None, cluster_mask=None, rhombus_gap=None):
     """
     Same shape-outline math as shapeOutlineLoops() in templates/generator.html,
@@ -4317,9 +4353,17 @@ def _generator_hole_polygon(hole_type, rad, length=None, cluster_mask=None, rhom
     other stay two separate pieces with the same kerf as any other pair,
     never merged into one seamless piece. Mirrors hexClusterRhombi() in
     templates/generator.html by hand. `rhombus_gap` (mm, "Разстояние между
-    ромбовете") is likewise hexcluster-only - converted to the same shrink
-    fraction, clamped the same way for the same reason (a fixed mm gap would
-    otherwise invert/collapse a small enough cluster).
+    ромбовете" for hexcluster) is reused for a second, unrelated purpose by
+    'tritl'/'tritr'/'tribr'/'tribl' - the "Триъгълници" pattern's four
+    corner-triangle halves of a square cell (named for which corner carries
+    the right angle; generateTriangleGridHoles() picks one at random for a
+    "single" cell, or both halves of one diagonal - 'tritr'+'tribl', or
+    'tritl'+'tribr' - for a "double" cell). There it's "Луфт по диагонала"
+    (mm) and, when given, translates (not shrinks) each of the double cell's
+    two halves away from their shared diagonal, so they pull apart into
+    visibly separate pieces without changing size at all - a lone single
+    triangle gets `None` and is identical in size either way. See
+    _generator_tri_half_pts().
     """
     if hole_type == 'square':
         return [[(-rad, -rad), (rad, -rad), (rad, rad), (-rad, rad)]]
@@ -4329,6 +4373,8 @@ def _generator_hole_polygon(hole_type, rad, length=None, cluster_mask=None, rhom
         return [[(0, -rad), (rad * 0.866, rad / 2), (-rad * 0.866, rad / 2)]]
     if hole_type == 'rhombus':
         return [[(0, -rad), (rad / 1.5, 0), (0, rad), (-rad / 1.5, 0)]]
+    if hole_type in ('tritl', 'tritr', 'tribr', 'tribl'):
+        return [_generator_tri_half_pts(hole_type, rad, rhombus_gap)]
     if hole_type == 'slot':
         hl = max(0.0, ((length if length is not None else rad * 2) - rad * 2) / 2)
         return [_generator_stadium_loop(rad, hl)]

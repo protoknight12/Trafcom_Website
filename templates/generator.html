@@ -245,10 +245,11 @@
             <input type="range" id="in-seed" min="1" max="9999" value="7341">
 
             <div class="control-group-title">{{ _('Тип шарка') }}</div>
-            <div class="shape-selector" id="pattern-mode-selector" style="grid-template-columns: 1fr 1fr 1fr;">
+            <div class="shape-selector" id="pattern-mode-selector" style="grid-template-columns: 1fr 1fr;">
                 <div class="shape-btn active" data-mode="honeycomb">{{ _('Пчелна пита') }}</div>
                 <div class="shape-btn" data-mode="rain">{{ _('Дъжд') }}</div>
                 <div class="shape-btn" data-mode="mosaic">{{ _('Мозайка') }}</div>
+                <div class="shape-btn" data-mode="trianglegrid">{{ _('Триъгълници') }}</div>
             </div>
 
             <div id="honeycomb-shape-controls">
@@ -319,15 +320,34 @@
             </div>
 
             <div id="mosaic-controls" style="display: none;">
-                <div class="control-group-title">{{ _('Мозайка - Квадрати') }}</div>
-                <div class="slider-row"><span class="slider-label">{{ _('Макс. квадрат (mm)') }}</span><input type="number" class="slider-num" id="num-mosaicmax" min="20" max="200" value="90"></div>
+                <div class="control-group-title">{{ _('Мозайка - Елементи') }}</div>
+                <div class="shape-selector" id="mosaic-shape-selector" style="grid-template-columns: 1fr 1fr 1fr;">
+                    <div class="shape-btn active" data-shape="square">{{ _('Квадрат') }}</div>
+                    <div class="shape-btn" data-shape="circle">{{ _('Кръг') }}</div>
+                    <div class="shape-btn" data-shape="hexagon">{{ _('Шестоъгълник') }}</div>
+                </div>
+                <div class="slider-row"><span class="slider-label">{{ _('Макс. елемент (mm)') }}</span><input type="number" class="slider-num" id="num-mosaicmax" min="20" max="200" value="90"></div>
                 <input type="range" id="in-mosaicmax" min="20" max="200" value="90">
-                <div class="slider-row"><span class="slider-label">{{ _('Мин. квадрат (mm)') }}</span><input type="number" class="slider-num" id="num-mosaicmin" min="5" max="100" value="15"></div>
+                <div class="slider-row"><span class="slider-label">{{ _('Мин. елемент (mm)') }}</span><input type="number" class="slider-num" id="num-mosaicmin" min="5" max="100" value="15"></div>
                 <input type="range" id="in-mosaicmin" min="5" max="100" value="15">
-                <div class="slider-row"><span class="slider-label">{{ _('Луфт между квадрати (mm)') }}</span><input type="number" class="slider-num" id="num-mosaicgap" min="0.5" max="30" step="0.5" value="4"></div>
+                <div class="slider-row"><span class="slider-label">{{ _('Луфт между елементите (mm)') }}</span><input type="number" class="slider-num" id="num-mosaicgap" min="0.5" max="30" step="0.5" value="4"></div>
                 <input type="range" id="in-mosaicgap" min="0.5" max="30" step="0.5" value="4">
                 <div class="slider-row"><span class="slider-label">{{ _('Плътност на запълване (%%)') }}</span><input type="number" class="slider-num" id="num-mosaicdensity" min="10" max="100" value="70"></div>
                 <input type="range" id="in-mosaicdensity" min="10" max="100" value="70">
+            </div>
+
+            <div id="trianglegrid-controls" style="display: none;">
+                <div class="control-group-title">{{ _('Триъгълници - Диагонали') }}</div>
+                <div class="slider-row"><span class="slider-label">{{ _('Размер на клетка (mm)') }}</span><input type="number" class="slider-num" id="num-trisize" min="10" max="150" value="50"></div>
+                <input type="range" id="in-trisize" min="10" max="150" value="50">
+                <div class="slider-row"><span class="slider-label">{{ _('Луфт между клетките (mm)') }}</span><input type="number" class="slider-num" id="num-trigap" min="0" max="30" step="0.5" value="3"></div>
+                <input type="range" id="in-trigap" min="0" max="30" step="0.5" value="3">
+                <div class="slider-row"><span class="slider-label">{{ _('Плътност на запълване (%%)') }}</span><input type="number" class="slider-num" id="num-tridensity" min="5" max="100" value="40"></div>
+                <input type="range" id="in-tridensity" min="5" max="100" value="40">
+                <div class="slider-row"><span class="slider-label">{{ _('Дял пълни квадрати (%%)') }}</span><input type="number" class="slider-num" id="num-tridouble" min="0" max="100" value="25"></div>
+                <input type="range" id="in-tridouble" min="0" max="100" value="25">
+                <div class="slider-row"><span class="slider-label">{{ _('Луфт по диагонала (mm)') }}</span><input type="number" class="slider-num" id="num-trisplitgap" min="0" max="20" step="0.5" value="3"></div>
+                <input type="range" id="in-trisplitgap" min="0" max="20" step="0.5" value="3">
             </div>
 
             <button id="btn-download" class="btn-submit" style="width: 100%; margin-top: 20px;">{{ _('Изтегли DXF Модел') }}</button>
@@ -393,6 +413,7 @@
     let viewMode = '2d';
     let patternMode = 'honeycomb';
     let rainOrientation = 'vertical';
+    let mosaicShape = 'square';
 
     // RAL Classic reference palette (standard sRGB approximations of the
     // official powder-coat swatches) - only used to color the preview, this
@@ -540,6 +561,14 @@
         });
     });
 
+    document.querySelectorAll('#mosaic-shape-selector .shape-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            mosaicShape = btn.getAttribute('data-shape');
+            document.querySelectorAll('#mosaic-shape-selector .shape-btn').forEach(b => b.classList.toggle('active', b === btn));
+            render();
+        });
+    });
+
     function setPatternMode(mode) {
         patternMode = mode;
         document.querySelectorAll('#pattern-mode-selector .shape-btn').forEach(b => {
@@ -549,6 +578,7 @@
         document.getElementById('honeycomb-gradient-controls').style.display = mode === 'honeycomb' ? '' : 'none';
         document.getElementById('rain-controls').style.display = mode === 'rain' ? '' : 'none';
         document.getElementById('mosaic-controls').style.display = mode === 'mosaic' ? '' : 'none';
+        document.getElementById('trianglegrid-controls').style.display = mode === 'trianglegrid' ? '' : 'none';
     }
 
     document.querySelectorAll('#pattern-mode-selector .shape-btn').forEach(btn => {
@@ -738,7 +768,8 @@
 
     const inputs = ['width', 'height', 'thickness', 'cellsize', 'minsize', 'spacing', 'rotation', 'clustercomplete', 'rhombusgap', 'border', 'densezone', 'falloff', 'sparseness', 'jitter', 'randomness', 'seed',
         'rainwidth', 'rainminlen', 'rainmaxlen', 'raingap', 'rainvgap', 'raindensity', 'rainstagger',
-        'mosaicmax', 'mosaicmin', 'mosaicgap', 'mosaicdensity'];
+        'mosaicmax', 'mosaicmin', 'mosaicgap', 'mosaicdensity',
+        'trisize', 'trigap', 'tridensity', 'tridouble', 'trisplitgap'];
 
     // Multi-select Logic
     document.querySelectorAll('#shape-selector .shape-btn').forEach(btn => {
@@ -838,7 +869,7 @@
         if (selectName && presetsCache[selectName]) select.value = selectName;
     }
     function currentSettings() {
-        const settings = { shapes: selectedShapes.slice(), direction: document.getElementById('in-direction').value, mode: patternMode, rainOrientation, ralcolor: document.getElementById('in-ralcolor').value };
+        const settings = { shapes: selectedShapes.slice(), direction: document.getElementById('in-direction').value, mode: patternMode, rainOrientation, mosaicShape, ralcolor: document.getElementById('in-ralcolor').value };
         inputs.forEach(id => { settings[id] = document.getElementById(`in-${id}`).value; });
         return settings;
     }
@@ -861,7 +892,11 @@
         document.querySelectorAll('#rain-orientation-selector .shape-btn').forEach(b => {
             b.classList.toggle('active', b.getAttribute('data-orientation') === rainOrientation);
         });
-        setPatternMode(['rain', 'mosaic'].includes(settings.mode) ? settings.mode : 'honeycomb');
+        mosaicShape = ['circle', 'hexagon'].includes(settings.mosaicShape) ? settings.mosaicShape : 'square';
+        document.querySelectorAll('#mosaic-shape-selector .shape-btn').forEach(b => {
+            b.classList.toggle('active', b.getAttribute('data-shape') === mosaicShape);
+        });
+        setPatternMode(['rain', 'mosaic', 'trianglegrid'].includes(settings.mode) ? settings.mode : 'honeycomb');
         render();
     }
 
@@ -969,6 +1004,37 @@
     }
 
     /**
+     * Local-frame point list for one "Триъгълници" corner-triangle half of a
+     * square cell (see generateTriangleGridHoles()) - vertices are 3 of the
+     * cell's own 4 corners (±r,±r), the one dropped by this variant; `pts[0]`
+     * is always the right-angle corner. Both diagonals of a square pass
+     * through its center, so the hypotenuse (the other two vertices) always
+     * runs straight through (0,0) - meaning a rigid translation straight
+     * from center toward pts[0] moves the WHOLE triangle uniformly away from
+     * the diagonal without resizing it at all (unlike shrinking toward a
+     * centroid, which would shorten the legs too). When `gapMm` is given
+     * (only for the "double" case, where both halves of one diagonal are cut
+     * as two separate pieces sharing an edge), each half is nudged `gapMm/2`
+     * that way, so the two together end up `gapMm` apart along the diagonal
+     * but each still exactly the same size as a lone "single" triangle
+     * (which gets no `gapMm` and is returned untranslated).
+     */
+    function triHalfPts(type, r, gapMm) {
+        let pts;
+        if (type === 'tritl') pts = [[-r, -r], [r, -r], [-r, r]];
+        else if (type === 'tritr') pts = [[r, -r], [-r, -r], [r, r]];
+        else if (type === 'tribr') pts = [[r, r], [r, -r], [-r, r]];
+        else if (type === 'tribl') pts = [[-r, r], [-r, -r], [r, r]];
+        else return null;
+        if (!gapMm) return pts;
+        const [cx, cy] = pts[0];
+        const len = Math.hypot(cx, cy) || 1;
+        const dx = (cx / len) * (gapMm / 2);
+        const dy = (cy / len) * (gapMm / 2);
+        return pts.map(([x, y]) => [x + dx, y + dy]);
+    }
+
+    /**
      * Local-frame point loop for a vertical "stadium"/slot shape (a
      * rectangle with two semicircular end caps) - width 2r, straight-side
      * half-length hl, long axis along y. Shared by the 3D outline and the
@@ -1027,6 +1093,12 @@
                 for (let i2 = 1; i2 < pts.length; i2++) ctx.lineTo(pts[i2][0], pts[i2][1]);
                 ctx.closePath();
             });
+        } else if (type === 'tritl' || type === 'tritr' || type === 'tribr' || type === 'tribl') {
+            const pts = triHalfPts(type, r, rhombusGap);
+            ctx.moveTo(pts[0][0], pts[0][1]);
+            ctx.lineTo(pts[1][0], pts[1][1]);
+            ctx.lineTo(pts[2][0], pts[2][1]);
+            ctx.closePath();
         }
     }
 
@@ -1060,6 +1132,7 @@
         else if (type === 'hexagon') { for (let i = 0; i < 6; i++) { let a = i * Math.PI / 3; pts.push([r * Math.cos(a), r * Math.sin(a)]); } }
         else if (type === 'triangle') pts = [[0, -r], [r * 0.866, r / 2], [-r * 0.866, r / 2]];
         else if (type === 'rhombus') pts = [[0, -r], [r / 1.5, 0], [0, r], [-r / 1.5, 0]];
+        else if (type === 'tritl' || type === 'tritr' || type === 'tribr' || type === 'tribl') pts = triHalfPts(type, r, rhombusGap);
         else return 0;
 
         let perimeter = 0;
@@ -1103,6 +1176,7 @@
         }
         if (type === 'triangle') return [[[0, -r], [r * 0.866, r / 2], [-r * 0.866, r / 2]]];
         if (type === 'rhombus') return [[[0, -r], [r / 1.5, 0], [0, r], [-r / 1.5, 0]]];
+        if (type === 'tritl' || type === 'tritr' || type === 'tribr' || type === 'tribl') return [triHalfPts(type, r, rhombusGap)];
         return [[]];
     }
 
@@ -1120,23 +1194,28 @@
     function generateHoles() {
         if (patternMode === 'rain') return generateRainHoles();
         if (patternMode === 'mosaic') return generateMosaicHoles();
+        if (patternMode === 'trianglegrid') return generateTriangleGridHoles();
         return generateHoneycombHoles();
     }
 
     /**
-     * "Мозайка" layout: random-sequential-adsorption packing of squares of
+     * "Мозайка" layout: random-sequential-adsorption packing of elements of
      * varying size - repeatedly try a random size+position, keep it only if
      * it doesn't overlap (with a `gap` margin) anything already placed,
      * give up after too many consecutive misses. This is what naturally
-     * produces the reference look (loose clusters of many small squares
+     * produces the reference look (loose clusters of many small elements
      * around a few large ones, uneven coverage) without any explicit
      * cluster/gradient logic - it just falls out of the packing process.
-     * Reuses the existing 'square' shape end to end (drawShapePath,
-     * shapePerimeter, the DXF export) - no new shape math needed, only the
-     * placement algorithm is new. A uniform grid buckets already-placed
-     * squares so each candidate only checks nearby neighbors instead of
-     * the whole list - without it this degrades to O(n^2) and stutters
-     * once a few hundred squares are placed.
+     * Element shape is `mosaicShape` ('square'/'circle'/'hexagon', picked via
+     * #mosaic-shape-selector) - reuses the existing per-shape drawShapePath/
+     * shapePerimeter/DXF export end to end, no new shape math needed, only
+     * the placement algorithm is new. Collision uses a plain square bounding
+     * box (`half` = size/2) regardless of shape - valid for all three since
+     * each fits entirely within its own size×size box, so the check stays
+     * conservative rather than under-rejecting. A uniform grid buckets
+     * already-placed elements so each candidate only checks nearby neighbors
+     * instead of the whole list - without it this degrades to O(n^2) and
+     * stutters once a few hundred elements are placed.
      */
     function generateMosaicHoles() {
         const W = parseFloat(document.getElementById('in-width').value);
@@ -1204,8 +1283,76 @@
             grid.get(key).push(idx);
 
             fails = 0;
-            generatedHoles.push({ x, y, size, rot: 0, type: 'square' });
-            totalCutLength += shapePerimeter('square', size);
+            generatedHoles.push({ x, y, size, rot: 0, type: mosaicShape });
+            totalCutLength += shapePerimeter(mosaicShape, size);
+        }
+
+        return { W, H, holes: generatedHoles, totalCutLength };
+    }
+
+    /**
+     * "Триъгълници" layout: a plain grid of square cells, each independently
+     * either empty, a single corner-triangle (half the cell, cut off by one
+     * of its two diagonals - 'tritl'/'tritr'/'tribr'/'tribl', picked at
+     * random), or "double" - both triangles that share one diagonal, cut as
+     * two separate pieces pulled apart from each other along that shared
+     * diagonal by `splitGap` (triHalfPts() shrinking each toward its own
+     * centroid - see there), rather than left touching edge-to-edge. Grid is
+     * sized to fit a whole number of cells into the working area (evenly
+     * stretching each cell slightly rather than leaving a partial row/column
+     * at the edge). `gap` shrinks each cell's shape uniformly around its own
+     * center (same trick as the mosaic squares) so adjacent cells' cut
+     * pieces don't touch edge-to-edge either.
+     */
+    function generateTriangleGridHoles() {
+        const W = parseFloat(document.getElementById('in-width').value);
+        const H = parseFloat(document.getElementById('in-height').value);
+        const border = parseFloat(document.getElementById('in-border').value);
+        const cell = parseFloat(document.getElementById('in-trisize').value);
+        const gap = parseFloat(document.getElementById('in-trigap').value);
+        const densityPct = parseFloat(document.getElementById('in-tridensity').value) / 100;
+        const doublePct = parseFloat(document.getElementById('in-tridouble').value) / 100;
+        const splitGap = parseFloat(document.getElementById('in-trisplitgap').value);
+        const seed = parseInt(document.getElementById('in-seed').value);
+
+        const rand = mulberry32(seed);
+        generatedHoles = [];
+        let totalCutLength = 2 * (W + H);
+
+        const minX = border, maxX = W - border, minY = border, maxY = H - border;
+        const areaW = maxX - minX, areaH = maxY - minY;
+        if (areaW <= 0 || areaH <= 0 || cell <= 0) {
+            return { W, H, holes: generatedHoles, totalCutLength };
+        }
+
+        const cols = Math.max(1, Math.round(areaW / cell));
+        const rows = Math.max(1, Math.round(areaH / cell));
+        const cellW = areaW / cols, cellH = areaH / rows;
+        const size = Math.max(0, Math.min(cellW, cellH) - gap * 2);
+        if (size <= 0) return { W, H, holes: generatedHoles, totalCutLength };
+
+        const SINGLE_TYPES = ['tritl', 'tritr', 'tribr', 'tribl'];
+        const MAIN_DIAG = ['tritr', 'tribl']; // the two halves sharing the top-left/bottom-right diagonal
+        const ANTI_DIAG = ['tritl', 'tribr']; // the two halves sharing the top-right/bottom-left diagonal
+
+        for (let row = 0; row < rows; row++) {
+            for (let col = 0; col < cols; col++) {
+                if (rand() > densityPct) continue;
+                const cx = minX + (col + 0.5) * cellW;
+                const cy = minY + (row + 0.5) * cellH;
+                const isDouble = rand() < doublePct;
+                const types = isDouble
+                    ? (rand() < 0.5 ? MAIN_DIAG : ANTI_DIAG)
+                    : [SINGLE_TYPES[Math.floor(rand() * 4)]];
+                // Only a "double" cell's two halves get pulled apart along
+                // their shared diagonal - a lone single triangle has nothing
+                // to split from and stays at full size.
+                const rhombusGap = isDouble ? splitGap : undefined;
+                types.forEach(type => {
+                    generatedHoles.push({ x: cx, y: cy, size, rot: 0, type, rhombusGap });
+                    totalCutLength += shapePerimeter(type, size, undefined, undefined, rhombusGap);
+                });
+            }
         }
 
         return { W, H, holes: generatedHoles, totalCutLength };
@@ -1608,14 +1755,21 @@
         // it's never behind a side wall; always drawn last.
         fillPoly([pt(0, 0, T), pt(W, 0, T), pt(W, H, T), pt(0, H, T)], topColor);
 
-        // Holes - flat dark cutouts on the top face.
+        // Holes - punched fully transparent (destination-out, same technique
+        // draw2D uses for punchThrough) instead of a flat dark fill, so a cut
+        // reads as an actual open hole rather than a black disc glued onto
+        // the top face. Unconditional here, unlike draw2D's punchThrough
+        // gate, since the 3D view never has a background photo behind it -
+        // fill color is irrelevant under destination-out, only alpha erases.
+        ctx.globalCompositeOperation = 'destination-out';
         holes.forEach(h => {
             shapeOutlineLoops(h.type, h.size, h.length, h.clusterMask, h.rhombusGap).forEach(loop => {
                 if (!loop.length) return;
                 const worldPts = rotateTranslatePts(loop, h.rot, h.x, h.y);
-                fillPoly(worldPts.map(([x, y]) => pt(x, y, T)), '#0a0b0e');
+                fillPoly(worldPts.map(([x, y]) => pt(x, y, T)), '#000');
             });
         });
+        ctx.globalCompositeOperation = 'source-over';
     }
 
     function render() {
