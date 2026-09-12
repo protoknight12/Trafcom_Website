@@ -96,6 +96,43 @@
     </section>
 
     <section class="admin-card">
+        <h3>Предстоящи подновявания</h3>
+        <p class="section-subtitle">Всички дати на изтичане по автомобили, подредени от най-скорошна към най-далечна.</p>
+        {% if renewals %}
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Автомобил</th>
+                    <th>Какво подлежи на подновяване</th>
+                    <th>Дата</th>
+                    <th>Остават дни</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for r in renewals %}
+                <tr>
+                    <td><strong>{{ r.vehicle.name }}</strong> <span class="text-small text-muted">({{ r.vehicle.license_plate }})</span></td>
+                    <td>{{ r.label }}</td>
+                    <td>{{ r.date.strftime('%d.%m.%Y') }}</td>
+                    <td>
+                        <span class="deadline-pill {{ r.status }}">
+                            {% if r.status == 'expired' %}изтекла от {{ -r.days }} дни
+                            {% else %}остават {{ r.days }} дни
+                            {% endif %}
+                        </span>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма зададени дати за подновяване.</p>
+        {% endif %}
+    </section>
+
+    <section class="admin-card">
         <h3>Автомобили</h3>
         {% if vehicles %}
         <div class="table-responsive">

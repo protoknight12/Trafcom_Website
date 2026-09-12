@@ -13604,7 +13604,11 @@ def _parse_form_date(raw):
 @role_required(['admin', 'worker'])
 def admin_vehicles():
     vehicles = Vehicle.query.order_by(Vehicle.name).all()
-    return render_template('admin_vehicles.html', vehicles=vehicles, active_page='admin_vehicles')
+    renewals = sorted(
+        (dict(d, vehicle=v) for v in vehicles for d in v.deadlines if d['date']),
+        key=lambda r: r['date'],
+    )
+    return render_template('admin_vehicles.html', vehicles=vehicles, renewals=renewals, active_page='admin_vehicles')
 
 
 @app.route('/admin/vehicles/create', methods=['POST'])
