@@ -15548,12 +15548,33 @@ def upload_offer_item_image():
 def _offer_picker_context():
     """Shared context for the offer create/edit form: catalog rows to pick
     from (as plain JSON-friendly dicts, for the add-item panel's JS) and the
-    client list, same shape as order_create.html's cart picker."""
-    products = [{'id': p.id, 'name': p.name, 'price': calculate_product_pricing(p)['sell_price']}
-                for p in Product.query.order_by(Product.name).all()]
+    client list, same shape as order_create.html's cart picker.
+
+    Also returns client_pricing - each Client's Детайли discount/markup, so
+    the editor's JS can pre-fill a picked product/detail's price already
+    adjusted for whichever client the offer is for (_apply_adjustment(),
+    mirrored by hand - same convention as order_create.html's CLIENT_PRICING).
+    Only a starting point: admin_offer_edit.html's price field stays freely
+    editable either way, and once an OfferItem is saved its unit_price is a
+    frozen column - neither a later catalog price change nor a later edit to
+    the client's discount percent ever touches an already-saved offer.
+    """
+    products = []
+    for p in Product.query.order_by(Product.name).all():
+        pricing = calculate_product_pricing(p)
+        products.append({
+            'id': p.id, 'name': p.name, 'price': pricing['sell_price'],
+            'details_subtotal': pricing['details_subtotal'],
+            'extra_costs_subtotal': pricing['extra_costs_subtotal'],
+            'markup_percent': p.markup_percent,
+        })
     details = [{'id': d.id, 'name': d.name, 'price': d.total_price} for d in Detail.query.order_by(Detail.name).all()]
     clients = Client.query.order_by(Client.name).all()
-    return products, details, clients
+    client_pricing = {
+        c.id: {'detail_type': c.detail_adjustment_type, 'detail_percent': c.detail_adjustment_percent}
+        for c in clients
+    }
+    return products, details, clients, client_pricing
 
 
 def _offer_items_json(offer):
@@ -15710,9 +15731,10 @@ def _save_offer(offer):
 def admin_offer_new():
     if request.method == 'POST':
         return _save_offer(None)
-    products, details, clients = _offer_picker_context()
+    products, details, clients, client_pricing = _offer_picker_context()
     return render_template('admin_offer_edit.html', offer=None, initial_items=[],
-                            products=products, details=details, clients=clients, active_page='admin_offers')
+                            products=products, details=details, clients=clients,
+                            client_pricing=client_pricing, active_page='admin_offers')
 
 
 @app.route('/admin/offers/<int:offer_id>/edit', methods=['GET', 'POST'])
@@ -15721,9 +15743,10 @@ def admin_offer_edit(offer_id):
     offer = Offer.query.get_or_404(offer_id)
     if request.method == 'POST':
         return _save_offer(offer)
-    products, details, clients = _offer_picker_context()
+    products, details, clients, client_pricing = _offer_picker_context()
     return render_template('admin_offer_edit.html', offer=offer, initial_items=_offer_items_json(offer),
-                            products=products, details=details, clients=clients, active_page='admin_offers')
+                            products=products, details=details, clients=clients,
+                            client_pricing=client_pricing, active_page='admin_offers')
 
 
 @app.route('/admin/offers/<int:offer_id>/create-order', methods=['POST'])
@@ -15735,8 +15758,11 @@ def admin_offer_create_order(offer_id):
     detail.total_price - material plus the detail's own permanent operations -
     for standalone details) - offer lines don't carry per-detail ad-hoc
     operations/attachments, so those parts of that loop don't apply here.
-    Text lines have no product_id/detail_id (see OfferItem) and can't be
-    selected."""
+    Prices are freshly computed against offer.client (not the offer's own
+    frozen OfferItem.unit_price, which may be a hand-negotiated one-off) -
+    same client discount/markup a self-service order would get, see
+    calculate_product_pricing()/detail_price_for(). Text lines have no
+    product_id/detail_id (see OfferItem) and can't be selected."""
     offer = Offer.query.get_or_404(offer_id)
     item_ids = request.form.getlist('item_ids', type=int)
     customer_name = request.form.get('customer_name', '').strip()
@@ -15772,7 +15798,7 @@ def admin_offer_create_order(offer_id):
             product = Product.query.get(oi.product_id)
             if not product:
                 continue
-            pricing = calculate_product_pricing(product)
+            pricing = calculate_product_pricing(product, offer.client)
             order_item = OrderItem(order_id=new_order.id, product_id=product.id,
                                     quantity_ordered=qty, unit_price=pricing['sell_price'])
             db.session.add(order_item)
@@ -15788,7 +15814,7 @@ def admin_offer_create_order(offer_id):
             if not detail:
                 continue
             db.session.add(OrderItem(order_id=new_order.id, detail_id=detail.id,
-                                      quantity_ordered=qty, unit_price=detail.total_price))
+                                      quantity_ordered=qty, unit_price=detail_price_for(detail, offer.client)))
             added_any = True
 
     if not added_any:

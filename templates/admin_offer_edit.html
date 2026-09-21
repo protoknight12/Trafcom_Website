@@ -237,6 +237,12 @@
 <script>
     const PRODUCTS = {{ products|tojson }};
     const DETAILS = {{ details|tojson }};
+    // Each Client's Детайли discount/markup, mirrored by hand from
+    // _apply_adjustment() - see _offer_picker_context(). Only used to
+    // pre-fill #item_unit_price for a freshly-picked catalog row; the field
+    // stays freely editable, and once an OfferItem is saved its price is a
+    // frozen column untouched by later catalog/client changes.
+    const CLIENT_PRICING = {{ client_pricing|tojson }};
     const OFFER_IMAGE_URL_PREFIX = {{ url_for('static', filename='uploads/offers/')|tojson }};
     const HAS_OFFER = {{ 'true' if offer else 'false' }};
     let cart = {{ initial_items|tojson }};
@@ -288,13 +294,60 @@
         });
     });
 
+    function applyClientAdjustment(amount, type, percent) {
+        if (!type || !percent) return amount;
+        const factor = percent / 100;
+        if (type === 'discount') return amount * (1 - factor);
+        if (type === 'markup') return amount * (1 + factor);
+        return amount;
+    }
+
+    function selectedOfferClientPricing() {
+        const sel = document.getElementById('client_id');
+        const cid = sel && sel.value ? parseInt(sel.value, 10) : null;
+        return cid && CLIENT_PRICING[cid] ? CLIENT_PRICING[cid] : null;
+    }
+
+    function detailAdjustedPrice(basePrice) {
+        const cp = selectedOfferClientPricing();
+        if (!cp) return basePrice;
+        return applyClientAdjustment(basePrice, cp.detail_type, cp.detail_percent);
+    }
+
+    // Mirrors calculate_product_pricing(): only the Детайли-built subtotal
+    // gets the client's discount/markup, extra costs and the product's own
+    // markup_percent stay untouched.
+    function productAdjustedPrice(p) {
+        if (typeof p.details_subtotal !== 'number') return detailAdjustedPrice(p.price);
+        const cp = selectedOfferClientPricing();
+        let detailsSubtotal = p.details_subtotal;
+        if (cp) detailsSubtotal = applyClientAdjustment(detailsSubtotal, cp.detail_type, cp.detail_percent);
+        const totalCost = detailsSubtotal + p.extra_costs_subtotal;
+        return totalCost * (1 + p.markup_percent / 100);
+    }
+
     document.getElementById('item_product_id').addEventListener('change', function () {
         const p = PRODUCTS.find(function (x) { return x.id === parseInt(this.value, 10); }.bind(this));
-        if (p) document.getElementById('item_unit_price').value = p.price;
+        if (p) document.getElementById('item_unit_price').value = productAdjustedPrice(p).toFixed(2);
     });
     document.getElementById('item_detail_id').addEventListener('change', function () {
         const d = DETAILS.find(function (x) { return x.id === parseInt(this.value, 10); }.bind(this));
-        if (d) document.getElementById('item_unit_price').value = d.price;
+        if (d) document.getElementById('item_unit_price').value = detailAdjustedPrice(d.price).toFixed(2);
+    });
+    // Re-fill the staged price if the admin switches the offer's client
+    // after already picking a catalog row (before it's added to the cart).
+    document.getElementById('client_id').addEventListener('change', function () {
+        const checkedType = document.querySelector('input[name="item_type"]:checked');
+        const type = checkedType ? checkedType.value : null;
+        if (type === 'product') {
+            const productSel = document.getElementById('item_product_id');
+            const p = productSel.value ? PRODUCTS.find(function (x) { return x.id === parseInt(productSel.value, 10); }) : null;
+            if (p) document.getElementById('item_unit_price').value = productAdjustedPrice(p).toFixed(2);
+        } else if (type === 'detail') {
+            const detailSel = document.getElementById('item_detail_id');
+            const d = detailSel.value ? DETAILS.find(function (x) { return x.id === parseInt(detailSel.value, 10); }) : null;
+            if (d) document.getElementById('item_unit_price').value = detailAdjustedPrice(d.price).toFixed(2);
+        }
     });
 
     function cell(html, opts) {
