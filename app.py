@@ -8304,6 +8304,15 @@ def create_order():
         machine_id = int(machine_id_raw) if machine_id_raw and machine_id_raw.isdigit() else None
         client_id_raw = request.form.get('client_id', '')
         client_id = int(client_id_raw) if client_id_raw and client_id_raw.isdigit() else None
+        if not current_user.is_staff:
+            # A self-service order is always attributed to (and priced as)
+            # the submitter's own linked client - never trust a client_id a
+            # non-staff request claims, whether from a tampered form or a
+            # stale page, or they could get another client's discount/markup
+            # (or private catalog access) just by submitting a different id.
+            # Staff keep picking any client, since they build orders on
+            # behalf of walk-in/phone customers.
+            client_id = current_user.client_id
         deliverer_id_raw = request.form.get('deliverer_id', '')
         deliverer_id = int(deliverer_id_raw) if deliverer_id_raw and deliverer_id_raw.isdigit() else None
         # Whichever client this order is actually for - the picked Client if
@@ -8423,7 +8432,16 @@ def create_order():
     machines = Machine.query.order_by(Machine.name).all()
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     services = Service.query.order_by(Service.name).all()
-    clients = Client.query.order_by(Client.name).all()
+    # Non-staff can only ever place an order as their own linked client (see
+    # the client_id override in the POST branch above) - so the picker only
+    # offers that one client (or none, until they link one via the quick-
+    # create-client modal - see api_quick_create_client()). This also keeps
+    # every other client's discount/markup terms (client_pricing below) out
+    # of a regular user's page source entirely.
+    if current_user.is_staff:
+        clients = Client.query.order_by(Client.name).all()
+    else:
+        clients = [current_user.client] if current_user.client else []
     deliverers = Deliverer.query.order_by(Deliverer.name).all()
     # Pre-computed, JSON-friendly catalogs so the cart UI can add items and
     # show live prices/totals client-side without extra round-trips.
@@ -10814,6 +10832,15 @@ def api_quick_create_client():
         mol=request.form.get('mol', '').strip() or None,
     )
     db.session.add(client)
+    db.session.flush()
+    # A still-unlinked regular_user quick-creating their own billing entity
+    # here becomes permanently linked to it - otherwise this self-service
+    # order flow would have no lasting effect on their own client-pricing/
+    # catalog-visibility elsewhere (see User.client_id, _catalog_item_visible()).
+    # Staff quick-creating a client for someone else's order never get
+    # auto-linked - only a genuinely unlinked non-staff submitter does.
+    if not current_user.is_staff and not current_user.client_id:
+        current_user.client_id = client.id
     db.session.commit()
     log_action(f'Създаден клиент "{name}" (бърз избор)')
 
