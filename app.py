@@ -629,6 +629,14 @@ class Detail(db.Model):
     # skip DXF geometry entirely - see _find_or_create_delivery_target).
     cutting_service_id = db.Column(db.Integer, db.ForeignKey('service.id'), nullable=True)
     cutting_service = db.relationship('Service')
+    # Which Client this catalog entry is private to - NULL means it's a
+    # public/general-catalog part visible to every client (the pre-existing
+    # behavior, so old rows need no backfill). Non-NULL restricts it to that
+    # one client (+ staff) - see _catalog_item_visible(), used to filter the
+    # self-service catalog (create_order()) and detail_dxf_dashboard() access
+    # so one client can never browse/order another client's custom part.
+    owner_client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True)
+    owner_client = db.relationship('Client', foreign_keys=[owner_client_id])
     # ERP code (shown as text + Code128 barcode) and internal part code (КД №)
     # printed on production labels - see print_label(). Optional/nullable
     # since older catalog parts won't have these set.
@@ -782,6 +790,10 @@ class Product(db.Model):
     # Stock on hand, bumped by recording delivery notes (see DeliveryNoteItem
     # / admin_delivery_notes.html) - not editable by hand elsewhere.
     stock_quantity = db.Column(db.Float, nullable=False, default=0.0)
+    # Same private-to-one-client convention as Detail.owner_client_id above -
+    # NULL is the pre-existing public/general-catalog behavior.
+    owner_client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True)
+    owner_client = db.relationship('Client', foreign_keys=[owner_client_id])
 
     product_details = db.relationship('ProductDetail', cascade='all, delete-orphan', backref='product', lazy=True)
     extra_costs = db.relationship('ProductExtraCost', cascade='all, delete-orphan', backref='product', lazy=True)
@@ -3772,16 +3784,42 @@ def _client_service_adjustment(client, service):
     return (row.adjustment_type, row.adjustment_percent) if row else (None, 0)
 
 
+def _viewer_client():
+    """The logged-in viewer's linked Client for price-display purposes, or
+    None for anonymous visitors AND for staff (admin/worker) - staff must
+    always see true list prices/costs regardless of whether their own
+    account happens to carry a client_id, since they use these same pages
+    (admin_details.html, admin_products.html, upload.html previews, ...) to
+    manage the real catalog. Used by every jinja-global price helper below."""
+    if not current_user.is_authenticated or current_user.is_staff:
+        return None
+    return current_user.client
+
+
 def client_service_rate(service):
     """Service.price_per_hour_eur adjusted for the logged-in viewer's linked
     Client (ClientServicePrice override) - jinja global used by
-    services.html/library.html so a linked client only ever sees their own
-    negotiated rate. Anonymous/unlinked viewers see the plain list rate."""
-    client = current_user.client if current_user.is_authenticated else None
+    services.html/library.html/upload.html so a linked client only ever sees
+    their own negotiated rate. Anonymous/unlinked/staff viewers see the plain
+    list rate."""
+    client = _viewer_client()
     if not client:
         return service.price_per_hour_eur
     adj_type, adj_percent = _client_service_adjustment(client, service)
     return round(_apply_adjustment(service.price_per_hour_eur, adj_type, adj_percent), 2)
+
+
+def client_material_rate(material):
+    """MaterialPrice.cost_per_m2 adjusted for the logged-in viewer's linked
+    Client's Материали discount/markup - jinja global used by
+    partials/material_options.html (upload.html/generator.html's material
+    picker) so the price shown while picking a material already matches what
+    the DXF calculator will actually charge. Anonymous/unlinked/staff viewers
+    see the plain list rate."""
+    client = _viewer_client()
+    if not client:
+        return material.cost_per_m2
+    return round(_apply_adjustment(material.cost_per_m2, client.material_adjustment_type, client.material_adjustment_percent), 2)
 
 
 def detail_price_for(detail, client):
@@ -3792,6 +3830,15 @@ def detail_price_for(detail, client):
     if not client:
         return detail.total_price
     return round(_apply_adjustment(detail.total_price, client.detail_adjustment_type, client.detail_adjustment_percent), 2)
+
+
+def _catalog_item_visible(owner_client_id, viewer_client):
+    """Whether a Detail/Product with this owner_client_id should be visible
+    to viewer_client (None = staff/unlinked, sees only public items). NULL
+    owner = public/general-catalog item, visible to everyone - the
+    pre-existing behavior. A non-NULL owner restricts it to that one client
+    only (checked by staff separately - see callers)."""
+    return owner_client_id is None or (viewer_client is not None and owner_client_id == viewer_client.id)
 
 
 def _material_cost(width, height, material, client=None):
@@ -4218,6 +4265,7 @@ app.jinja_env.globals['material_price_m2_label'] = material_price_m2_label
 app.jinja_env.globals['format_cut_dimensions'] = format_cut_dimensions
 app.jinja_env.globals['material_available_qty'] = _material_available_qty
 app.jinja_env.globals['client_service_rate'] = client_service_rate
+app.jinja_env.globals['client_material_rate'] = client_material_rate
 
 
 @app.route('/favicon.ico')
@@ -5304,8 +5352,9 @@ def admin_details():
     details = Detail.query.order_by(Detail.name).all()
     services = Service.query.order_by(Service.name).all()
     services_data = [{'id': s.id, 'name': s.name, 'price_per_hour_eur': s.price_per_hour_eur} for s in services]
+    clients = Client.query.order_by(Client.name).all()
     return render_template('admin_details.html', materials=materials, details=details, services=services,
-                            services_data=services_data, active_page='admin_details')
+                            services_data=services_data, clients=clients, active_page='admin_details')
 
 
 @app.route('/admin/products')
@@ -5316,7 +5365,9 @@ def admin_products():
         return redirect(url_for('dashboard'))
     products = Product.query.order_by(Product.name).all()
     product_pricing = {p.id: calculate_product_pricing(p) for p in products}
-    return render_template('admin_products.html', products=products, product_pricing=product_pricing, active_page='admin_products')
+    clients = Client.query.order_by(Client.name).all()
+    return render_template('admin_products.html', products=products, product_pricing=product_pricing,
+                            clients=clients, active_page='admin_products')
 
 
 @app.route('/admin/clients')
@@ -7225,6 +7276,12 @@ def admin_add_detail():
     material_key = request.form.get('material', '')
     service_id_raw = request.form.get('service_id', '')
     service_id = int(service_id_raw) if service_id_raw and service_id_raw.isdigit() else None
+    # Blank = public/general-catalog part, visible to every client - see
+    # Detail.owner_client_id / _catalog_item_visible().
+    owner_client_id_raw = request.form.get('owner_client_id', '')
+    owner_client_id = int(owner_client_id_raw) if owner_client_id_raw.isdigit() else None
+    if owner_client_id and not db.session.get(Client, owner_client_id):
+        owner_client_id = None
     try:
         erp_number = _parse_erp_number(request.form)
     except ValueError:
@@ -7310,14 +7367,16 @@ def admin_add_detail():
                 name=name, material_key=material_key, width=width, height=height,
                 total_length=total_length, pierce_count=pierce_count,
                 calculated_price=price, geometry_json=json.dumps(shapes),
-                erp_number=erp_number, code_number=code_number, cutting_service_id=service_id
+                erp_number=erp_number, code_number=code_number, cutting_service_id=service_id,
+                owner_client_id=owner_client_id
             )
         else:
             new_detail = Detail(
                 name=name, material_key=material_key, width=0.0, height=0.0,
                 total_length=0.0, pierce_count=0,
                 calculated_price=manual_price, geometry_json=None,
-                erp_number=erp_number, code_number=code_number, cutting_service_id=service_id
+                erp_number=erp_number, code_number=code_number, cutting_service_id=service_id,
+                owner_client_id=owner_client_id
             )
         db.session.add(new_detail)
         db.session.flush()  # assigns new_detail.id for the DetailDxfFile/Operation FKs below
@@ -7362,9 +7421,15 @@ def detail_dxf_dashboard(detail_id):
     /admin/details (admins) or by a direct link (any logged-in user, e.g. to
     upload a revision - see the DXF dashboard access decision in the task
     notes). Anyone logged in can view the list and upload, but only admins
-    get a working download link - see download_detail_dxf().
+    get a working download link - see download_detail_dxf(). Non-staff are
+    further limited to details visible to them (their own client's, or
+    public) - see _catalog_item_visible() - so one client can't browse or
+    upload revisions onto another client's private part.
     """
     detail = Detail.query.get_or_404(detail_id)
+    if not current_user.is_staff and not _catalog_item_visible(detail.owner_client_id, current_user.client):
+        flash('Нямате достъп до този детайл.', 'danger')
+        return redirect(url_for('dashboard'))
     files = DetailDxfFile.query.filter_by(detail_id=detail_id).order_by(DetailDxfFile.uploaded_at.desc()).all()
     services = Service.query.order_by(Service.name).all()
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
@@ -7455,6 +7520,9 @@ def upload_detail_dxf(detail_id):
     any other attachment.
     """
     detail = Detail.query.get_or_404(detail_id)
+    if not current_user.is_staff and not _catalog_item_visible(detail.owner_client_id, current_user.client):
+        flash('Нямате достъп до този детайл.', 'danger')
+        return redirect(url_for('dashboard'))
     file = request.files.get('file')
     if not file or file.filename == '':
         flash(gettext('Моля изберете файл.'), 'danger')
@@ -7812,6 +7880,31 @@ def admin_delete_detail(detail_id):
     return redirect(url_for('admin_details'))
 
 
+@app.route('/admin/details/<int:detail_id>/owner', methods=['POST'])
+@login_required
+def admin_update_detail_owner(detail_id):
+    """Sets which Client this catalog Detail is private to (blank = public,
+    visible to everyone) - see Detail.owner_client_id / _catalog_item_visible()."""
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    detail = Detail.query.get_or_404(detail_id)
+    client_id_raw = request.form.get('owner_client_id', '')
+    client_id = int(client_id_raw) if client_id_raw.isdigit() else None
+    if client_id and not db.session.get(Client, client_id):
+        flash('Невалиден клиент.', 'danger')
+        return redirect(url_for('admin_details'))
+
+    old_owner = detail.owner_client.name if detail.owner_client else '(публичен)'
+    detail.owner_client_id = client_id
+    db.session.commit()
+    new_owner = detail.owner_client.name if detail.owner_client else '(публичен)'
+    log_action(f'Собственик на детайл "{detail.name}": {old_owner} → {new_owner}')
+    flash(f'Собственикът на "{detail.name}" беше обновен успешно.', 'success')
+    return redirect(url_for('admin_details'))
+
+
 
 
 # ----------------- ПРОДУКТИ (Products) -----------------
@@ -7860,9 +7953,10 @@ def admin_product_edit(product_id):
     all_details = Detail.query.order_by(Detail.name).all()
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     services = Service.query.order_by(Service.name).all()
+    clients = Client.query.order_by(Client.name).all()
     pricing = calculate_product_pricing(product)
     return render_template('product_edit.html', product=product, all_details=all_details, pricing=pricing,
-                            materials=materials, services=services, active_page='admin')
+                            materials=materials, services=services, clients=clients, active_page='admin')
 
 
 @app.route('/admin/products/<int:product_id>/edit-content')
@@ -7937,6 +8031,13 @@ def admin_product_update(product_id):
         product.markup_percent = round(markup_percent, 2)
         product.erp_number = erp_number
         product.code_number = request.form.get('code_number', '').strip() or None
+
+        # Blank = public/general-catalog product, visible to every client -
+        # see Product.owner_client_id / _catalog_item_visible().
+        owner_client_id_raw = request.form.get('owner_client_id', '')
+        owner_client_id = int(owner_client_id_raw) if owner_client_id_raw.isdigit() else None
+        if not owner_client_id or db.session.get(Client, owner_client_id):
+            product.owner_client_id = owner_client_id
 
     log_action(describe_changes(f'продукт "{product.name}"', product, {
         'name': 'име', 'description': 'описание', 'markup_percent': 'надценка %',
@@ -8241,6 +8342,8 @@ def create_order():
                 product = Product.query.get(item_id)
                 if not product:
                     continue
+                if not current_user.is_staff and not _catalog_item_visible(product.owner_client_id, current_user.client):
+                    continue
                 pricing = calculate_product_pricing(product, pricing_client)
                 order_item = OrderItem(
                     order_id=new_order.id, product_id=product.id,
@@ -8263,6 +8366,8 @@ def create_order():
             elif item_type == 'detail':
                 detail = Detail.query.get(item_id)
                 if not detail:
+                    continue
+                if not current_user.is_staff and not _catalog_item_visible(detail.owner_client_id, current_user.client):
                     continue
                 order_item = OrderItem(
                     order_id=new_order.id, detail_id=detail.id,
@@ -8308,6 +8413,13 @@ def create_order():
 
     products = Product.query.order_by(Product.name).all()
     details = Detail.query.order_by(Detail.name).all()
+    # Non-staff only ever browse their own client's private catalog entries
+    # plus whatever admin marked public - see _catalog_item_visible(). Staff
+    # keep the full, unfiltered catalog (they build orders for any client).
+    if not current_user.is_staff:
+        viewer_client = current_user.client
+        products = [p for p in products if _catalog_item_visible(p.owner_client_id, viewer_client)]
+        details = [d for d in details if _catalog_item_visible(d.owner_client_id, viewer_client)]
     machines = Machine.query.order_by(Machine.name).all()
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     services = Service.query.order_by(Service.name).all()

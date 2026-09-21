@@ -69,6 +69,15 @@
                 <label for="detail_code_number">КД № (за етикет, незадължително)</label>
                 <input type="text" id="detail_code_number" name="code_number" placeholder="напр. Bulspike 01.01.01.00.02">
             </div>
+            <div class="form-group">
+                <label for="detail_owner_client_id">Собственик (клиент) - празно = публичен детайл</label>
+                <select id="detail_owner_client_id" name="owner_client_id">
+                    <option value="">-- Публичен (видим за всички клиенти) --</option>
+                    {% for c in clients %}
+                    <option value="{{ c.id }}">{{ c.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
 
             <div class="form-group" style="flex-basis: 100%;">
                 <label>Допълнителни операции (незадължително - фрезоване, зачистване...)</label>
@@ -112,6 +121,7 @@
                     <th>Обща цена с операции (€)</th>
                     <th>На склад</th>
                     <th>ERP № / КД №</th>
+                    <th>Собственик</th>
                     <th class="text-right">Етикет</th>
                     <th class="text-right">Действие</th>
                 </tr>
@@ -126,6 +136,18 @@
                     <td>{{ "%.2f"|format(detail.total_price) }} €</td>
                     <td>{{ detail.stock_quantity|round(2) }}</td>
                     <td class="text-small text-muted">{{ detail.erp_number or '-' }} / {{ detail.code_number or '-' }}</td>
+                    <td>
+                        <form action="{{ url_for('admin_update_detail_owner', detail_id=detail.id) }}" method="POST" style="display:flex; gap:4px;">
+                            {% include 'partials/csrf_field.html' %}
+                            <select name="owner_client_id" class="material-price-input" style="width: auto;">
+                                <option value="">-- Публичен --</option>
+                                {% for c in clients %}
+                                <option value="{{ c.id }}" {% if detail.owner_client_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+                                {% endfor %}
+                            </select>
+                            <button type="submit" class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;">Запази</button>
+                        </form>
+                    </td>
                     <td class="text-right">
                         <form action="{{ url_for('print_label', target_type='detail', target_id=detail.id) }}" method="GET" style="display:flex; gap:4px; align-items:center; justify-content:flex-end;">
                             <input type="number" name="quantity" min="1" value="1" class="material-price-input" style="width: 55px;">
@@ -141,11 +163,11 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="9" class="text-center no-data">Няма добавени детайли.</td>
+                    <td colspan="10" class="text-center no-data">Няма добавени детайли.</td>
                 </tr>
                 {% endfor %}
                 {% if details %}
-                <tr class="search-empty-row" hidden><td colspan="9" class="text-center no-data">Няма съвпадения.</td></tr>
+                <tr class="search-empty-row" hidden><td colspan="10" class="text-center no-data">Няма съвпадения.</td></tr>
                 {% endif %}
                 </tbody>
             </table>

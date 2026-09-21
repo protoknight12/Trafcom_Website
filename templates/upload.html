@@ -64,7 +64,7 @@
                 <label>{{ _('Услуги (рязане) * - изберете една или повече, цената се сумира съответно') }}</label>
                 <div class="service-checkbox-group" id="serviceCheckboxGroup">
                     {% for s in services %}
-                    <label><input type="checkbox" name="service_ids" value="{{ s.id }}">{{ localized(s, 'name') }} ({{ "%.2f"|format(s.price_per_hour_eur) }} €/{{ _('час') }})</label>
+                    <label><input type="checkbox" name="service_ids" value="{{ s.id }}">{{ localized(s, 'name') }} ({{ "%.2f"|format(client_service_rate(s)) }} €/{{ _('час') }})</label>
                     {% else %}
                     <span class="text-muted text-small">{{ _('Няма добавени услуги.') }}</span>
                     {% endfor %}
