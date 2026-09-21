@@ -93,7 +93,7 @@
                 <select id="pending_op_service_id" style="flex: 1; min-width: 200px;">
                     <option value="">-- {{ _('Изберете услуга') }} --</option>
                     {% for s in services %}
-                    <option value="{{ s.id }}">{{ localized(s, 'name') }} ({{ "%.2f"|format(s.price_per_hour_eur) }} €/{{ _('час') }})</option>
+                    <option value="{{ s.id }}">{{ localized(s, 'name') }} ({{ "%.2f"|format(client_service_rate(s)) }} €/{{ _('час') }})</option>
                     {% endfor %}
                 </select>
                 <input type="text" id="pending_op_description" placeholder="{{ _('Описание (незадължително, напр. външно лазерно рязане)') }}" style="flex: 1; min-width: 200px;">
