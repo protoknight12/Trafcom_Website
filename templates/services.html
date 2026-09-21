@@ -187,7 +187,7 @@
                     <div class="spec-row"><span class="spec-name">{{ _('Тип машина') }}</span><span class="spec-val">{{ service.machine_type }}</span></div>
                     {% endif %}
                     {% if service.show_price %}
-                    <div class="spec-row"><span class="spec-name">{{ _('Цена на час') }}</span><span class="spec-val">{{ "%.2f"|format(service.price_per_hour_eur) }} €</span></div>
+                    <div class="spec-row"><span class="spec-name">{{ _('Цена на час') }}</span><span class="spec-val">{{ "%.2f"|format(client_service_rate(service)) }} €</span></div>
                     {% endif %}
                 </div>
                 {% if service.description %}

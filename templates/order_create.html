@@ -158,10 +158,10 @@
                     <label for="client_id" style="margin-bottom: 0;">{{ _('Клиент / Фирма *') }}</label>
                     <button type="button" onclick="openQuickClientModal()" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ {{ _('Бързо създаване') }}</button>
                 </div>
-                <select id="client_id" name="client_id" required>
+                <select id="client_id" name="client_id" required onchange="renderCart()">
                     <option value="">-- {{ _('Изберете клиент') }} --</option>
                     {% for c in clients %}
-                    <option value="{{ c.id }}" data-name="{{ c.name }}">{{ c.name }}</option>
+                    <option value="{{ c.id }}" data-name="{{ c.name }}" {% if current_user.client_id == c.id %}selected{% endif %}>{{ c.name }}</option>
                     {% endfor %}
                 </select>
                 <input type="hidden" name="customer_name" id="customer_name">
@@ -446,12 +446,75 @@
     const PRODUCTS = {{ products|tojson }};
     const DETAILS = {{ details|tojson }};
     const SERVICES_DATA = {{ services_data|tojson }};
+    // Per-client Детайли/service discount-or-markup terms, mirroring
+    // _apply_adjustment()/_client_service_adjustment() by hand - see the
+    // client_pricing dict built in create_order().
+    const CLIENT_PRICING = {{ client_pricing|tojson }};
     let cart = [];
     let pendingDetailOps = [];
 
+    function applyClientAdjustment(amount, type, percent) {
+        if (!type || !percent) return amount;
+        const factor = percent / 100;
+        if (type === 'discount') return amount * (1 - factor);
+        if (type === 'markup') return amount * (1 + factor);
+        return amount;
+    }
+
+    function selectedClientPricing() {
+        const sel = document.getElementById('client_id');
+        const cid = sel && sel.value ? parseInt(sel.value, 10) : null;
+        return cid && CLIENT_PRICING[cid] ? CLIENT_PRICING[cid] : null;
+    }
+
+    // A Detail's/quick-created item's list price, discounted/marked-up by
+    // the currently selected client's Детайли terms (see detail_price_for()).
+    function detailAdjustedPrice(basePrice) {
+        const cp = selectedClientPricing();
+        if (!cp) return basePrice;
+        return applyClientAdjustment(basePrice, cp.detail_type, cp.detail_percent);
+    }
+
+    // Re-runs calculate_product_pricing()'s own formula so a Product's
+    // markup/extra costs stay untouched and only its Детайли-built subtotal
+    // gets the client's discount/markup - falls back to a flat discount on
+    // the whole price when the breakdown fields aren't present (quick-created
+    // products from the admin modal don't return them).
+    function productAdjustedPrice(p) {
+        if (typeof p.details_subtotal !== 'number') return detailAdjustedPrice(p.price);
+        const cp = selectedClientPricing();
+        let detailsSubtotal = p.details_subtotal;
+        if (cp) detailsSubtotal = applyClientAdjustment(detailsSubtotal, cp.detail_type, cp.detail_percent);
+        const totalCost = detailsSubtotal + p.extra_costs_subtotal;
+        return totalCost * (1 + p.markup_percent / 100);
+    }
+
     function pendingOpCost(serviceId, durationMinutes) {
         const service = SERVICES_DATA.find(function (s) { return s.id === serviceId; });
-        return service ? durationMinutes * (service.price_per_hour_eur / 60) : 0;
+        if (!service) return 0;
+        let rate = service.price_per_hour_eur;
+        const cp = selectedClientPricing();
+        if (cp && cp.services[serviceId]) {
+            rate = applyClientAdjustment(rate, cp.services[serviceId].type, cp.services[serviceId].percent);
+        }
+        return durationMinutes * (rate / 60);
+    }
+
+    // Cart items don't keep a frozen unit price - they're re-priced against
+    // PRODUCTS/DETAILS + the currently selected client every render, so
+    // switching the client dropdown after adding items keeps the preview
+    // honest (the server does the same resolution at order-creation time).
+    function liveUnitPrice(item) {
+        if (item.type === 'product') {
+            const p = PRODUCTS.find(function (x) { return x.id === item.id; });
+            return p ? productAdjustedPrice(p) : (item.unitPrice || 0);
+        }
+        const d = DETAILS.find(function (x) { return x.id === item.id; });
+        if (!d) return item.unitPrice || 0;
+        const opsCost = (item.operations || []).reduce(function (sum, op) {
+            return sum + pendingOpCost(op.serviceId, op.durationMinutes);
+        }, 0);
+        return detailAdjustedPrice(d.price) + opsCost;
     }
 
     function addPendingOperation() {
@@ -546,7 +609,7 @@
             if (existing) {
                 existing.qty += qty;
             } else {
-                cart.push({ type: type, id: id, name: p.name, unitPrice: p.price, qty: qty });
+                cart.push({ type: type, id: id, name: p.name, unitPrice: productAdjustedPrice(p), qty: qty });
             }
         } else {
             const sel = document.getElementById('cart_detail_id');
@@ -559,7 +622,7 @@
             const operations = pendingDetailOps.map(function (op) {
                 return { serviceId: op.serviceId, serviceName: op.serviceName, description: op.description, durationMinutes: op.durationMinutes };
             });
-            const unitPrice = d.price + opsCost;
+            const unitPrice = detailAdjustedPrice(d.price) + opsCost;
 
             const pdfInput = document.getElementById('pending_op_pdf');
             const pdfFile = pdfInput.files[0];
@@ -625,7 +688,8 @@
             body.innerHTML = '<tr id="cartEmptyRow"><td colspan="6" class="text-center no-data">{{ _('Все още няма добавени артикули.') }}</td></tr>';
         } else {
             cart.forEach(function (item, idx) {
-                const lineTotal = (item.unitPrice * item.qty).toFixed(2);
+                const unitPrice = liveUnitPrice(item);
+                const lineTotal = (unitPrice * item.qty).toFixed(2);
                 const tr = document.createElement('tr');
 
                 const nameTd = document.createElement('td');
@@ -647,7 +711,7 @@
                 tr.appendChild(nameTd);
                 tr.appendChild(cell(item.type === 'product' ? "{{ _('Продукт') }}" : "{{ _('Детайл') }}"));
                 tr.appendChild(cell(item.qty, { className: 'text-center' }));
-                tr.appendChild(cell(item.unitPrice.toFixed(2) + ' €', { className: 'text-right' }));
+                tr.appendChild(cell(unitPrice.toFixed(2) + ' €', { className: 'text-right' }));
                 tr.appendChild(cell(lineTotal + ' €', { className: 'text-right' }));
 
                 const actionTd = document.createElement('td');
@@ -664,7 +728,7 @@
             });
         }
 
-        const total = cart.reduce(function (sum, item) { return sum + item.unitPrice * item.qty; }, 0);
+        const total = cart.reduce(function (sum, item) { return sum + liveUnitPrice(item) * item.qty; }, 0);
         document.getElementById('cartTotal').textContent = total.toFixed(2) + ' €';
         document.getElementById('submitOrderBtn').disabled = cart.length === 0;
     }

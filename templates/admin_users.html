@@ -47,6 +47,15 @@
                         <option value="admin">Администратор</option>
                     </select>
                 </div>
+                <div class="form-group">
+                    <label for="new_user_client_id">Клиент (за собствени цени)</label>
+                    <select id="new_user_client_id" name="client_id">
+                        <option value="">-- Без клиент --</option>
+                        {% for c in clients %}
+                        <option value="{{ c.id }}">{{ c.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
                 <button type="submit" class="btn-submit">Регистрация на акаунт</button>
             </form>
         </section>
@@ -83,6 +92,7 @@
                     <th>ID</th>
                     <th>Потребителско име</th>
                     <th>Роля / Права</th>
+                    <th>Клиент</th>
                     <th class="text-right">Действия</th>
                 </tr>
                 </thead>
@@ -106,11 +116,12 @@
                         <span class="badge badge-user">Клиент</span>
                         {% endif %}
                     </td>
+                    <td>{{ user.client.name if user.client else '-' }}</td>
                     <td class="text-right">
                         {% if user.id == current_user.id %}
                         <span class="text-muted text-small">Текуща сесия</span>
                         {% else %}
-                        <div style="display: flex; gap: 8px; justify-content: flex-end; align-items: center;">
+                        <div style="display: flex; gap: 8px; justify-content: flex-end; align-items: center; flex-wrap: wrap;">
                             <form action="{{ url_for('admin_update_user_role', user_id=user.id) }}" method="POST" style="display:inline; display: flex; gap: 6px;">
                                 {% include 'partials/csrf_field.html' %}
                                 <select name="role" class="material-price-input" style="width: auto;">
@@ -122,6 +133,16 @@
                                 </select>
                                 <button type="submit" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem; border-radius: 4px;">Промени роля</button>
                             </form>
+                            <form action="{{ url_for('admin_update_user_client', user_id=user.id) }}" method="POST" style="display:inline; display: flex; gap: 6px;">
+                                {% include 'partials/csrf_field.html' %}
+                                <select name="client_id" class="material-price-input" style="width: auto;">
+                                    <option value="">-- Без клиент --</option>
+                                    {% for c in clients %}
+                                    <option value="{{ c.id }}" {% if user.client_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+                                    {% endfor %}
+                                </select>
+                                <button type="submit" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem; border-radius: 4px;">Промени клиент</button>
+                            </form>
                             <form action="{{ url_for('admin_delete_user', user_id=user.id) }}" method="POST" onsubmit="return confirm('Изтриването на потребителя ще премахне и цялата му библиотека с чертежи! Потвърждавате ли?');" style="display:inline;">
                                 {% include 'partials/csrf_field.html' %}
                                 <button type="submit" class="btn-delete">Изтрий профила</button>
@@ -132,13 +153,13 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="4" class="text-center no-data">
+                    <td colspan="5" class="text-center no-data">
                         Няма намерени регистрирани потребители в базата данни.
                     </td>
                 </tr>
                 {% endfor %}
                 {% if users %}
-                <tr class="search-empty-row" hidden><td colspan="4" class="text-center no-data">Няма съвпадения.</td></tr>
+                <tr class="search-empty-row" hidden><td colspan="5" class="text-center no-data">Няма съвпадения.</td></tr>
                 {% endif %}
                 </tbody>
             </table>

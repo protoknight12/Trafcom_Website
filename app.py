@@ -232,6 +232,14 @@ class User(db.Model, UserMixin):
     # Base32 TOTP secret (pyotp). Presence of a value is the on/off switch
     # for 2FA - see login()'s pending-2FA branch.
     totp_secret = db.Column(db.String(32), nullable=True)
+    # Which Client this login belongs to - drives the per-client discount/
+    # markup pricing (see Client.material_adjustment_*/detail_adjustment_*
+    # and ClientServicePrice below). Nullable: pre-existing accounts aren't
+    # backfilled, and an unlinked user simply sees undiscounted list prices
+    # everywhere - see _apply_adjustment(). Many users can share one Client
+    # (e.g. several employees of the same company).
+    client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True)
+    client = db.relationship('Client', backref='users')
 
     uploads = db.relationship('DxfFile', cascade='all, delete-orphan', backref='owner', lazy=True)
 
@@ -542,6 +550,38 @@ class Client(db.Model):
     vat_number = db.Column(db.String(20), nullable=True)  # ИН по ДДС
     address = db.Column(db.String(255), nullable=True)  # Адрес на управление
     mol = db.Column(db.String(150), nullable=True)  # МОЛ - материално отговорно лице
+    # Default per-client pricing terms, set by admins on admin_clients.html -
+    # see _apply_adjustment(). 'discount'/'markup'/NULL; NULL or a 0 percent
+    # means no adjustment. Materials only affects the live DXF calculator
+    # (_material_cost) - a Detail/Product's already-frozen list price can't
+    # be decomposed back into a material portion per client. Details is the
+    # one that actually makes catalog Detail/Product prices client-specific
+    # (see detail_price_for()/calculate_product_pricing()). Services has no
+    # single default here - see ClientServicePrice below, one row per service
+    # a client actually gets a different rate on.
+    material_adjustment_type = db.Column(db.String(10), nullable=True)
+    material_adjustment_percent = db.Column(db.Float, nullable=True)
+    detail_adjustment_type = db.Column(db.String(10), nullable=True)
+    detail_adjustment_percent = db.Column(db.Float, nullable=True)
+
+
+class ClientServicePrice(db.Model):
+    """
+    Per-client override of one Service's rate ('discount'/'markup' + percent)
+    - see _client_service_adjustment(). Only services an admin actually set a
+    different rate for a given client get a row here; everything else falls
+    back to no adjustment (the shared list rate).
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=False)
+    service_id = db.Column(db.Integer, db.ForeignKey('service.id'), nullable=False)
+    adjustment_type = db.Column(db.String(10), nullable=True)
+    adjustment_percent = db.Column(db.Float, nullable=True)
+
+    client = db.relationship('Client', backref=db.backref('service_prices', cascade='all, delete-orphan', lazy=True))
+    service = db.relationship('Service')
+
+    __table_args__ = (db.UniqueConstraint('client_id', 'service_id', name='uq_client_service_price'),)
 
 
 class Deliverer(db.Model):
@@ -991,14 +1031,20 @@ class ProductExtraCost(db.Model):
     amount = db.Column(db.Float, nullable=False)
 
 
-def calculate_product_pricing(product):
+def calculate_product_pricing(product, client=None):
     """
     Returns a dict with the full cost/price breakdown for a product:
     details subtotal, extra costs subtotal, total cost, markup amount, and
     final sell price. Centralized here so the products list, edit page, and
     offer view can never disagree with each other.
+
+    `client`, when given, applies its Детайли discount/markup to the details
+    subtotal (the Product's own extra costs/markup_percent are admin-set,
+    not touched) - see _apply_adjustment().
     """
     details_subtotal = sum(pd.detail.total_price * pd.quantity for pd in product.product_details)
+    if client:
+        details_subtotal = _apply_adjustment(details_subtotal, client.detail_adjustment_type, client.detail_adjustment_percent)
     extra_costs_subtotal = sum(ec.amount for ec in product.extra_costs)
     total_cost = details_subtotal + extra_costs_subtotal
     markup_amount = total_cost * (product.markup_percent / 100.0)
@@ -2125,6 +2171,18 @@ class Convector(db.Model):
         if self.room:
             return f'{self.room.building.name} / {self.room.name}'
         return self.location_label or '—'
+
+
+# Official Guarantee Fund (Гаранционен фонд) page for checking whether a vehicle has valid
+# civil-liability (ГО) insurance - the site itself gates the lookup behind a captcha, so this
+# is a link the admin opens and fills in by hand, not something this app can query directly.
+GUARANTEE_FUND_CHECK_URL = (
+    'https://www.guaranteefund.org/bg/%D0%B8%D0%BD%D1%84%D0%BE%D1%80%D0%BC%D0%B0%D1%86%D0%B8%D0%BE%D0%BD%D0%B5%D0%BD-'
+    '%D1%86%D0%B5%D0%BD%D1%82%D1%8A%D1%80-%D0%B8-%D1%81%D0%BF%D1%80%D0%B0%D0%B2%D0%BA%D0%B8/%D1%83%D1%81%D0%BB%D1%83%D0%B3%D0%B8/'
+    '%D0%BF%D1%80%D0%BE%D0%B2%D0%B5%D1%80%D0%BA%D0%B0-%D0%B7%D0%B0-%D0%B2%D0%B0%D0%BB%D0%B8%D0%B4%D0%BD%D0%B0-'
+    '%D0%B7%D0%B0%D1%81%D1%82%D1%80%D0%B0%D1%85%D0%BE%D0%B2%D0%BA%D0%B0-%D0%B3%D1%80a%D0%B6%D0%B4a%D0%BD%D1%81%D0%BAa-'
+    '%D0%BE%D1%82%D0%B3%D0%BE%D0%B2%D0%BE%D1%80%D0%BD%D0%BE%D1%81%D1%82-%D0%BD%D0%B0-%D0%B0%D0%B2%D1%82%D0%BE%D0%BC%D0%BE%D0%B1%D0%B8%D0%BB%D0%B8%D1%81%D1%82%D0%B8%D1%82%D0%B5'
+)
 
 
 class Vehicle(db.Model):
@@ -3665,7 +3723,7 @@ def analyze_dxf_geometry(file_path):
         return None, None, None, None, None
 
 
-def _service_time_cost(total_length, pierce_count, material, service):
+def _service_time_cost(total_length, pierce_count, material, service, client=None):
     """
     One service's share of the time-based cutting+pierce cost - the term
     calculate_cnc_price() applies once (single service) and
@@ -3683,10 +3741,60 @@ def _service_time_cost(total_length, pierce_count, material, service):
     """
     cutting_time_min = total_length / material.cutting_speed_mm_per_min if material.cutting_speed_mm_per_min else 0.0
     pierce_time_min = pierce_count / material.pierce_rate_per_min if material.pierce_rate_per_min else 0.0
-    return (cutting_time_min + pierce_time_min) * (service.price_per_hour_eur / 60.0)
+    time_cost = (cutting_time_min + pierce_time_min) * (service.price_per_hour_eur / 60.0)
+    if client:
+        adj_type, adj_percent = _client_service_adjustment(client, service)
+        time_cost = _apply_adjustment(time_cost, adj_type, adj_percent)
+    return time_cost
 
 
-def _material_cost(width, height, material):
+def _apply_adjustment(amount, adjustment_type, adjustment_percent):
+    """Applies a client's discount/markup to a computed price. NULL type or
+    a 0/NULL percent is a no-op - see Client.material_adjustment_*/
+    detail_adjustment_* and ClientServicePrice."""
+    if not adjustment_type or not adjustment_percent:
+        return amount
+    factor = adjustment_percent / 100.0
+    if adjustment_type == 'discount':
+        return amount * (1 - factor)
+    if adjustment_type == 'markup':
+        return amount * (1 + factor)
+    return amount
+
+
+def _client_service_adjustment(client, service):
+    """(adjustment_type, adjustment_percent) for this client+service from
+    ClientServicePrice, or (None, 0) when no override row exists (or either
+    argument is missing) - see _apply_adjustment()."""
+    if not client or not service:
+        return None, 0
+    row = ClientServicePrice.query.filter_by(client_id=client.id, service_id=service.id).first()
+    return (row.adjustment_type, row.adjustment_percent) if row else (None, 0)
+
+
+def client_service_rate(service):
+    """Service.price_per_hour_eur adjusted for the logged-in viewer's linked
+    Client (ClientServicePrice override) - jinja global used by
+    services.html/library.html so a linked client only ever sees their own
+    negotiated rate. Anonymous/unlinked viewers see the plain list rate."""
+    client = current_user.client if current_user.is_authenticated else None
+    if not client:
+        return service.price_per_hour_eur
+    adj_type, adj_percent = _client_service_adjustment(client, service)
+    return round(_apply_adjustment(service.price_per_hour_eur, adj_type, adj_percent), 2)
+
+
+def detail_price_for(detail, client):
+    """A Detail's total_price adjusted for one client's "Детайли"
+    discount/markup - what a linked client actually sees/pays for a
+    standalone catalog Detail (order_create.html, DXF-upload-adjacent
+    displays). None/unlinked client -> unchanged list price."""
+    if not client:
+        return detail.total_price
+    return round(_apply_adjustment(detail.total_price, client.detail_adjustment_type, client.detail_adjustment_percent), 2)
+
+
+def _material_cost(width, height, material, client=None):
     """
     Raw-stock cost for one cut, shared by calculate_cnc_price() and
     calculate_cnc_price_multi_service(). Rods, pipes AND profiles are all
@@ -3697,11 +3805,19 @@ def _material_cost(width, height, material):
     width * height (for a profile that's cross-section width * length, not a
     real area, same reasoning as diameter * length for rods/pipes). Sheets
     are the only type where cost_per_m2 is genuinely an area rate.
+
+    `client`, when given, applies its "Материали" discount/markup - only
+    meaningful here (the live calculator); a Detail/Product's already-frozen
+    list price can't be decomposed back into a material portion per client.
     """
     if material.type in ('rods', 'pipes', 'profiles'):
-        return (height / 1000) * material.cost_per_m2
-    area_m2 = (width * height) / 1_000_000
-    return area_m2 * material.cost_per_m2
+        cost = (height / 1000) * material.cost_per_m2
+    else:
+        area_m2 = (width * height) / 1_000_000
+        cost = area_m2 * material.cost_per_m2
+    if client:
+        cost = _apply_adjustment(cost, client.material_adjustment_type, client.material_adjustment_percent)
+    return cost
 
 
 def _cost_per_m2_from_unit_price(material_type, unit_price, width, height):
@@ -3796,7 +3912,7 @@ def _material_stock_delta(material, native_qty):
     return native_qty
 
 
-def calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id):
+def calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id, client=None):
     """
     Time-based pricing engine for a single service - used by the personal
     DXF-upload calculator (DxfFile, process_dxf_upload()). Material supplies
@@ -3807,16 +3923,23 @@ def calculate_cnc_price(width, height, total_length, pierce_count, material_key,
     calculate_material_price(), which prices a Detail's base cut as material
     only, with cutting cost captured separately as a length-priced Operation
     (_add_cutting_operation) instead of baked into this total.
+
+    `client`, when given, applies its Материали discount/markup to the
+    material cost, its per-service discount/markup (ClientServicePrice) to
+    the time cost, and finally its Детайли discount/markup to the whole
+    total - see _apply_adjustment().
     """
     material = MaterialPrice.query.filter_by(key=material_key).first()
     service = db.session.get(Service, service_id) if service_id else None
     if not material or not service:
         return 0.0
 
-    material_cost = _material_cost(width, height, material)
-    time_cost = _service_time_cost(total_length, pierce_count, material, service)
+    material_cost = _material_cost(width, height, material, client)
+    time_cost = _service_time_cost(total_length, pierce_count, material, service, client)
 
     total_calculated_euro = material_cost + time_cost + BASE_SETUP_FEE
+    if client:
+        total_calculated_euro = _apply_adjustment(total_calculated_euro, client.detail_adjustment_type, client.detail_adjustment_percent)
     return round(total_calculated_euro, 2)
 
 
@@ -3838,7 +3961,7 @@ def calculate_material_price(width, height, material_key):
     return round(_material_cost(width, height, material), 2)
 
 
-def calculate_cnc_price_multi_service(width, height, total_length, pierce_count, material_key, service_ids):
+def calculate_cnc_price_multi_service(width, height, total_length, pierce_count, material_key, service_ids, client=None):
     """
     Same engine as calculate_cnc_price(), but for the DXF calculator's
     multi-service checkbox selection (see upload.html / process_dxf_upload()
@@ -3847,16 +3970,20 @@ def calculate_cnc_price_multi_service(width, height, total_length, pierce_count,
     service's rate and summed, not just one. Lets a job that genuinely spans
     multiple billable processes (e.g. a combined cut+engrave pass) get one
     upload/price instead of forcing an artificial single pick.
+
+    `client` - see calculate_cnc_price().
     """
     material = MaterialPrice.query.filter_by(key=material_key).first()
     services = Service.query.filter(Service.id.in_(service_ids)).all() if service_ids else []
     if not material or not services:
         return 0.0
 
-    material_cost = _material_cost(width, height, material)
-    time_cost = sum(_service_time_cost(total_length, pierce_count, material, s) for s in services)
+    material_cost = _material_cost(width, height, material, client)
+    time_cost = sum(_service_time_cost(total_length, pierce_count, material, s, client) for s in services)
 
     total_calculated_euro = material_cost + time_cost + BASE_SETUP_FEE
+    if client:
+        total_calculated_euro = _apply_adjustment(total_calculated_euro, client.detail_adjustment_type, client.detail_adjustment_percent)
     return round(total_calculated_euro, 2)
 
 
@@ -4090,6 +4217,7 @@ app.jinja_env.globals['material_dimension_labels'] = material_dimension_labels
 app.jinja_env.globals['material_price_m2_label'] = material_price_m2_label
 app.jinja_env.globals['format_cut_dimensions'] = format_cut_dimensions
 app.jinja_env.globals['material_available_qty'] = _material_available_qty
+app.jinja_env.globals['client_service_rate'] = client_service_rate
 
 
 @app.route('/favicon.ico')
@@ -4874,7 +5002,8 @@ def process_dxf_upload(file, material_key, service_ids, machine_id=None):
         if not services:
             return None, None, 'Моля изберете поне една услуга.'
 
-        price = calculate_cnc_price_multi_service(width, height, total_length, pierce_count, material_key, service_ids)
+        price = calculate_cnc_price_multi_service(width, height, total_length, pierce_count, material_key, service_ids,
+                                                   client=current_user.client)
 
         dxf_file = DxfFile(
             filename=sanitize_display_filename(file.filename),
@@ -5029,7 +5158,9 @@ def admin_users():
         flash('Нямате достъп до тази страница.')
         return redirect(url_for('dashboard'))
     all_users = User.query.filter(User.id != current_user.id).all()
-    return render_template('admin_users.html', users=all_users, registration_closed=registration_closed(), active_page='admin_users')
+    clients = Client.query.order_by(Client.name).all()
+    return render_template('admin_users.html', users=all_users, clients=clients,
+                           registration_closed=registration_closed(), active_page='admin_users')
 
 
 @app.route('/admin/users/toggle-registration', methods=['POST'])
@@ -5446,14 +5577,76 @@ def admin_delete_client(client_id):
         flash('Нямате достъп до тази страница.', 'danger')
         return redirect(url_for('dashboard'))
     client = Client.query.get_or_404(client_id)
-    # Orders referencing this client keep existing (client_id is nullable) -
+    # Orders/Users referencing this client keep existing (both FKs nullable) -
     # detach rather than block deletion, same pattern as delete_machine().
     Order.query.filter_by(client_id=client.id).update({'client_id': None})
+    User.query.filter_by(client_id=client.id).update({'client_id': None})
     db.session.delete(client)
     db.session.commit()
     log_action(f'Изтрит клиент "{client.name}"')
     flash(f'Клиентът "{client.name}" беше изтрит.', 'success')
     return redirect(url_for('admin_clients'))
+
+
+@app.route('/admin/clients/<int:client_id>/pricing')
+@login_required
+def admin_client_pricing(client_id):
+    """Per-client discount/markup terms - Материали + Детайли defaults, plus
+    one row per Service an admin has actually set a different rate for (see
+    ClientServicePrice). Everything a linked User sees adjusted (DXF
+    calculator, catalog, /services) funnels through these settings via
+    _apply_adjustment()/_client_service_adjustment()."""
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+    client = Client.query.get_or_404(client_id)
+    services = Service.query.order_by(Service.name).all()
+    service_prices = {sp.service_id: sp for sp in client.service_prices}
+    return render_template('admin_client_pricing.html', client=client, services=services,
+                            service_prices=service_prices, active_page='admin_clients')
+
+
+@app.route('/admin/clients/<int:client_id>/pricing/update', methods=['POST'])
+@login_required
+def update_client_pricing(client_id):
+    if not current_user.is_admin:
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
+    client = Client.query.get_or_404(client_id)
+
+    def _read_adjustment(type_field, percent_field):
+        adj_type = request.form.get(type_field, '').strip()
+        try:
+            percent = float(request.form.get(percent_field, '') or 0)
+        except ValueError:
+            percent = 0.0
+        if adj_type not in ('discount', 'markup') or percent <= 0:
+            return None, None
+        return adj_type, round(percent, 2)
+
+    client.material_adjustment_type, client.material_adjustment_percent = _read_adjustment(
+        'material_adjustment_type', 'material_adjustment_percent')
+    client.detail_adjustment_type, client.detail_adjustment_percent = _read_adjustment(
+        'detail_adjustment_type', 'detail_adjustment_percent')
+
+    existing = {sp.service_id: sp for sp in client.service_prices}
+    for service in Service.query.all():
+        adj_type, percent = _read_adjustment(f'service_{service.id}_type', f'service_{service.id}_percent')
+        row = existing.get(service.id)
+        if adj_type is None:
+            if row:
+                db.session.delete(row)
+            continue
+        if row:
+            row.adjustment_type, row.adjustment_percent = adj_type, percent
+        else:
+            db.session.add(ClientServicePrice(client_id=client.id, service_id=service.id,
+                                               adjustment_type=adj_type, adjustment_percent=percent))
+
+    db.session.commit()
+    log_action(f'Обновено ценообразуване за клиент "{client.name}"')
+    flash('Ценообразуването за клиента беше обновено.', 'success')
+    return redirect(url_for('admin_client_pricing', client_id=client.id))
 
 
 @app.route('/admin/deliverers/add', methods=['POST'])
@@ -6344,9 +6537,13 @@ def admin_create_user():
     if role not in ('regular_user', 'worker', 'admin', 'web_designer', 'quality_control'):
         flash('Невалидна роля.', 'danger')
         return redirect(url_for('admin_users'))
+    client_id_raw = request.form.get('client_id', '')
+    client_id = int(client_id_raw) if client_id_raw.isdigit() else None
+    if client_id and not db.session.get(Client, client_id):
+        client_id = None
 
     secure_pass = generate_password_hash(password, method='scrypt')
-    new_user = User(username=username, password=secure_pass, role=role)
+    new_user = User(username=username, password=secure_pass, role=role, client_id=client_id)
     db.session.add(new_user)
     db.session.commit()
     log_action(f'Създаден потребител "{username}" (роля {role})')
@@ -6375,6 +6572,32 @@ def admin_update_user_role(user_id):
     db.session.commit()
     log_action(f'Роля на "{user_to_update.username}": {old_role} → {role}')
     flash(f'Ролята на {user_to_update.username} беше обновена успешно.', 'success')
+    return redirect(url_for('admin_users'))
+
+
+@app.route('/admin/update_client/<int:user_id>', methods=['POST'])
+@login_required
+def admin_update_user_client(user_id):
+    """Links/unlinks a User to a Client - drives that user's discount/markup
+    pricing everywhere (see Client.material_adjustment_*/detail_adjustment_*
+    and ClientServicePrice). Blank selection unlinks (user_to_update.client_id
+    = None), same as every other optional FK picker in this app."""
+    if not current_user.is_admin:
+        return jsonify({'error': 'Неоторизиран достъп'}), 403
+
+    user_to_update = User.query.get_or_404(user_id)
+    client_id_raw = request.form.get('client_id', '')
+    client_id = int(client_id_raw) if client_id_raw.isdigit() else None
+    if client_id and not db.session.get(Client, client_id):
+        flash('Невалиден клиент.', 'danger')
+        return redirect(url_for('admin_users'))
+
+    old_client = user_to_update.client.name if user_to_update.client else '(няма)'
+    user_to_update.client_id = client_id
+    db.session.commit()
+    new_client = user_to_update.client.name if user_to_update.client else '(няма)'
+    log_action(f'Клиент на "{user_to_update.username}": {old_client} → {new_client}')
+    flash(f'Клиентът на {user_to_update.username} беше обновен успешно.', 'success')
     return redirect(url_for('admin_users'))
 
 
@@ -7413,7 +7636,7 @@ def _add_cutting_operation(detail, service_id, total_length):
     ))
 
 
-def _order_item_operations_cost(order_item, rows):
+def _order_item_operations_cost(order_item, rows, client=None):
     """Creates one OrderItemOperation per valid {service_id, duration_minutes}
     row for a freshly-flushed order_item (always starts sequence at 0, unlike
     _add_operations_from_rows - a new OrderItem never already has operations).
@@ -7421,7 +7644,11 @@ def _order_item_operations_cost(order_item, rows):
     whole cart line. An optional 'description' per row (e.g. "външно лазерно
     рязане" vs. in-house) is stored as-is, trimmed, blank -> None. Returns the
     summed per-unit cost so the caller can fold it into OrderItem.unit_price;
-    caller is responsible for committing."""
+    caller is responsible for committing.
+
+    `client`, when given, applies its per-service discount/markup
+    (ClientServicePrice) to each row's cost - see _client_service_adjustment().
+    """
     total_cost = 0.0
     sequence = 0
     for row in rows:
@@ -7440,7 +7667,11 @@ def _order_item_operations_cost(order_item, rows):
             order_item_id=order_item.id, service_id=service_id, sequence=sequence,
             duration_minutes=round(duration_minutes, 2), description=description
         ))
-        total_cost += duration_minutes * (service.price_per_hour_eur / 60.0)
+        row_cost = duration_minutes * (service.price_per_hour_eur / 60.0)
+        if client:
+            adj_type, adj_percent = _client_service_adjustment(client, service)
+            row_cost = _apply_adjustment(row_cost, adj_type, adj_percent)
+        total_cost += row_cost
         sequence += 1
     return round(total_cost, 2)
 
@@ -7974,6 +8205,12 @@ def create_order():
         client_id = int(client_id_raw) if client_id_raw and client_id_raw.isdigit() else None
         deliverer_id_raw = request.form.get('deliverer_id', '')
         deliverer_id = int(deliverer_id_raw) if deliverer_id_raw and deliverer_id_raw.isdigit() else None
+        # Whichever client this order is actually for - the picked Client if
+        # one was chosen, else the ordering user's own linked client. Prices
+        # frozen into unit_price below use this, so what got previewed in
+        # the cart (order_create.html's own client-side copy of this same
+        # discount math) matches what's actually charged.
+        pricing_client = db.session.get(Client, client_id) if client_id else current_user.client
 
         new_order = Order(
             order_number=generate_order_number(),
@@ -8004,7 +8241,7 @@ def create_order():
                 product = Product.query.get(item_id)
                 if not product:
                     continue
-                pricing = calculate_product_pricing(product)
+                pricing = calculate_product_pricing(product, pricing_client)
                 order_item = OrderItem(
                     order_id=new_order.id, product_id=product.id,
                     quantity_ordered=qty, unit_price=pricing['sell_price']
@@ -8029,14 +8266,14 @@ def create_order():
                     continue
                 order_item = OrderItem(
                     order_id=new_order.id, detail_id=detail.id,
-                    quantity_ordered=qty, unit_price=detail.total_price
+                    quantity_ordered=qty, unit_price=detail_price_for(detail, pricing_client)
                 )
                 db.session.add(order_item)
                 db.session.flush()  # need order_item.id for its operations
 
                 op_rows = row.get('operations')
                 if isinstance(op_rows, list) and op_rows:
-                    ops_cost_per_unit = _order_item_operations_cost(order_item, op_rows)
+                    ops_cost_per_unit = _order_item_operations_cost(order_item, op_rows, pricing_client)
                     order_item.unit_price = round(order_item.unit_price + ops_cost_per_unit, 2)
 
                 _link_order_item_attachment(order_item, row.get('attachment'))
@@ -8079,7 +8316,17 @@ def create_order():
     # Pre-computed, JSON-friendly catalogs so the cart UI can add items and
     # show live prices/totals client-side without extra round-trips.
     products_data = [
-        {'id': p.id, 'name': localized(p, 'name'), 'price': calculate_product_pricing(p)['sell_price']}
+        {
+            'id': p.id, 'name': localized(p, 'name'),
+            'price': calculate_product_pricing(p)['sell_price'],
+            # Unadjusted breakdown so the cart's client-side price preview can
+            # re-run calculate_product_pricing()'s own formula per selected
+            # client (see CLIENT_PRICING below) instead of just discounting
+            # the already-marked-up sell price.
+            'details_subtotal': calculate_product_pricing(p)['details_subtotal'],
+            'extra_costs_subtotal': calculate_product_pricing(p)['extra_costs_subtotal'],
+            'markup_percent': p.markup_percent,
+        }
         for p in products
     ]
     details_data = [
@@ -8094,9 +8341,25 @@ def create_order():
     # preview an operation's cost client-side, same convention as
     # admin_details.html's ND_SERVICES.
     services_data = [{'id': s.id, 'name': localized(s, 'name'), 'price_per_hour_eur': s.price_per_hour_eur} for s in services]
+    # Per-client discount/markup terms (Детайли + per-service), so the cart's
+    # JS can preview the real charged price as soon as a client is picked in
+    # the dropdown - mirrors _apply_adjustment()/_client_service_adjustment()
+    # by hand, same convention as _generator_hole_polygon() mirroring its JS
+    # counterpart.
+    client_pricing = {
+        c.id: {
+            'detail_type': c.detail_adjustment_type,
+            'detail_percent': c.detail_adjustment_percent,
+            'services': {
+                sp.service_id: {'type': sp.adjustment_type, 'percent': sp.adjustment_percent}
+                for sp in c.service_prices
+            },
+        }
+        for c in clients
+    }
     return render_template('order_create.html', products=products_data, details=details_data,
                            machines=machines, materials=materials, services=services, services_data=services_data,
-                           clients=clients, deliverers=deliverers,
+                           clients=clients, deliverers=deliverers, client_pricing=client_pricing,
                            active_page='create_order')
 
 
@@ -13608,7 +13871,8 @@ def admin_vehicles():
         (dict(d, vehicle=v) for v in vehicles for d in v.deadlines if d['date']),
         key=lambda r: r['date'],
     )
-    return render_template('admin_vehicles.html', vehicles=vehicles, renewals=renewals, active_page='admin_vehicles')
+    return render_template('admin_vehicles.html', vehicles=vehicles, renewals=renewals,
+                           guarantee_fund_url=GUARANTEE_FUND_CHECK_URL, active_page='admin_vehicles')
 
 
 @app.route('/admin/vehicles/create', methods=['POST'])
@@ -13658,7 +13922,8 @@ def edit_vehicle_window(vehicle_id):
             {'name': 'model', 'label': 'Модел', 'value': v.model or '', 'type': 'text'},
             {'name': 'vin', 'label': 'Рама (VIN)', 'value': v.vin or '', 'type': 'text'},
             {'name': 'responsible_name', 'label': 'Отговорник', 'value': v.responsible_name or '', 'type': 'text'},
-            {'name': 'insurance_expiry', 'label': 'Застраховка (ГО) - валидна до', 'value': v.insurance_expiry or '', 'type': 'date'},
+            {'name': 'insurance_expiry', 'label': 'Застраховка (ГО) - валидна до', 'value': v.insurance_expiry or '', 'type': 'date',
+             'help_link': {'label': 'Провери в Гаранционния фонд ↗', 'url': GUARANTEE_FUND_CHECK_URL}},
             {'name': 'insurance_installments', 'label': 'Изплаща се на вноски (тримесечно)', 'value': v.insurance_installments, 'type': 'checkbox'},
             {'name': 'vignette_expiry', 'label': 'Винетка - валидна до', 'value': v.vignette_expiry or '', 'type': 'date'},
             {'name': 'inspection_expiry', 'label': 'Технически преглед - валиден до', 'value': v.inspection_expiry or '', 'type': 'date'},

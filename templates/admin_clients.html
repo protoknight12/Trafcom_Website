@@ -89,6 +89,7 @@
                     <th>Имейл</th>
                     <th>Телефон</th>
                     <th>ЕИК</th>
+                    <th class="text-right">Ценообразуване</th>
                     <th class="text-right">Редакция</th>
                     <th class="text-right">Изтриване</th>
                 </tr>
@@ -102,6 +103,9 @@
                     <td>{{ client.phone or '-' }}</td>
                     <td>{{ client.eik or '-' }}</td>
                     <td class="text-right">
+                        <a href="{{ url_for('admin_client_pricing', client_id=client.id) }}" class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;">Отстъпки/надценки</a>
+                    </td>
+                    <td class="text-right">
                         <a href="{{ url_for('edit_client_window', client_id=client.id) }}" class="btn-secondary" target="_blank" rel="noopener" style="padding: 6px 10px; font-size: 0.78rem;">Редакция</a>
                     </td>
                     <td class="text-right">
@@ -114,11 +118,11 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="7" class="text-center no-data">Няма добавени клиенти.</td>
+                    <td colspan="8" class="text-center no-data">Няма добавени клиенти.</td>
                 </tr>
                 {% endfor %}
                 {% if clients %}
-                <tr class="search-empty-row" hidden><td colspan="7" class="text-center no-data">Няма съвпадения.</td></tr>
+                <tr class="search-empty-row" hidden><td colspan="8" class="text-center no-data">Няма съвпадения.</td></tr>
                 {% endif %}
                 </tbody>
             </table>

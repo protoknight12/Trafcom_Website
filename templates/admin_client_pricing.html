@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Ценообразуване: {{ client.name }} - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Ценообразуване за клиент: {{ client.name }}</h3>
+        <p class="section-subtitle">
+            Отстъпка (намалява цената) или надценка (увеличава цената), приложена автоматично навсякъде,
+            където потребители, присъединени към този клиент, виждат цена.
+            <a href="{{ url_for('admin_clients') }}">&larr; Обратно към клиенти</a>
+        </p>
+
+        <form action="{{ url_for('update_client_pricing', client_id=client.id) }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+
+            <div class="form-group">
+                <label for="material_adjustment_type">Материали - вид</label>
+                <select id="material_adjustment_type" name="material_adjustment_type">
+                    <option value="" {% if not client.material_adjustment_type %}selected{% endif %}>Без корекция</option>
+                    <option value="discount" {% if client.material_adjustment_type == 'discount' %}selected{% endif %}>Отстъпка</option>
+                    <option value="markup" {% if client.material_adjustment_type == 'markup' %}selected{% endif %}>Надценка</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="material_adjustment_percent">Материали - процент (%)</label>
+                <input type="text" id="material_adjustment_percent" name="material_adjustment_percent"
+                       value="{{ client.material_adjustment_percent or '' }}" inputmode="decimal" placeholder="напр. 10">
+            </div>
+            <p class="text-small text-muted" style="grid-column: 1 / -1; margin-top: -8px;">
+                Важи само за живото изчисление на цена при качване на DXF чертеж - не променя вече зададена цена на каталожен Детайл/Продукт.
+            </p>
+
+            <div class="form-group">
+                <label for="detail_adjustment_type">Детайли - вид</label>
+                <select id="detail_adjustment_type" name="detail_adjustment_type">
+                    <option value="" {% if not client.detail_adjustment_type %}selected{% endif %}>Без корекция</option>
+                    <option value="discount" {% if client.detail_adjustment_type == 'discount' %}selected{% endif %}>Отстъпка</option>
+                    <option value="markup" {% if client.detail_adjustment_type == 'markup' %}selected{% endif %}>Надценка</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="detail_adjustment_percent">Детайли - процент (%)</label>
+                <input type="text" id="detail_adjustment_percent" name="detail_adjustment_percent"
+                       value="{{ client.detail_adjustment_percent or '' }}" inputmode="decimal" placeholder="напр. 10">
+            </div>
+            <p class="text-small text-muted" style="grid-column: 1 / -1; margin-top: -8px;">
+                Важи за готовата цена на Детайли/Продукти (каталог, поръчки) и за DXF калкулатора.
+            </p>
+
+            <h4 style="grid-column: 1 / -1; margin-bottom: 4px;">Услуги - процент по отделно за всяка услуга</h4>
+            <div class="table-responsive" style="grid-column: 1 / -1;">
+                <table class="data-table">
+                    <thead>
+                    <tr>
+                        <th>Услуга</th>
+                        <th>Вид</th>
+                        <th>Процент (%)</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for service in services %}
+                    {% set sp = service_prices.get(service.id) %}
+                    <tr>
+                        <td>{{ service.name }}</td>
+                        <td>
+                            <select name="service_{{ service.id }}_type">
+                                <option value="" {% if not sp %}selected{% endif %}>Без корекция</option>
+                                <option value="discount" {% if sp and sp.adjustment_type == 'discount' %}selected{% endif %}>Отстъпка</option>
+                                <option value="markup" {% if sp and sp.adjustment_type == 'markup' %}selected{% endif %}>Надценка</option>
+                            </select>
+                        </td>
+                        <td>
+                            <input type="text" name="service_{{ service.id }}_percent"
+                                   value="{{ sp.adjustment_percent if sp else '' }}" inputmode="decimal" placeholder="напр. 10">
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="3" class="text-center no-data">Няма създадени услуги.</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <button type="submit" class="btn-submit" style="grid-column: 1 / -1;">Запази ценообразуването</button>
+        </form>
+    </section>
+
+</main>
+</body>
+</html>
