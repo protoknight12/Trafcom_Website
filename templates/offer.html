@@ -148,8 +148,8 @@
             <td>{{ pd.detail.name }}</td>
             <td>{{ pd.detail.material.display_name }}</td>
             <td class="text-right">{{ pd.quantity }}</td>
-            <td class="text-right">{{ "%.2f"|format(pd.detail.total_price) }} €</td>
-            <td class="text-right">{{ "%.2f"|format(pd.detail.total_price * pd.quantity) }} €</td>
+            <td class="text-right" id="pd-unit-{{ loop.index0 }}">{{ "%.2f"|format(pd.detail.total_price) }} €</td>
+            <td class="text-right" id="pd-total-{{ loop.index0 }}">{{ "%.2f"|format(pd.detail.total_price * pd.quantity) }} €</td>
         </tr>
         {% else %}
         <tr>
@@ -168,7 +168,7 @@
         <tbody>
         <tr>
             <td>Сума от детайли</td>
-            <td class="text-right">{{ "%.2f"|format(pricing.details_subtotal) }} €</td>
+            <td class="text-right" id="offerDetailsSubtotal">{{ "%.2f"|format(pricing.details_subtotal) }} €</td>
         </tr>
 
         {% if product.extra_costs %}
@@ -182,17 +182,17 @@
 
         <tr>
             <td style="border-top: 1px solid #ccc; font-weight: 600;">Обща себестойност</td>
-            <td class="text-right" style="border-top: 1px solid #ccc; font-weight: 600;">{{ "%.2f"|format(pricing.total_cost) }} €</td>
+            <td class="text-right" style="border-top: 1px solid #ccc; font-weight: 600;" id="offerTotalCost">{{ "%.2f"|format(pricing.total_cost) }} €</td>
         </tr>
         {% if product.markup_percent %}
         <tr>
             <td>Надценка ({{ product.markup_percent }}%)</td>
-            <td class="text-right">+{{ "%.2f"|format(pricing.markup_amount) }} €</td>
+            <td class="text-right" id="offerMarkupAmount">+{{ "%.2f"|format(pricing.markup_amount) }} €</td>
         </tr>
         {% endif %}
         <tr class="offer-total-row">
             <td>Крайна цена за клиента</td>
-            <td class="text-right">{{ "%.2f"|format(pricing.sell_price) }} €</td>
+            <td class="text-right" id="offerSellPrice">{{ "%.2f"|format(pricing.sell_price) }} €</td>
         </tr>
         </tbody>
     </table>
@@ -220,8 +220,53 @@
         customerDisplay.textContent = customerInput.value.trim() || '—';
     });
 
+    // Base (undiscounted) per-detail unit prices, in DOM row order - see
+    // the pd-unit-N/pd-total-N cell ids above.
+    const PRODUCT_DETAILS = [
+        {% for pd in product.product_details %}
+        { unitPrice: {{ pd.detail.total_price }}, quantity: {{ pd.quantity }} },
+        {% endfor %}
+    ];
+    const EXTRA_COSTS_SUBTOTAL = {{ pricing.extra_costs_subtotal }};
+    const MARKUP_PERCENT = {{ product.markup_percent or 0 }};
+    // Each Client's Детайли discount/markup - see admin_product_offer().
+    const CLIENT_PRICING = {{ client_pricing|tojson }};
+
+    function applyClientAdjustment(amount, type, percent) {
+        if (!type || !percent) return amount;
+        const factor = percent / 100;
+        if (type === 'discount') return amount * (1 - factor);
+        if (type === 'markup') return amount * (1 + factor);
+        return amount;
+    }
+
+    // Re-runs calculate_product_pricing()'s own formula: only the Детайли
+    // subtotal gets the picked client's discount/markup, extra costs and
+    // the product's own markup_percent stay untouched - mirrors
+    // order_create.html's/admin_offer_edit.html's productAdjustedPrice().
+    function recomputeOfferPricing(clientId) {
+        const cp = clientId && CLIENT_PRICING[clientId] ? CLIENT_PRICING[clientId] : null;
+        let detailsSubtotal = 0;
+        PRODUCT_DETAILS.forEach(function (pd, idx) {
+            const adjustedUnit = applyClientAdjustment(pd.unitPrice, cp && cp.detail_type, cp && cp.detail_percent);
+            const lineTotal = adjustedUnit * pd.quantity;
+            detailsSubtotal += lineTotal;
+            document.getElementById('pd-unit-' + idx).textContent = adjustedUnit.toFixed(2) + ' €';
+            document.getElementById('pd-total-' + idx).textContent = lineTotal.toFixed(2) + ' €';
+        });
+        const totalCost = detailsSubtotal + EXTRA_COSTS_SUBTOTAL;
+        const markupAmount = totalCost * (MARKUP_PERCENT / 100);
+        const sellPrice = totalCost + markupAmount;
+        document.getElementById('offerDetailsSubtotal').textContent = detailsSubtotal.toFixed(2) + ' €';
+        document.getElementById('offerTotalCost').textContent = totalCost.toFixed(2) + ' €';
+        const markupCell = document.getElementById('offerMarkupAmount');
+        if (markupCell) markupCell.textContent = '+' + markupAmount.toFixed(2) + ' €';
+        document.getElementById('offerSellPrice').textContent = sellPrice.toFixed(2) + ' €';
+    }
+
     document.getElementById('offerClientSelect').addEventListener('change', function () {
         const opt = this.options[this.selectedIndex];
+        recomputeOfferPricing(opt.value ? parseInt(opt.value, 10) : null);
         if (!opt.value) return;
         customerInput.value = opt.dataset.name || opt.textContent;
         customerDisplay.textContent = customerInput.value;

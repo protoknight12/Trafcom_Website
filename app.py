@@ -8185,7 +8185,17 @@ def admin_product_offer(product_id):
     pricing = calculate_product_pricing(product)
     customer_name = request.args.get('customer', '')
     clients = Client.query.order_by(Client.name).all()
-    return render_template('offer.html', product=product, pricing=pricing, customer_name=customer_name, clients=clients)
+    # Each Client's Детайли discount/markup, so offer.html's JS can
+    # recompute the whole price table when the admin picks a client for
+    # this printed quote - same convention as order_create.html's/
+    # admin_offer_edit.html's CLIENT_PRICING (_apply_adjustment() mirrored
+    # by hand). Static print document, no server round-trip needed.
+    client_pricing = {
+        c.id: {'detail_type': c.detail_adjustment_type, 'detail_percent': c.detail_adjustment_percent}
+        for c in clients
+    }
+    return render_template('offer.html', product=product, pricing=pricing, customer_name=customer_name,
+                            clients=clients, client_pricing=client_pricing)
 
 
 @app.route('/admin/products/<int:product_id>/protocol')
