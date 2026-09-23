@@ -17,3 +17,5 @@ anthropic
 paho-mqtt
 pymodbus
 flask-babel
+librouteros
+cryptography

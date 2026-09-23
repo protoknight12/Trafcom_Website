@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Импорт на DHCP leases - Мрежа - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Импорт на DHCP leases</h3>
+        <p class="section-subtitle"><a href="{{ url_for('admin_network_hosts') }}">&larr; MAC инвентар</a></p>
+        <ol style="color: var(--text-muted); font-size: 0.9rem; line-height: 1.7;">
+            <li>Влезте в терминала на Mikrotik(trafcom) (Winbox &rarr; New Terminal, или SSH).</li>
+            <li>Изпълнете точно тази команда: <code>/ip dhcp-server lease print terse</code></li>
+            <li>Копирайте целия изход и го поставете по-долу.</li>
+        </ol>
+        <p class="section-subtitle">Важно: използвайте <strong>terse</strong>, не обикновен <code>print</code> или <code>print detail</code> - те пренасят записите на няколко реда и не могат да бъдат разпознати надеждно.
+        Съществуващ хост (по MAC) се обновява само по IP/име/последно видян - режимът (статичен/динамичен), комутаторът и бележките, зададени ръчно, не се презаписват.</p>
+        <form action="{{ url_for('admin_network_hosts_import') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group" style="width: 100%;">
+                <textarea name="lease_text" rows="14" style="width: 100%; font-family: monospace; font-size: 0.85rem;"
+                          placeholder="0   address=192.168.18.50 mac-address=AA:BB:CC:DD:EE:FF host-name=&quot;PC1&quot; server=dhcp1 status=bound ..."
+                          required></textarea>
+            </div>
+            <button type="submit" class="btn-submit">Импортирай</button>
+        </form>
+    </section>
+
+</main>
+</body>
+</html>

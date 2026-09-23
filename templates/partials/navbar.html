@@ -129,6 +129,17 @@
                                         </div>
                                     </div>
                                 {% endif %}
+                                {% if current_user.is_admin %}
+                                    <div class="dropdown-sub">
+                                        <span class="dropdown-trigger dropdown-sub-trigger">Мрежа (LAN) <span class="dropdown-arrow">▾</span></span>
+                                        <div class="dropdown-content dropdown-content-sub">
+                                            <a href="{{ url_for('admin_network') }}">Карта на мрежата</a>
+                                            <a href="{{ url_for('admin_network_hosts') }}">MAC инвентар</a>
+                                            <a href="{{ url_for('admin_network_hosts_import') }}">Импорт на DHCP leases</a>
+                                            <a href="{{ url_for('admin_network_audit') }}">Security одит</a>
+                                        </div>
+                                    </div>
+                                {% endif %}
                                 {% if current_user.is_admin or current_user.is_worker %}
                                     <div class="dropdown-sub">
                                         <span class="dropdown-trigger dropdown-sub-trigger">Автопарк <span class="dropdown-arrow">▾</span></span>

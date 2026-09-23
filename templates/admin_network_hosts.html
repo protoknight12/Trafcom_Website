@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>MAC инвентар - Мрежа - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>.rename-input { padding: 4px 8px; }</style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px;">
+            <h3 style="margin: 0;">MAC инвентар</h3>
+            <div class="text-small">
+                <a href="{{ url_for('admin_network') }}">&larr; Карта на мрежата</a> ·
+                <a href="{{ url_for('admin_network_hosts_import') }}">Импорт на DHCP leases</a>
+            </div>
+        </div>
+        <p class="section-subtitle">Пълна проследимост по MAC адрес - всеки хост, въведен ръчно или импортиран от DHCP lease-овете на Mikrotik.</p>
+        <form method="GET" class="admin-form" style="margin-bottom: 4px;">
+            <div class="form-group" style="flex: 1;"><input type="text" name="q" value="{{ q }}" placeholder="Търсене по MAC, име, IP, тип..." style="width: 100%;"></div>
+            <button type="submit" class="btn-secondary">Търси</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Нов хост</h3>
+        <form action="{{ url_for('admin_network_add_host') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group"><label>MAC адрес</label><input type="text" name="mac_address" required placeholder="AA:BB:CC:DD:EE:FF"></div>
+            <div class="form-group"><label>Име на хоста</label><input type="text" name="hostname"></div>
+            <div class="form-group"><label>IP адрес</label><input type="text" name="ip_address"></div>
+            <div class="form-group"><label>Режим</label>
+                <select name="ip_mode"><option value="dynamic">Динамичен</option><option value="static">Статичен</option></select>
+            </div>
+            <div class="form-group"><label>Тип устройство</label><input type="text" name="device_type" placeholder="напр. компютър, камера, машина"></div>
+            <div class="form-group"><label>Комутатор</label>
+                <select name="switch_device_id"><option value="">—</option>{% for d in devices %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select>
+            </div>
+            <div class="form-group"><label>Порт</label><input type="text" name="switch_port"></div>
+            <div class="form-group" style="width:100%;"><label>Бележки</label><input type="text" name="notes" style="width:100%;"></div>
+            <button type="submit" class="btn-submit">Добави хост</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Хостове ({{ hosts|length }})</h3>
+        {% if hosts %}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                <tr>
+                    <th>MAC</th><th>Име</th><th>IP</th><th>Режим</th><th>Тип</th><th>Комутатор / порт</th>
+                    <th>Бележки</th><th>Източник</th><th>Последно видян</th><th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for h in hosts %}
+                <tr>
+                    <td colspan="9" style="padding:0;">
+                        <form action="{{ url_for('admin_network_edit_host', host_id=h.id) }}" method="POST" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; padding:8px 0;">
+                            {% include 'partials/csrf_field.html' %}
+                            <input type="text" name="mac_address" value="{{ h.mac_address }}" required class="rename-input" style="width:135px;">
+                            <input type="text" name="hostname" value="{{ h.hostname or '' }}" class="rename-input" style="width:120px;" placeholder="име">
+                            <input type="text" name="ip_address" value="{{ h.ip_address or '' }}" class="rename-input" style="width:110px;" placeholder="IP">
+                            <select name="ip_mode" class="rename-input">
+                                <option value="dynamic" {% if h.ip_mode == 'dynamic' %}selected{% endif %}>Динамичен</option>
+                                <option value="static" {% if h.ip_mode == 'static' %}selected{% endif %}>Статичен</option>
+                            </select>
+                            <input type="text" name="device_type" value="{{ h.device_type or '' }}" class="rename-input" style="width:110px;" placeholder="тип">
+                            <select name="switch_device_id" class="rename-input">
+                                <option value="">—</option>
+                                {% for d in devices %}<option value="{{ d.id }}" {% if h.switch_device_id == d.id %}selected{% endif %}>{{ d.name }}</option>{% endfor %}
+                            </select>
+                            <input type="text" name="switch_port" value="{{ h.switch_port or '' }}" class="rename-input" style="width:80px;" placeholder="порт">
+                            <input type="text" name="notes" value="{{ h.notes or '' }}" class="rename-input" style="width:120px;" placeholder="бележки">
+                            <span class="text-small">{{ 'DHCP импорт' if h.source == 'dhcp_import' else 'ръчно' }}</span>
+                            <span class="text-small">{{ h.last_seen.strftime('%d.%m.%Y %H:%M') if h.last_seen else '—' }}</span>
+                            <button type="submit" class="btn-secondary" style="padding:5px 10px; font-size:0.8rem;">Запази</button>
+                        </form>
+                        {% if h.ip_mode == 'dynamic' %}
+                        <form action="{{ url_for('admin_network_host_make_static', host_id=h.id) }}" method="POST"
+                              onsubmit="return confirm('Реално ще се изпрати команда към живия DHCP сървър, за да стане {{ h.mac_address }} статичен. Продължи?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-secondary" style="padding:5px 10px; font-size:0.8rem;" title="Изпраща make-static към живия DHCP сървър">📡 Направи статичен</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_network_delete_host', host_id=h.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на хост {{ h.mac_address }}?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма намерени хостове.</p>
+        {% endif %}
+    </section>
+
+</main>
+</body>
+</html>

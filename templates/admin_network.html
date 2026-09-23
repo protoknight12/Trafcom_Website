@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Мрежа (LAN) - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .map-canvas {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 16 / 8;
+            min-height: 360px;
+            background-color: var(--bg-input);
+            background-image:
+                linear-gradient(to right, var(--border-color) 1px, transparent 1px),
+                linear-gradient(to bottom, var(--border-color) 1px, transparent 1px);
+            background-size: 5% 8%;
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-md);
+            overflow: hidden;
+            touch-action: none;
+        }
+        .net-card {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            width: 160px;
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-sm);
+            padding: 8px 10px;
+            cursor: default;
+            user-select: none;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+        }
+        .map-canvas.edit-mode .net-card { cursor: grab; }
+        .map-canvas.edit-mode .net-card:active { cursor: grabbing; z-index: 10; }
+        .net-card .nc-name { font-weight: 700; font-size: 0.88rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .net-card .nc-sub { font-size: 0.72rem; color: var(--text-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .net-card .nc-status-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+        .net-card .nc-status-dot { width: 9px; height: 9px; border-radius: 50%; background-color: var(--text-muted); flex-shrink: 0; }
+        .net-card .nc-status-dot.online { background-color: #10b981; }
+        .net-card .nc-status-dot.offline { background-color: #ef4444; }
+        .net-card .nc-status-label { font-size: 0.72rem; color: var(--text-muted); }
+        .net-card.eol { border-color: #f59e0b; }
+        .net-card.eol .nc-name::after { content: " ⚠"; color: #f59e0b; }
+        .connections-svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        .connection-line { stroke: var(--border-color); stroke-width: 2; fill: none; }
+        .connection-line.vlan { stroke: #38bdf8; stroke-dasharray: 6 4; }
+        .map-toolbar { display: flex; gap: 10px; align-items: center; margin: 4px 0 14px 0; flex-wrap: wrap; }
+        .rename-input { padding: 4px 8px; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px;">
+            <h3 style="margin: 0;">Карта на мрежата</h3>
+            <div class="text-small">
+                <a href="{{ url_for('admin_network_hosts') }}">MAC инвентар</a> ·
+                <a href="{{ url_for('admin_network_hosts_import') }}">Импорт на DHCP leases</a> ·
+                <a href="{{ url_for('admin_network_audit') }}">Security одит</a>
+            </div>
+        </div>
+        <p class="section-subtitle">Статусът (онлайн/офлайн) се проверява чрез ping до management IP на всяко устройство на всеки няколко секунди - без данни за достъп до самите устройства.</p>
+
+        <div class="map-toolbar">
+            <button type="button" id="unlockBtn" class="btn-secondary">🔓 Отключи местоположенията</button>
+            <button type="button" id="saveBtn" class="btn-submit" style="display:none;">💾 Запази местоположенията</button>
+            <button type="button" id="cancelBtn" class="btn-secondary" style="display:none;">Откажи</button>
+            <span id="editHint" class="text-small" style="display:none;">Влачете картичките, после запазете.</span>
+            <span id="mapTs" class="text-small" style="margin-left:auto;"></span>
+        </div>
+
+        <div class="map-canvas" id="mapCanvas">
+            <svg class="connections-svg" id="connectionsSvg"></svg>
+            {% for d in devices %}
+            {% set col = loop.index0 % 5 %}
+            {% set row = loop.index0 // 5 %}
+            <div class="net-card {{ 'eol' if d.is_eol else '' }}" data-id="{{ d.id }}"
+                 title="{{ d.vendor_label }} · {{ d.role_label }}{% if d.model %} · {{ d.model }}{% endif %}"
+                 style="left: {{ d.pos_x if d.pos_x is not none else (10 + col * 20) }}%; top: {{ d.pos_y if d.pos_y is not none else (15 + row * 25) }}%;">
+                <div class="nc-name">{{ d.name }}</div>
+                <div class="nc-sub">{{ d.vendor_label }} · {{ d.role_label }}</div>
+                <div class="nc-sub">{{ d.management_ip or 'няма IP' }}{% if d.management_vlan %} · VLAN {{ d.management_vlan }}{% endif %}</div>
+                <div class="nc-status-row">
+                    <span class="nc-status-dot" data-status-dot="{{ d.id }}"></span>
+                    <span class="nc-status-label" data-status-label="{{ d.id }}">{% if d.management_ip %}проверка…{% else %}няма IP{% endif %}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="admin-card">
+        <h3>Ново устройство</h3>
+        <form action="{{ url_for('admin_network_add_device') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group"><label>Име</label><input type="text" name="name" required></div>
+            <div class="form-group"><label>Производител</label>
+                <select name="vendor">{% for k, v in vendors.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+            </div>
+            <div class="form-group"><label>Роля</label>
+                <select name="device_role">{% for k, v in roles.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+            </div>
+            <div class="form-group"><label>Модел</label><input type="text" name="model" placeholder="напр. CCR2004, Catalyst 3750"></div>
+            <div class="form-group"><label>Management IP</label><input type="text" name="management_ip" placeholder="192.168.18.х"></div>
+            <div class="form-group"><label>MAC адрес</label><input type="text" name="mac_address" placeholder="незадължително"></div>
+            <div class="form-group"><label>Management VLAN</label><input type="number" name="management_vlan" min="1" max="4094"></div>
+            <div class="form-group" style="width:100%;"><label>Бележки</label><input type="text" name="notes" style="width:100%;"></div>
+            <button type="submit" class="btn-submit">Добави устройство</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Устройства</h3>
+        {% if devices %}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                <tr>
+                    <th>Статус</th><th>Име</th><th>Производител</th><th>Роля</th><th>Модел</th>
+                    <th>Management IP</th><th>MAC</th><th>VLAN</th><th>Бележки</th><th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for d in devices %}
+                <tr>
+                    <td><span class="nc-status-dot" data-status-dot-row="{{ d.id }}"></span></td>
+                    <td colspan="9" style="padding:0;">
+                        <form action="{{ url_for('admin_network_edit_device', device_id=d.id) }}" method="POST" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; padding:8px 0;">
+                            {% include 'partials/csrf_field.html' %}
+                            <input type="text" name="name" value="{{ d.name }}" required class="rename-input" style="width:130px;">
+                            <select name="vendor" class="rename-input">
+                                {% for k, v in vendors.items() %}<option value="{{ k }}" {% if k == d.vendor %}selected{% endif %}>{{ v }}</option>{% endfor %}
+                            </select>
+                            <select name="device_role" class="rename-input">
+                                {% for k, v in roles.items() %}<option value="{{ k }}" {% if k == d.device_role %}selected{% endif %}>{{ v }}</option>{% endfor %}
+                            </select>
+                            <input type="text" name="model" value="{{ d.model or '' }}" class="rename-input" style="width:120px;" placeholder="модел">
+                            <input type="text" name="management_ip" value="{{ d.management_ip or '' }}" class="rename-input" style="width:110px;" placeholder="IP">
+                            <input type="text" name="mac_address" value="{{ d.mac_address or '' }}" class="rename-input" style="width:130px;" placeholder="MAC">
+                            <input type="number" name="management_vlan" value="{{ d.management_vlan or '' }}" min="1" max="4094" class="rename-input" style="width:70px;" placeholder="VLAN">
+                            <input type="text" name="notes" value="{{ d.notes or '' }}" class="rename-input" style="width:140px;" placeholder="бележки">
+                            <label class="text-small" style="display:flex; align-items:center; gap:4px; white-space:nowrap;">
+                                <input type="checkbox" name="is_dhcp_server" {% if d.is_dhcp_server %}checked{% endif %}> DHCP сървър
+                            </label>
+                            <button type="submit" class="btn-secondary" style="padding:5px 10px; font-size:0.8rem;">Запази</button>
+                        </form>
+                    </td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_network_delete_device', device_id=d.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на устройство &quot;{{ d.name|e }}&quot;?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма добавени устройства.</p>
+        {% endif %}
+    </section>
+
+    <section class="admin-card">
+        <h3>Живо управление (RouterOS API)</h3>
+        <p class="section-subtitle">Единственото действие, което това приложение реално изпраща към жива инфраструктура,
+            е "Направи статичен" на хост в MAC инвентара (виж бутона там) - всичко останало е само инвентар в тази база.
+            Паролата никога не се показва повторно тук - само дали е зададена.</p>
+        {% set mikrotik_devices = devices | selectattr('vendor', 'equalto', 'mikrotik') | list %}
+        {% if mikrotik_devices %}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead><tr><th>Устройство</th><th>DHCP сървър</th><th>API достъп</th><th>Настрой</th><th>Тествай</th></tr></thead>
+                <tbody>
+                {% for d in mikrotik_devices %}
+                <tr>
+                    <td><strong>{{ d.name }}</strong><br><span class="text-small">{{ d.management_ip or 'няма IP' }}</span></td>
+                    <td>{{ '✓' if d.is_dhcp_server else '—' }}</td>
+                    <td>{{ '✓ зададен' if d.has_api_credentials else '— не е зададен' }}</td>
+                    <td>
+                        <form action="{{ url_for('admin_network_device_api_credentials', device_id=d.id) }}" method="POST" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                            {% include 'partials/csrf_field.html' %}
+                            <input type="text" name="api_username" placeholder="потребител" class="rename-input" style="width:110px;" autocomplete="off">
+                            <input type="password" name="api_password" placeholder="парола" class="rename-input" style="width:110px;" autocomplete="new-password">
+                            <button type="submit" class="btn-secondary" style="padding:5px 10px; font-size:0.8rem;">Запази</button>
+                        </form>
+                        {% if d.has_api_credentials %}
+                        <form action="{{ url_for('admin_network_device_api_credentials', device_id=d.id) }}" method="POST"
+                              onsubmit="return confirm('Премахване на API достъпа за {{ d.name|e }}?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <input type="hidden" name="clear" value="1">
+                            <button type="submit" class="btn-delete" style="padding:5px 10px; font-size:0.8rem;">Изчисти</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if d.has_api_credentials %}
+                        <form action="{{ url_for('admin_network_device_api_test', device_id=d.id) }}" method="POST" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-secondary" style="padding:5px 10px; font-size:0.8rem;">Тествай връзка</button>
+                        </form>
+                        {% else %}—{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма добавени MikroTik устройства.</p>
+        {% endif %}
+    </section>
+
+    <section class="admin-card">
+        <h3>Нова връзка</h3>
+        {% if devices|length >= 2 %}
+        <form action="{{ url_for('admin_network_add_link') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group"><label>От устройство</label>
+                <select name="device_a_id" required>{% for d in devices %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select>
+            </div>
+            <div class="form-group"><label>Към устройство</label>
+                <select name="device_b_id" required>{% for d in devices %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select>
+            </div>
+            <div class="form-group"><label>Тип връзка</label>
+                <select name="link_type">{% for k, v in link_types.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+            </div>
+            <div class="form-group"><label>VLAN (незадължително)</label><input type="number" name="vlan" min="1" max="4094"></div>
+            <div class="form-group"><label>Порт (от)</label><input type="text" name="port_a"></div>
+            <div class="form-group"><label>Порт (към)</label><input type="text" name="port_b"></div>
+            <div class="form-group" style="width:100%;"><label>Бележки</label><input type="text" name="notes" style="width:100%;"></div>
+            <button type="submit" class="btn-submit">Добави връзка</button>
+        </form>
+        {% else %}
+        <p class="no-data text-center">Трябва поне 2 устройства, за да добавите връзка.</p>
+        {% endif %}
+    </section>
+
+    <section class="admin-card">
+        <h3>Връзки</h3>
+        {% if links %}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                <tr><th>От</th><th>Към</th><th>Тип</th><th>VLAN</th><th>Портове</th><th>Бележки</th><th class="text-right">Изтриване</th></tr>
+                </thead>
+                <tbody>
+                {% for l in links %}
+                <tr>
+                    <td>{{ l.device_a.name }}</td>
+                    <td>{{ l.device_b.name }}</td>
+                    <td>{{ l.type_label }}</td>
+                    <td>{{ l.vlan or '—' }}</td>
+                    <td>{{ l.port_a or '—' }} / {{ l.port_b or '—' }}</td>
+                    <td>{{ l.notes or '—' }}</td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_network_delete_link', link_id=l.id) }}" method="POST"
+                              onsubmit="return confirm('Изтриване на връзка?');" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма добавени връзки.</p>
+        {% endif %}
+    </section>
+
+</main>
+
+<script>
+(function () {
+    var canvas = document.getElementById('mapCanvas');
+    var cards = Array.from(document.querySelectorAll('.net-card'));
+    var svg = document.getElementById('connectionsSvg');
+    var tsEl = document.getElementById('mapTs');
+
+    var links = [
+        {% for l in links %}{a: '{{ l.device_a_id }}', b: '{{ l.device_b_id }}', vlan: {{ l.vlan or 'null' }}, line: null},
+        {% endfor %}
+    ];
+
+    function cardCenter(id) {
+        var card = document.querySelector('.net-card[data-id="' + id + '"]');
+        return card ? {x: parseFloat(card.style.left), y: parseFloat(card.style.top)} : null;
+    }
+
+    function redrawConnections() {
+        links.forEach(function (conn) {
+            var from = cardCenter(conn.a), to = cardCenter(conn.b);
+            if (!from || !to) return;
+            if (!conn.line) {
+                conn.line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                conn.line.setAttribute('class', 'connection-line' + (conn.vlan ? ' vlan' : ''));
+                if (conn.vlan) {
+                    var title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+                    title.textContent = 'VLAN ' + conn.vlan;
+                    conn.line.appendChild(title);
+                }
+                svg.appendChild(conn.line);
+            }
+            conn.line.setAttribute('x1', from.x + '%');
+            conn.line.setAttribute('y1', from.y + '%');
+            conn.line.setAttribute('x2', to.x + '%');
+            conn.line.setAttribute('y2', to.y + '%');
+        });
+    }
+    redrawConnections();
+
+    // --- Lock/unlock/save positions - same pattern as admin_factory_map_room.html ---
+    var editMode = false;
+    var dirty = {};
+    var unlockBtn = document.getElementById('unlockBtn');
+    var saveBtn = document.getElementById('saveBtn');
+    var cancelBtn = document.getElementById('cancelBtn');
+    var editHint = document.getElementById('editHint');
+
+    function setEditMode(on) {
+        editMode = on;
+        canvas.classList.toggle('edit-mode', on);
+        unlockBtn.style.display = on ? 'none' : '';
+        saveBtn.style.display = on ? '' : 'none';
+        cancelBtn.style.display = on ? '' : 'none';
+        editHint.style.display = on ? '' : 'none';
+    }
+    unlockBtn.addEventListener('click', function () { setEditMode(true); });
+    cancelBtn.addEventListener('click', function () { window.location.reload(); });
+    saveBtn.addEventListener('click', function () {
+        var keys = Object.keys(dirty);
+        if (!keys.length) { setEditMode(false); return; }
+        saveBtn.disabled = true;
+        Promise.all(keys.map(function (id) {
+            var fd = new FormData();
+            fd.append('csrf_token', window.CSRF_TOKEN);
+            fd.append('pos_x', dirty[id].x.toFixed(2));
+            fd.append('pos_y', dirty[id].y.toFixed(2));
+            return fetch('/admin/network/devices/' + id + '/position', {method: 'POST', body: fd});
+        })).then(function () {
+            dirty = {};
+            saveBtn.disabled = false;
+            setEditMode(false);
+        }).catch(function () {
+            saveBtn.disabled = false;
+            alert('Грешка при запис.');
+        });
+    });
+
+    cards.forEach(function (card) {
+        var dragging = false;
+        var id = card.getAttribute('data-id');
+
+        function pointerToPercent(clientX, clientY) {
+            var rect = canvas.getBoundingClientRect();
+            return {
+                x: Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100)),
+                y: Math.max(0, Math.min(100, ((clientY - rect.top) / rect.height) * 100))
+            };
+        }
+        function onMove(e) {
+            if (!dragging) return;
+            var point = e.touches ? e.touches[0] : e;
+            var pos = pointerToPercent(point.clientX, point.clientY);
+            card.style.left = pos.x + '%';
+            card.style.top = pos.y + '%';
+            redrawConnections();
+        }
+        function onUp(e) {
+            if (!dragging) return;
+            dragging = false;
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            document.removeEventListener('touchmove', onMove);
+            document.removeEventListener('touchend', onUp);
+            var point = (e.changedTouches && e.changedTouches[0]) || e;
+            var pos = pointerToPercent(point.clientX, point.clientY);
+            dirty[id] = pos;
+            redrawConnections();
+        }
+        function onDown(e) {
+            if (!editMode) return;
+            dragging = true;
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+            document.addEventListener('touchmove', onMove, {passive: false});
+            document.addEventListener('touchend', onUp);
+            e.preventDefault();
+        }
+        card.addEventListener('mousedown', onDown);
+        card.addEventListener('touchstart', onDown, {passive: false});
+    });
+
+    // --- Live online/offline poll ---
+    function pollStatus() {
+        fetch('/admin/network/data').then(function (r) { return r.json(); }).then(function (data) {
+            cards.forEach(function (card) {
+                var id = card.getAttribute('data-id');
+                if (!(id in data)) return;
+                var online = !!data[id];
+                [card.querySelector('[data-status-dot="' + id + '"]'),
+                 document.querySelector('[data-status-dot-row="' + id + '"]')].forEach(function (dot) {
+                    if (!dot) return;
+                    dot.classList.toggle('online', online);
+                    dot.classList.toggle('offline', !online);
+                });
+                var label = card.querySelector('[data-status-label="' + id + '"]');
+                if (label) label.textContent = online ? 'онлайн' : 'офлайн';
+            });
+            tsEl.textContent = 'Последна проверка: ' + new Date().toLocaleTimeString('bg-BG');
+        }).catch(function () {});
+    }
+    pollStatus();
+    setInterval(pollStatus, 8000);
+})();
+</script>
+
+</body>
+</html>

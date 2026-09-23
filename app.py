@@ -4,6 +4,7 @@ import json
 import math
 import re
 import calendar
+import subprocess
 import difflib
 import uuid
 import io
@@ -44,6 +45,9 @@ import anthropic
 import paho.mqtt.client as mqtt_client
 from pymodbus.client import ModbusTcpClient
 from flask_babel import Babel, gettext
+import librouteros
+from librouteros.query import Key as RouterosKey
+from cryptography.fernet import Fernet, InvalidToken
 
 # Optional: load a local .env file if python-dotenv is installed, so secrets
 # can be kept out of source control. Safe no-op if the package isn't present.
@@ -3181,6 +3185,173 @@ class CustomerSatisfactionRecord(db.Model):
     @property
     def source_label(self):
         return SATISFACTION_SOURCES.get(self.source, self.source)
+
+
+NETWORK_DEVICE_VENDORS = {
+    'mikrotik': 'MikroTik',
+    'cisco': 'Cisco',
+    'ubiquiti': 'Ubiquiti',
+    'other': 'Друго',
+}
+
+NETWORK_DEVICE_ROLES = {
+    'router': 'Рутер',
+    'switch': 'Комутатор',
+    'bridge': 'PtP мост',
+    'ap': 'Access Point',
+    'other': 'Друго',
+}
+
+NETWORK_LINK_TYPES = {
+    'sfp': 'SFP / Оптика',
+    'copper': 'Меден кабел (RJ45)',
+    'wireless_ptp': 'Безжичен PtP мост',
+    'other': 'Друго',
+}
+
+# Model names (lowercased substring match) known to be past vendor support -
+# flagged by _network_security_audit() below. Extend as more EOL hardware
+# turns up; this is a static list, not derived from any vendor EOL feed.
+EOL_DEVICE_MODEL_KEYWORDS = ['2950']
+
+
+class NetworkDevice(db.Model):
+    """
+    A core LAN device (Mikrotik/Cisco/Ubiquiti router, switch or PtP bridge)
+    making up the shop's network backbone - managed from /admin/network. This
+    is an inventory record only: the app never pushes configuration to real
+    hardware, and stores no device credentials - actual changes (DHCP,
+    VLANs, firmware) stay manual in Winbox/SSH/the UniFi controller. Marking
+    a NetworkHost 'static' here is this app's own bookkeeping of intent, not
+    a live Mikrotik DHCP reservation - see NetworkHost below.
+    online/offline on the map (admin_network_data()) comes from a plain ICMP
+    ping to management_ip - no auth, nothing here can reconfigure a device.
+    pos_x/pos_y are percent-of-canvas for the topology map, same convention
+    as Machine.pos_x/pos_y (see admin_factory_map_room.html's drag pattern,
+    reused as-is for this map).
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    vendor = db.Column(db.String(20), nullable=False, default='other')
+    device_role = db.Column(db.String(20), nullable=False, default='other')
+    model = db.Column(db.String(100), nullable=True)
+    management_ip = db.Column(db.String(45), nullable=True, unique=True)
+    mac_address = db.Column(db.String(17), nullable=True)
+    # VLAN the device's own management interface (Winbox/SSH/HTTPS) answers
+    # on, if segmented off from the general LAN - nullable because most of
+    # the current topology (see the audit) has no such segmentation yet.
+    management_vlan = db.Column(db.Integer, nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    pos_x = db.Column(db.Float, nullable=True)
+    pos_y = db.Column(db.Float, nullable=True)
+    # Marks which single device is the actual DHCP server to talk to for
+    # live lease actions (admin_network_host_make_static()) - sourced from
+    # the admin's own judgment (there's no way to infer "the" DHCP server
+    # from inventory data alone), not auto-detected.
+    is_dhcp_server = db.Column(db.Boolean, nullable=False, default=False)
+    # RouterOS API credentials for the live-management actions below (test
+    # connection, make a DHCP lease static) - see the "LAN / МРЕЖОВА
+    # ИНФРАСТРУКТУРА" section's live-management subsection for the full
+    # story. api_password_encrypted is a Fernet token (_encrypt_secret()),
+    # never plaintext - decrypted only just-in-time inside _routeros_connect(),
+    # never logged or echoed back to a form. Both null = live management
+    # disabled for this device (the module falls back to inventory-only).
+    api_username = db.Column(db.String(100), nullable=True)
+    api_password_encrypted = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    @property
+    def vendor_label(self):
+        return NETWORK_DEVICE_VENDORS.get(self.vendor, self.vendor)
+
+    @property
+    def role_label(self):
+        return NETWORK_DEVICE_ROLES.get(self.device_role, self.device_role)
+
+    @property
+    def is_eol(self):
+        model = (self.model or '').lower()
+        return any(kw in model for kw in EOL_DEVICE_MODEL_KEYWORDS)
+
+    @property
+    def has_api_credentials(self):
+        return bool(self.api_username and self.api_password_encrypted)
+
+
+class NetworkLink(db.Model):
+    """
+    One physical connection between two NetworkDevice rows, for the topology
+    map and the security audit's VLAN-segmentation check (e.g. the
+    Mikrotik-trafcom <-> Mikrotik-trafcom-hale SFP link carrying VLAN138).
+    Two FKs rather than a many-to-many table since a link also carries its
+    own per-connection data (ports, VLAN, type) that a bare association
+    table can't - device_a/device_b order carries no meaning, the link is
+    undirected.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    device_a_id = db.Column(db.Integer, db.ForeignKey('network_device.id'), nullable=False)
+    device_b_id = db.Column(db.Integer, db.ForeignKey('network_device.id'), nullable=False)
+    link_type = db.Column(db.String(20), nullable=False, default='copper')
+    vlan = db.Column(db.Integer, nullable=True)
+    port_a = db.Column(db.String(50), nullable=True)
+    port_b = db.Column(db.String(50), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+
+    device_a = db.relationship('NetworkDevice', foreign_keys=[device_a_id], backref='links_a')
+    device_b = db.relationship('NetworkDevice', foreign_keys=[device_b_id], backref='links_b')
+
+    @property
+    def type_label(self):
+        return NETWORK_LINK_TYPES.get(self.link_type, self.link_type)
+
+
+class NetworkHost(db.Model):
+    """
+    MAC-address inventory of end devices (PCs, machines, printers, cameras...)
+    seen on the LAN - the by-MAC traceability table behind /admin/network/hosts.
+    Filled in by hand or via the DHCP-lease import wizard
+    (admin_network_hosts_import(), parsing a pasted
+    `/ip dhcp-server lease print terse` export from the Mikrotik - `terse`
+    specifically, since that's the one RouterOS print mode that puts a whole
+    lease on one line; the wrapped `detail`/plain table output can't be
+    parsed reliably line-by-line).
+
+    ip_mode is this app's own record of intended dynamic-vs-static - toggling
+    it here is bookkeeping only, it does NOT create a real Mikrotik DHCP
+    reservation (see NetworkDevice's docstring on why: no device credentials
+    are stored anywhere in this module). switch_device/switch_port are
+    optional - which NetworkDevice port this host is patched into, filled in
+    once that's physically confirmed, same "optional until someone checks"
+    convention as ShellyDevice.machines.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    mac_address = db.Column(db.String(17), nullable=False, unique=True)
+    hostname = db.Column(db.String(150), nullable=True)
+    ip_address = db.Column(db.String(45), nullable=True)
+    ip_mode = db.Column(db.String(10), nullable=False, default='dynamic')
+    device_type = db.Column(db.String(100), nullable=True)
+    switch_device_id = db.Column(db.Integer, db.ForeignKey('network_device.id'), nullable=True)
+    switch_port = db.Column(db.String(50), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    last_seen = db.Column(db.DateTime, nullable=True)
+    # 'manual' (typed in by an admin) or 'dhcp_import' (came from the lease
+    # import wizard) - purely informational, shown in the hosts table so a
+    # stale imported row is easy to tell apart from a hand-maintained one.
+    source = db.Column(db.String(20), nullable=False, default='manual')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    switch_device = db.relationship('NetworkDevice', backref='hosts')
+
+
+def _normalize_mac(raw):
+    """'aa-bb-cc-dd-ee-ff' / 'aabb.ccdd.eeff' / 'AA:BB:CC:DD:EE:FF' -> 'AA:BB:CC:DD:EE:FF',
+    or None if it isn't 12 hex digits once separators are stripped."""
+    hex_digits = re.sub(r'[^0-9A-Fa-f]', '', raw or '')
+    if len(hex_digits) != 12:
+        return None
+    hex_digits = hex_digits.upper()
+    return ':'.join(hex_digits[i:i + 2] for i in range(0, 12, 2))
 
 
 def _next_offer_number():
@@ -15042,6 +15213,644 @@ def admin_modbus_read_registers(device_id):
         'int32': _modbus_decode(registers, 'int32') if count >= 2 else [],
         'float32': _modbus_decode(registers, 'float32') if count >= 2 else [],
     })
+
+
+# ----------------- LAN / МРЕЖОВА ИНФРАСТРУКТУРА -----------------
+# Inventory + topology map + MAC-address traceability + a rule-based
+# security audit for the shop's core network (Mikrotik/Cisco/Ubiquiti) - see
+# NetworkDevice/NetworkLink/NetworkHost above. Deliberately NOT a live
+# control plane: no device credentials are stored or used anywhere here,
+# online/offline is a bare ICMP ping, and "management" means editing this
+# app's own inventory records, not pushing config to real hardware - see
+# each model's docstring for why.
+
+def _ping_host(ip, timeout_ms=800):
+    """True if `ip` answers a single ICMP echo within timeout_ms. Shells out
+    to the OS ping binary - stdlib has no cross-platform ICMP without raw
+    sockets/root. ponytail: subprocess over a raw-socket implementation,
+    plenty fast enough for polling a handful of core devices."""
+    if not ip:
+        return False
+    if os.name == 'nt':
+        cmd = ['ping', '-n', '1', '-w', str(timeout_ms), ip]
+    else:
+        cmd = ['ping', '-c', '1', '-W', str(max(1, timeout_ms // 1000)), ip]
+    try:
+        result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 timeout=timeout_ms / 1000 + 1)
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _ping_fleet(devices):
+    """{device_id: bool} for every device with a management_ip, polled
+    concurrently so one unreachable host doesn't serialize onto the rest -
+    same ThreadPoolExecutor pattern as shelly_fleet_snapshot()."""
+    targets = [d for d in devices if d.management_ip]
+    if not targets:
+        return {}
+    with ThreadPoolExecutor(max_workers=min(16, len(targets))) as executor:
+        results = executor.map(lambda d: (d.id, _ping_host(d.management_ip)), targets)
+    return dict(results)
+
+
+def _network_api_fernet():
+    """Fernet instance from NETWORK_API_ENCRYPTION_KEY, or None if unset -
+    the live-DHCP-management feature (RouterOS API write access) degrades to
+    disabled rather than crashing the app, same optional-feature pattern as
+    ANTHROPIC_API_KEY/SMTP_* in Config & secrets. Never a hardcoded fallback
+    key - see the top-level SECRET_KEY enforcement this project already has
+    strong feelings about."""
+    key = os.environ.get('NETWORK_API_ENCRYPTION_KEY')
+    if not key:
+        return None
+    try:
+        return Fernet(key.encode())
+    except Exception:
+        return None
+
+
+def _encrypt_secret(plain):
+    """plain -> Fernet token (str), or None if no key configured or plain is
+    empty - callers treat None the same as "not stored"."""
+    fernet = _network_api_fernet()
+    if not fernet or not plain:
+        return None
+    return fernet.encrypt(plain.encode()).decode()
+
+
+def _decrypt_secret(token):
+    """Fernet token -> plaintext (str), or None if no key configured, no
+    token, or the token can't be decrypted (wrong/rotated key) - callers
+    must treat None as "credentials unusable", never as an empty password."""
+    fernet = _network_api_fernet()
+    if not fernet or not token:
+        return None
+    try:
+        return fernet.decrypt(token.encode()).decode()
+    except InvalidToken:
+        return None
+
+
+def _routeros_connect(device, timeout=6):
+    """
+    Connects to `device`'s RouterOS legacy binary API (port 8728 - this
+    fleet runs RouterOS 6.x, which has no REST API, unlike 7.x) using its
+    stored, encrypted credentials. Raises RuntimeError/librouteros exceptions
+    on any failure (missing credentials, undecryptable password, unreachable
+    host, bad auth) - callers catch broadly and flash a generic message,
+    never echoing connection details back to the browser. Caller must
+    api.close() the returned Api (use try/finally).
+    """
+    if not device.has_api_credentials:
+        raise RuntimeError('no API credentials configured for this device')
+    password = _decrypt_secret(device.api_password_encrypted)
+    if password is None:
+        raise RuntimeError('stored credentials could not be decrypted')
+    if not device.management_ip:
+        raise RuntimeError('device has no management IP')
+    return librouteros.connect(host=device.management_ip, username=device.api_username,
+                                password=password, timeout=timeout)
+
+
+def _routeros_lease_make_static(device, mac_address):
+    """Converts the DHCP lease matching `mac_address` on `device`'s RouterOS
+    DHCP server from dynamic to static. Raises LookupError if no such lease
+    exists, or a librouteros/RuntimeError on connection/auth failure - see
+    admin_network_host_make_static() for how those are surfaced. This is the
+    ONLY write action this module performs against live infrastructure -
+    everything else here is inventory bookkeeping (see NetworkHost's
+    docstring)."""
+    api = _routeros_connect(device)
+    try:
+        lease_path = api.path('ip', 'dhcp-server', 'lease')
+        matches = list(lease_path.select().where(RouterosKey('mac-address') == mac_address))
+        if not matches:
+            raise LookupError(f'no DHCP lease found for {mac_address}')
+        list(lease_path('make-static', **{'.id': matches[0]['.id']}))
+    finally:
+        api.close()
+
+
+def _network_security_audit():
+    """
+    Rule-based checks over the entered NetworkDevice/NetworkLink/NetworkHost
+    inventory, plus a fixed set of best-practice recommendations for this
+    shop's specific topology. NOT a live scan of the real hardware - this
+    module stores no device credentials (see NetworkDevice's docstring) - it
+    only reasons over whatever inventory has been entered, plus static
+    guidance. Re-run a real audit against the devices' actual running-config
+    periodically; this is a starting checklist, not a substitute.
+    Returns {'findings': [...], 'recommendations': [...], 'qos_recommendations': [...]}.
+    """
+    devices = NetworkDevice.query.all()
+    links = NetworkLink.query.all()
+    hosts = NetworkHost.query.all()
+    findings = []
+
+    for d in devices:
+        if d.is_eol:
+            findings.append({
+                'severity': 'high', 'title': f'{d.name}: остарял модел ({d.model})',
+                'detail': 'Извън производствена поддръжка - вероятно без нови security ъпдейти. '
+                          'Обмислете подмяна или изолиране в отделен VLAN с ограничен достъп.',
+            })
+
+    router_switch = [d for d in devices if d.device_role in ('router', 'switch')]
+    if router_switch and not any(d.management_vlan for d in router_switch):
+        findings.append({
+            'severity': 'high', 'title': 'Няма конфигуриран management VLAN',
+            'detail': 'Нито едно устройство няма зададен management VLAN - управляващите интерфейси '
+                      '(Winbox/SSH/HTTPS) вероятно са достъпни от същата мрежа като работните станции и машините.',
+        })
+
+    vlans_used = {l.vlan for l in links if l.vlan}
+    if len(devices) > 2 and len(vlans_used) <= 1:
+        findings.append({
+            'severity': 'medium', 'title': 'Плоска мрежа - липсва VLAN сегментация',
+            'detail': 'Въведените връзки ползват най-много един VLAN'
+                      + (f' ({next(iter(vlans_used))})' if vlans_used else '')
+                      + '. Няма отделяне на офис/машини/management трафик.',
+        })
+
+    ip_owners = {}
+    for h in hosts:
+        if h.ip_address:
+            ip_owners.setdefault(h.ip_address, []).append(h.mac_address)
+    for ip, macs in ip_owners.items():
+        if len(macs) > 1:
+            findings.append({
+                'severity': 'high', 'title': f'Дублиран IP адрес {ip}',
+                'detail': 'Възложен е на повече от един MAC: ' + ', '.join(macs) + '. Може да причини конфликт в мрежата.',
+            })
+
+    mgmt_owners = {}
+    for d in devices:
+        if d.management_ip:
+            mgmt_owners.setdefault(d.management_ip, []).append(d.name)
+    for ip, names in mgmt_owners.items():
+        if len(names) > 1:
+            findings.append({
+                'severity': 'high', 'title': f'Дублиран management IP {ip}',
+                'detail': 'Възложен е на: ' + ', '.join(names) + '.',
+            })
+
+    severity_order = {'high': 0, 'medium': 1, 'low': 2}
+    findings.sort(key=lambda f: severity_order.get(f['severity'], 3))
+
+    recommendations = [
+        'Изнесете management достъпа (Winbox/SSH/HTTPS) на всички Mikrotik/Cisco/Ubiquiti устройства в отделен '
+        'management VLAN, недостъпен от работните станции и производствените машини.',
+        'Заменете или изолирайте Cisco 2950 комутаторите - извън производствена поддръжка от години.',
+        'Сегментирайте мрежата поне на 3 VLAN-а: офис/администрация, производствени машини, management - '
+        'вместо един общ бридж за всичко.',
+        'Изключете Telnet и обикновен HTTP за управление навсякъде, където има опция - само SSH/HTTPS/Winbox '
+        'с силна парола.',
+        'Активирайте DHCP snooping и port security на Cisco комутаторите, за да ограничите неоторизирани '
+        'DHCP сървъри и MAC spoofing.',
+        'Сменете стандартната SNMP community ("public"), ако SNMP е активен на Cisco устройствата, или го '
+        'изключете напълно ако не се ползва.',
+        'Ограничете достъпа до Winbox/SSH/API на Mikrotik само от management VLAN-а (firewall filter правило), '
+        'не от цялата LAN мрежа.',
+        'Пазете периодичен бекъп на конфигурацията на всяко core устройство (Mikrotik export, Cisco '
+        'running-config) извън самите устройства.',
+    ]
+
+    qos_recommendations = [
+        'Приоритизирайте трафика на производствените машини (CNC/лазер контролери) пред общия офис трафик '
+        'чрез Mikrotik queue tree, групирано по VLAN.',
+        'Ограничете (rate-limit) трафик, несвързан с производството, с проста опашка, за да не изяжда '
+        'честотната лента при качване на файлове.',
+        'Заделете отделна опашка с гарантиран минимален bandwidth за VoIP/видеонаблюдение, ако има такива в мрежата.',
+        'Внедрете QoS едва след като VLAN сегментацията по-горе е на място - опашките са най-лесни за поддръжка, '
+        'когато трафикът вече е разделен по VLAN, не по отделен IP.',
+    ]
+
+    return {'findings': findings, 'recommendations': recommendations, 'qos_recommendations': qos_recommendations}
+
+
+@app.route('/admin/network')
+@role_required('admin')
+def admin_network():
+    devices = NetworkDevice.query.order_by(NetworkDevice.name).all()
+    links = NetworkLink.query.all()
+    return render_template('admin_network.html', devices=devices, links=links,
+                           vendors=NETWORK_DEVICE_VENDORS, roles=NETWORK_DEVICE_ROLES,
+                           link_types=NETWORK_LINK_TYPES, active_page='admin_network')
+
+
+@app.route('/admin/network/data')
+@role_required('admin')
+def admin_network_data():
+    """JSON feed polled by admin_network.html for live online/offline status - see _ping_fleet()."""
+    devices = NetworkDevice.query.all()
+    status = _ping_fleet(devices)
+    return jsonify({str(device_id): online for device_id, online in status.items()})
+
+
+@app.route('/admin/network/devices/add', methods=['POST'])
+@role_required('admin')
+def admin_network_add_device():
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Името не може да бъде празно.', 'danger')
+        return redirect(url_for('admin_network'))
+    vendor = request.form.get('vendor', 'other')
+    if vendor not in NETWORK_DEVICE_VENDORS:
+        vendor = 'other'
+    device_role = request.form.get('device_role', 'other')
+    if device_role not in NETWORK_DEVICE_ROLES:
+        device_role = 'other'
+    management_ip = request.form.get('management_ip', '').strip() or None
+    if management_ip and NetworkDevice.query.filter_by(management_ip=management_ip).first():
+        flash(f'Вече има устройство с management IP "{management_ip}".', 'danger')
+        return redirect(url_for('admin_network'))
+    mac_raw = request.form.get('mac_address', '').strip()
+    mac_address = _normalize_mac(mac_raw) if mac_raw else None
+    vlan_raw = request.form.get('management_vlan', '').strip()
+    device = NetworkDevice(
+        name=name, vendor=vendor, device_role=device_role,
+        model=request.form.get('model', '').strip() or None,
+        management_ip=management_ip, mac_address=mac_address,
+        management_vlan=int(vlan_raw) if vlan_raw.isdigit() else None,
+        notes=request.form.get('notes', '').strip() or None,
+    )
+    db.session.add(device)
+    db.session.commit()
+    log_action(f'Добавено мрежово устройство "{name}"')
+    flash(f'Устройството "{name}" беше добавено.', 'success')
+    return redirect(url_for('admin_network'))
+
+
+@app.route('/admin/network/devices/<int:device_id>/edit', methods=['POST'])
+@role_required('admin')
+def admin_network_edit_device(device_id):
+    device = NetworkDevice.query.get_or_404(device_id)
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Името не може да бъде празно.', 'danger')
+        return redirect(url_for('admin_network'))
+    vendor = request.form.get('vendor', device.vendor)
+    if vendor not in NETWORK_DEVICE_VENDORS:
+        vendor = device.vendor
+    device_role = request.form.get('device_role', device.device_role)
+    if device_role not in NETWORK_DEVICE_ROLES:
+        device_role = device.device_role
+    management_ip = request.form.get('management_ip', '').strip() or None
+    if management_ip and NetworkDevice.query.filter(
+            NetworkDevice.management_ip == management_ip, NetworkDevice.id != device.id).first():
+        flash(f'Вече има друго устройство с management IP "{management_ip}".', 'danger')
+        return redirect(url_for('admin_network'))
+    mac_raw = request.form.get('mac_address', '').strip()
+    old_name = device.name
+    device.name = name
+    device.vendor = vendor
+    device.device_role = device_role
+    device.model = request.form.get('model', '').strip() or None
+    device.management_ip = management_ip
+    device.mac_address = _normalize_mac(mac_raw) if mac_raw else None
+    vlan_raw = request.form.get('management_vlan', '').strip()
+    device.management_vlan = int(vlan_raw) if vlan_raw.isdigit() else None
+    device.notes = request.form.get('notes', '').strip() or None
+    # Exactly one device can be "the" DHCP server (admin_network_host_make_static()
+    # picks the first is_dhcp_server=True row) - checking this one unchecks any other.
+    is_dhcp_server = bool(request.form.get('is_dhcp_server'))
+    if is_dhcp_server:
+        NetworkDevice.query.filter(NetworkDevice.id != device.id).update({'is_dhcp_server': False})
+    device.is_dhcp_server = is_dhcp_server
+    db.session.commit()
+    log_action(f'Редактирано мрежово устройство "{old_name}" → "{name}"')
+    flash(f'Устройството "{name}" беше обновено.', 'success')
+    return redirect(url_for('admin_network'))
+
+
+@app.route('/admin/network/devices/<int:device_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_network_delete_device(device_id):
+    device = NetworkDevice.query.get_or_404(device_id)
+    name = device.name
+    NetworkLink.query.filter(db.or_(NetworkLink.device_a_id == device.id, NetworkLink.device_b_id == device.id)).delete()
+    NetworkHost.query.filter_by(switch_device_id=device.id).update({'switch_device_id': None})
+    db.session.delete(device)
+    db.session.commit()
+    log_action(f'Изтрито мрежово устройство "{name}"')
+    flash(f'Устройството "{name}" беше изтрито.', 'success')
+    return redirect(url_for('admin_network'))
+
+
+@app.route('/admin/network/devices/<int:device_id>/position', methods=['POST'])
+@role_required('admin')
+def admin_network_device_position(device_id):
+    """Drag-to-reposition on the topology map - same percent-of-canvas
+    convention as admin_factory_map_machine_position()."""
+    device = NetworkDevice.query.get_or_404(device_id)
+    try:
+        pos_x = float(request.form.get('pos_x', ''))
+        pos_y = float(request.form.get('pos_y', ''))
+    except ValueError:
+        return jsonify({'error': 'invalid position'}), 400
+    device.pos_x = max(0.0, min(100.0, pos_x))
+    device.pos_y = max(0.0, min(100.0, pos_y))
+    db.session.commit()
+    return jsonify({'pos_x': device.pos_x, 'pos_y': device.pos_y})
+
+
+@app.route('/admin/network/devices/<int:device_id>/api-credentials', methods=['POST'])
+@role_required('admin')
+def admin_network_device_api_credentials(device_id):
+    """
+    Set/replace or clear this device's stored RouterOS API credentials - a
+    separate form/route from admin_network_edit_device() so the password
+    field is never pre-filled or round-tripped through the main edit form
+    (it always renders blank; the template shows a "configured" badge
+    instead of the value). Encrypted at rest via _encrypt_secret() -
+    NETWORK_API_ENCRYPTION_KEY must be set or this refuses with a flash
+    explaining why, same degrade-gracefully pattern as the chat widget.
+    """
+    device = NetworkDevice.query.get_or_404(device_id)
+    if request.form.get('clear'):
+        device.api_username = None
+        device.api_password_encrypted = None
+        db.session.commit()
+        log_action(f'Изчистени API credentials за "{device.name}"')
+        flash(f'API достъпът за "{device.name}" беше премахнат.', 'success')
+        return redirect(url_for('admin_network'))
+
+    if not _network_api_fernet():
+        flash('NETWORK_API_ENCRYPTION_KEY не е зададен в конфигурацията на сървъра - живото управление е изключено.', 'danger')
+        return redirect(url_for('admin_network'))
+
+    username = request.form.get('api_username', '').strip()
+    password = request.form.get('api_password', '')
+    if not username or not password:
+        flash('Нужни са едновременно потребителско име и парола.', 'danger')
+        return redirect(url_for('admin_network'))
+    device.api_username = username
+    device.api_password_encrypted = _encrypt_secret(password)
+    db.session.commit()
+    log_action(f'Зададени API credentials за "{device.name}"')
+    flash(f'API достъпът за "{device.name}" беше запазен.', 'success')
+    return redirect(url_for('admin_network'))
+
+
+@app.route('/admin/network/devices/<int:device_id>/api-test', methods=['POST'])
+@role_required('admin')
+def admin_network_device_api_test(device_id):
+    """Read-only sanity check (/system/identity/print) that the stored
+    credentials actually work, without touching any config - the only way
+    to validate them, since this app never sees the real password again
+    after it's encrypted."""
+    device = NetworkDevice.query.get_or_404(device_id)
+    try:
+        api = _routeros_connect(device, timeout=5)
+        try:
+            identity = list(api('/system/identity/print'))
+        finally:
+            api.close()
+        name = identity[0].get('name', '?') if identity else '?'
+        flash(f'Връзката работи - system identity: "{name}".', 'success')
+    except Exception:
+        flash(f'Неуспешна връзка към "{device.name}" - провери IP, потребител, парола и мрежова достъпност.', 'danger')
+    return redirect(url_for('admin_network'))
+
+
+@app.route('/admin/network/links/add', methods=['POST'])
+@role_required('admin')
+def admin_network_add_link():
+    device_a_id = request.form.get('device_a_id', '')
+    device_b_id = request.form.get('device_b_id', '')
+    if not device_a_id.isdigit() or not device_b_id.isdigit() or device_a_id == device_b_id:
+        flash('Изберете две различни устройства за връзката.', 'danger')
+        return redirect(url_for('admin_network'))
+    device_a = db.session.get(NetworkDevice, int(device_a_id))
+    device_b = db.session.get(NetworkDevice, int(device_b_id))
+    if not device_a or not device_b:
+        flash('Едно от избраните устройства не съществува.', 'danger')
+        return redirect(url_for('admin_network'))
+    link_type = request.form.get('link_type', 'copper')
+    if link_type not in NETWORK_LINK_TYPES:
+        link_type = 'copper'
+    vlan_raw = request.form.get('vlan', '').strip()
+    link = NetworkLink(
+        device_a_id=device_a.id, device_b_id=device_b.id, link_type=link_type,
+        vlan=int(vlan_raw) if vlan_raw.isdigit() else None,
+        port_a=request.form.get('port_a', '').strip() or None,
+        port_b=request.form.get('port_b', '').strip() or None,
+        notes=request.form.get('notes', '').strip() or None,
+    )
+    db.session.add(link)
+    db.session.commit()
+    log_action(f'Добавена мрежова връзка "{device_a.name}" ↔ "{device_b.name}"')
+    flash('Връзката беше добавена.', 'success')
+    return redirect(url_for('admin_network'))
+
+
+@app.route('/admin/network/links/<int:link_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_network_delete_link(link_id):
+    link = NetworkLink.query.get_or_404(link_id)
+    label = f'{link.device_a.name} ↔ {link.device_b.name}'
+    db.session.delete(link)
+    db.session.commit()
+    log_action(f'Изтрита мрежова връзка "{label}"')
+    flash('Връзката беше изтрита.', 'success')
+    return redirect(url_for('admin_network'))
+
+
+@app.route('/admin/network/hosts')
+@role_required('admin')
+def admin_network_hosts():
+    q = request.args.get('q', '').strip()
+    query = NetworkHost.query
+    if q:
+        like = f'%{q}%'
+        query = query.filter(db.or_(
+            NetworkHost.mac_address.ilike(like), NetworkHost.hostname.ilike(like),
+            NetworkHost.ip_address.ilike(like), NetworkHost.device_type.ilike(like),
+        ))
+    hosts = query.order_by(NetworkHost.hostname, NetworkHost.mac_address).all()
+    devices = NetworkDevice.query.order_by(NetworkDevice.name).all()
+    return render_template('admin_network_hosts.html', hosts=hosts, devices=devices, q=q, active_page='admin_network')
+
+
+@app.route('/admin/network/hosts/add', methods=['POST'])
+@role_required('admin')
+def admin_network_add_host():
+    mac_address = _normalize_mac(request.form.get('mac_address', ''))
+    if not mac_address:
+        flash('Невалиден MAC адрес.', 'danger')
+        return redirect(url_for('admin_network_hosts'))
+    if NetworkHost.query.filter_by(mac_address=mac_address).first():
+        flash(f'Вече има хост с MAC адрес {mac_address}.', 'danger')
+        return redirect(url_for('admin_network_hosts'))
+    switch_id_raw = request.form.get('switch_device_id', '')
+    host = NetworkHost(
+        mac_address=mac_address,
+        hostname=request.form.get('hostname', '').strip() or None,
+        ip_address=request.form.get('ip_address', '').strip() or None,
+        ip_mode='static' if request.form.get('ip_mode') == 'static' else 'dynamic',
+        device_type=request.form.get('device_type', '').strip() or None,
+        switch_device_id=int(switch_id_raw) if switch_id_raw.isdigit() else None,
+        switch_port=request.form.get('switch_port', '').strip() or None,
+        notes=request.form.get('notes', '').strip() or None,
+        source='manual',
+    )
+    db.session.add(host)
+    db.session.commit()
+    log_action(f'Добавен мрежов хост {mac_address}' + (f' ({host.hostname})' if host.hostname else ''))
+    flash('Хостът беше добавен.', 'success')
+    return redirect(url_for('admin_network_hosts'))
+
+
+@app.route('/admin/network/hosts/<int:host_id>/edit', methods=['POST'])
+@role_required('admin')
+def admin_network_edit_host(host_id):
+    """Also where a host is flipped between dynamic/static (ip_mode) - see
+    NetworkHost's docstring: this records intent in this app only, it is
+    not a live Mikrotik DHCP reservation."""
+    host = NetworkHost.query.get_or_404(host_id)
+    mac_address = _normalize_mac(request.form.get('mac_address', ''))
+    if not mac_address:
+        flash('Невалиден MAC адрес.', 'danger')
+        return redirect(url_for('admin_network_hosts'))
+    if NetworkHost.query.filter(NetworkHost.mac_address == mac_address, NetworkHost.id != host.id).first():
+        flash(f'Вече има друг хост с MAC адрес {mac_address}.', 'danger')
+        return redirect(url_for('admin_network_hosts'))
+    switch_id_raw = request.form.get('switch_device_id', '')
+    host.mac_address = mac_address
+    host.hostname = request.form.get('hostname', '').strip() or None
+    host.ip_address = request.form.get('ip_address', '').strip() or None
+    host.ip_mode = 'static' if request.form.get('ip_mode') == 'static' else 'dynamic'
+    host.device_type = request.form.get('device_type', '').strip() or None
+    host.switch_device_id = int(switch_id_raw) if switch_id_raw.isdigit() else None
+    host.switch_port = request.form.get('switch_port', '').strip() or None
+    host.notes = request.form.get('notes', '').strip() or None
+    db.session.commit()
+    log_action(f'Редактиран мрежов хост {mac_address}')
+    flash('Хостът беше обновен.', 'success')
+    return redirect(url_for('admin_network_hosts'))
+
+
+@app.route('/admin/network/hosts/<int:host_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_network_delete_host(host_id):
+    host = NetworkHost.query.get_or_404(host_id)
+    mac_address = host.mac_address
+    db.session.delete(host)
+    db.session.commit()
+    log_action(f'Изтрит мрежов хост {mac_address}')
+    flash('Хостът беше изтрит.', 'success')
+    return redirect(url_for('admin_network_hosts'))
+
+
+@app.route('/admin/network/hosts/<int:host_id>/dhcp-make-static', methods=['POST'])
+@role_required('admin')
+def admin_network_host_make_static(host_id):
+    """
+    The one real write action this module performs against live
+    infrastructure - converts this host's DHCP lease from dynamic to static
+    on the configured DHCP server (the NetworkDevice with is_dhcp_server=True),
+    matched by MAC (_routeros_lease_make_static()). Everything else in this
+    module is inventory bookkeeping only (see NetworkHost's docstring) -
+    this is deliberately the single narrow exception, gated behind a
+    confirm() in the template and logged to ActivityLog like every other
+    state change.
+    """
+    host = NetworkHost.query.get_or_404(host_id)
+    dhcp_server = NetworkDevice.query.filter_by(is_dhcp_server=True).first()
+    if not dhcp_server:
+        flash('Няма зададен DHCP сървър - маркирай устройството в картата на мрежата ("Основен DHCP сървър").', 'danger')
+        return redirect(url_for('admin_network_hosts'))
+    try:
+        _routeros_lease_make_static(dhcp_server, host.mac_address)
+    except LookupError:
+        flash(f'Не е намерен DHCP lease за {host.mac_address} на "{dhcp_server.name}".', 'danger')
+        return redirect(url_for('admin_network_hosts'))
+    except Exception:
+        flash(f'Неуспешна връзка към "{dhcp_server.name}" - lease-ът НЕ е променен.', 'danger')
+        return redirect(url_for('admin_network_hosts'))
+
+    host.ip_mode = 'static'
+    db.session.commit()
+    log_action(f'DHCP lease {host.mac_address} ({host.ip_address or "?"}) -> статичен на "{dhcp_server.name}"')
+    flash(f'{host.mac_address} вече е статичен на "{dhcp_server.name}".', 'success')
+    return redirect(url_for('admin_network_hosts'))
+
+
+def _parse_dhcp_lease_terse(text_blob):
+    """
+    Parses `/ip dhcp-server lease print terse` output (one lease per line, as
+    `key=value key=value ...`) into a list of {mac, ip, hostname} dicts.
+    Deliberately requires `terse` output, not the wrapped `detail`/plain
+    table format - `terse` is the only RouterOS print mode that keeps one
+    whole record on one line, so it can be parsed per-line without having to
+    reconstruct records split across wrapped lines. Lines without both an
+    address and a mac-address are skipped (comments, blank lines, headers).
+    """
+    leases = []
+    for line in (text_blob or '').splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        ip_match = re.search(r'\baddress=(\S+)', line)
+        mac_match = re.search(r'\bmac-address=(\S+)', line) or re.search(r'\bactive-mac-address=(\S+)', line)
+        if not ip_match or not mac_match:
+            continue
+        mac = _normalize_mac(mac_match.group(1))
+        if not mac:
+            continue
+        host_match = re.search(r'host-name=("([^"]*)"|(\S+))', line)
+        hostname = (host_match.group(2) or host_match.group(3)) if host_match else None
+        leases.append({'mac': mac, 'ip': ip_match.group(1), 'hostname': hostname or None})
+    return leases
+
+
+@app.route('/admin/network/hosts/import', methods=['GET', 'POST'])
+@role_required('admin')
+def admin_network_hosts_import():
+    """
+    DHCP-lease import wizard - paste the output of
+    `/ip dhcp-server lease print terse` from the Mikrotik and every lease is
+    upserted into NetworkHost by MAC (existing rows keep their ip_mode/
+    switch/notes - only ip/hostname/last_seen are refreshed, since ip_mode
+    especially is admin-set intent that an import must never silently
+    overwrite back to 'dynamic').
+    """
+    if request.method == 'GET':
+        return render_template('admin_network_hosts_import.html', active_page='admin_network')
+    text_blob = request.form.get('lease_text', '')
+    leases = _parse_dhcp_lease_terse(text_blob)
+    if not leases:
+        flash('Не бяха разпознати lease записи. Уверете се, че сте използвали "/ip dhcp-server lease print terse".', 'danger')
+        return redirect(url_for('admin_network_hosts_import'))
+    created = updated = 0
+    now = datetime.utcnow()
+    for lease in leases:
+        host = NetworkHost.query.filter_by(mac_address=lease['mac']).first()
+        if host:
+            host.ip_address = lease['ip']
+            if lease['hostname']:
+                host.hostname = lease['hostname']
+            host.last_seen = now
+            updated += 1
+        else:
+            db.session.add(NetworkHost(
+                mac_address=lease['mac'], ip_address=lease['ip'], hostname=lease['hostname'],
+                ip_mode='dynamic', source='dhcp_import', last_seen=now,
+            ))
+            created += 1
+    db.session.commit()
+    log_action(f'Импорт на DHCP lease-ове: {created} нови, {updated} обновени')
+    flash(f'Импортирани {created} нови и {updated} обновени хоста.', 'success')
+    return redirect(url_for('admin_network_hosts'))
+
+
+@app.route('/admin/network/audit')
+@role_required('admin')
+def admin_network_audit():
+    audit = _network_security_audit()
+    return render_template('admin_network_audit.html', active_page='admin_network', **audit)
 
 
 # ----------------- ИНТЕРАКТИВНА КАРТА НА ФАБРИКАТА -----------------

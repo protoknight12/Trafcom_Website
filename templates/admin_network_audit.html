@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Security одит - Мрежа - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .finding { border-left: 3px solid var(--border-color); padding: 8px 12px; margin-bottom: 10px; border-radius: 4px; background-color: var(--bg-input); }
+        .finding.high { border-left-color: #ef4444; }
+        .finding.medium { border-left-color: #f59e0b; }
+        .finding.low { border-left-color: #38bdf8; }
+        .finding-title { font-weight: 700; }
+        .finding-sev { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin-left: 8px; }
+        .finding-detail { font-size: 0.85rem; color: var(--text-muted); margin-top: 4px; }
+        .rec-list li { margin-bottom: 8px; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Security одит на мрежата</h3>
+        <p class="section-subtitle"><a href="{{ url_for('admin_network') }}">&larr; Карта на мрежата</a></p>
+        <p class="section-subtitle">Открива само това, което личи от въведения инвентар (устройства/връзки/хостове) - не сканира реалните устройства и не съхранява данни за достъп до тях. Препоръките по-долу са фиксирани, базирани на описаната топология, и трябва да се преразглеждат периодично спрямо реалната конфигурация.</p>
+    </section>
+
+    <section class="admin-card">
+        <h3>Констатации ({{ findings|length }})</h3>
+        {% if findings %}
+        {% for f in findings %}
+        <div class="finding {{ f.severity }}">
+            <span class="finding-title">{{ f.title }}</span><span class="finding-sev">{{ f.severity }}</span>
+            <div class="finding-detail">{{ f.detail }}</div>
+        </div>
+        {% endfor %}
+        {% else %}
+        <p class="no-data text-center">Няма констатации от въведения инвентар - добавете устройства/връзки/хостове в <a href="{{ url_for('admin_network') }}">картата на мрежата</a> за по-пълен одит.</p>
+        {% endif %}
+    </section>
+
+    <section class="admin-card">
+        <h3>Препоръки за сигурност</h3>
+        <ul class="rec-list">
+            {% for r in recommendations %}<li>{{ r }}</li>{% endfor %}
+        </ul>
+    </section>
+
+    <section class="admin-card">
+        <h3>QoS - план за по-нататък</h3>
+        <p class="section-subtitle">QoS все още не е внедрен през този модул - само препоръки за реда, в който да се планира.</p>
+        <ul class="rec-list">
+            {% for r in qos_recommendations %}<li>{{ r }}</li>{% endfor %}
+        </ul>
+    </section>
+
+</main>
+</body>
+</html>
