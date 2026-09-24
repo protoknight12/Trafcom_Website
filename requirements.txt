@@ -19,3 +19,4 @@ pymodbus
 flask-babel
 librouteros
 cryptography
+netmiko

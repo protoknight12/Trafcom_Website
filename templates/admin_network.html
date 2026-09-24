@@ -10,8 +10,8 @@
         .map-canvas {
             position: relative;
             width: 100%;
-            aspect-ratio: 16 / 8;
-            min-height: 360px;
+            aspect-ratio: 16 / 9;
+            min-height: 420px;
             background-color: var(--bg-input);
             background-image:
                 linear-gradient(to right, var(--border-color) 1px, transparent 1px),
@@ -33,6 +33,7 @@
             cursor: default;
             user-select: none;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+            z-index: 2;
         }
         .map-canvas.edit-mode .net-card { cursor: grab; }
         .map-canvas.edit-mode .net-card:active { cursor: grabbing; z-index: 10; }
@@ -49,7 +50,38 @@
         .connection-line { stroke: var(--border-color); stroke-width: 2; fill: none; }
         .connection-line.vlan { stroke: #38bdf8; stroke-dasharray: 6 4; }
         .map-toolbar { display: flex; gap: 10px; align-items: center; margin: 4px 0 14px 0; flex-wrap: wrap; }
+        .map-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 8px; align-items: center; }
+        .map-legend span { display: inline-flex; align-items: center; gap: 5px; }
         .rename-input { padding: 4px 8px; }
+
+        /* Host clusters - small dot markers grouped around the switch/device
+           they're attached to (switch_device_id), instead of one full-size
+           node per host - with 100+ hosts a 1:1 node would be unusable. */
+        .host-cluster { position: absolute; z-index: 1; display: flex; flex-wrap: wrap; align-content: flex-start; width: 92px; }
+        .host-cluster-label {
+            position: absolute; transform: translate(-50%, -100%); top: -3px; left: 50%;
+            font-size: 0.62rem; color: var(--text-muted); white-space: nowrap;
+            background-color: var(--bg-surface); border: 1px solid var(--border-color);
+            border-radius: 3px; padding: 1px 5px; pointer-events: none;
+        }
+        .host-dot {
+            width: 8px; height: 8px; border-radius: 50%; margin: 1.5px;
+            background-color: var(--text-muted); opacity: 0.5; cursor: default;
+        }
+        .host-dot.static { background-color: #38bdf8; opacity: 1; box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.45); }
+
+        /* Readable tables: plain text cells by default, an inline edit row
+           toggled per-row instead of narrow always-on inputs (those used to
+           clip MAC/IP values and desync from the header - see the "Редактирай"
+           button below). */
+        .data-table td { vertical-align: top; }
+        .edit-row { display: none; background-color: var(--bg-input); }
+        .edit-row.open { display: table-row; }
+        .edit-row td { padding-top: 10px; padding-bottom: 10px; }
+        .edit-form-grid { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
+        .edit-form-grid .form-group { min-width: 110px; }
+        .edit-form-grid label { font-size: 0.72rem; color: var(--text-muted); display: block; margin-bottom: 2px; }
+        .edit-form-grid input, .edit-form-grid select { width: 100%; }
     </style>
 </head>
 <body>
@@ -77,6 +109,12 @@
             </div>
         </div>
         <p class="section-subtitle">Статусът (онлайн/офлайн) се проверява чрез ping до management IP на всяко устройство на всеки няколко секунди - без данни за достъп до самите устройства.</p>
+
+        <div class="map-legend">
+            <span><span class="host-dot static" style="position:static; margin:0;"></span> Хост със статичен IP</span>
+            <span><span class="host-dot" style="position:static; margin:0;"></span> Хост с динамичен IP</span>
+            <span>Хостовете без зададен комутатор/порт не се показват на картата - виж <a href="{{ url_for('admin_network_hosts') }}">MAC инвентара</a>.</span>
+        </div>
 
         <div class="map-toolbar">
             <button type="button" id="unlockBtn" class="btn-secondary">🔓 Отключи местоположенията</button>
@@ -134,39 +172,54 @@
                 <thead>
                 <tr>
                     <th>Статус</th><th>Име</th><th>Производител</th><th>Роля</th><th>Модел</th>
-                    <th>Management IP</th><th>MAC</th><th>VLAN</th><th>Бележки</th><th class="text-right">Изтриване</th>
+                    <th>Management IP</th><th>MAC</th><th>VLAN</th><th>DHCP сървър</th><th>Бележки</th><th class="text-right">Действия</th>
                 </tr>
                 </thead>
                 <tbody>
                 {% for d in devices %}
                 <tr>
                     <td><span class="nc-status-dot" data-status-dot-row="{{ d.id }}"></span></td>
-                    <td colspan="9" style="padding:0;">
-                        <form action="{{ url_for('admin_network_edit_device', device_id=d.id) }}" method="POST" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; padding:8px 0;">
-                            {% include 'partials/csrf_field.html' %}
-                            <input type="text" name="name" value="{{ d.name }}" required class="rename-input" style="width:130px;">
-                            <select name="vendor" class="rename-input">
-                                {% for k, v in vendors.items() %}<option value="{{ k }}" {% if k == d.vendor %}selected{% endif %}>{{ v }}</option>{% endfor %}
-                            </select>
-                            <select name="device_role" class="rename-input">
-                                {% for k, v in roles.items() %}<option value="{{ k }}" {% if k == d.device_role %}selected{% endif %}>{{ v }}</option>{% endfor %}
-                            </select>
-                            <input type="text" name="model" value="{{ d.model or '' }}" class="rename-input" style="width:120px;" placeholder="модел">
-                            <input type="text" name="management_ip" value="{{ d.management_ip or '' }}" class="rename-input" style="width:110px;" placeholder="IP">
-                            <input type="text" name="mac_address" value="{{ d.mac_address or '' }}" class="rename-input" style="width:130px;" placeholder="MAC">
-                            <input type="number" name="management_vlan" value="{{ d.management_vlan or '' }}" min="1" max="4094" class="rename-input" style="width:70px;" placeholder="VLAN">
-                            <input type="text" name="notes" value="{{ d.notes or '' }}" class="rename-input" style="width:140px;" placeholder="бележки">
-                            <label class="text-small" style="display:flex; align-items:center; gap:4px; white-space:nowrap;">
-                                <input type="checkbox" name="is_dhcp_server" {% if d.is_dhcp_server %}checked{% endif %}> DHCP сървър
-                            </label>
-                            <button type="submit" class="btn-secondary" style="padding:5px 10px; font-size:0.8rem;">Запази</button>
-                        </form>
-                    </td>
+                    <td><strong>{{ d.name }}</strong></td>
+                    <td>{{ d.vendor_label }}</td>
+                    <td>{{ d.role_label }}</td>
+                    <td>{{ d.model or '—' }}</td>
+                    <td>{{ d.management_ip or '—' }}</td>
+                    <td>{{ d.mac_address or '—' }}</td>
+                    <td>{{ d.management_vlan or '—' }}</td>
+                    <td>{{ '✓' if d.is_dhcp_server else '—' }}</td>
+                    <td style="max-width:220px; white-space:normal; word-break:break-word;">{{ d.notes or '—' }}</td>
                     <td class="text-right">
+                        <button type="button" class="btn-secondary edit-toggle" data-target="edit-device-{{ d.id }}" style="padding:5px 10px; font-size:0.8rem;">Редактирай</button>
                         <form action="{{ url_for('admin_network_delete_device', device_id=d.id) }}" method="POST"
                               onsubmit="return confirm('Изтриване на устройство &quot;{{ d.name|e }}&quot;?');" style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
-                            <button type="submit" class="btn-delete">Изтрий</button>
+                            <button type="submit" class="btn-delete" style="padding:5px 10px; font-size:0.8rem;">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                <tr class="edit-row" id="edit-device-{{ d.id }}">
+                    <td colspan="11">
+                        <form action="{{ url_for('admin_network_edit_device', device_id=d.id) }}" method="POST" class="edit-form-grid">
+                            {% include 'partials/csrf_field.html' %}
+                            <div class="form-group"><label>Име</label><input type="text" name="name" value="{{ d.name }}" required></div>
+                            <div class="form-group"><label>Производител</label>
+                                <select name="vendor">{% for k, v in vendors.items() %}<option value="{{ k }}" {% if k == d.vendor %}selected{% endif %}>{{ v }}</option>{% endfor %}</select>
+                            </div>
+                            <div class="form-group"><label>Роля</label>
+                                <select name="device_role">{% for k, v in roles.items() %}<option value="{{ k }}" {% if k == d.device_role %}selected{% endif %}>{{ v }}</option>{% endfor %}</select>
+                            </div>
+                            <div class="form-group"><label>Модел</label><input type="text" name="model" value="{{ d.model or '' }}"></div>
+                            <div class="form-group"><label>Management IP</label><input type="text" name="management_ip" value="{{ d.management_ip or '' }}"></div>
+                            <div class="form-group"><label>MAC адрес</label><input type="text" name="mac_address" value="{{ d.mac_address or '' }}"></div>
+                            <div class="form-group"><label>Management VLAN</label><input type="number" name="management_vlan" value="{{ d.management_vlan or '' }}" min="1" max="4094"></div>
+                            <div class="form-group" style="flex:1; min-width:220px;"><label>Бележки</label><input type="text" name="notes" value="{{ d.notes or '' }}"></div>
+                            <div class="form-group">
+                                <label style="display:flex; align-items:center; gap:4px;">
+                                    <input type="checkbox" name="is_dhcp_server" {% if d.is_dhcp_server %}checked{% endif %} style="width:auto;"> DHCP сървър
+                                </label>
+                            </div>
+                            <button type="submit" class="btn-submit">Запази</button>
+                            <button type="button" class="btn-secondary edit-toggle" data-target="edit-device-{{ d.id }}">Откажи</button>
                         </form>
                     </td>
                 </tr>
@@ -180,19 +233,20 @@
     </section>
 
     <section class="admin-card">
-        <h3>Живо управление (RouterOS API)</h3>
+        <h3>Живо управление (RouterOS API / Cisco SSH)</h3>
         <p class="section-subtitle">Единственото действие, което това приложение реално изпраща към жива инфраструктура,
-            е "Направи статичен" на хост в MAC инвентара (виж бутона там) - всичко останало е само инвентар в тази база.
-            Паролата никога не се показва повторно тук - само дали е зададена.</p>
-        {% set mikrotik_devices = devices | selectattr('vendor', 'equalto', 'mikrotik') | list %}
-        {% if mikrotik_devices %}
+            е "Направи статичен" на хост в MAC инвентара (виж бутона там) - всичко останало (синхронизация на инфо/MAC
+            таблица) само чете от устройството и пише в тази база. Паролите никога не се показват повторно тук - само дали са зададени.
+            За Cisco комутатори връзката е през SSH (netmiko) - старите IOS версии тук нямат REST API.</p>
+        {% set api_devices = devices | selectattr('vendor', 'in', ['mikrotik', 'cisco']) | list %}
+        {% if api_devices %}
         <div class="table-responsive">
             <table class="data-table">
-                <thead><tr><th>Устройство</th><th>DHCP сървър</th><th>API достъп</th><th>Настрой</th><th>Тествай</th></tr></thead>
+                <thead><tr><th>Устройство</th><th>DHCP сървър</th><th>API/SSH достъп</th><th>Настрой</th><th>Тествай / Синхронизирай</th></tr></thead>
                 <tbody>
-                {% for d in mikrotik_devices %}
+                {% for d in api_devices %}
                 <tr>
-                    <td><strong>{{ d.name }}</strong><br><span class="text-small">{{ d.management_ip or 'няма IP' }}</span></td>
+                    <td><strong>{{ d.name }}</strong><br><span class="text-small">{{ d.vendor_label }} · {{ d.management_ip or 'няма IP' }}</span></td>
                     <td>{{ '✓' if d.is_dhcp_server else '—' }}</td>
                     <td>{{ '✓ зададен' if d.has_api_credentials else '— не е зададен' }}</td>
                     <td>
@@ -200,23 +254,40 @@
                             {% include 'partials/csrf_field.html' %}
                             <input type="text" name="api_username" placeholder="потребител" class="rename-input" style="width:110px;" autocomplete="off">
                             <input type="password" name="api_password" placeholder="парола" class="rename-input" style="width:110px;" autocomplete="new-password">
+                            {% if d.vendor == 'cisco' %}
+                            <input type="password" name="api_enable_secret" placeholder="enable парола (ако има)" class="rename-input" style="width:150px;" autocomplete="new-password">
+                            {% endif %}
                             <button type="submit" class="btn-secondary" style="padding:5px 10px; font-size:0.8rem;">Запази</button>
                         </form>
                         {% if d.has_api_credentials %}
                         <form action="{{ url_for('admin_network_device_api_credentials', device_id=d.id) }}" method="POST"
-                              onsubmit="return confirm('Премахване на API достъпа за {{ d.name|e }}?');" style="display:inline;">
+                              onsubmit="return confirm('Премахване на достъпа за {{ d.name|e }}?');" style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
                             <input type="hidden" name="clear" value="1">
                             <button type="submit" class="btn-delete" style="padding:5px 10px; font-size:0.8rem;">Изчисти</button>
                         </form>
                         {% endif %}
                     </td>
-                    <td>
+                    <td style="display:flex; gap:4px; flex-wrap:wrap;">
                         {% if d.has_api_credentials %}
                         <form action="{{ url_for('admin_network_device_api_test', device_id=d.id) }}" method="POST" style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-secondary" style="padding:5px 10px; font-size:0.8rem;">Тествай връзка</button>
                         </form>
+                        <form action="{{ url_for('admin_network_device_sync_info', device_id=d.id) }}" method="POST" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-secondary" style="padding:5px 10px; font-size:0.8rem;" title="Изтегля модел/версия от устройството">Синхронизирай инфо</button>
+                        </form>
+                        <form action="{{ url_for('admin_network_device_sync_mac_table', device_id=d.id) }}" method="POST" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-secondary" style="padding:5px 10px; font-size:0.8rem;" title="Изтегля MAC таблицата - попълва порт за хостове и открива връзки към други устройства">Синхронизирай MAC таблица</button>
+                        </form>
+                        {% if d.is_dhcp_server %}
+                        <form action="{{ url_for('admin_network_device_sync_dhcp', device_id=d.id) }}" method="POST" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-secondary" style="padding:5px 10px; font-size:0.8rem;" title="Изтегля живата DHCP lease таблица и обновява MAC инвентара">Синхронизирай DHCP</button>
+                        </form>
+                        {% endif %}
                         {% else %}—{% endif %}
                     </td>
                 </tr>
@@ -225,8 +296,63 @@
             </table>
         </div>
         {% else %}
-        <p class="no-data text-center">Няма добавени MikroTik устройства.</p>
+        <p class="no-data text-center">Няма добавени MikroTik/Cisco устройства.</p>
         {% endif %}
+    </section>
+
+    <section class="admin-card">
+        <h3>❓ Как се активира достъп за живо управление</h3>
+        <p class="section-subtitle">Стъпки за всеки тип устройство, за да можете да зададете потребител/парола по-горе.
+            Винаги ползвайте отделен потребител само за тази цел, с най-малко необходимите права - никога основния admin акаунт.</p>
+
+        <details style="margin-bottom: 10px;">
+            <summary style="cursor: pointer; font-weight: 600;">MikroTik (RouterOS API, порт 8728)</summary>
+            <div style="padding: 10px 4px 4px 4px; font-size: 0.88rem;">
+                <p>Тази версия на RouterOS (6.x) няма REST API - използва се старото бинарно API на порт <code>8728</code> (без TLS) или <code>8729</code> (с TLS, не се поддържа тук).</p>
+                <ol style="padding-left: 20px; line-height: 1.8;">
+                    <li>В Winbox/терминал направете нова група с права само за четене + за DHCP:<br>
+                        <code style="background: var(--bg-input); padding: 2px 6px; border-radius: 3px; display: inline-block; margin-top: 3px;">/user group add name=api-readonly policy=read,api,dhcp,test</code></li>
+                    <li>Създайте отделен потребител в тази група (не основния admin):<br>
+                        <code style="background: var(--bg-input); padding: 2px 6px; border-radius: 3px; display: inline-block; margin-top: 3px;">/user add name=trafcom-api group=api-readonly password=&lt;силна парола&gt;</code></li>
+                    <li>Уверете се, че API услугата е включена:<br>
+                        <code style="background: var(--bg-input); padding: 2px 6px; border-radius: 3px; display: inline-block; margin-top: 3px;">/ip service enable api</code>
+                        (и по желание ограничете <code>/ip service set api address=&lt;IP на сървъра&gt;</code>, за да приема връзки само оттук)</li>
+                    <li>Ако устройството е с фабрични настройки (<code>defconf</code>), задайте му статичен management IP вместо DHCP-получен, преди да разчитате на този модул.</li>
+                    <li>Въведете <code>trafcom-api</code> + паролата в таблицата по-горе и натиснете "Тествай връзка".</li>
+                </ol>
+                <p class="text-muted">Права, от които api-readonly НЕ се нуждае и не трябва да има: <code>policy</code>, <code>password</code>, <code>reboot</code>, <code>ftp</code>, <code>sensitive</code> - бъг в модула не бива да може да направи повече от това, което позволява самият API потребител.</p>
+            </div>
+        </details>
+
+        <details style="margin-bottom: 10px;">
+            <summary style="cursor: pointer; font-weight: 600;">Cisco IOS (SSH, порт 22)</summary>
+            <div style="padding: 10px 4px 4px 4px; font-size: 0.88rem;">
+                <p>Тези комутатори (3750/2950) са класически IOS без REST/NETCONF - връзката е през обикновен SSH.</p>
+                <ol style="padding-left: 20px; line-height: 1.8;">
+                    <li>В конфигурационен режим генерирайте RSA ключ (ако още няма) и включете SSH v2:<br>
+                        <code style="background: var(--bg-input); padding: 2px 6px; border-radius: 3px; display: inline-block; margin-top: 3px;">crypto key generate rsa modulus 2048</code><br>
+                        <code style="background: var(--bg-input); padding: 2px 6px; border-radius: 3px; display: inline-block; margin-top: 3px;">ip ssh version 2</code></li>
+                    <li>Създайте отделен потребител само за тази цел (ниво 15 за <code>show</code> команди, не за конфигурация):<br>
+                        <code style="background: var(--bg-input); padding: 2px 6px; border-radius: 3px; display: inline-block; margin-top: 3px;">username trafcom-api privilege 15 secret &lt;силна парола&gt;</code></li>
+                    <li>Разрешете вход по SSH на линиите vty:<br>
+                        <code style="background: var(--bg-input); padding: 2px 6px; border-radius: 3px; display: inline-block; margin-top: 3px;">line vty 0 15</code><br>
+                        <code style="background: var(--bg-input); padding: 2px 6px; border-radius: 3px; display: inline-block; margin-top: 3px;">login local</code><br>
+                        <code style="background: var(--bg-input); padding: 2px 6px; border-radius: 3px; display: inline-block; margin-top: 3px;">transport input ssh</code></li>
+                    <li>Ако устройството иска отделна enable парола (за <code>show mac address-table</code>/<code>show version</code> в привилегирован режим), задайте я и въведете я в полето "enable парола" тук:<br>
+                        <code style="background: var(--bg-input); padding: 2px 6px; border-radius: 3px; display: inline-block; margin-top: 3px;">enable secret &lt;enable парола&gt;</code></li>
+                    <li>Въведете потребителя, паролата и enable паролата по-горе и натиснете "Тествай връзка".</li>
+                </ol>
+                <p class="text-muted">Ако "Тествай връзка" върне грешка за вход - най-честата причина е грешен потребител/парола/enable парола. Грешка за недостижимост - проверете дали SSH (порт 22) изобщо е отворен и достижим от този сървър.</p>
+            </div>
+        </details>
+
+        <details>
+            <summary style="cursor: pointer; font-weight: 600;">Ubiquiti (само инвентар, без живо управление)</summary>
+            <div style="padding: 10px 4px 4px 4px; font-size: 0.88rem;">
+                <p>За Ubiquiti устройства (напр. PtP линкове) модулът пази само ръчно въведени данни - няма автоматична синхронизация през API/SSH.
+                    Реални промени по тях се правят както досега, през UniFi контролера или локалния уеб интерфейс на устройството.</p>
+            </div>
+        </details>
     </section>
 
     <section class="admin-card">
@@ -270,7 +396,7 @@
                     <td>{{ l.type_label }}</td>
                     <td>{{ l.vlan or '—' }}</td>
                     <td>{{ l.port_a or '—' }} / {{ l.port_b or '—' }}</td>
-                    <td>{{ l.notes or '—' }}</td>
+                    <td style="max-width:260px; white-space:normal; word-break:break-word;">{{ l.notes or '—' }}</td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_network_delete_link', link_id=l.id) }}" method="POST"
                               onsubmit="return confirm('Изтриване на връзка?');" style="display:inline;">
@@ -297,15 +423,63 @@
     var svg = document.getElementById('connectionsSvg');
     var tsEl = document.getElementById('mapTs');
 
+    // --- Edit-row toggles (Устройства table) ---
+    document.querySelectorAll('.edit-toggle').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var row = document.getElementById(btn.getAttribute('data-target'));
+            if (row) row.classList.toggle('open');
+        });
+    });
+
     var links = [
         {% for l in links %}{a: '{{ l.device_a_id }}', b: '{{ l.device_b_id }}', vlan: {{ l.vlan or 'null' }}, line: null},
         {% endfor %}
     ];
 
+    // Hosts grouped by which device (switch/router) they're attached to -
+    // rendered as a small dot cluster near that device instead of one
+    // full-size node per host (see .host-cluster in <style>).
+    var hostsByDevice = {};
+    [
+        {% for h in hosts %}{switchId: '{{ h.switch_device_id }}', mac: {{ h.mac_address|tojson }}, name: {{ (h.hostname or h.mac_address)|tojson }}, ip: {{ (h.ip_address or '')|tojson }}, static: {{ 'true' if h.ip_mode == 'static' else 'false' }}},
+        {% endfor %}
+    ].forEach(function (h) {
+        (hostsByDevice[h.switchId] = hostsByDevice[h.switchId] || []).push(h);
+    });
+    var clusterEls = {};
+    Object.keys(hostsByDevice).forEach(function (deviceId) {
+        var cluster = document.createElement('div');
+        cluster.className = 'host-cluster';
+        var label = document.createElement('div');
+        label.className = 'host-cluster-label';
+        label.textContent = hostsByDevice[deviceId].length + ' хоста';
+        cluster.appendChild(label);
+        hostsByDevice[deviceId].forEach(function (h) {
+            var dot = document.createElement('div');
+            dot.className = 'host-dot' + (h.static ? ' static' : '');
+            dot.title = h.name + (h.ip ? ' · ' + h.ip : '') + ' · ' + h.mac + (h.static ? ' · статичен' : ' · динамичен');
+            cluster.appendChild(dot);
+        });
+        canvas.appendChild(cluster);
+        clusterEls[deviceId] = cluster;
+    });
+
     function cardCenter(id) {
         var card = document.querySelector('.net-card[data-id="' + id + '"]');
         return card ? {x: parseFloat(card.style.left), y: parseFloat(card.style.top)} : null;
     }
+
+    function repositionClusters() {
+        Object.keys(clusterEls).forEach(function (deviceId) {
+            var pos = cardCenter(deviceId);
+            var el = clusterEls[deviceId];
+            if (!pos) { el.style.display = 'none'; return; }
+            el.style.display = '';
+            el.style.left = Math.min(96, pos.x + 9) + '%';
+            el.style.top = Math.min(94, pos.y + 6) + '%';
+        });
+    }
+    repositionClusters();
 
     function redrawConnections() {
         links.forEach(function (conn) {
@@ -326,6 +500,7 @@
             conn.line.setAttribute('x2', to.x + '%');
             conn.line.setAttribute('y2', to.y + '%');
         });
+        repositionClusters();
     }
     redrawConnections();
 

@@ -6,7 +6,20 @@
     {% include 'partials/favicon.html' %}
     <title>MAC инвентар - Мрежа - Trafcom DXF</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <style>.rename-input { padding: 4px 8px; }</style>
+    <style>
+        .rename-input { padding: 4px 8px; }
+        .data-table td { vertical-align: top; }
+        .edit-row { display: none; background-color: var(--bg-input); }
+        .edit-row.open { display: table-row; }
+        .edit-row td { padding-top: 10px; padding-bottom: 10px; }
+        .edit-form-grid { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
+        .edit-form-grid .form-group { min-width: 110px; }
+        .edit-form-grid label { font-size: 0.72rem; color: var(--text-muted); display: block; margin-bottom: 2px; }
+        .edit-form-grid input, .edit-form-grid select { width: 100%; }
+        .ip-mode-badge { font-size: 0.72rem; padding: 2px 7px; border-radius: 3px; white-space: nowrap; }
+        .ip-mode-badge.static { background-color: rgba(56, 189, 248, 0.18); color: #38bdf8; }
+        .ip-mode-badge.dynamic { background-color: rgba(148, 163, 184, 0.15); color: var(--text-muted); }
+    </style>
 </head>
 <body>
 {% include 'partials/navbar.html' %}
@@ -34,6 +47,13 @@
         <p class="section-subtitle">Пълна проследимост по MAC адрес - всеки хост, въведен ръчно или импортиран от DHCP lease-овете на Mikrotik.</p>
         <form method="GET" class="admin-form" style="margin-bottom: 4px;">
             <div class="form-group" style="flex: 1;"><input type="text" name="q" value="{{ q }}" placeholder="Търсене по MAC, име, IP, тип..." style="width: 100%;"></div>
+            <div class="form-group">
+                <select name="ip_mode">
+                    <option value="" {% if not ip_mode %}selected{% endif %}>Всички режими</option>
+                    <option value="static" {% if ip_mode == 'static' %}selected{% endif %}>Само статични</option>
+                    <option value="dynamic" {% if ip_mode == 'dynamic' %}selected{% endif %}>Само динамични</option>
+                </select>
+            </div>
             <button type="submit" class="btn-secondary">Търси</button>
         </form>
     </section>
@@ -66,46 +86,61 @@
                 <thead>
                 <tr>
                     <th>MAC</th><th>Име</th><th>IP</th><th>Режим</th><th>Тип</th><th>Комутатор / порт</th>
-                    <th>Бележки</th><th>Източник</th><th>Последно видян</th><th class="text-right">Изтриване</th>
+                    <th>Бележки</th><th>Източник</th><th>Последно видян</th><th class="text-right">Действия</th>
                 </tr>
                 </thead>
                 <tbody>
                 {% for h in hosts %}
                 <tr>
-                    <td colspan="9" style="padding:0;">
-                        <form action="{{ url_for('admin_network_edit_host', host_id=h.id) }}" method="POST" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; padding:8px 0;">
-                            {% include 'partials/csrf_field.html' %}
-                            <input type="text" name="mac_address" value="{{ h.mac_address }}" required class="rename-input" style="width:135px;">
-                            <input type="text" name="hostname" value="{{ h.hostname or '' }}" class="rename-input" style="width:120px;" placeholder="име">
-                            <input type="text" name="ip_address" value="{{ h.ip_address or '' }}" class="rename-input" style="width:110px;" placeholder="IP">
-                            <select name="ip_mode" class="rename-input">
-                                <option value="dynamic" {% if h.ip_mode == 'dynamic' %}selected{% endif %}>Динамичен</option>
-                                <option value="static" {% if h.ip_mode == 'static' %}selected{% endif %}>Статичен</option>
-                            </select>
-                            <input type="text" name="device_type" value="{{ h.device_type or '' }}" class="rename-input" style="width:110px;" placeholder="тип">
-                            <select name="switch_device_id" class="rename-input">
-                                <option value="">—</option>
-                                {% for d in devices %}<option value="{{ d.id }}" {% if h.switch_device_id == d.id %}selected{% endif %}>{{ d.name }}</option>{% endfor %}
-                            </select>
-                            <input type="text" name="switch_port" value="{{ h.switch_port or '' }}" class="rename-input" style="width:80px;" placeholder="порт">
-                            <input type="text" name="notes" value="{{ h.notes or '' }}" class="rename-input" style="width:120px;" placeholder="бележки">
-                            <span class="text-small">{{ 'DHCP импорт' if h.source == 'dhcp_import' else 'ръчно' }}</span>
-                            <span class="text-small">{{ h.last_seen.strftime('%d.%m.%Y %H:%M') if h.last_seen else '—' }}</span>
-                            <button type="submit" class="btn-secondary" style="padding:5px 10px; font-size:0.8rem;">Запази</button>
-                        </form>
+                    <td>{{ h.mac_address }}</td>
+                    <td>{{ h.hostname or '—' }}</td>
+                    <td>{{ h.ip_address or '—' }}</td>
+                    <td><span class="ip-mode-badge {{ h.ip_mode }}">{{ 'Статичен' if h.ip_mode == 'static' else 'Динамичен' }}</span></td>
+                    <td>{{ h.device_type or '—' }}</td>
+                    <td>{{ h.switch_device.name if h.switch_device else '—' }}{% if h.switch_port %}<br><span class="text-small">{{ h.switch_port }}</span>{% endif %}</td>
+                    <td style="max-width:200px; white-space:normal; word-break:break-word;">{{ h.notes or '—' }}</td>
+                    <td>{{ 'DHCP импорт' if h.source == 'dhcp_import' else 'ръчно' }}</td>
+                    <td class="text-small">{{ h.last_seen.strftime('%d.%m.%Y %H:%M') if h.last_seen else '—' }}</td>
+                    <td class="text-right">
+                        <button type="button" class="btn-secondary edit-toggle" data-target="edit-host-{{ h.id }}" style="padding:5px 10px; font-size:0.8rem;">Редактирай</button>
                         {% if h.ip_mode == 'dynamic' %}
                         <form action="{{ url_for('admin_network_host_make_static', host_id=h.id) }}" method="POST"
                               onsubmit="return confirm('Реално ще се изпрати команда към живия DHCP сървър, за да стане {{ h.mac_address }} статичен. Продължи?');" style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
-                            <button type="submit" class="btn-secondary" style="padding:5px 10px; font-size:0.8rem;" title="Изпраща make-static към живия DHCP сървър">📡 Направи статичен</button>
+                            <button type="submit" class="btn-secondary" style="padding:5px 10px; font-size:0.8rem;" title="Изпраща make-static към живия DHCP сървър">📡 Статичен</button>
                         </form>
                         {% endif %}
-                    </td>
-                    <td class="text-right">
                         <form action="{{ url_for('admin_network_delete_host', host_id=h.id) }}" method="POST"
                               onsubmit="return confirm('Изтриване на хост {{ h.mac_address }}?');" style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
-                            <button type="submit" class="btn-delete">Изтрий</button>
+                            <button type="submit" class="btn-delete" style="padding:5px 10px; font-size:0.8rem;">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                <tr class="edit-row" id="edit-host-{{ h.id }}">
+                    <td colspan="10">
+                        <form action="{{ url_for('admin_network_edit_host', host_id=h.id) }}" method="POST" class="edit-form-grid">
+                            {% include 'partials/csrf_field.html' %}
+                            <div class="form-group"><label>MAC адрес</label><input type="text" name="mac_address" value="{{ h.mac_address }}" required></div>
+                            <div class="form-group"><label>Име</label><input type="text" name="hostname" value="{{ h.hostname or '' }}"></div>
+                            <div class="form-group"><label>IP адрес</label><input type="text" name="ip_address" value="{{ h.ip_address or '' }}"></div>
+                            <div class="form-group"><label>Режим</label>
+                                <select name="ip_mode">
+                                    <option value="dynamic" {% if h.ip_mode == 'dynamic' %}selected{% endif %}>Динамичен</option>
+                                    <option value="static" {% if h.ip_mode == 'static' %}selected{% endif %}>Статичен</option>
+                                </select>
+                            </div>
+                            <div class="form-group"><label>Тип устройство</label><input type="text" name="device_type" value="{{ h.device_type or '' }}"></div>
+                            <div class="form-group"><label>Комутатор</label>
+                                <select name="switch_device_id">
+                                    <option value="">—</option>
+                                    {% for d in devices %}<option value="{{ d.id }}" {% if h.switch_device_id == d.id %}selected{% endif %}>{{ d.name }}</option>{% endfor %}
+                                </select>
+                            </div>
+                            <div class="form-group"><label>Порт</label><input type="text" name="switch_port" value="{{ h.switch_port or '' }}"></div>
+                            <div class="form-group" style="flex:1; min-width:220px;"><label>Бележки</label><input type="text" name="notes" value="{{ h.notes or '' }}"></div>
+                            <button type="submit" class="btn-submit">Запази</button>
+                            <button type="button" class="btn-secondary edit-toggle" data-target="edit-host-{{ h.id }}">Откажи</button>
                         </form>
                     </td>
                 </tr>
@@ -119,5 +154,13 @@
     </section>
 
 </main>
+<script>
+document.querySelectorAll('.edit-toggle').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+        var row = document.getElementById(btn.getAttribute('data-target'));
+        if (row) row.classList.toggle('open');
+    });
+});
+</script>
 </body>
 </html>

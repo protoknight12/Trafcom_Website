@@ -48,6 +48,8 @@ from flask_babel import Babel, gettext
 import librouteros
 from librouteros.query import Key as RouterosKey
 from cryptography.fernet import Fernet, InvalidToken
+from netmiko import ConnectHandler
+from netmiko.exceptions import NetmikoTimeoutException, NetmikoAuthenticationException
 
 # Optional: load a local .env file if python-dotenv is installed, so secrets
 # can be kept out of source control. Safe no-op if the package isn't present.
@@ -3258,6 +3260,13 @@ class NetworkDevice(db.Model):
     # disabled for this device (the module falls back to inventory-only).
     api_username = db.Column(db.String(100), nullable=True)
     api_password_encrypted = db.Column(db.Text, nullable=True)
+    # Cisco IOS privileged-EXEC ("enable") secret, only used when vendor ==
+    # 'cisco' (classic IOS has no REST/NETCONF on this fleet's old hardware,
+    # so live actions go over SSH via netmiko instead of an API - see
+    # _cisco_connect()). Optional: some of this fleet drops straight into
+    # privileged mode on login and needs none. Same Fernet encryption as
+    # api_password_encrypted.
+    api_enable_secret_encrypted = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
     @property
@@ -15293,15 +15302,42 @@ def _decrypt_secret(token):
         return None
 
 
+def _device_connect_error_message(exc, device):
+    """
+    Translates a connection/auth exception (RouterOS API or Cisco SSH) into
+    a specific, actionable Bulgarian flash message - distinguishes "can't
+    even reach the device" (network/firewall/service problem) from "the
+    device rejected the login" (wrong username/password/permissions/enable
+    secret), so an admin can actually self-diagnose without ever seeing the
+    stored password. TrapError/FatalError.message and netmiko's own
+    exception text are the device's own reply to OUR request, safe to show
+    as-is - never derived from what we sent it.
+    """
+    if isinstance(exc, (librouteros.exceptions.TrapError, librouteros.exceptions.FatalError)):
+        return f'"{device.name}" отхвърли връзката: {exc} - провери потребител/парола/права на API потребителя.'
+    if isinstance(exc, NetmikoAuthenticationException):
+        return f'"{device.name}" отхвърли входа по SSH - провери потребител/парола/enable парола.'
+    if isinstance(exc, NetmikoTimeoutException):
+        return (f'Не мога да достигна "{device.name}" ({device.management_ip}:22) по SSH - провери дали IP-то е вярно, '
+                f'дали SSH е включен на комутатора, и дали firewall не го блокира от този сървър.')
+    if isinstance(exc, OSError):
+        return (f'Не мога да достигна "{device.name}" ({device.management_ip}) - провери дали IP-то е вярно, '
+                f'дали API/SSH service е включен на устройството, и дали firewall не го блокира от този сървър.')
+    if isinstance(exc, RuntimeError):
+        return f'"{device.name}": {exc}'
+    return f'Неуспешна връзка към "{device.name}" - непозната грешка ({type(exc).__name__}).'
+
+
 def _routeros_connect(device, timeout=6):
     """
     Connects to `device`'s RouterOS legacy binary API (port 8728 - this
     fleet runs RouterOS 6.x, which has no REST API, unlike 7.x) using its
     stored, encrypted credentials. Raises RuntimeError/librouteros exceptions
     on any failure (missing credentials, undecryptable password, unreachable
-    host, bad auth) - callers catch broadly and flash a generic message,
-    never echoing connection details back to the browser. Caller must
-    api.close() the returned Api (use try/finally).
+    host, bad auth) - callers catch broadly and flash via
+    _device_connect_error_message(), never echoing connection details beyond what
+    that helper already decided is safe. Caller must api.close() the
+    returned Api (use try/finally).
     """
     if not device.has_api_credentials:
         raise RuntimeError('no API credentials configured for this device')
@@ -15331,6 +15367,246 @@ def _routeros_lease_make_static(device, mac_address):
         list(lease_path('make-static', **{'.id': matches[0]['.id']}))
     finally:
         api.close()
+
+
+def _routeros_sync_dhcp_leases(device):
+    """
+    Pulls the live DHCP lease table from `device` via API and upserts
+    NetworkHost - the live equivalent of admin_network_hosts_import()'s
+    paste wizard, for a device with stored API credentials. Unlike that
+    wizard (which deliberately preserves an admin's manually-set ip_mode,
+    since pasted text can be stale), this reads ip_mode straight from the
+    router's own `dynamic` lease property every time - a live API pull is
+    the authoritative source, so it's allowed to correct our record rather
+    than defer to it. Read-only against the router; only ever writes to our
+    own DB. Returns (created, updated). Raises on connection/auth failure.
+    """
+    api = _routeros_connect(device)
+    try:
+        leases = list(api('/ip/dhcp-server/lease/print'))
+    finally:
+        api.close()
+    created = updated = 0
+    now = datetime.utcnow()
+    for lease in leases:
+        mac = _normalize_mac(lease.get('mac-address') or lease.get('active-mac-address') or '')
+        ip = lease.get('address') or lease.get('active-address')
+        if not mac or not ip:
+            continue
+        ip_mode = 'dynamic' if lease.get('dynamic') is True else 'static'
+        hostname = lease.get('host-name') or None
+        host = NetworkHost.query.filter_by(mac_address=mac).first()
+        if host:
+            host.ip_address = ip
+            host.ip_mode = ip_mode
+            if hostname:
+                host.hostname = hostname
+            host.last_seen = now
+            updated += 1
+        else:
+            db.session.add(NetworkHost(mac_address=mac, ip_address=ip, hostname=hostname,
+                                        ip_mode=ip_mode, source='dhcp_import', last_seen=now))
+            created += 1
+    db.session.commit()
+    return created, updated
+
+
+def _routeros_sync_device_info(device):
+    """
+    Pulls /system/identity/print + /system/resource/print via API and
+    updates device.model (board-name) - read-only against the router,
+    writes only to our own inventory (device.name is never auto-renamed -
+    an admin's chosen name in this app may deliberately differ from the
+    router's own identity). Appends/replaces a single "[API sync ...]"
+    marker line in notes rather than accumulating one per sync. Returns the
+    router's own system identity name (informational). Raises on
+    connection/auth failure.
+    """
+    api = _routeros_connect(device)
+    try:
+        identity = list(api('/system/identity/print'))
+        resource = list(api('/system/resource/print'))
+    finally:
+        api.close()
+    name = identity[0].get('name') if identity else None
+    if resource:
+        r = resource[0]
+        if r.get('board-name'):
+            device.model = r['board-name']
+        version = r.get('version')
+        sync_line = f'[API sync {datetime.utcnow():%Y-%m-%d %H:%M}] identity="{name}"' + (f', RouterOS {version}' if version else '')
+        kept_lines = [line for line in (device.notes or '').splitlines() if not line.startswith('[API sync ')]
+        device.notes = '\n'.join(kept_lines + [sync_line]).strip()
+    db.session.commit()
+    return name
+
+
+def _mac_table_apply(device, mac_port_pairs, source_label):
+    """
+    Shared logic behind every "learned MAC table" sync (RouterOS bridge host,
+    Cisco `show mac address-table`, any future vendor): given the (mac, port)
+    pairs `device` has learned, this
+      1) fills in NetworkHost.switch_device_id/switch_port for any MAC that
+         matches an existing host, giving real port-level traceability;
+      2) auto-creates (or refreshes the port on) a NetworkLink to any OTHER
+         NetworkDevice whose own mac_address shows up in the table - this is
+         how the topology map gets built from what a switch/bridge has
+         actually learned, instead of an admin drawing every link by hand.
+    Only ever writes to our own DB - the caller is responsible for reading
+    the table from the real device read-only. Returns
+    (hosts_updated, links_created, links_updated).
+    """
+    other_devices_by_mac = {
+        d.mac_address: d for d in NetworkDevice.query.filter(
+            NetworkDevice.id != device.id, NetworkDevice.mac_address.isnot(None)).all()
+    }
+    marker = f'[открито през {source_label}]'
+    hosts_updated = links_created = links_updated = 0
+    for mac, port in mac_port_pairs:
+        if not mac:
+            continue
+        host = NetworkHost.query.filter_by(mac_address=mac).first()
+        if host:
+            host.switch_device_id = device.id
+            host.switch_port = port
+            hosts_updated += 1
+
+        other = other_devices_by_mac.get(mac)
+        if other:
+            link = NetworkLink.query.filter(db.or_(
+                db.and_(NetworkLink.device_a_id == device.id, NetworkLink.device_b_id == other.id),
+                db.and_(NetworkLink.device_a_id == other.id, NetworkLink.device_b_id == device.id),
+            )).first()
+            if link:
+                if link.device_a_id == device.id:
+                    link.port_a = port
+                else:
+                    link.port_b = port
+                if marker not in (link.notes or ''):
+                    link.notes = ((link.notes + ' ') if link.notes else '') + marker
+                links_updated += 1
+            else:
+                db.session.add(NetworkLink(
+                    device_a_id=device.id, device_b_id=other.id, link_type='copper', port_a=port,
+                    notes=f'Автоматично открито през MAC таблицата на "{device.name}". {marker}',
+                ))
+                links_created += 1
+    db.session.commit()
+    return hosts_updated, links_created, links_updated
+
+
+def _routeros_sync_bridge_hosts(device):
+    """
+    Pulls /interface/bridge/host/print via API - a Mikrotik bridge's own
+    learned MAC address table, the RouterOS equivalent of a Cisco `show mac
+    address-table` - and applies it via _mac_table_apply(). Skips rows
+    RouterOS itself marks 'local' (a bridge port's own MAC, not a real
+    learned neighbor - librouteros casts RouterOS' true/false words to real
+    Python bools, see _routeros_sync_dhcp_leases()). Read-only against the
+    router. Raises on connection/auth failure.
+    """
+    api = _routeros_connect(device)
+    try:
+        rows = list(api('/interface/bridge/host/print'))
+    finally:
+        api.close()
+    pairs = []
+    for row in rows:
+        if row.get('local') is True:
+            continue
+        mac = _normalize_mac(row.get('mac-address') or '')
+        if mac:
+            pairs.append((mac, row.get('on-interface') or row.get('interface')))
+    return _mac_table_apply(device, pairs, 'bridge host API')
+
+
+def _cisco_connect(device, timeout=8):
+    """
+    Opens an SSH session to `device` (a Cisco switch) via netmiko - the SSH
+    equivalent of _routeros_connect() for devices with no API at all: the
+    classic IOS on this fleet's old 3750/2950 hardware predates
+    REST/NETCONF. Enters privileged EXEC with api_enable_secret_encrypted
+    when one is stored (some of this fleet drops straight into privileged
+    mode on login and needs none - see HALE-VOLOVII's captured session
+    earlier in this project, which did need `enable`). Raises RuntimeError/
+    netmiko exceptions on any failure (missing credentials, undecryptable
+    password, unreachable host, bad auth). Caller must
+    net_connect.disconnect() (use try/finally).
+    """
+    if not device.has_api_credentials:
+        raise RuntimeError('no SSH credentials configured for this device')
+    password = _decrypt_secret(device.api_password_encrypted)
+    if password is None:
+        raise RuntimeError('stored credentials could not be decrypted')
+    if not device.management_ip:
+        raise RuntimeError('device has no management IP')
+    secret = _decrypt_secret(device.api_enable_secret_encrypted) or ''
+    net_connect = ConnectHandler(
+        device_type='cisco_ios', host=device.management_ip, username=device.api_username,
+        password=password, secret=secret, timeout=timeout, fast_cli=False,
+    )
+    if secret:
+        net_connect.enable()
+    return net_connect
+
+
+_CISCO_MAC_TABLE_LINE_RE = re.compile(
+    r'^\s*(?:All|\d+)\s+([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})\s+\S+\s+(\S+)')
+
+
+def _cisco_sync_mac_table(device):
+    """
+    Runs `show mac address-table` over SSH and applies it via
+    _mac_table_apply() - the Cisco equivalent of
+    _routeros_sync_bridge_hosts(). Parses the classic IOS table format
+    (VLAN, MAC in xxxx.xxxx.xxxx form, Type, Ports - see HALE-VOLOVII's
+    captured output earlier in this project for the exact shape), skipping
+    the CPU/system rows (Ports == 'CPU'). Read-only against the switch.
+    Raises on connection/auth failure.
+    """
+    net_connect = _cisco_connect(device)
+    try:
+        output = net_connect.send_command('show mac address-table')
+    finally:
+        net_connect.disconnect()
+    pairs = []
+    for line in output.splitlines():
+        m = _CISCO_MAC_TABLE_LINE_RE.match(line)
+        if not m:
+            continue
+        port = m.group(2)
+        if port.upper() == 'CPU':
+            continue
+        mac = _normalize_mac(m.group(1))
+        if mac:
+            pairs.append((mac, port))
+    return _mac_table_apply(device, pairs, 'MAC таблица (SSH)')
+
+
+_CISCO_MODEL_NUMBER_RE = re.compile(r'Model [Nn]umber\s*:\s*(\S+)')
+
+
+def _cisco_sync_device_info(device):
+    """Runs `show version` over SSH and updates device.model from the
+    'Model number' line - the Cisco equivalent of
+    _routeros_sync_device_info(). Replaces a single '[API sync ...]' marker
+    line in notes rather than accumulating one per sync. Returns the
+    switch's own CLI prompt (informational). Raises on connection/auth
+    failure."""
+    net_connect = _cisco_connect(device)
+    try:
+        output = net_connect.send_command('show version')
+        prompt = net_connect.find_prompt()
+    finally:
+        net_connect.disconnect()
+    m = _CISCO_MODEL_NUMBER_RE.search(output)
+    if m:
+        device.model = m.group(1)
+    sync_line = f'[API sync {datetime.utcnow():%Y-%m-%d %H:%M}] prompt="{prompt}"'
+    kept_lines = [line for line in (device.notes or '').splitlines() if not line.startswith('[API sync ')]
+    device.notes = '\n'.join(kept_lines + [sync_line]).strip()
+    db.session.commit()
+    return prompt
 
 
 def _network_security_audit():
@@ -15435,7 +15711,12 @@ def _network_security_audit():
 def admin_network():
     devices = NetworkDevice.query.order_by(NetworkDevice.name).all()
     links = NetworkLink.query.all()
-    return render_template('admin_network.html', devices=devices, links=links,
+    # Only hosts linked to a switch/device can be placed on the map at all -
+    # see the map's JS, which clusters them around their switch_device's
+    # own node. Hosts with no switch_device_id just don't appear here (they
+    # still show in the MAC inventory table).
+    hosts = NetworkHost.query.filter(NetworkHost.switch_device_id.isnot(None)).all()
+    return render_template('admin_network.html', devices=devices, links=links, hosts=hosts,
                            vendors=NETWORK_DEVICE_VENDORS, roles=NETWORK_DEVICE_ROLES,
                            link_types=NETWORK_LINK_TYPES, active_page='admin_network')
 
@@ -15560,11 +15841,12 @@ def admin_network_device_position(device_id):
 @role_required('admin')
 def admin_network_device_api_credentials(device_id):
     """
-    Set/replace or clear this device's stored RouterOS API credentials - a
-    separate form/route from admin_network_edit_device() so the password
-    field is never pre-filled or round-tripped through the main edit form
-    (it always renders blank; the template shows a "configured" badge
-    instead of the value). Encrypted at rest via _encrypt_secret() -
+    Set/replace or clear this device's stored credentials (RouterOS API
+    username/password for mikrotik, SSH username/password/enable-secret for
+    cisco) - a separate form/route from admin_network_edit_device() so the
+    password fields are never pre-filled or round-tripped through the main
+    edit form (they always render blank; the template shows a "configured"
+    badge instead of the value). Encrypted at rest via _encrypt_secret() -
     NETWORK_API_ENCRYPTION_KEY must be set or this refuses with a flash
     explaining why, same degrade-gracefully pattern as the chat widget.
     """
@@ -15572,6 +15854,7 @@ def admin_network_device_api_credentials(device_id):
     if request.form.get('clear'):
         device.api_username = None
         device.api_password_encrypted = None
+        device.api_enable_secret_encrypted = None
         db.session.commit()
         log_action(f'Изчистени API credentials за "{device.name}"')
         flash(f'API достъпът за "{device.name}" беше премахнат.', 'success')
@@ -15588,6 +15871,9 @@ def admin_network_device_api_credentials(device_id):
         return redirect(url_for('admin_network'))
     device.api_username = username
     device.api_password_encrypted = _encrypt_secret(password)
+    enable_secret = request.form.get('api_enable_secret', '')
+    if enable_secret:
+        device.api_enable_secret_encrypted = _encrypt_secret(enable_secret)
     db.session.commit()
     log_action(f'Зададени API credentials за "{device.name}"')
     flash(f'API достъпът за "{device.name}" беше запазен.', 'success')
@@ -15597,21 +15883,82 @@ def admin_network_device_api_credentials(device_id):
 @app.route('/admin/network/devices/<int:device_id>/api-test', methods=['POST'])
 @role_required('admin')
 def admin_network_device_api_test(device_id):
-    """Read-only sanity check (/system/identity/print) that the stored
-    credentials actually work, without touching any config - the only way
-    to validate them, since this app never sees the real password again
-    after it's encrypted."""
+    """Read-only sanity check that the stored credentials actually work,
+    without touching any config - the only way to validate them, since this
+    app never sees the real password again after it's encrypted. Dispatches
+    on vendor: RouterOS API for mikrotik, SSH `find_prompt()` for cisco."""
     device = NetworkDevice.query.get_or_404(device_id)
     try:
-        api = _routeros_connect(device, timeout=5)
-        try:
-            identity = list(api('/system/identity/print'))
-        finally:
-            api.close()
-        name = identity[0].get('name', '?') if identity else '?'
-        flash(f'Връзката работи - system identity: "{name}".', 'success')
-    except Exception:
-        flash(f'Неуспешна връзка към "{device.name}" - провери IP, потребител, парола и мрежова достъпност.', 'danger')
+        if device.vendor == 'cisco':
+            net_connect = _cisco_connect(device, timeout=6)
+            try:
+                prompt = net_connect.find_prompt()
+            finally:
+                net_connect.disconnect()
+            flash(f'Връзката работи - prompt: "{prompt}".', 'success')
+        else:
+            api = _routeros_connect(device, timeout=5)
+            try:
+                identity = list(api('/system/identity/print'))
+            finally:
+                api.close()
+            name = identity[0].get('name', '?') if identity else '?'
+            flash(f'Връзката работи - system identity: "{name}".', 'success')
+    except Exception as exc:
+        flash(_device_connect_error_message(exc, device), 'danger')
+    return redirect(url_for('admin_network'))
+
+
+@app.route('/admin/network/devices/<int:device_id>/api-sync-info', methods=['POST'])
+@role_required('admin')
+def admin_network_device_sync_info(device_id):
+    """Read-only sync of model/version from the real device - RouterOS API
+    for mikrotik (_routeros_sync_device_info()), SSH `show version` for
+    cisco (_cisco_sync_device_info()). Replaces manually copying terminal
+    output into notes by hand."""
+    device = NetworkDevice.query.get_or_404(device_id)
+    try:
+        name = _cisco_sync_device_info(device) if device.vendor == 'cisco' else _routeros_sync_device_info(device)
+        log_action(f'Синхронизирана информация за "{device.name}" през API')
+        flash(f'Синхронизирано от "{device.name}" ("{name}").', 'success')
+    except Exception as exc:
+        flash(_device_connect_error_message(exc, device), 'danger')
+    return redirect(url_for('admin_network'))
+
+
+@app.route('/admin/network/devices/<int:device_id>/api-sync-dhcp', methods=['POST'])
+@role_required('admin')
+def admin_network_device_sync_dhcp(device_id):
+    """Pulls the live DHCP lease table via API and upserts NetworkHost - the
+    live equivalent of admin_network_hosts_import() for a device with
+    stored API credentials. See _routeros_sync_dhcp_leases()."""
+    device = NetworkDevice.query.get_or_404(device_id)
+    try:
+        created, updated = _routeros_sync_dhcp_leases(device)
+        log_action(f'Синхронизация на DHCP lease-ове от "{device.name}" през API: {created} нови, {updated} обновени')
+        flash(f'Синхронизирани DHCP lease-ове от "{device.name}": {created} нови, {updated} обновени.', 'success')
+    except Exception as exc:
+        flash(_device_connect_error_message(exc, device), 'danger')
+    return redirect(url_for('admin_network_hosts'))
+
+
+@app.route('/admin/network/devices/<int:device_id>/api-sync-mac-table', methods=['POST'])
+@role_required('admin')
+def admin_network_device_sync_mac_table(device_id):
+    """Pulls the device's learned MAC address table (RouterOS bridge host
+    via API, or Cisco `show mac address-table` via SSH) and uses it to fill
+    in switch/port traceability for known hosts, and to auto-discover
+    NetworkLink connections to other known devices - see
+    _routeros_sync_bridge_hosts()/_cisco_sync_mac_table()."""
+    device = NetworkDevice.query.get_or_404(device_id)
+    try:
+        sync_fn = _cisco_sync_mac_table if device.vendor == 'cisco' else _routeros_sync_bridge_hosts
+        hosts_updated, links_created, links_updated = sync_fn(device)
+        log_action(f'Синхронизация на MAC таблица от "{device.name}" през API: '
+                   f'{hosts_updated} хоста с порт, {links_created} нови връзки, {links_updated} обновени връзки')
+        flash(f'От "{device.name}": {hosts_updated} хоста с порт, {links_created} нови връзки, {links_updated} обновени връзки.', 'success')
+    except Exception as exc:
+        flash(_device_connect_error_message(exc, device), 'danger')
     return redirect(url_for('admin_network'))
 
 
@@ -15662,6 +16009,7 @@ def admin_network_delete_link(link_id):
 @role_required('admin')
 def admin_network_hosts():
     q = request.args.get('q', '').strip()
+    ip_mode = request.args.get('ip_mode', '').strip()
     query = NetworkHost.query
     if q:
         like = f'%{q}%'
@@ -15669,9 +16017,11 @@ def admin_network_hosts():
             NetworkHost.mac_address.ilike(like), NetworkHost.hostname.ilike(like),
             NetworkHost.ip_address.ilike(like), NetworkHost.device_type.ilike(like),
         ))
+    if ip_mode in ('static', 'dynamic'):
+        query = query.filter(NetworkHost.ip_mode == ip_mode)
     hosts = query.order_by(NetworkHost.hostname, NetworkHost.mac_address).all()
     devices = NetworkDevice.query.order_by(NetworkDevice.name).all()
-    return render_template('admin_network_hosts.html', hosts=hosts, devices=devices, q=q, active_page='admin_network')
+    return render_template('admin_network_hosts.html', hosts=hosts, devices=devices, q=q, ip_mode=ip_mode, active_page='admin_network')
 
 
 @app.route('/admin/network/hosts/add', methods=['POST'])
@@ -15767,8 +16117,8 @@ def admin_network_host_make_static(host_id):
     except LookupError:
         flash(f'Не е намерен DHCP lease за {host.mac_address} на "{dhcp_server.name}".', 'danger')
         return redirect(url_for('admin_network_hosts'))
-    except Exception:
-        flash(f'Неуспешна връзка към "{dhcp_server.name}" - lease-ът НЕ е променен.', 'danger')
+    except Exception as exc:
+        flash(_device_connect_error_message(exc, dhcp_server) + ' Lease-ът НЕ е променен.', 'danger')
         return redirect(url_for('admin_network_hosts'))
 
     host.ip_mode = 'static'
