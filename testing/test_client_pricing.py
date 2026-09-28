@@ -47,7 +47,8 @@ with app.app_context():
 
     client_discount = Client(name='QA Отстъпков клиент', material_adjustment_type='discount',
                               material_adjustment_percent=10, detail_adjustment_type='discount',
-                              detail_adjustment_percent=5)
+                              detail_adjustment_percent=5, product_adjustment_type='discount',
+                              product_adjustment_percent=10)
     client_plain = Client(name='QA Клиент без условия')
     db.session.add_all([client_discount, client_plain])
     db.session.flush()
@@ -72,7 +73,8 @@ with app.app_context():
     price_with_client = calculate_cnc_price_multi_service(1000, 500, 2000, 2, 'qa_sheet', [service.id], client_discount)
     assert price_with_client < price_no_client, "a client with discounts on every layer must always price lower"
 
-    # --- calculate_product_pricing: Детайли discount hits only the details subtotal ---
+    # --- calculate_product_pricing: the Продукти discount hits the whole sell price,
+    # the Детайли one never applies inside a product ---
     detail = Detail(name='QA Detail', material_key=material.key, width=1000.0, height=500.0,
                      total_length=0.0, pierce_count=0, calculated_price=5.0)
     db.session.add(detail)
@@ -85,12 +87,13 @@ with app.app_context():
 
     pricing_plain = calculate_product_pricing(product)
     pricing_discounted = calculate_product_pricing(product, client_discount)
-    # details_subtotal = 2 x 5.0 = 10.0; with 5% Детайли discount -> 9.5;
-    # markup 50% on top -> 14.25 (vs 15.0 undiscounted). Markup itself is untouched.
+    # details_subtotal = 2 x 5.0 = 10.0 (list, the 5% Детайли discount doesn't
+    # apply), markup 50% -> 15.0, then the client's 10% Продукти discount -> 13.5.
     assert pricing_plain['details_subtotal'] == 10.0
     assert pricing_plain['sell_price'] == 15.0
-    assert pricing_discounted['details_subtotal'] == 9.5
-    assert pricing_discounted['sell_price'] == 14.25
+    assert pricing_discounted['details_subtotal'] == 10.0
+    assert pricing_discounted['sell_price'] == 13.5
+    assert calculate_product_pricing(product, client_plain)['sell_price'] == 15.0, "no Продукти terms -> list price"
 
     # --- detail_price_for: standalone Detail catalog price ---
     assert detail_price_for(detail, None) == detail.total_price

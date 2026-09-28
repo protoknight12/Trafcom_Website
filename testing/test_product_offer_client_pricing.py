@@ -5,10 +5,9 @@ distinct from the Offer/OfferItem model's admin_offer_edit.html) lets an
 admin pick a Client from a dropdown to fill in the customer name, but never
 actually adjusted the price table for that client's discount/markup - the
 dropdown was purely cosmetic for the displayed name. Guards that the page
-now also exposes each detail's base (undiscounted) unit price and every
-Client's Детайли terms so offer.html's JS (recomputeOfferPricing()) can
-apply the picked client's discount/markup to the whole price table, same as
-order_create.html/admin_offer_edit.html already do.
+exposes the list sell price and every Client's Продукти terms, so offer.html's
+JS (recomputeOfferPricing()) can show the picked client's discount/markup
+as its own row on the final price - same rule as calculate_product_pricing().
 
 protocol.html/certificate.html carry no pricing at all, so they need no
 equivalent coverage.
@@ -49,7 +48,7 @@ def app():
     with flask_app.app_context():
         db.create_all()
         admin = User(username='qa_admin', password=generate_password_hash('irrelevant123'), role='admin')
-        client = Client(name='QA Discount Client', detail_adjustment_type='discount', detail_adjustment_percent=15)
+        client = Client(name='QA Discount Client', product_adjustment_type='discount', product_adjustment_percent=15)
         db.session.add_all([admin, client])
         material = MaterialPrice(key='qa_mat', display_name='QA Mat', type='sheets', cost_per_m2=10.0,
                                   cutting_speed_mm_per_min=1000, pierce_rate_per_min=30)
@@ -78,17 +77,16 @@ def admin_browser(app):
     return c, product_id, client_id
 
 
-def test_offer_page_exposes_base_detail_price_and_client_terms(admin_browser):
+def test_offer_page_exposes_list_price_and_client_product_terms(admin_browser):
     c, product_id, client_id = admin_browser
     res = c.get(f'/admin/products/{product_id}/offer')
     assert res.status_code == 200
     body = res.get_data(as_text=True)
-    # Base (undiscounted) unit price - the JS applies the discount at pick time.
-    assert 'unitPrice: 20.0' in body
+    # List sell price (2 x 20 + 10% markup) - the JS applies the client's
+    # Продукти discount on top of it, as its own row.
+    assert 'LIST_SELL_PRICE = 44.0' in body
     assert f'"{client_id}"' in body
-    assert '"detail_type": "discount"' in body or '"detail_type":"discount"' in body
-    assert '"detail_percent": 15' in body or '"detail_percent":15' in body
-    # The recompute cell ids the JS writes into must exist.
-    for cell_id in ('pd-unit-0', 'pd-total-0', 'offerDetailsSubtotal', 'offerTotalCost',
-                    'offerMarkupAmount', 'offerSellPrice'):
+    assert '"product_type": "discount"' in body or '"product_type":"discount"' in body
+    assert '"product_percent": 15' in body or '"product_percent":15' in body
+    for cell_id in ('offerClientAdjRow', 'offerClientAdjAmount', 'offerSellPrice'):
         assert f'id="{cell_id}"' in body

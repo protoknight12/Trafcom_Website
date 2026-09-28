@@ -644,15 +644,18 @@ class Client(db.Model):
     # see _apply_adjustment(). 'discount'/'markup'/NULL; NULL or a 0 percent
     # means no adjustment. Materials only affects the live DXF calculator
     # (_material_cost) - a Detail/Product's already-frozen list price can't
-    # be decomposed back into a material portion per client. Details is the
-    # one that actually makes catalog Detail/Product prices client-specific
-    # (see detail_price_for()/calculate_product_pricing()). Services has no
+    # be decomposed back into a material portion per client. Details makes
+    # standalone catalog Detail prices client-specific (detail_price_for()),
+    # Products the whole sell price of a Product (calculate_product_pricing())
+    # - a product never also gets the Details terms. Services has no
     # single default here - see ClientServicePrice below, one row per service
     # a client actually gets a different rate on.
     material_adjustment_type = db.Column(db.String(10), nullable=True)
     material_adjustment_percent = db.Column(db.Float, nullable=True)
     detail_adjustment_type = db.Column(db.String(10), nullable=True)
     detail_adjustment_percent = db.Column(db.Float, nullable=True)
+    product_adjustment_type = db.Column(db.String(10), nullable=True)
+    product_adjustment_percent = db.Column(db.Float, nullable=True)
 
 
 class ClientServicePrice(db.Model):
@@ -1157,17 +1160,18 @@ def calculate_product_pricing(product, client=None):
     final sell price. Centralized here so the products list, edit page, and
     offer view can never disagree with each other.
 
-    `client`, when given, applies its Детайли discount/markup to the details
-    subtotal (the Product's own extra costs/markup_percent are admin-set,
-    not touched) - see _apply_adjustment().
+    `client`, when given, applies its Продукти discount/markup to the final
+    sell price (the breakdown above it stays the list one) - see
+    _apply_adjustment(). The client's Детайли terms only ever apply to
+    standalone details (detail_price_for()), never inside a product.
     """
     details_subtotal = sum(pd.detail.total_price * pd.quantity for pd in product.product_details)
-    if client:
-        details_subtotal = _apply_adjustment(details_subtotal, client.detail_adjustment_type, client.detail_adjustment_percent)
     extra_costs_subtotal = sum(ec.amount for ec in product.extra_costs)
     total_cost = details_subtotal + extra_costs_subtotal
     markup_amount = total_cost * (product.markup_percent / 100.0)
     sell_price = total_cost + markup_amount
+    if client:
+        sell_price = _apply_adjustment(sell_price, client.product_adjustment_type, client.product_adjustment_percent)
 
     return {
         'details_subtotal': round(details_subtotal, 2),
@@ -6094,8 +6098,10 @@ def update_client_pricing(client_id):
         'material_adjustment_type', 'material_adjustment_percent')
     client.detail_adjustment_type, client.detail_adjustment_percent = _read_adjustment(
         'detail_adjustment_type', 'detail_adjustment_percent')
+    client.product_adjustment_type, client.product_adjustment_percent = _read_adjustment(
+        'product_adjustment_type', 'product_adjustment_percent')
 
-    existing = {sp.service_id: sp for sp in client.service_prices}
+    existing ={sp.service_id: sp for sp in client.service_prices}
     for service in Service.query.all():
         adj_type, percent = _read_adjustment(f'service_{service.id}_type', f'service_{service.id}_percent')
         row = existing.get(service.id)
@@ -8794,7 +8800,8 @@ def admin_product_offer(product_id):
     # admin_offer_edit.html's CLIENT_PRICING (_apply_adjustment() mirrored
     # by hand). Static print document, no server round-trip needed.
     client_pricing = {
-        c.id: {'detail_type': c.detail_adjustment_type, 'detail_percent': c.detail_adjustment_percent}
+        c.id: {'detail_type': c.detail_adjustment_type, 'detail_percent': c.detail_adjustment_percent,
+               'product_type': c.product_adjustment_type, 'product_percent': c.product_adjustment_percent}
         for c in clients
     }
     return render_template('offer.html', product=product, pricing=pricing, customer_name=customer_name,
@@ -9093,6 +9100,8 @@ def create_order():
         c.id: {
             'detail_type': c.detail_adjustment_type,
             'detail_percent': c.detail_adjustment_percent,
+            'product_type': c.product_adjustment_type,
+            'product_percent': c.product_adjustment_percent,
             'services': {
                 sp.service_id: {'type': sp.adjustment_type, 'percent': sp.adjustment_percent}
                 for sp in c.service_prices
@@ -17176,7 +17185,8 @@ def _offer_picker_context():
     details = [{'id': d.id, 'name': d.name, 'price': d.total_price} for d in Detail.query.order_by(Detail.name).all()]
     clients = Client.query.order_by(Client.name).all()
     client_pricing = {
-        c.id: {'detail_type': c.detail_adjustment_type, 'detail_percent': c.detail_adjustment_percent}
+        c.id: {'detail_type': c.detail_adjustment_type, 'detail_percent': c.detail_adjustment_percent,
+               'product_type': c.product_adjustment_type, 'product_percent': c.product_adjustment_percent}
         for c in clients
     }
     return products, details, clients, client_pricing

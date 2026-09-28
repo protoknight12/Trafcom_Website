@@ -334,16 +334,12 @@
         return applyClientAdjustment(basePrice, cp.detail_type, cp.detail_percent);
     }
 
-    // Mirrors calculate_product_pricing(): only the Детайли-built subtotal
-    // gets the client's discount/markup, extra costs and the product's own
-    // markup_percent stay untouched.
+    // A Product's list sell price with the offer client's Продукти terms -
+    // mirrors calculate_product_pricing(client).
     function productAdjustedPrice(p) {
-        if (typeof p.details_subtotal !== 'number') return detailAdjustedPrice(p.price);
         const cp = selectedOfferClientPricing();
-        let detailsSubtotal = p.details_subtotal;
-        if (cp) detailsSubtotal = applyClientAdjustment(detailsSubtotal, cp.detail_type, cp.detail_percent);
-        const totalCost = detailsSubtotal + p.extra_costs_subtotal;
-        return totalCost * (1 + p.markup_percent / 100);
+        if (!cp) return p.price;
+        return applyClientAdjustment(p.price, cp.product_type, cp.product_percent);
     }
 
     document.getElementById('item_product_id').addEventListener('change', function () {

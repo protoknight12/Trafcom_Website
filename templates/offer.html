@@ -190,6 +190,10 @@
             <td class="text-right" id="offerMarkupAmount">+{{ "%.2f"|format(pricing.markup_amount) }} €</td>
         </tr>
         {% endif %}
+        <tr id="offerClientAdjRow" style="display: none;">
+            <td id="offerClientAdjLabel"></td>
+            <td class="text-right" id="offerClientAdjAmount"></td>
+        </tr>
         <tr class="offer-total-row">
             <td>Крайна цена за клиента</td>
             <td class="text-right" id="offerSellPrice">{{ "%.2f"|format(pricing.sell_price) }} €</td>
@@ -220,16 +224,8 @@
         customerDisplay.textContent = customerInput.value.trim() || '—';
     });
 
-    // Base (undiscounted) per-detail unit prices, in DOM row order - see
-    // the pd-unit-N/pd-total-N cell ids above.
-    const PRODUCT_DETAILS = [
-        {% for pd in product.product_details %}
-        { unitPrice: {{ pd.detail.total_price }}, quantity: {{ pd.quantity }} },
-        {% endfor %}
-    ];
-    const EXTRA_COSTS_SUBTOTAL = {{ pricing.extra_costs_subtotal }};
-    const MARKUP_PERCENT = {{ product.markup_percent or 0 }};
-    // Each Client's Детайли discount/markup - see admin_product_offer().
+    const LIST_SELL_PRICE = {{ pricing.sell_price }};
+    // Each Client's Продукти discount/markup - see admin_product_offer().
     const CLIENT_PRICING = {{ client_pricing|tojson }};
 
     function applyClientAdjustment(amount, type, percent) {
@@ -240,27 +236,20 @@
         return amount;
     }
 
-    // Re-runs calculate_product_pricing()'s own formula: only the Детайли
-    // subtotal gets the picked client's discount/markup, extra costs and
-    // the product's own markup_percent stay untouched - mirrors
-    // order_create.html's/admin_offer_edit.html's productAdjustedPrice().
+    // The breakdown above stays the list one; the picked client's Продукти
+    // discount/markup is its own row on the final price - mirrors
+    // calculate_product_pricing(client).
     function recomputeOfferPricing(clientId) {
         const cp = clientId && CLIENT_PRICING[clientId] ? CLIENT_PRICING[clientId] : null;
-        let detailsSubtotal = 0;
-        PRODUCT_DETAILS.forEach(function (pd, idx) {
-            const adjustedUnit = applyClientAdjustment(pd.unitPrice, cp && cp.detail_type, cp && cp.detail_percent);
-            const lineTotal = adjustedUnit * pd.quantity;
-            detailsSubtotal += lineTotal;
-            document.getElementById('pd-unit-' + idx).textContent = adjustedUnit.toFixed(2) + ' €';
-            document.getElementById('pd-total-' + idx).textContent = lineTotal.toFixed(2) + ' €';
-        });
-        const totalCost = detailsSubtotal + EXTRA_COSTS_SUBTOTAL;
-        const markupAmount = totalCost * (MARKUP_PERCENT / 100);
-        const sellPrice = totalCost + markupAmount;
-        document.getElementById('offerDetailsSubtotal').textContent = detailsSubtotal.toFixed(2) + ' €';
-        document.getElementById('offerTotalCost').textContent = totalCost.toFixed(2) + ' €';
-        const markupCell = document.getElementById('offerMarkupAmount');
-        if (markupCell) markupCell.textContent = '+' + markupAmount.toFixed(2) + ' €';
+        const sellPrice = cp ? applyClientAdjustment(LIST_SELL_PRICE, cp.product_type, cp.product_percent) : LIST_SELL_PRICE;
+        const diff = sellPrice - LIST_SELL_PRICE;
+        const row = document.getElementById('offerClientAdjRow');
+        row.style.display = Math.abs(diff) > 0.0001 ? '' : 'none';
+        if (cp && cp.product_type) {
+            document.getElementById('offerClientAdjLabel').textContent =
+                (cp.product_type === 'discount' ? 'Отстъпка' : 'Надценка') + ' за клиента (' + cp.product_percent + '%)';
+            document.getElementById('offerClientAdjAmount').textContent = (diff >= 0 ? '+' : '') + diff.toFixed(2) + ' €';
+        }
         document.getElementById('offerSellPrice').textContent = sellPrice.toFixed(2) + ' €';
     }
 

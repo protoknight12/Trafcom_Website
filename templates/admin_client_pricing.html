@@ -64,7 +64,24 @@
                        value="{{ client.detail_adjustment_percent or '' }}" inputmode="decimal" placeholder="напр. 10">
             </div>
             <p class="text-small text-muted" style="grid-column: 1 / -1; margin-top: -8px;">
-                Важи за готовата цена на Детайли/Продукти (каталог, поръчки) и за DXF калкулатора.
+                Важи за самостоятелните Детайли (каталог, поръчки, оферти) и за DXF калкулатора - не и за детайлите в продукт.
+            </p>
+
+            <div class="form-group">
+                <label for="product_adjustment_type">Продукти - вид</label>
+                <select id="product_adjustment_type" name="product_adjustment_type">
+                    <option value="" {% if not client.product_adjustment_type %}selected{% endif %}>Без корекция</option>
+                    <option value="discount" {% if client.product_adjustment_type == 'discount' %}selected{% endif %}>Отстъпка</option>
+                    <option value="markup" {% if client.product_adjustment_type == 'markup' %}selected{% endif %}>Надценка</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="product_adjustment_percent">Продукти - процент (%)</label>
+                <input type="text" id="product_adjustment_percent" name="product_adjustment_percent"
+                       value="{{ client.product_adjustment_percent or '' }}" inputmode="decimal" placeholder="напр. 10">
+            </div>
+            <p class="text-small text-muted" style="grid-column: 1 / -1; margin-top: -8px;">
+                Прилага се върху крайната цена на Продукта (след надценката на продукта) - в поръчки, оферти и печатна оферта.
             </p>
 
             <h4 style="grid-column: 1 / -1; margin-bottom: 4px;">Услуги - процент по отделно за всяка услуга</h4>

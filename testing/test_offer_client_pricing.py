@@ -92,6 +92,28 @@ def test_offer_create_order_applies_linked_clients_discount(admin_client):
         assert item.unit_price == 16.0, "20 EUR list price with a 20% client discount -> 16.0, not the offer's frozen 777.0"
 
 
+def test_offer_create_order_applies_clients_product_terms_not_detail_ones(admin_client):
+    c, offer_id, _offer_item_id, client_id, detail_id = admin_client
+    with flask_app.app_context():
+        from app import ProductDetail
+        client = db.session.get(Client, client_id)
+        client.product_adjustment_type, client.product_adjustment_percent = 'markup', 10
+        product = Product(name='QA Product', markup_percent=0)
+        db.session.add(product)
+        db.session.flush()
+        db.session.add(ProductDetail(product_id=product.id, detail_id=detail_id, quantity=2))
+        line = OfferItem(offer_id=offer_id, position=1, item_type='product', product_id=product.id,
+                         name=product.name, quantity=1, unit='бр', unit_price=1.0)
+        db.session.add(line)
+        db.session.commit()
+        line_id = line.id
+    c.post(f'/admin/offers/{offer_id}/create-order', data={'customer_name': 'QA Product Order', 'item_ids': [str(line_id)]})
+    with flask_app.app_context():
+        order = Order.query.filter_by(customer_name='QA Product Order').one()
+        # 2 x 20 list = 40, +10% Продукти markup = 44 (the 20% Детайли discount is not applied)
+        assert OrderItem.query.filter_by(order_id=order.id).one().unit_price == 44.0
+
+
 def test_offer_picker_context_exposes_client_detail_terms(app):
     flask_app, offer_id, offer_item_id, client_id, detail_id = app
     with flask_app.app_context():
