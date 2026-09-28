@@ -150,9 +150,19 @@
 
     {% if not focus_host %}
     <section class="admin-card">
-        <h3 style="margin-top: 0;">Управление на устройствата</h3>
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap;">
+            <h3 style="margin: 0;">Управление на устройствата</h3>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                <button type="button" class="btn-submit btn-inline" data-dialog="shellyDeviceDialog" data-new-button>+ Ново Shelly устройство</button>
+                <button type="button" class="btn-submit btn-inline" data-dialog="modbusDeviceDialog" data-new-button>+ Ново Modbus устройство</button>
+            </div>
+        </div>
+
+        <dialog id="shellyDeviceDialog" class="form-dialog">
+        <h3 data-dialog-title>Ново Shelly устройство</h3>
         <form action="{{ url_for('admin_power_add_device') }}" method="POST" class="admin-form">
             {% include 'partials/csrf_field.html' %}
+            <input type="hidden" name="with_machines" value="1">
             <div class="form-group">
                 <label>Име на устройството</label>
                 <input type="text" name="name" placeholder="напр. Лазер CO2" maxlength="100">
@@ -176,7 +186,7 @@
             <p class="text-muted text-small" style="width: 100%; margin: -8px 0 8px 0;">За "IP (HTTP)" е нужен IP адрес, за "MQTT" - MQTT тема. "RPC през UDP" и "CoIoT" все още не са реализирани в приложението (проверено - няма как да получим пакети по тях от този dev сървър в момента).</p>
             <div class="form-group">
                 <label>Монтиран в ел. табло (по избор)</label>
-                <select name="panel_id">
+                <select name="panel_id" id="shelly_panel_id" data-create="{{ create_url('panel') }}">
                     <option value="">-- няма --</option>
                     {% for p in panels %}
                     <option value="{{ p.id }}">{{ p.room.name }} / {{ p.name }}</option>
@@ -195,12 +205,15 @@
                     {% endfor %}
                 </div>
             </div>
-            <button type="submit" class="btn-submit">Добави машина</button>
+            <button type="submit" class="btn-submit" data-dialog-submit>Добави машина</button>
         </form>
+        </dialog>
 
-        <form action="{{ url_for('admin_add_modbus_device') }}" method="POST" class="admin-form" style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border-color);">
+        <dialog id="modbusDeviceDialog" class="form-dialog">
+        <h3 data-dialog-title>Ново Modbus устройство</h3>
+        <form action="{{ url_for('admin_add_modbus_device') }}" method="POST" class="admin-form">
             {% include 'partials/csrf_field.html' %}
-            <p class="section-subtitle" style="width: 100%; margin-top: 0;">Ново Modbus TCP устройство (DTSU666 електромер или Solis S6 инвертор). Регистровите карти на двата модела са потвърдени и се показват автоматично в живия изглед по-долу.</p>
+            <p class="section-subtitle" style="width: 100%; margin-top: 0;">Modbus TCP устройство (DTSU666 електромер или Solis S6 инвертор). Регистровите карти на двата модела са потвърдени и се показват автоматично в живия изглед по-долу.</p>
             <div class="form-group">
                 <label>Име</label>
                 <input type="text" name="name" placeholder="напр. DTSU666 - главно табло" maxlength="100">
@@ -227,7 +240,7 @@
             </div>
             <div class="form-group new-modbus-virtual-fields" style="display:none;">
                 <label>Измерва се през (инвертор)</label>
-                <select name="source_device_id">
+                <select name="source_device_id" id="modbus_source_device_id" data-create="{{ create_url('inverter') }}">
                     <option value="">-- изберете инвертор --</option>
                     {% for d in modbus_devices if d.device_type == 'solis_s6' %}
                     <option value="{{ d.id }}">{{ d.name }}</option>
@@ -236,7 +249,7 @@
             </div>
             <div class="form-group">
                 <label>Монтирано в ел. табло (по избор)</label>
-                <select name="panel_id">
+                <select name="panel_id" id="modbus_panel_id" data-create="{{ create_url('panel') }}">
                     <option value="">-- няма --</option>
                     {% for p in panels %}
                     <option value="{{ p.id }}">{{ p.room.name }} / {{ p.name }}</option>
@@ -259,8 +272,9 @@
                     {% endfor %}
                 </div>
             </div>
-            <button type="submit" class="btn-submit">Добави Modbus устройство</button>
+            <button type="submit" class="btn-submit" data-dialog-submit>Добави Modbus устройство</button>
         </form>
+        </dialog>
         <script>
             // "Виртуален измервател" няма собствена Modbus връзка - показва
             // "Измерва се през" вместо IP/порт/unit id (виж
@@ -272,154 +286,102 @@
             }
         </script>
 
+        {% macro modbus_edit_button(d) -%}
+        <button type="button" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;" data-dialog="modbusDeviceDialog"
+                data-action="{{ url_for('admin_update_modbus_device', device_id=d.id) }}"
+                data-title="Редакция: {{ d.name }}"
+                data-values='{{ {"name": d.name, "device_type": d.device_type, "host": d.host, "port": d.port, "unit_id": d.unit_id,
+                    "source_device_id": d.source_device_id or "", "panel_id": d.panel_id or "", "notes": d.notes,
+                    "machine_ids": d.machines|map(attribute="id")|list}|tojson|forceescape }}'>Редактирай</button>
+        {%- endmacro %}
+
+        {% macro modbus_diagnostics(d) -%}
+        <details>
+            <summary class="text-small text-muted" style="cursor: pointer;">Сурови регистри</summary>
+            <form class="modbus-read-form" data-device-id="{{ d.id }}" data-read-url="{{ url_for('admin_modbus_read_registers', device_id=d.id) }}">
+                <div class="form-group">
+                    <label>Адрес</label>
+                    <input type="number" name="address" value="0" min="0">
+                </div>
+                <div class="form-group">
+                    <label>Брой</label>
+                    <input type="number" name="count" value="10" min="1" max="64">
+                </div>
+                <div class="form-group">
+                    <label>Тип</label>
+                    <select name="input_type">
+                        <option value="holding">Holding (0x03)</option>
+                        <option value="input">Input (0x04)</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Прочети</button>
+            </form>
+            <div class="modbus-result-area" data-result-for="{{ d.id }}"></div>
+        </details>
+        {%- endmacro %}
+
+        {% macro delete_button(url, name, label) -%}
+        <form action="{{ url }}" method="POST" onsubmit="return confirm('{{ label }} &quot;{{ name|e }}&quot;?');" style="display:inline;">
+            {% include 'partials/csrf_field.html' %}
+            <button type="submit" class="btn-delete">Премахни</button>
+        </form>
+        {%- endmacro %}
+
         {% if devices or modbus_devices %}
         <div class="table-responsive" style="margin-top: 18px;">
             <table class="data-table">
                 <thead>
                 <tr>
                     <th>Устройство</th>
+                    <th>Връзка</th>
+                    <th>Табло</th>
                     <th>Свързана машина</th>
                     <th>Диагностика</th>
-                    <th></th>
+                    <th class="text-right">Действия</th>
                 </tr>
                 </thead>
                 <tbody>
                 {% for d in devices %}
                 <tr>
+                    <td><strong>{{ d.name }}</strong></td>
                     <td>
-                        <form action="{{ url_for('admin_power_rename_device', device_id=d.id) }}" method="POST"
-                              style="display:flex; flex-direction: column; gap: 6px;">
-                            {% include 'partials/csrf_field.html' %}
-                            <input type="text" name="name" value="{{ d.name }}" maxlength="100" required
-                                   class="rename-input" style="width: 140px;" placeholder="Име">
-                            <select name="connection_type" style="width: 140px;">
-                                {% for key, label in connection_types.items() %}
-                                <option value="{{ key }}" {% if d.connection_type == key %}selected{% endif %}>{{ label }}</option>
-                                {% endfor %}
-                            </select>
-                            <input type="text" name="host" value="{{ d.host or '' }}" placeholder="IP адрес"
-                                   class="rename-input" style="width: 140px;">
-                            <input type="text" name="mqtt_topic" value="{{ d.mqtt_topic or '' }}" placeholder="MQTT тема (по избор)"
-                                   class="rename-input" style="width: 140px;">
-                            <select name="panel_id" style="width: 140px;">
-                                <option value="">-- без табло --</option>
-                                {% for p in panels %}
-                                <option value="{{ p.id }}" {% if d.panel_id == p.id %}selected{% endif %}>{{ p.room.name }} / {{ p.name }}</option>
-                                {% endfor %}
-                            </select>
-                            <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Запази</button>
-                        </form>
+                        {{ connection_types.get(d.connection_type, d.connection_type) }}
+                        <div class="text-muted text-small">{{ d.host or d.mqtt_topic or '—' }}</div>
                     </td>
-                    <td>
-                        <form action="{{ url_for('admin_power_set_device_machines', device_id=d.id) }}" method="POST">
-                            {% include 'partials/csrf_field.html' %}
-                            <div class="machine-checklist">
-                                {% for m in machines %}
-                                <label class="machine-checklist-item">
-                                    <input type="checkbox" name="machine_ids" value="{{ m.id }}"
-                                           {% if m in d.machines %}checked{% endif %}> {{ m.name }}
-                                </label>
-                                {% else %}
-                                <span class="text-muted text-small">Няма добавени машини в списъка с машини.</span>
-                                {% endfor %}
-                            </div>
-                            <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem; margin-top: 6px;">Запази</button>
-                        </form>
-                    </td>
+                    <td>{{ (d.panel.room.name ~ ' / ' ~ d.panel.name) if d.panel else '—' }}</td>
+                    <td>{{ d.machines|map(attribute='name')|join(', ') or '—' }}</td>
                     <td class="text-muted text-small">&mdash;</td>
-                    <td class="text-right">
-                        <form action="{{ url_for('admin_power_delete_device', device_id=d.id) }}" method="POST"
-                              onsubmit="return confirm('Премахване на машина &quot;{{ d.name|e }}&quot;?');"
-                              style="display:inline;">
-                            {% include 'partials/csrf_field.html' %}
-                            <button type="submit" class="btn-delete">Премахни</button>
-                        </form>
+                    <td class="text-right" style="white-space: nowrap;">
+                        <button type="button" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;" data-dialog="shellyDeviceDialog"
+                                data-action="{{ url_for('admin_power_rename_device', device_id=d.id) }}"
+                                data-title="Редакция: {{ d.name }}"
+                                data-values='{{ {"name": d.name, "connection_type": d.connection_type, "host": d.host, "mqtt_topic": d.mqtt_topic,
+                                    "panel_id": d.panel_id or "", "machine_ids": d.machines|map(attribute="id")|list}|tojson|forceescape }}'>Редактирай</button>
+                        {{ delete_button(url_for('admin_power_delete_device', device_id=d.id), d.name, 'Премахване на машина') }}
                     </td>
                 </tr>
                 {% endfor %}
                 {% for d in modbus_devices if d.device_type != 'solis_s6' %}
-                {% set form_id = 'modbus-form-' ~ d.id %}
                 <tr>
                     <td>
-                        <form id="{{ form_id }}" action="{{ url_for('admin_update_modbus_device', device_id=d.id) }}" method="POST">
-                            {% include 'partials/csrf_field.html' %}
-                        </form>
-                        <div style="display:flex; flex-direction: column; gap: 6px;">
-                            <input type="text" name="name" form="{{ form_id }}" value="{{ d.name }}" maxlength="100" required
-                                   class="rename-input" style="width: 140px;" placeholder="Име">
-                            <input type="text" name="host" form="{{ form_id }}" value="{{ d.host }}" placeholder="IP адрес" required
-                                   class="rename-input" style="width: 140px;">
-                            <input type="number" name="port" form="{{ form_id }}" value="{{ d.port }}" placeholder="Порт"
-                                   class="rename-input" style="width: 140px;">
-                            <input type="number" name="unit_id" form="{{ form_id }}" value="{{ d.unit_id }}" placeholder="Unit ID"
-                                   class="rename-input" style="width: 140px;">
-                            <select name="device_type" form="{{ form_id }}" style="width: 140px;">
-                                {% for key, label in modbus_device_types.items() %}
-                                <option value="{{ key }}" {% if d.device_type == key %}selected{% endif %}>{{ label }}</option>
-                                {% endfor %}
-                            </select>
-                            {% if d.device_type == 'solis_grid_meter' %}
-                            <select name="source_device_id" form="{{ form_id }}" style="width: 140px;" title="Измерва се през (само за виртуален измервател)">
-                                <option value="">-- изберете инвертор --</option>
-                                {% for sd in modbus_devices if sd.device_type == 'solis_s6' %}
-                                <option value="{{ sd.id }}" {% if d.source_device_id == sd.id %}selected{% endif %}>{{ sd.name }}</option>
-                                {% endfor %}
-                            </select>
-                            {% endif %}
-                            <input type="text" name="notes" form="{{ form_id }}" value="{{ d.notes or '' }}" placeholder="Бележки (по избор)"
-                                   class="rename-input" style="width: 140px;">
-                            <select name="panel_id" form="{{ form_id }}" style="width: 140px;">
-                                <option value="">-- без табло --</option>
-                                {% for p in panels %}
-                                <option value="{{ p.id }}" {% if d.panel_id == p.id %}selected{% endif %}>{{ p.room.name }} / {{ p.name }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
+                        <strong>{{ d.name }}</strong>
+                        <div class="text-muted text-small">{{ modbus_device_types.get(d.device_type, d.device_type) }}</div>
+                        {% if d.notes %}<div class="text-muted text-small">{{ d.notes }}</div>{% endif %}
                     </td>
                     <td>
-                        <div class="machine-checklist">
-                            {% for m in machines %}
-                            <label class="machine-checklist-item">
-                                <input type="checkbox" name="machine_ids" form="{{ form_id }}" value="{{ m.id }}"
-                                       {% if m in d.machines %}checked{% endif %}> {{ m.name }}
-                            </label>
-                            {% else %}
-                            <span class="text-muted text-small">Няма добавени машини в списъка с машини.</span>
-                            {% endfor %}
-                        </div>
-                        <button type="submit" form="{{ form_id }}" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem; margin-top: 6px;">Запази</button>
+                        {% if d.device_type == 'solis_grid_meter' %}
+                        през {{ d.source_device.name if d.source_device else '—' }}
+                        {% else %}
+                        Modbus TCP
+                        <div class="text-muted text-small">{{ d.host }}:{{ d.port }} · unit {{ d.unit_id }}</div>
+                        {% endif %}
                     </td>
-                    <td>
-                        <details>
-                            <summary class="text-small text-muted" style="cursor: pointer;">Сурови регистри</summary>
-                            <form class="modbus-read-form" data-device-id="{{ d.id }}" data-read-url="{{ url_for('admin_modbus_read_registers', device_id=d.id) }}">
-                                <div class="form-group">
-                                    <label>Адрес</label>
-                                    <input type="number" name="address" value="0" min="0">
-                                </div>
-                                <div class="form-group">
-                                    <label>Брой</label>
-                                    <input type="number" name="count" value="10" min="1" max="64">
-                                </div>
-                                <div class="form-group">
-                                    <label>Тип</label>
-                                    <select name="input_type">
-                                        <option value="holding">Holding (0x03)</option>
-                                        <option value="input">Input (0x04)</option>
-                                    </select>
-                                </div>
-                                <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Прочети</button>
-                            </form>
-                            <div class="modbus-result-area" data-result-for="{{ d.id }}"></div>
-                        </details>
-                    </td>
-                    <td class="text-right">
-                        <form action="{{ url_for('admin_delete_modbus_device', device_id=d.id) }}" method="POST"
-                              onsubmit="return confirm('Изтриване на &quot;{{ d.name|e }}&quot;?');"
-                              style="display:inline;">
-                            {% include 'partials/csrf_field.html' %}
-                            <button type="submit" class="btn-delete">Премахни</button>
-                        </form>
+                    <td>{{ (d.panel.room.name ~ ' / ' ~ d.panel.name) if d.panel else '—' }}</td>
+                    <td>{{ d.machines|map(attribute='name')|join(', ') or '—' }}</td>
+                    <td>{{ modbus_diagnostics(d) }}</td>
+                    <td class="text-right" style="white-space: nowrap;">
+                        {{ modbus_edit_button(d) }}
+                        {{ delete_button(url_for('admin_delete_modbus_device', device_id=d.id), d.name, 'Изтриване на') }}
                     </td>
                 </tr>
                 {% endfor %}
@@ -444,126 +406,87 @@
                     <th>Портове &rarr; табла</th>
                     <th>Свързана машина</th>
                     <th>Диагностика</th>
-                    <th></th>
+                    <th class="text-right">Действия</th>
                 </tr>
                 </thead>
                 <tbody>
                 {% for d in solis_devices %}
-                {% set form_id = 'modbus-form-' ~ d.id %}
-                {% set ports_form_id = 'ports-form-' ~ d.id %}
+                {% set ports = [
+                    ('grid_panel_id', 'Мрежа', d.grid_panel_id),
+                    ('main_panel_id', 'Основен', d.main_panel_id),
+                    ('backup_panel_id', 'Бекъп', d.backup_panel_id),
+                    ('generator_panel_id', 'Генератор', d.generator_panel_id),
+                ] %}
                 <tr>
                     <td>
-                        <form id="{{ form_id }}" action="{{ url_for('admin_update_modbus_device', device_id=d.id) }}" method="POST">
-                            {% include 'partials/csrf_field.html' %}
-                        </form>
-                        <div style="display:flex; flex-direction: column; gap: 6px;">
-                            <input type="text" name="name" form="{{ form_id }}" value="{{ d.name }}" maxlength="100" required
-                                   class="rename-input" style="width: 140px;" placeholder="Име">
-                            <input type="text" name="host" form="{{ form_id }}" value="{{ d.host }}" placeholder="IP адрес" required
-                                   class="rename-input" style="width: 140px;">
-                            <input type="number" name="port" form="{{ form_id }}" value="{{ d.port }}" placeholder="Порт"
-                                   class="rename-input" style="width: 140px;">
-                            <input type="number" name="unit_id" form="{{ form_id }}" value="{{ d.unit_id }}" placeholder="Unit ID"
-                                   class="rename-input" style="width: 140px;">
-                            <input type="hidden" name="device_type" form="{{ form_id }}" value="solis_s6">
-                            <input type="text" name="notes" form="{{ form_id }}" value="{{ d.notes or '' }}" placeholder="Бележки (по избор)"
-                                   class="rename-input" style="width: 140px;">
-                            <select name="panel_id" form="{{ form_id }}" style="width: 140px;">
-                                <option value="">-- без табло --</option>
-                                {% for p in panels %}
-                                <option value="{{ p.id }}" {% if d.panel_id == p.id %}selected{% endif %}>{{ p.room.name }} / {{ p.name }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
+                        <strong>{{ d.name }}</strong>
+                        <div class="text-muted text-small">{{ d.host }}:{{ d.port }} · unit {{ d.unit_id }}</div>
+                        {% if d.notes %}<div class="text-muted text-small">{{ d.notes }}</div>{% endif %}
                     </td>
                     <td>
                         {% if d.panel %}
-                        <p class="text-small text-muted" style="margin: 0 0 6px 0;">Сега: {{ d.panel.room.building.name }} / {{ d.panel.room.name }}</p>
-                        <form action="{{ url_for('admin_update_panel_room', panel_id=d.panel.id) }}" method="POST" style="display:flex; flex-direction: column; gap: 6px;">
-                            {% include 'partials/csrf_field.html' %}
-                            <select name="room_id" style="width: 140px;">
-                                {% for r in rooms %}
-                                <option value="{{ r.id }}" {% if d.panel.room_id == r.id %}selected{% endif %}>{{ r.building.name }} / {{ r.name }}</option>
-                                {% endfor %}
-                            </select>
-                            <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Премести</button>
-                        </form>
+                        {{ d.panel.room.building.name }} / {{ d.panel.room.name }}
+                        <div><button type="button" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem; margin-top: 4px;" data-dialog="panelRoomDialog"
+                                data-action="{{ url_for('admin_update_panel_room', panel_id=d.panel.id) }}"
+                                data-title="Премести табло: {{ d.panel.name }}"
+                                data-values='{{ {"room_id": d.panel.room_id}|tojson|forceescape }}'>Премести</button></div>
                         {% else %}
-                        <span class="text-muted text-small">Няма свързано табло за картата - изберете от "Устройство".</span>
+                        <span class="text-muted text-small">Няма свързано табло за картата - изберете от "Редактирай".</span>
                         {% endif %}
                     </td>
                     <td>
-                        <form id="{{ ports_form_id }}" action="{{ url_for('admin_update_device_ports', device_id=d.id) }}" method="POST" style="display:flex; flex-direction: column; gap: 6px;">
-                            {% include 'partials/csrf_field.html' %}
-                            {% for port_key, port_label, current_panel_id in [
-                                ('grid_panel_id', 'Мрежа', d.grid_panel_id),
-                                ('main_panel_id', 'Основен', d.main_panel_id),
-                                ('backup_panel_id', 'Бекъп', d.backup_panel_id),
-                                ('generator_panel_id', 'Генератор', d.generator_panel_id),
-                            ] %}
-                            <div style="display:flex; align-items:center; gap:6px;">
-                                <label class="text-small text-muted" style="width: 62px; flex-shrink:0;">{{ port_label }}</label>
-                                <select name="{{ port_key }}" style="width: 140px;">
-                                    <option value="">-- няма --</option>
-                                    {% for p in panels %}
-                                    <option value="{{ p.id }}" {% if current_panel_id == p.id %}selected{% endif %}>{{ p.room.name }} / {{ p.name }}</option>
-                                    {% endfor %}
-                                </select>
-                            </div>
-                            {% endfor %}
-                            <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Запази портовете</button>
-                        </form>
+                        {% for port_key, port_label, current_panel_id in ports %}
+                        {% set port_panel = panels|selectattr('id', 'equalto', current_panel_id)|first %}
+                        <div class="text-small"><span class="text-muted">{{ port_label }}:</span> {{ (port_panel.room.name ~ ' / ' ~ port_panel.name) if port_panel else '—' }}</div>
+                        {% endfor %}
+                        <button type="button" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem; margin-top: 4px;" data-dialog="devicePortsDialog"
+                                data-action="{{ url_for('admin_update_device_ports', device_id=d.id) }}"
+                                data-title="Портове: {{ d.name }}"
+                                data-values='{{ {"grid_panel_id": d.grid_panel_id or "", "main_panel_id": d.main_panel_id or "",
+                                    "backup_panel_id": d.backup_panel_id or "", "generator_panel_id": d.generator_panel_id or ""}|tojson|forceescape }}'>Портове</button>
                     </td>
-                    <td>
-                        <div class="machine-checklist">
-                            {% for m in machines %}
-                            <label class="machine-checklist-item">
-                                <input type="checkbox" name="machine_ids" form="{{ form_id }}" value="{{ m.id }}"
-                                       {% if m in d.machines %}checked{% endif %}> {{ m.name }}
-                            </label>
-                            {% else %}
-                            <span class="text-muted text-small">Няма добавени машини в списъка с машини.</span>
-                            {% endfor %}
-                        </div>
-                        <button type="submit" form="{{ form_id }}" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem; margin-top: 6px;">Запази</button>
-                    </td>
-                    <td>
-                        <details>
-                            <summary class="text-small text-muted" style="cursor: pointer;">Сурови регистри</summary>
-                            <form class="modbus-read-form" data-device-id="{{ d.id }}" data-read-url="{{ url_for('admin_modbus_read_registers', device_id=d.id) }}">
-                                <div class="form-group">
-                                    <label>Адрес</label>
-                                    <input type="number" name="address" value="0" min="0">
-                                </div>
-                                <div class="form-group">
-                                    <label>Брой</label>
-                                    <input type="number" name="count" value="10" min="1" max="64">
-                                </div>
-                                <div class="form-group">
-                                    <label>Тип</label>
-                                    <select name="input_type">
-                                        <option value="holding">Holding (0x03)</option>
-                                        <option value="input">Input (0x04)</option>
-                                    </select>
-                                </div>
-                                <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Прочети</button>
-                            </form>
-                            <div class="modbus-result-area" data-result-for="{{ d.id }}"></div>
-                        </details>
-                    </td>
-                    <td class="text-right">
-                        <form action="{{ url_for('admin_delete_modbus_device', device_id=d.id) }}" method="POST"
-                              onsubmit="return confirm('Изтриване на &quot;{{ d.name|e }}&quot;?');"
-                              style="display:inline;">
-                            {% include 'partials/csrf_field.html' %}
-                            <button type="submit" class="btn-delete">Премахни</button>
-                        </form>
+                    <td>{{ d.machines|map(attribute='name')|join(', ') or '—' }}</td>
+                    <td>{{ modbus_diagnostics(d) }}</td>
+                    <td class="text-right" style="white-space: nowrap;">
+                        {{ modbus_edit_button(d) }}
+                        {{ delete_button(url_for('admin_delete_modbus_device', device_id=d.id), d.name, 'Изтриване на') }}
                     </td>
                 </tr>
                 {% endfor %}
                 </tbody>
             </table>
         </div>
+
+        <dialog id="panelRoomDialog" class="form-dialog">
+            <h3 data-dialog-title>Премести табло</h3>
+            <form method="POST" class="admin-form">
+                {% include 'partials/csrf_field.html' %}
+                <div class="form-group">
+                    <label>Помещение</label>
+                    <select name="room_id" id="panel_room_id" data-create="{{ create_url('room') }}">
+                        {% for r in rooms %}<option value="{{ r.id }}">{{ r.building.name }} / {{ r.name }}</option>{% endfor %}
+                    </select>
+                </div>
+                <button type="submit" class="btn-submit">Премести</button>
+            </form>
+        </dialog>
+
+        <dialog id="devicePortsDialog" class="form-dialog">
+            <h3 data-dialog-title>Портове</h3>
+            <form method="POST" class="admin-form">
+                {% include 'partials/csrf_field.html' %}
+                {% for port_key, port_label in [('grid_panel_id', 'Мрежа'), ('main_panel_id', 'Основен'), ('backup_panel_id', 'Бекъп'), ('generator_panel_id', 'Генератор')] %}
+                <div class="form-group">
+                    <label>{{ port_label }}</label>
+                    <select name="{{ port_key }}" id="port_{{ port_key }}" data-create="{{ create_url('panel') }}">
+                        <option value="">-- няма --</option>
+                        {% for p in panels %}<option value="{{ p.id }}">{{ p.room.name }} / {{ p.name }}</option>{% endfor %}
+                    </select>
+                </div>
+                {% endfor %}
+                <button type="submit" class="btn-submit">Запази портовете</button>
+            </form>
+        </dialog>
     </section>
     {% endif %}
 

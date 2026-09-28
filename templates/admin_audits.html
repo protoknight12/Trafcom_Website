@@ -32,7 +32,7 @@
     {% endwith %}
 
     {% if current_user.is_admin or current_user.role == 'quality_control' %}
-    <section class="admin-card">
+    <section class="admin-card" data-dialog-section="+ Нов одит">
         <h3>Нов вътрешен одит</h3>
         <p class="section-subtitle">ISO 9001 §9.2 - планиране на вътрешен одит; констатациите се добавят по-късно в самия одит.</p>
         <form action="{{ url_for('admin_add_audit') }}" method="POST" class="admin-form">
@@ -43,7 +43,7 @@
             </div>
             <div class="form-group">
                 <label for="new_auditor_id">Одитор</label>
-                <select id="new_auditor_id" name="auditor_id">
+                <select id="new_auditor_id" data-create="{{ create_url('user') }}" name="auditor_id">
                     <option value="">-- няма --</option>
                     {% for u in users %}
                     <option value="{{ u.id }}">{{ u.username }}</option>
@@ -104,7 +104,7 @@
                     </td>
                     <td>{{ audit.findings|length }}</td>
                     <td class="text-right">
-                        <a href="{{ url_for('admin_edit_audit', audit_id=audit.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Отвори</a>
+                        <a href="{{ url_for('admin_edit_audit', audit_id=audit.id) }}" data-frame="stay" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Отвори</a>
                     </td>
                     <td class="text-right">
                         {% if current_user.is_admin or current_user.role == 'quality_control' %}

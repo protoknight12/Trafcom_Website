@@ -359,12 +359,12 @@
 
             <div class="control-group-title">{{ _('Изчисляване на цена') }}</div>
             <div class="form-group" style="margin-bottom: 12px;">
-                <select id="in-material" class="material-picker" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-color); color: #fff; padding: 8px; border-radius: 4px;">
+                <select id="in-material" data-create="{{ create_url('material') }}" class="material-picker" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-color); color: #fff; padding: 8px; border-radius: 4px;">
                     {% include 'partials/material_options.html' %}
                 </select>
             </div>
             <div class="form-group" style="margin-bottom: 12px;">
-                <select id="in-service" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-color); color: #fff; padding: 8px; border-radius: 4px;">
+                <select id="in-service" data-create="{{ create_url('service') }}" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-color); color: #fff; padding: 8px; border-radius: 4px;">
                     {% for s in services %}
                     <option value="{{ s.id }}">{{ localized(s, 'name') }}</option>
                     {% endfor %}

@@ -25,7 +25,7 @@
     <section class="admin-card">
         <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px;">
             <h3 style="margin:0;">Модели батерии</h3>
-            <a href="{{ url_for('new_battery_model_window') }}" onclick="window.open(this.href, 'newBatteryModel', 'width=520,height=680'); return false;" class="btn-submit" style="padding: 8px 16px; font-size: 0.85rem; text-decoration:none;">+ Нов модел</a>
+            <a href="{{ url_for('new_battery_model_window') }}" data-frame class="btn-submit" style="padding: 8px 16px; font-size: 0.85rem; text-decoration:none;">+ Нов модел</a>
         </div>
         <p class="section-subtitle">Каталог с технически характеристики на батерийните модули - при добавяне на батерия в stack се избира модел от този списък вместо ръчно въвеждане на напрежение/капацитет.</p>
 
@@ -54,7 +54,7 @@
                     <td class="text-small text-muted">{{ m.cycle_life or '—' }}</td>
                     <td class="text-small text-muted">{{ m.protection_rating or '—' }}</td>
                     <td class="text-right">
-                        <a href="{{ url_for('edit_battery_model_window', model_id=m.id) }}" onclick="window.open(this.href, 'editBatteryModel', 'width=520,height=680'); return false;" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
+                        <a href="{{ url_for('edit_battery_model_window', model_id=m.id) }}" data-frame class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
                     </td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_battery_model', model_id=m.id) }}" method="POST"

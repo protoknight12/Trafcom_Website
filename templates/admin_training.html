@@ -38,14 +38,14 @@
     {% endwith %}
 
     {% if current_user.is_admin or current_user.role == 'quality_control' %}
-    <section class="admin-card">
+    <section class="admin-card" data-dialog-section="+ Ново обучение">
         <h3>Ново обучение</h3>
         <p class="section-subtitle">ISO 9001 §7.2 - запис за проведено обучение/инструктаж на служител, като доказателство за компетентност.</p>
         <form action="{{ url_for('admin_add_training_record') }}" method="POST" class="admin-form" enctype="multipart/form-data">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="new_employee_id">Служител</label>
-                <select id="new_employee_id" name="employee_id" required>
+                <select id="new_employee_id" data-create="{{ create_url('user') }}" name="employee_id" required>
                     <option value="">-- изберете --</option>
                     {% for u in employees %}
                     <option value="{{ u.id }}">{{ u.username }}</option>

@@ -38,14 +38,14 @@
     {% endwith %}
 
     {% if current_user.is_admin or current_user.role == 'quality_control' %}
-    <section class="admin-card">
+    <section class="admin-card" data-dialog-section="+ Нова обратна връзка">
         <h3>Нова обратна връзка</h3>
         <p class="section-subtitle">ISO 9001 §9.1.2 - наблюдение на възприятието на клиента (анкета, оплакване, похвала, рекламация, преглед на доставка).</p>
         <form action="{{ url_for('admin_add_satisfaction_record') }}" method="POST" class="admin-form">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="new_client_id">Клиент</label>
-                <select id="new_client_id" name="client_id" required>
+                <select id="new_client_id" data-create="{{ create_url('client') }}" name="client_id" required>
                     <option value="">-- изберете --</option>
                     {% for c in clients %}
                     <option value="{{ c.id }}">{{ c.name }}</option>
@@ -126,7 +126,7 @@
                     <td style="max-width: 260px;">{{ record.comment or '—' }}</td>
                     <td>
                         {% if record.capa %}
-                        <a href="{{ url_for('admin_edit_capa', capa_id=record.capa.id) }}">{{ record.capa.capa_no }}</a>
+                        <a href="{{ url_for('admin_edit_capa', capa_id=record.capa.id) }}" data-frame>{{ record.capa.capa_no }}</a>
                         {% elif current_user.is_admin or current_user.role == 'quality_control' %}
                         <a href="{{ url_for('admin_capa', prefill_problem=(record.comment or record.source_label) ~ ' (' ~ (record.client.name if record.client else '') ~ ')', prefill_source='Удовлетвореност на клиенти - ' ~ record.source_label, from_satisfaction_id=record.id) }}" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Отвори CAPA</a>
                         {% else %}—{% endif %}

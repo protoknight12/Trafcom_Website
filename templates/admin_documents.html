@@ -70,7 +70,7 @@
     {% endwith %}
 
     {% if current_user.is_admin or current_user.role == 'quality_control' %}
-    <section class="admin-card">
+    <section class="admin-card" data-dialog-section="+ Нов документ">
         <h3>Добавяне на нов документ</h3>
         <p class="section-subtitle">Наръчник по качеството, политики, процедури, работни инструкции, формуляри и записи (ISO 9001 §7.5) - с версии и одобрения.</p>
         <form action="{{ url_for('admin_add_document') }}" method="POST" enctype="multipart/form-data" class="admin-form">
@@ -101,7 +101,7 @@
             </div>
             <div class="form-group">
                 <label for="new_owner_id">Отговорник (незадължително)</label>
-                <select id="new_owner_id" name="owner_id">
+                <select id="new_owner_id" data-create="{{ create_url('user') }}" name="owner_id">
                     <option value="">-- няма --</option>
                     {% for u in users %}
                     <option value="{{ u.id }}">{{ u.username }}</option>
@@ -227,8 +227,8 @@
 </main>
 
 {% if current_user.is_admin or current_user.role == 'quality_control' %}
-<div class="doc-modal-overlay" id="revisionModal">
-    <div class="doc-modal-box">
+<dialog id="revisionModal" class="form-dialog">
+    <div>
         <span class="doc-modal-close" onclick="closeRevisionModal()">&times;</span>
         <h3 style="margin-top: 0; margin-bottom: 16px;">Нова версия на <span id="revisionModalDocNo"></span></h3>
         <form id="revisionForm" method="POST" enctype="multipart/form-data">
@@ -252,7 +252,7 @@
             <button type="submit" class="btn-submit" style="width: 100%;">Запази версията</button>
         </form>
     </div>
-</div>
+</dialog>
 {% endif %}
 
 <script src="{{ url_for('static', filename='js/table_search.js') }}"></script>
@@ -262,10 +262,10 @@ initTableSearch('documentsSearchInput', 'documentsTableBody');
 function openRevisionModal(documentId, documentNo) {
     document.getElementById('revisionModalDocNo').textContent = documentNo;
     document.getElementById('revisionForm').action = '/admin/documents/' + documentId + '/new-revision';
-    document.getElementById('revisionModal').style.display = 'flex';
+    document.getElementById('revisionModal').showModal();
 }
 function closeRevisionModal() {
-    document.getElementById('revisionModal').style.display = 'none';
+    document.getElementById('revisionModal').close();
     document.getElementById('revisionForm').reset();
 }
 </script>

@@ -2219,7 +2219,7 @@
             // selection (see the delegated canvas click handler above) -
             // clicking elsewhere on the card body does nothing.
             if (connectMode) return;
-            window.open(card.getAttribute('data-edit-url'), 'editComponent', 'width=480,height=640');
+            window.openFrameDialog(card.getAttribute('data-edit-url'));
         });
     });
 

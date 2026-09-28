@@ -62,7 +62,7 @@
             </div>
             <div class="form-group">
                 <label for="auditor_id">Одитор</label>
-                <select id="auditor_id" name="auditor_id" {{ 'disabled' if readonly }}>
+                <select id="auditor_id" data-create="{{ create_url('user') }}" name="auditor_id" {{ 'disabled' if readonly }}>
                     <option value="">-- няма --</option>
                     {% for u in users %}
                     <option value="{{ u.id }}" {% if audit.auditor_id == u.id %}selected{% endif %}>{{ u.username }}</option>
@@ -96,7 +96,7 @@
     </section>
 
     {% if not readonly %}
-    <section class="admin-card">
+    <section class="admin-card" data-dialog-section="+ Нова констатация">
         <h3>Нова констатация</h3>
         <form action="{{ url_for('admin_add_audit_finding', audit_id=audit.id) }}" method="POST" class="admin-form">
             {% include 'partials/csrf_field.html' %}

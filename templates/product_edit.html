@@ -78,7 +78,7 @@
             </div>
             <div class="form-group">
                 <label for="owner_client_id">Собственик (клиент) - празно = публичен продукт</label>
-                <select id="owner_client_id" name="owner_client_id">
+                <select id="owner_client_id" data-create="{{ create_url('client') }}" name="owner_client_id">
                     <option value="">-- Публичен (видим за всички клиенти) --</option>
                     {% for c in clients %}
                     <option value="{{ c.id }}" {% if product.owner_client_id == c.id %}selected{% endif %}>{{ c.name }}</option>
@@ -93,7 +93,7 @@
     <section class="admin-card">
         <h3>Детайли в продукта</h3>
 
-        <form action="{{ url_for('admin_product_add_detail', product_id=product.id) }}" method="POST" class="admin-form" style="margin-bottom: 1.5rem;">
+        <form action="{{ url_for('admin_product_add_detail', product_id=product.id) }}" method="POST" class="admin-form" style="margin-bottom: 1.5rem;" data-dialog-section="+ Добави детайл" data-dialog-heading="Добавяне на детайл към продукта">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
@@ -161,7 +161,7 @@
         <h3>Допълнителни разходи</h3>
         <p class="section-subtitle">Боядисване, монтаж, транспорт или всякакъв друг разход, специфичен за този продукт.</p>
 
-        <form action="{{ url_for('admin_product_add_cost', product_id=product.id) }}" method="POST" class="admin-form" style="margin-bottom: 1.5rem;">
+        <form action="{{ url_for('admin_product_add_cost', product_id=product.id) }}" method="POST" class="admin-form" style="margin-bottom: 1.5rem;" data-dialog-section="+ Добави разход" data-dialog-heading="Нов допълнителен разход">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="label">Описание</label>
@@ -210,7 +210,7 @@
         <h3>Изображения на продукта</h3>
         <p class="section-subtitle">Качете чертежи, визуализации или снимки на крайния продукт, които автоматично ще се приложат към генерираната оферта.</p>
 
-        <form action="{{ url_for('admin_product_upload_image', product_id=product.id) }}" method="POST" enctype="multipart/form-data" style="margin-bottom: 2rem; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+        <form action="{{ url_for('admin_product_upload_image', product_id=product.id) }}" method="POST" enctype="multipart/form-data" style="margin-bottom: 2rem; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;" data-dialog-section="+ Качи изображение" data-dialog-heading="Ново изображение">
             {% include 'partials/csrf_field.html' %}
             <div style="flex: 1; min-width: 250px;">
                 <input type="file" name="images" accept="image/*" multiple required style="background: #1a1a1a; color: #fff; padding: 9px 12px; border-radius: 6px; border: 1px solid #333; width: 100%; box-sizing: border-box; font-size: 0.9rem;">
@@ -276,8 +276,8 @@
 
 <!-- Modal for Quick Create Detail -->
 {% if current_user.is_admin %}
-<div id="quickDetailModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
-    <div class="admin-card" style="width: 100%; max-width: 500px; margin: 20px; background-color: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 28px; box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15); position: relative;">
+<dialog id="quickDetailModal" class="form-dialog">
+    <div>
         <span onclick="closeQuickDetailModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
         <h3 style="margin-top: 0; margin-bottom: 16px;">Бързо създаване на детайл</h3>
         <form id="quickDetailForm" enctype="multipart/form-data">
@@ -297,7 +297,7 @@
             </div>
             <div class="form-group" style="margin-bottom: 15px;">
                 <label for="qd_service">Услуга (рязане, незадължително)</label>
-                <select id="qd_service" name="service_id">
+                <select id="qd_service" data-create="{{ create_url('service') }}" name="service_id">
                     <option value="">-- Изберете услуга --</option>
                     {% for s in services %}
                     <option value="{{ s.id }}">{{ s.name }} ({% if s.pricing_mode == 'length' %}{{ "%.2f"|format(s.price_per_meter_eur) }} €/м{% else %}{{ "%.2f"|format(s.price_per_hour_eur) }} €/час{% endif %})</option>
@@ -328,10 +328,10 @@
             <div id="qd_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
         </form>
     </div>
-</div>
+</dialog>
 
-<div id="quickMaterialModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1100; align-items: center; justify-content: center;">
-    <div class="admin-card" style="width: 100%; max-width: 500px; margin: 20px; background-color: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 28px; box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15); position: relative; max-height: 90vh; overflow-y: auto;">
+<dialog id="quickMaterialModal" class="form-dialog">
+    <div>
         <span onclick="closeQuickMaterialModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
         <h3 style="margin-top: 0; margin-bottom: 16px;">Бързо създаване на материал</h3>
         <form id="quickMaterialForm">
@@ -343,7 +343,7 @@
             <div class="form-group" style="margin-bottom: 15px;">
                 <label for="qm_type">Тип (форма на суровината)</label>
                 <select id="qm_type" name="type">
-                    {% for type_key, type_label in MATERIAL_TYPE_LABELS.items() %}
+                    {% for type_key, type_label in material_type_labels().items() %}
                     <option value="{{ type_key }}" {% if type_key == 'sheets' %}selected{% endif %}>{{ type_label }}</option>
                     {% endfor %}
                 </select>
@@ -351,10 +351,6 @@
             <div class="form-group" style="margin-bottom: 15px;">
                 <label for="qm_brand">Марка (незадължително)</label>
                 <input type="text" id="qm_brand" name="brand" placeholder="напр. Alcoa">
-            </div>
-            <div class="form-group" style="margin-bottom: 15px;">
-                <label for="qm_cost_per_m2" id="qm_cost_per_m2_label">Цена на м² плоча (€)</label>
-                <input type="number" id="qm_cost_per_m2" step="0.01" min="0" name="cost_per_m2" required>
             </div>
             <div class="form-group" style="margin-bottom: 15px;" id="qm_cutting_speed_mm_per_min_group">
                 <label for="qm_cutting_speed_mm_per_min">Скорост на рязане (мм/мин)</label>
@@ -388,18 +384,18 @@
             <div id="qm_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
         </form>
     </div>
-</div>
+</dialog>
 
 <script src="{{ url_for('static', filename='js/material_picker.js') }}"></script>
 <script>
     let qmTargetSelectId = null;
     function openQuickMaterialModal(targetSelectId) {
         qmTargetSelectId = targetSelectId;
-        document.getElementById('quickMaterialModal').style.display = 'flex';
+        document.getElementById('quickMaterialModal').showModal();
         document.getElementById('qm_error').style.display = 'none';
     }
     function closeQuickMaterialModal() {
-        document.getElementById('quickMaterialModal').style.display = 'none';
+        document.getElementById('quickMaterialModal').close();
         document.getElementById('quickMaterialForm').reset();
         applyQuickMaterialDimensionLabels();
     }
@@ -407,13 +403,8 @@
     // Relabels/hides the 3 generic dimension fields based on the chosen type -
     // mirrors MATERIAL_DIMENSION_LABELS/material_price_m2_label in app.py, same
     // as the standalone add-material form on admin_materials.html.
-    const QM_DIMENSION_FIELD_LABELS = {
-        sheets: ['Дължина на плочата (мм)', 'Ширина на плочата (мм)', 'Дебелина (мм)'],
-        rods: ['Дължина (мм)', 'Диаметър (мм)', null],
-        pipes: ['Дължина (мм)', 'Външен диаметър (мм)', 'Дебелина на стената (мм)'],
-        profiles: ['Дължина (мм)', 'Ширина (мм)', 'Дебелина на стената (мм)'],
-        other: [null, null, null],
-    };
+    const MATERIAL_TYPES = {{ material_types_js()|tojson }};
+    const QM_DIMENSION_FIELD_LABELS = Object.fromEntries(Object.entries(MATERIAL_TYPES).map(function (e) { return [e[0], e[1].dims]; }));
     const QM_DIMENSION_FIELD_IDS = ['qm_sheet_length_mm', 'qm_sheet_width_mm', 'qm_thickness_mm'];
 
     function applyQuickMaterialDimensionLabels() {
@@ -429,17 +420,14 @@
                 group.style.display = 'none';
             }
         });
-        document.getElementById('qm_cost_per_m2_label').textContent =
-            typeSelect.value === 'sheets' ? 'Цена на м² плоча (€)' :
-            typeSelect.value === 'rods' ? 'Цена на линеен метър (€)' : 'Цена на м² материал (€)';
 
-        // Rods are cut to length on a saw, never pierced or DXF-cut - no
+        // Saw-cut types (MaterialType.has_cutting off) are never pierced or DXF-cut - no
         // cutting/drill speed for them.
-        const isRod = typeSelect.value === 'rods';
+        const noCutting = !(MATERIAL_TYPES[typeSelect.value] || {}).cutting;
         ['qm_cutting_speed_mm_per_min', 'qm_pierce_time_sec'].forEach(function (fieldId) {
             const group = document.getElementById(fieldId + '_group');
             const input = document.getElementById(fieldId);
-            if (isRod) {
+            if (noCutting) {
                 group.style.display = 'none';
                 input.required = false;
                 input.value = '';
@@ -492,11 +480,11 @@
     });
 
     function openQuickDetailModal() {
-        document.getElementById('quickDetailModal').style.display = 'flex';
+        document.getElementById('quickDetailModal').showModal();
         document.getElementById('qd_error').style.display = 'none';
     }
     function closeQuickDetailModal() {
-        document.getElementById('quickDetailModal').style.display = 'none';
+        document.getElementById('quickDetailModal').close();
         document.getElementById('quickDetailForm').reset();
         applyQdManualPriceVisibility();
     }

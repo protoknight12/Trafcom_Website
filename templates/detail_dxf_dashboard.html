@@ -117,7 +117,7 @@
             {% if current_user.is_admin %}Само администратори могат да ги изтеглят, преглеждат и премахват.{% endif %}
         </p>
 
-        <form action="{{ url_for('upload_detail_dxf', detail_id=detail.id) }}" method="POST" enctype="multipart/form-data" class="admin-form" style="margin-bottom: 1.5rem;">
+        <form action="{{ url_for('upload_detail_dxf', detail_id=detail.id) }}" method="POST" enctype="multipart/form-data" class="admin-form" style="margin-bottom: 1.5rem;" data-dialog-section="{{ _('+ Качи нова версия') }}" data-dialog-heading="{{ _('Нова версия на DXF файла') }}">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="dxf_file">{{ _('Качване на нов файл') }}</label>
@@ -187,7 +187,7 @@
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="material_material">Материал</label>
-                <select id="material_material" name="material" onchange="applyDetailMaterialDimensionLabels()">
+                <select id="material_material" data-create="{{ create_url('material') }}" name="material" onchange="applyDetailMaterialDimensionLabels()">
                     {% for type_key, group in materials|groupby('type') %}
                     <optgroup label="{{ material_type_label(type_key) }}">
                         {% for material in group %}
@@ -255,13 +255,14 @@
         // labelled Диаметър/Дължина instead of Ширина/Височина; the 3rd field
         // is purely informational (Detail.thickness_mm, never priced) and
         // hides when the type has no such concept (rods/other).
-        const DETAIL_DIMENSION_LABELS = {
-            sheets: ['Ширина (мм)', 'Височина (мм)', 'Дебелина (мм)'],
-            rods: ['Диаметър (мм)', 'Дължина (мм)', null],
-            pipes: ['Външен диаметър (мм)', 'Дължина (мм)', 'Дебелина на стената (мм)'],
-            profiles: ['Ширина (мм)', 'Дължина (мм)', 'Дебелина на стената (мм)'],
-            other: ['Ширина (мм)', 'Височина (мм)', null],
-        };
+        // Built from MaterialType (material_types_js() in app.py): linear stock
+        // shows [width, length]; area/piece stock shows the cut part's own
+        // Ширина/Височина rather than the raw sheet's dimension names.
+        const DETAIL_DIMENSION_LABELS = Object.fromEntries(Object.entries({{ material_types_js()|tojson }}).map(function (e) {
+            const t = e[1];
+            const linear = t.unit === 'm';
+            return [e[0], [(linear && t.dims[1]) || 'Ширина (мм)', (linear && t.dims[0]) || (linear ? 'Дължина (мм)' : 'Височина (мм)'), t.dims[2]]];
+        }));
 
         // Shows/hides + relabels the fields for whichever material is
         // currently selected, without touching values - used on initial page
@@ -340,11 +341,11 @@
             Изберете няколко операции по-долу преди да ги запазите - общата цена се обновява веднага.
         </p>
 
-        <form id="addOperationsForm" action="{{ url_for('admin_add_operation', detail_id=detail.id) }}" method="POST" class="admin-form" style="margin-bottom: 1rem;" novalidate>
+        <form id="addOperationsForm" action="{{ url_for('admin_add_operation', detail_id=detail.id) }}" method="POST" class="admin-form" style="margin-bottom: 1rem;" novalidate data-dialog-section="+ Добави операции" data-dialog-heading="Добавяне на операции">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="op_service_id">Услуга</label>
-                <select id="op_service_id" onchange="toggleOpValueInput()">
+                <select id="op_service_id" data-create="{{ create_url('service') }}" onchange="toggleOpValueInput()">
                     <option value="">-- Изберете услуга --</option>
                     <optgroup label="По дължина (мм)">
                         {% for s in services if s.pricing_mode == 'length' %}
@@ -648,5 +649,10 @@
 </div>
 
 <script src="{{ url_for('static', filename='js/dxf_viewer.js') }}"></script>
+<script>
+    // "+" create-new next to a select (form_dialog.js): keep this page's own
+    // catalog arrays in step with the option that was just added.
+    document.addEventListener('create-new', function (e) { mergeCatalog(e.detail.doc, 'OP_SERVICES', OP_SERVICES); });
+</script>
 </body>
 </html>

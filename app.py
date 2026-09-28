@@ -18,10 +18,11 @@ import urllib.error
 from html import escape as html_escape
 from html.parser import HTMLParser
 from concurrent.futures import ThreadPoolExecutor
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory, send_file, g, session, has_request_context
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory, send_file, g, session, has_request_context, has_app_context
 from openpyxl import Workbook
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import inspect as sa_inspect
+from markupsafe import Markup
 from sqlalchemy.exc import IntegrityError
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_limiter import Limiter
@@ -143,6 +144,17 @@ def get_locale():
 
 
 babel = Babel(app, locale_selector=get_locale)
+
+
+@app.url_defaults
+def _static_cache_bust(endpoint, values):
+    """?v=<mtime> on every static URL, so an edited JS/CSS file is never
+    served stale from the browser's cache."""
+    if endpoint == 'static' and 'filename' in values and 'v' not in values:
+        try:
+            values['v'] = int(os.stat(os.path.join(app.static_folder, values['filename'])).st_mtime)
+        except OSError:
+            pass
 
 
 @app.context_processor
@@ -437,60 +449,132 @@ class MaterialPrice(db.Model):
     min_quantity = db.Column(db.Float, nullable=True)
 
 
-# Structural-form categories a material's stock can come in, driving the
-# <optgroup> grouping on every material <select> in the app (see
-# partials/material_options.html) and the type dropdown on the admin
-# materials page. Not a DB table - this is a fixed, small set of physical
-# stock forms, not admin-editable data.
-MATERIAL_TYPE_LABELS = {
-    'sheets': 'Листове/Плочи',
-    'rods': 'Пръти',
-    'profiles': 'Профили',
-    'pipes': 'Тръби',
-    'other': 'Други',
-}
+class MaterialType(db.Model):
+    """
+    Admin-editable structural type of a material's stock (лист, прът, тръба,
+    ...), managed from admin_materials.html. MaterialPrice.type stores its
+    `key` (plain string, no FK - the 5 original types keep their historic
+    keys 'sheets'/'rods'/'profiles'/'pipes'/'other', new ones get 'type_<id>').
 
-# Per-type display labels for the 3 generic dimension columns (sheet_length_mm,
-# sheet_width_mm, thickness_mm - in that order), so a rod's "width" column
-# reads "Диаметър" instead of "Ширина", etc. None hides that slot's meaning
-# for the type (still stored/editable, just not a relevant physical
-# dimension) - see material_dimension_labels() and admin_materials.html.
-# ponytail: reuses the 3 existing sheet-named columns instead of adding
-# dedicated diameter_mm/wall_thickness_mm columns - avoids a migration, at
-# the cost of the column names not matching what they mean for non-sheet
-# types. Add real columns if this ever needs to be less confusing at the DB
-# level.
-MATERIAL_DIMENSION_LABELS = {
-    'sheets': ('Дължина на плочата (мм)', 'Ширина на плочата (мм)', 'Дебелина (мм)'),
-    'rods': ('Дължина (мм)', 'Диаметър (мм)', None),
-    'pipes': ('Дължина (мм)', 'Външен диаметър (мм)', 'Дебелина на стената (мм)'),
-    'profiles': ('Дължина (мм)', 'Ширина (мм)', 'Дебелина на стената (мм)'),
-    'other': (None, None, None),
-}
+    The per-parameter *_label columns double as on/off switches: NULL means
+    the type has no such parameter (field hidden everywhere), text means it's
+    shown under that label. They map onto MaterialPrice's generic columns:
+    length_label -> sheet_length_mm, width_label -> sheet_width_mm (a
+    diameter for round stock), thickness_label -> thickness_mm, height_label
+    -> height_mm.
+
+    price_unit decides how MaterialPrice.cost_per_m2 is read by the pricing
+    engine (see _material_cost): 'm2' area rate, 'm' linear-meter rate (cost
+    scales with the cut part's length only), 'pcs' flat price per piece.
+    has_cutting=False means stock is saw-cut to length - no cutting speed /
+    pierce time asked for. is_round only affects display (⌀ prefix).
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    key = db.Column(db.String(30), unique=True, nullable=False)
+    label = db.Column(db.String(100), nullable=False)
+    price_unit = db.Column(db.String(10), nullable=False, default='m2')
+    length_label = db.Column(db.String(100), nullable=True)
+    width_label = db.Column(db.String(100), nullable=True)
+    thickness_label = db.Column(db.String(100), nullable=True)
+    height_label = db.Column(db.String(100), nullable=True)
+    has_cutting = db.Column(db.Boolean, nullable=False, default=True)
+    is_round = db.Column(db.Boolean, nullable=False, default=False)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+
+
+# The 5 types that used to be hardcoded - seeded into MaterialType once (see
+# seed_material_types()) with exactly the behavior they had before, so no
+# existing material/detail price changes when this moved into the DB.
+DEFAULT_MATERIAL_TYPES = [
+    dict(key='sheets', label='Листове/Плочи', price_unit='m2', length_label='Дължина на плочата (мм)',
+         width_label='Ширина на плочата (мм)', thickness_label='Дебелина (мм)', has_cutting=True, is_round=False, sort_order=1),
+    dict(key='rods', label='Пръти', price_unit='m', length_label='Дължина (мм)', width_label='Диаметър (мм)',
+         has_cutting=False, is_round=True, sort_order=2),
+    dict(key='profiles', label='Профили', price_unit='m', length_label='Дължина (мм)', width_label='Ширина (мм)',
+         thickness_label='Дебелина на стената (мм)', height_label='Височина (мм)', has_cutting=False, is_round=False, sort_order=3),
+    dict(key='pipes', label='Тръби', price_unit='m', length_label='Дължина (мм)', width_label='Външен диаметър (мм)',
+         thickness_label='Дебелина на стената (мм)', has_cutting=True, is_round=True, sort_order=4),
+    dict(key='other', label='Други', price_unit='m2', has_cutting=True, is_round=False, sort_order=5),
+]
+
+PRICE_UNIT_LABELS = {'m2': 'м²', 'm': 'линеен метър', 'pcs': 'брой'}
+PRICE_UNIT_SHORT = {'m2': 'м²', 'm': 'м', 'pcs': 'бр'}
+
+
+def seed_material_types():
+    """Inserts DEFAULT_MATERIAL_TYPES only if MaterialType is completely
+    empty - safe on every startup, never touches admin edits."""
+    if not MaterialType.query.first():
+        db.session.add_all(MaterialType(**d) for d in DEFAULT_MATERIAL_TYPES)
+        db.session.commit()
+
+
+def _material_types():
+    """key -> MaterialType, ordered, cached for the current app context (g)
+    since per-row helpers below call this many times per page. An empty
+    table (fresh DB before seed_material_types() ran, or a test DB) falls
+    back to unsaved DEFAULT_MATERIAL_TYPES objects rather than writing
+    from inside a read. Outside any app context (pure-function unit tests)
+    the defaults are used directly."""
+    if not has_app_context():
+        return {d['key']: MaterialType(**d) for d in DEFAULT_MATERIAL_TYPES}
+    cache = g.get('_material_types')
+    if cache is None:
+        rows = MaterialType.query.order_by(MaterialType.sort_order, MaterialType.id).all() \
+            or [MaterialType(**d) for d in DEFAULT_MATERIAL_TYPES]
+        cache = g._material_types = {r.key: r for r in rows}
+    return cache
+
+
+def material_type_cfg(type_key):
+    """The MaterialType for a key, falling back to 'sheets' (then to any
+    type) for blank/unknown/deleted keys - same default as
+    _parse_material_type()."""
+    types = _material_types()
+    return types.get(type_key) or types.get('sheets') or next(iter(types.values()))
+
+
+def material_price_unit(type_key):
+    return material_type_cfg(type_key).price_unit
+
+
+def material_is_linear(type_key):
+    """True when the type is priced/stocked by the linear meter."""
+    return material_price_unit(type_key) == 'm'
+
+
+def material_unit_short(type_key):
+    return PRICE_UNIT_SHORT.get(material_price_unit(type_key), 'м²')
+
+
+def material_type_labels():
+    """key -> label for every type, in display order (the old
+    MATERIAL_TYPE_LABELS dict, now DB-backed)."""
+    return {k: t.label for k, t in _material_types().items()}
 
 
 def material_dimension_labels(type_key):
-    """(length_label, width_label, thickness_label) for a material type, falling
-    back to the sheet labels for unknown/blank types - same default as
-    _parse_material_type()."""
-    return MATERIAL_DIMENSION_LABELS.get(type_key, MATERIAL_DIMENSION_LABELS['sheets'])
+    """(length_label, width_label, thickness_label) for a material type - None
+    hides that slot. See MaterialType."""
+    t = material_type_cfg(type_key)
+    return (t.length_label, t.width_label, t.thickness_label)
 
 
 def material_price_m2_label(type_key):
-    """
-    cost_per_m2 is only genuinely area-based for sheets (calculate_cnc_price()
-    prices those off the DXF bounding-box area). Rods, pipes AND profiles are
-    all bought/cut by the linear meter (a profile is a bar stock, same as a
-    rod or pipe, just non-round - see _material_cost), not by a
-    cross-section area - a pipe's "width" is its outer diameter, not a
-    literal width (see DETAIL_DIMENSION_LABELS/MATERIAL_DIMENSION_LABELS), so
-    diameter x length (or profile width x length) is not a real area.
-    """
-    if type_key == 'sheets':
-        return 'Цена на м² плоча (€)'
-    if type_key in ('rods', 'pipes', 'profiles'):
-        return 'Цена на линеен метър (€)'
-    return 'Цена на м² материал (€)'
+    """Column/field label for MaterialPrice.cost_per_m2, which means a
+    different rate depending on the type's price_unit (see _material_cost)."""
+    return {'m': 'Цена на линеен метър (€)', 'pcs': 'Цена за брой (€)'}.get(
+        material_price_unit(type_key), 'Цена на м² (€)')
+
+
+def material_types_js():
+    """Per-type config for client-side form logic (which fields to show,
+    their labels, cutting inputs on/off) - replaces the per-template
+    hardcoded rods/pipes/profiles JS tables."""
+    return {k: {'label': t.label, 'unit': t.price_unit,
+                'dims': [t.length_label, t.width_label, t.thickness_label],
+                'height': t.height_label, 'cutting': bool(t.has_cutting), 'round': bool(t.is_round)}
+            for k, t in _material_types().items()}
 
 
 def format_cut_dimensions(width, height, material_type):
@@ -505,7 +589,7 @@ def format_cut_dimensions(width, height, material_type):
     """
     if width is None or height is None:
         return '-'
-    if material_type in ('rods', 'pipes'):
+    if material_type_cfg(material_type).is_round:
         return f"⌀{width:.2f} x {height:.2f} мм"
     return f"{width:.2f} x {height:.2f} мм"
 
@@ -700,8 +784,11 @@ class Detail(db.Model):
         if not self.material:
             return None
         width, height = self.effective_width, self.effective_height
-        if self.material.type in ('rods', 'pipes', 'profiles'):
+        unit = material_price_unit(self.material.type)
+        if unit == 'm':
             return f"{height:.0f} мм × {self.material.cost_per_m2:.2f} €/м"
+        if unit == 'pcs':
+            return f"1 бр × {self.material.cost_per_m2:.2f} €/бр"
         area_m2 = (width * height) / 1_000_000
         return f"{area_m2:.3f} м² × {self.material.cost_per_m2:.2f} €/м²"
 
@@ -897,15 +984,15 @@ class OrderItem(db.Model):
 
     For product line items, production progress is tracked per-component via
     OrderItemComponent (see below), NOT via quantity_produced on this row -
-    that field is only meaningful for standalone-detail line items, which
-    have no sub-components to track separately.
+    that field is only meaningful for lines produced as a whole: standalone
+    details and component-less products (see stock_target).
     """
     id = db.Column(db.Integer, primary_key=True)
     order_id = db.Column(db.Integer, db.ForeignKey('order.id'), nullable=False)
     product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=True)
     detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=True)
     quantity_ordered = db.Column(db.Integer, nullable=False)
-    quantity_produced = db.Column(db.Integer, default=0, nullable=False)  # only used for standalone-detail items
+    quantity_produced = db.Column(db.Integer, default=0, nullable=False)  # only for items tracked whole (see stock_target)
     unit_price = db.Column(db.Float, nullable=False, default=0.0)
 
     product = db.relationship('Product')
@@ -929,13 +1016,27 @@ class OrderItem(db.Model):
         return round(self.unit_price * self.quantity_ordered, 2)
 
     @property
+    def stock_target(self):
+        """The catalog row this line is produced as a whole (quantity_produced
+        on this row, stock bumped on it): a standalone Detail, or a Product
+        with no Details to track (e.g. one converted from an offer's
+        free-text line - api_offer_item_to_product()). None for a product
+        tracked per component."""
+        if self.detail:
+            return self.detail
+        if self.product and not self.components:
+            return self.product
+        return None
+
+    @property
     def detail_unit_totals(self):
         """
         (needed, produced) expressed in raw detail-piece units - used both
         for this item's own percent_complete and as this item's weighted
-        contribution to the parent Order's percent_complete.
+        contribution to the parent Order's percent_complete. A component-less
+        product counts as its own units, like a standalone detail.
         """
-        if self.product_id:
+        if self.product_id and self.components:
             needed = sum(c.quantity_needed for c in self.components)
             produced = sum(min(c.quantity_produced, c.quantity_needed) for c in self.components)
         else:
@@ -1277,10 +1378,12 @@ class ProductionOrder(db.Model):
 
     @property
     def is_linear_material(self):
-        return bool(self.material and self.material.type in ('rods', 'pipes', 'profiles'))
+        return bool(self.material and material_is_linear(self.material.type))
 
     @property
     def unit_label(self):
+        if self.material and material_price_unit(self.material.type) == 'pcs':
+            return 'бр'
         return 'мм' if self.is_linear_material else 'м²'
 
     @property
@@ -4037,8 +4140,11 @@ def _material_cost(width, height, material, client=None):
     meaningful here (the live calculator); a Detail/Product's already-frozen
     list price can't be decomposed back into a material portion per client.
     """
-    if material.type in ('rods', 'pipes', 'profiles'):
+    unit = material_price_unit(material.type)
+    if unit == 'm':
         cost = (height / 1000) * material.cost_per_m2
+    elif unit == 'pcs':
+        cost = material.cost_per_m2
     else:
         area_m2 = (width * height) / 1_000_000
         cost = area_m2 * material.cost_per_m2
@@ -4058,9 +4164,12 @@ def _cost_per_m2_from_unit_price(material_type, unit_price, width, height):
     dimensions); callers then fall back to treating unit_price as already
     being the rate, same as before this existed.
     """
+    unit = material_price_unit(material_type)
+    if unit_price is not None and unit == 'pcs':
+        return unit_price
     if unit_price is None or not height:
         return None
-    if material_type in ('rods', 'pipes', 'profiles'):
+    if unit == 'm':
         return unit_price / (height / 1000)
     if not width:
         return None
@@ -4079,8 +4188,11 @@ def _detail_material_unit_qty(detail):
     material need.
     """
     width, height = detail.effective_width, detail.effective_height
-    if detail.material.type in ('rods', 'pipes', 'profiles'):
+    unit = material_price_unit(detail.material.type)
+    if unit == 'm':
         return height / 1000.0
+    if unit == 'pcs':
+        return 1.0
     return (width * height) / 1_000_000.0
 
 
@@ -4112,7 +4224,7 @@ def _material_available_qty(material):
     running length total, not a bar count.
     """
     stock = material.stock_quantity or 0.0
-    if material.type not in ('rods', 'pipes', 'profiles'):
+    if material_price_unit(material.type) == 'm2':
         sheet_area_m2 = _material_sheet_area_m2(material)
         if sheet_area_m2:
             return stock * sheet_area_m2
@@ -4132,7 +4244,7 @@ def _material_stock_delta(material, native_qty):
     and delete_production_order() so completing then deleting a job always
     lands stock back at exactly its starting value.
     """
-    if material.type not in ('rods', 'pipes', 'profiles'):
+    if material_price_unit(material.type) == 'm2':
         sheet_area_m2 = _material_sheet_area_m2(material)
         if sheet_area_m2:
             return native_qty / sheet_area_m2
@@ -4437,8 +4549,45 @@ app.jinja_env.globals['get_text'] = get_text
 # MATERIAL_TYPE_LABELS values are looked up dynamically (by type_key), so
 # pybabel can't statically extract them from this lambda - their EN/DE
 # translations are added by hand in translations/*/LC_MESSAGES/messages.po.
-app.jinja_env.globals['material_type_label'] = lambda key: gettext(MATERIAL_TYPE_LABELS.get(key, key))
-app.jinja_env.globals['MATERIAL_TYPE_LABELS'] = MATERIAL_TYPE_LABELS
+app.jinja_env.globals['material_type_label'] = lambda key: gettext(material_type_labels().get(key, key))
+app.jinja_env.globals['material_unit_short'] = material_unit_short
+app.jinja_env.globals['material_types_js'] = material_types_js
+
+# "+ Добави нов" next to an entity <select> (static/js/form_dialog.js, the
+# data-create attribute): entity -> (list page endpoint, which "+ Нов ..."
+# button on it to auto-open - 1-based among its [data-new-button]s, 0 = none).
+# The list page opens in a frame dialog with that add dialog already open.
+CREATE_NEW_TARGETS = {
+    'material': ('admin_materials', 1),
+    'client': ('admin_clients', 1),
+    'deliverer': ('admin_clients', 2),
+    'supplier': ('admin_delivery_notes', 1),
+    'machine': ('list_machines', 1),
+    'service': ('admin_services', 1),
+    'detail': ('admin_details', 1),
+    'product': ('admin_products', 1),
+    'room': ('admin_buildings', 0),  # a room needs its building - pick it on that page
+    'panel': ('admin_panels', 1),
+    'user': ('admin_users', 1),
+    'network_device': ('admin_network', 1),
+    'inverter': ('admin_power', 2),
+}
+
+
+def create_url(entity):
+    """URL for the "+" button next to a select of `entity`s, or '' when the
+    viewer can't create one (the button is then simply not shown). Every
+    target is an admin-only page."""
+    if entity not in CREATE_NEW_TARGETS or not current_user.is_authenticated or not current_user.is_admin:
+        return ''
+    endpoint, which = CREATE_NEW_TARGETS[entity]
+    return url_for(endpoint, dialog=f'new:{which}') if which else url_for(endpoint)
+
+
+app.jinja_env.globals['create_url'] = create_url
+# Was the static MATERIAL_TYPE_LABELS dict; now DB-backed (MaterialType), so
+# templates call it - only pages that actually list types hit the DB.
+app.jinja_env.globals['material_type_labels'] = material_type_labels
 app.jinja_env.globals['format_material_option'] = format_material_option
 app.jinja_env.globals['material_dimension_labels'] = material_dimension_labels
 app.jinja_env.globals['material_price_m2_label'] = material_price_m2_label
@@ -5453,7 +5602,93 @@ def admin_materials():
         flash('Нямате достъп до тази страница.')
         return redirect(url_for('dashboard'))
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
-    return render_template('admin_materials.html', materials=materials, active_page='admin_materials')
+    material_types = MaterialType.query.order_by(MaterialType.sort_order, MaterialType.id).all()
+    type_usage = dict(db.session.query(MaterialPrice.type, db.func.count(MaterialPrice.id)).group_by(MaterialPrice.type).all())
+    return render_template('admin_materials.html', materials=materials, material_types=material_types,
+                           type_usage=type_usage, PRICE_UNIT_LABELS=PRICE_UNIT_LABELS, active_page='admin_materials')
+
+
+# (form checkbox, label input, default label, MaterialType column) for each
+# optional material parameter - a checked box with a blank label falls back
+# to the default text; an unchecked box stores NULL (= parameter off).
+MATERIAL_TYPE_PARAM_FIELDS = [
+    ('has_length', 'length_label', 'Дължина (мм)'),
+    ('has_width', 'width_label', 'Ширина (мм)'),
+    ('has_thickness', 'thickness_label', 'Дебелина (мм)'),
+    ('has_height', 'height_label', 'Височина (мм)'),
+]
+
+
+def _apply_material_type_form(mtype, form):
+    """Copies the add/edit type dialog's fields onto a MaterialType. Returns
+    an error message, or None."""
+    label = form.get('label', '').strip()
+    if not label:
+        return 'Моля въведете име на типа.'
+    price_unit = form.get('price_unit', 'm2')
+    if price_unit not in PRICE_UNIT_LABELS:
+        return 'Невалидна мерна единица за цена.'
+    mtype.label = label
+    mtype.price_unit = price_unit
+    for checkbox, column, default in MATERIAL_TYPE_PARAM_FIELDS:
+        setattr(mtype, column, (form.get(column, '').strip() or default) if form.get(checkbox) else None)
+    mtype.has_cutting = bool(form.get('has_cutting'))
+    mtype.is_round = bool(form.get('is_round'))
+    try:
+        mtype.sort_order = int(form.get('sort_order') or 0)
+    except ValueError:
+        return 'Подредбата трябва да е цяло число.'
+    return None
+
+
+@app.route('/admin/material-types/add', methods=['POST'])
+@role_required('admin')
+def admin_add_material_type():
+    mtype = MaterialType(key='pending')
+    error = _apply_material_type_form(mtype, request.form)
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('admin_materials'))
+    db.session.add(mtype)
+    db.session.flush()
+    mtype.key = f'type_{mtype.id}'
+    db.session.commit()
+    log_action(f'Създаден тип материал "{mtype.label}" (цена за {PRICE_UNIT_LABELS[mtype.price_unit]})')
+    flash(f'Типът "{mtype.label}" беше добавен.', 'success')
+    return redirect(url_for('admin_materials'))
+
+
+@app.route('/admin/material-types/<int:type_id>/edit', methods=['POST'])
+@role_required('admin')
+def admin_edit_material_type(type_id):
+    mtype = MaterialType.query.get_or_404(type_id)
+    error = _apply_material_type_form(mtype, request.form)
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('admin_materials'))
+    log_action(describe_changes(f'тип материал "{mtype.label}"', mtype, {
+        'label': 'име', 'price_unit': 'мерна единица', 'length_label': 'дължина', 'width_label': 'ширина',
+        'thickness_label': 'дебелина', 'height_label': 'височина', 'has_cutting': 'рязане',
+        'is_round': 'кръгло сечение', 'sort_order': 'подредба',
+    }))
+    db.session.commit()
+    flash(f'Типът "{mtype.label}" беше обновен.', 'success')
+    return redirect(url_for('admin_materials'))
+
+
+@app.route('/admin/material-types/<int:type_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_delete_material_type(type_id):
+    mtype = MaterialType.query.get_or_404(type_id)
+    used = MaterialPrice.query.filter_by(type=mtype.key).count()
+    if used:
+        flash(f'Типът "{mtype.label}" се използва от {used} материала и не може да бъде изтрит.', 'danger')
+        return redirect(url_for('admin_materials'))
+    db.session.delete(mtype)
+    db.session.commit()
+    log_action(f'Изтрит тип материал "{mtype.label}"')
+    flash(f'Типът "{mtype.label}" беше изтрит.', 'success')
+    return redirect(url_for('admin_materials'))
 
 
 @app.route('/admin/materials/<int:material_id>/history')
@@ -5609,7 +5844,7 @@ def storage_materials():
             continue
         first = lots[0]
         group['label'] = f"{first.display_name} ({_format_material_dims(first)})"
-        group['unit'] = 'м' if first.type in ('rods', 'pipes', 'profiles') else 'м²'
+        group['unit'] = material_unit_short(first.type)
         group['total_stock'] = sum(lot.stock_quantity for lot in lots)
         group['total_value'] = sum(lot.cost_per_m2 * _material_available_qty(lot) for lot in lots)
         group['min_price'] = min(lot.cost_per_m2 for lot in lots)
@@ -6029,11 +6264,12 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
     a normal, pre-existing state here (same as api_quick_create_product with
     no components attached).
 
-    A *new* material must come with real cost_per_m2/cutting_speed_mm_per_min/
-    pierce_rate_per_min (mirrors admin_add_material's required fields) - without
-    them we'd otherwise silently create a zero-priced row that produces
-    €0.00 CNC prices everywhere it's later picked. Returns None (skip the
-    line) rather than defaulting to 0.0. Matching an *existing* material at
+    Material price comes ONLY from here: admins can't type one on
+    admin_materials.html. A *new* material still needs cutting_speed_mm_per_min/
+    pierce_rate_per_min (returns None otherwise), but its price is this
+    line's unit_price, or 0 ("няма доставна цена") if none was entered. An
+    existing never-priced (0) row just takes this line's price, no new lot.
+    Matching an *existing* material at
     the SAME price (or with no price entered on this line - the common case
     for a routine restock) reuses that row as-is. A different price on this
     line is a distinct batch/lot (the "keep separate items separate" rule
@@ -6056,7 +6292,7 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
     price_per_unit = None
 
     if item_type == 'material':
-        material_type = material_type if material_type in MATERIAL_TYPE_LABELS else 'sheets'
+        material_type = material_type if material_type in material_type_labels() else 'sheets'
         # A restock line from the delivery-note dropdown carries material_key -
         # the exact row the admin picked - so trust that directly instead of
         # re-deriving identity from name/dims/type/notes: several price-lots
@@ -6082,12 +6318,19 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
                 display_name=name, notes=notes, sheet_width_mm=width,
                 sheet_length_mm=height, thickness_mm=thickness, type=material_type
             ).first()
-        if existing and unit_price is not None:
+        # The intake price on this line IS the material's price - admins no
+        # longer enter one on admin_materials.html (see admin_add_material).
+        if unit_price is not None:
             derived_cost_per_m2 = _cost_per_m2_from_unit_price(material_type, unit_price, width, height)
-            effective_cost_per_m2 = derived_cost_per_m2 if derived_cost_per_m2 is not None else unit_price
-            if abs(existing.cost_per_m2 - effective_cost_per_m2) > 0.001:
-                price_per_unit = unit_price
-                cost_per_m2 = effective_cost_per_m2
+            cost_per_m2 = round(derived_cost_per_m2 if derived_cost_per_m2 is not None else unit_price, 2)
+            price_per_unit = unit_price
+        if existing and unit_price is not None:
+            if not existing.cost_per_m2:
+                # First delivery of a never-priced material (created with 0):
+                # this price becomes the row's own, no separate lot needed.
+                existing.cost_per_m2 = cost_per_m2
+                existing.price_per_unit = price_per_unit
+            elif abs(existing.cost_per_m2 - cost_per_m2) > 0.001:
                 cutting_speed_mm_per_min = existing.cutting_speed_mm_per_min
                 pierce_rate_per_min = existing.pierce_rate_per_min
                 existing = None
@@ -6102,17 +6345,23 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
         # creating the distinct variant row the "keep separate items
         # separate" rule above calls for. material_key here identifies the
         # material the admin actually picked before editing its dimensions.
-        if cost_per_m2 is None and material_key:
+        if material_key and (cutting_speed_mm_per_min is None or pierce_rate_per_min is None):
             source = MaterialPrice.query.filter_by(key=material_key).first()
             if source:
-                cost_per_m2 = source.cost_per_m2
+                if cost_per_m2 is None:
+                    cost_per_m2 = source.cost_per_m2
                 cutting_speed_mm_per_min = source.cutting_speed_mm_per_min
                 pierce_rate_per_min = source.pierce_rate_per_min
-        # Rods are cut to length on a saw, never pierced or DXF-cut - no
-        # cutting/drill speed required for them.
-        if cost_per_m2 is None or (material_type != 'rods' and (cutting_speed_mm_per_min is None or pierce_rate_per_min is None)):
+        # No intake price on the line -> 0 ("няма доставна цена"), same as a
+        # material created from admin_materials.html.
+        if cost_per_m2 is None:
+            cost_per_m2 = 0.0
+        # Saw-cut types (MaterialType.has_cutting off) are never pierced or
+        # DXF-cut - no cutting/drill speed required for them.
+        has_cutting = material_type_cfg(material_type).has_cutting
+        if has_cutting and (cutting_speed_mm_per_min is None or pierce_rate_per_min is None):
             return None
-        if material_type == 'rods':
+        if not has_cutting:
             cutting_speed_mm_per_min = None
             pierce_rate_per_min = None
         new_row = MaterialPrice(
@@ -6190,8 +6439,28 @@ def admin_delivery_notes():
                       'material_key': d.material_key, 'price': d.calculated_price} for d in details]
     products_data = [{'name': p.name, 'width': None, 'height': None, 'thickness': None, 'brand': None, 'price': None} for p in products]
     services = Service.query.order_by(Service.name).all()
+    # Each note's lines in the form's own dnItems shape, for its "Редактирай"
+    # (edit_delivery_note) - item_id marks an existing line.
+    note_rows = {}
+    for note in notes:
+        rows = []
+        for it in note.items:
+            target = DELIVERY_NOTE_TARGET_MODELS[it.target_type].query.get(it.target_id)
+            row = {'item_id': it.id, 'type': it.target_type, 'qty': it.quantity, 'unit_price': it.unit_price,
+                   'width': it.width, 'height': it.height, 'thickness': it.thickness, 'brand': it.brand,
+                   'notes': it.notes, 'material_key': None, 'material_type': None, 'components': [],
+                   'cost_per_m2': None, 'cutting_speed_mm_per_min': None, 'pierce_rate_per_min': None,
+                   'name': it.description_snapshot}
+            if it.target_type == 'material' and target:
+                row.update(name=target.display_name, material_key=target.key, material_type=target.type)
+            elif it.target_type == 'detail' and target:
+                row.update(name=target.name, material_key=target.material_key)
+            elif target:
+                row['name'] = target.name
+            rows.append(row)
+        note_rows[note.id] = rows
     return render_template(
-        'admin_delivery_notes.html', suppliers=suppliers, notes=notes,
+        'admin_delivery_notes.html', suppliers=suppliers, notes=notes, note_rows=note_rows,
         materials=materials, details=details, products=products, services=services,
         materials_data=materials_data, details_data=details_data, products_data=products_data,
         active_page='admin_delivery_notes'
@@ -6242,31 +6511,138 @@ def create_delivery_note():
     ([{detail_id, quantity}]) only applies to a brand-new product line -
     see _find_or_create_delivery_target.
     """
-    try:
-        items = json.loads(request.form.get('items_json', ''))
-        if not isinstance(items, list):
-            items = []
-    except (TypeError, ValueError):
-        items = []
-
+    items = _delivery_note_form_items()
     if not items:
         flash('Моля добавете поне един артикул към стоковата разписка.', 'danger')
         return redirect(url_for('admin_delivery_notes'))
 
-    supplier_id_raw = request.form.get('supplier_id', '')
-    supplier_id = int(supplier_id_raw) if supplier_id_raw and supplier_id_raw.isdigit() else None
-    note_date_raw = request.form.get('note_date', '').strip()
-    note_date = datetime.strptime(note_date_raw, '%Y-%m-%d').date() if note_date_raw else None
-
-    note = DeliveryNote(
-        supplier_id=supplier_id,
-        note_number=request.form.get('note_number', '').strip() or None,
-        note_date=note_date,
-        created_by_id=current_user.id,
-    )
+    note = DeliveryNote(created_by_id=current_user.id)
+    _set_delivery_note_header(note, 'supplier_id')
     db.session.add(note)
     db.session.flush()
 
+    added_any, log_parts, log_detail_lines = _apply_delivery_note_items(note, items)
+    if not added_any:
+        db.session.rollback()
+        flash('Няма валидни артикули за добавяне.', 'danger')
+        return redirect(url_for('admin_delivery_notes'))
+
+    db.session.commit()
+    supplier_name = note.supplier.name if note.supplier else '-'
+    header = f'Стокова разписка №{note.id} (доставчик: {supplier_name}, № {note.note_number or "-"}, дата {note.note_date or "-"})'
+    log_action(f'Стокова разписка №{note.id}: ' + ', '.join(log_parts), details=header + '\n' + '\n'.join(log_detail_lines))
+    flash('Стоковата разписка беше записана и наличностите бяха обновени.', 'success')
+    return redirect(url_for('admin_delivery_notes'))
+
+
+@app.route('/admin/delivery-notes/<int:note_id>/edit', methods=['POST'])
+@role_required(['admin', 'worker'])
+def edit_delivery_note(note_id):
+    """
+    Rewrites a recorded DeliveryNote from the same form as create_delivery_note():
+    every old line's stock bump is reversed, then the submitted lines are
+    applied fresh (stock ends up as if the note had been entered this way).
+    A line that kept its item_id and still points at the same catalog row
+    keeps that row as-is - no re-matching; a changed price on such a material
+    line re-prices the lot in place when no other delivery note uses it (a
+    correction), otherwise the usual price-lot split applies. Catalog rows
+    created by the original note are never deleted, just left with that stock
+    taken back.
+    """
+    note = DeliveryNote.query.get_or_404(note_id)
+    items = _delivery_note_form_items()
+    if not items:
+        flash('Разписката трябва да има поне един артикул.', 'danger')
+        return redirect(url_for('admin_delivery_notes'))
+
+    kept = {it.id: {'type': it.target_type, 'target_id': it.target_id, 'unit_price': it.unit_price}
+            for it in note.items}
+    old_lines = _reverse_note_items(note.items, sign=1)
+    _set_delivery_note_header(note, 'supplier_id')
+
+    added_any, log_parts, log_detail_lines = _apply_delivery_note_items(note, items, kept)
+    if not added_any:
+        db.session.rollback()
+        flash('Няма валидни артикули - разписката не е променена.', 'danger')
+        return redirect(url_for('admin_delivery_notes'))
+
+    db.session.commit()
+    supplier_name = note.supplier.name if note.supplier else '-'
+    header = f'Стокова разписка №{note.id} (доставчик: {supplier_name}, № {note.note_number or "-"}, дата {note.note_date or "-"})'
+    log_action(f'Редактирана стокова разписка №{note.id}: ' + ', '.join(log_parts),
+               details=header + '\nПреди:\n' + '\n'.join(old_lines) + '\nСлед:\n' + '\n'.join(log_detail_lines))
+    flash('Стоковата разписка беше редактирана и наличностите бяха преизчислени.', 'success')
+    return redirect(url_for('admin_delivery_notes'))
+
+
+@app.route('/admin/delivery-notes/<int:note_id>/delete', methods=['POST'])
+@role_required(['admin', 'worker'])
+def delete_delivery_note(note_id):
+    """Deletes a DeliveryNote the reverse way it was recorded: every line's
+    intake is taken back out of stock. Catalog rows the note created (new
+    materials/lots/details/products) stay, just without that stock."""
+    note = DeliveryNote.query.get_or_404(note_id)
+    return _delete_note(note, sign=1, label='Стокова разписка', endpoint='admin_delivery_notes')
+
+
+@app.route('/admin/client-delivery-notes/<int:note_id>/delete', methods=['POST'])
+@role_required(['admin', 'worker'])
+def delete_client_delivery_note(note_id):
+    """Deletes a ClientDeliveryNote: everything it issued goes back into stock."""
+    note = ClientDeliveryNote.query.get_or_404(note_id)
+    return _delete_note(note, sign=-1, label='Издадена стокова разписка', endpoint='admin_client_delivery_notes')
+
+
+def _delete_note(note, sign, label, endpoint):
+    party = getattr(note, 'supplier', None) or getattr(note, 'client', None)
+    header = f'{label} №{note.id} ({party.name if party else "-"}, № {note.note_number or "-"}, дата {note.note_date or "-"})'
+    lines = _reverse_note_items(note.items, sign=sign)
+    db.session.delete(note)
+    db.session.commit()
+    log_action(f'Изтрита {label[0].lower() + label[1:]} №{note.id} (наличностите са върнати)',
+               details=header + '\n' + '\n'.join(lines))
+    flash(f'{label} №{note.id} беше изтрита и наличностите бяха върнати.', 'success')
+    return redirect(url_for(endpoint))
+
+
+def _delivery_note_form_items():
+    try:
+        items = json.loads(request.form.get('items_json', ''))
+    except (TypeError, ValueError):
+        return []
+    return items if isinstance(items, list) else []
+
+
+def _set_delivery_note_header(note, party_field):
+    """supplier_id / client_id + number + date from the create/edit form."""
+    party_raw = request.form.get(party_field, '')
+    setattr(note, party_field, int(party_raw) if party_raw.isdigit() else None)
+    note.note_number = request.form.get('note_number', '').strip() or None
+    note_date_raw = request.form.get('note_date', '').strip()
+    note.note_date = datetime.strptime(note_date_raw, '%Y-%m-%d').date() if note_date_raw else None
+
+
+def _reverse_note_items(items, sign):
+    """Takes back the stock movement of each (Client)DeliveryNoteItem
+    (sign=1: it was an intake, so stock goes down; -1: it was issued) and
+    deletes the lines. Returns log lines describing what they were."""
+    lines = []
+    for it in list(items):
+        target = DELIVERY_NOTE_TARGET_MODELS[it.target_type].query.get(it.target_id)
+        if target:
+            _bump_stock(target, -sign * it.quantity)
+        price = f' @ {it.unit_price:g} €' if it.unit_price is not None else ''
+        lines.append(f'{it.description_snapshot} x {it.quantity:g}{price}')
+        db.session.delete(it)
+    db.session.flush()
+    return lines
+
+
+def _apply_delivery_note_items(note, items, kept=None):
+    """The line loop behind create_delivery_note()/edit_delivery_note() - see
+    create_delivery_note() for the items_json shape; on edit, a row may also
+    carry item_id (an old line, described in `kept`)."""
+    kept = kept or {}
     item_type_labels = {'material': 'материал', 'detail': 'детайл', 'product': 'продукт'}
     added_any = False
     log_parts = []
@@ -6319,11 +6695,29 @@ def create_delivery_note():
                 continue
             components[comp_detail_id] = components.get(comp_detail_id, 0) + comp_quantity
 
-        target = _find_or_create_delivery_target(
-            item_type, name, brand, width, height, thickness, unit_price, material_key,
-            cost_per_m2=cost_per_m2, cutting_speed_mm_per_min=cutting_speed_mm_per_min, pierce_rate_per_min=pierce_rate_per_min,
-            components=components, material_type=material_type, notes=notes
-        )
+        target = None
+        old = kept.get(row.get('item_id'))
+        if old and old['type'] == item_type:
+            target = DELIVERY_NOTE_TARGET_MODELS[item_type].query.get(old['target_id'])
+            # still the same catalog row? (the line's pick may have been changed)
+            if target and (target.key != material_key if item_type == 'material' else target.name != name):
+                target = None
+            if target and item_type == 'material' and unit_price is not None and unit_price != old['unit_price']:
+                used_elsewhere = DeliveryNoteItem.query.filter(
+                    DeliveryNoteItem.target_type == 'material', DeliveryNoteItem.target_id == target.id,
+                    DeliveryNoteItem.delivery_note_id != note.id).count()
+                if used_elsewhere:
+                    target = None  # the lot's price belongs to other deliveries too - normal lot split
+                else:
+                    derived = _cost_per_m2_from_unit_price(target.type, unit_price, width, height)
+                    target.cost_per_m2 = round(derived if derived is not None else unit_price, 2)
+                    target.price_per_unit = unit_price
+        if target is None:
+            target = _find_or_create_delivery_target(
+                item_type, name, brand, width, height, thickness, unit_price, material_key,
+                cost_per_m2=cost_per_m2, cutting_speed_mm_per_min=cutting_speed_mm_per_min, pierce_rate_per_min=pierce_rate_per_min,
+                components=components, material_type=material_type, notes=notes
+            )
         if not target:
             continue
 
@@ -6340,18 +6734,7 @@ def create_delivery_note():
         price_note = f', цена {unit_price:g} лв.' if unit_price is not None else ''
         notes_note = f', бележка: {row.get("notes")}' if (row.get('notes') or '').strip() else ''
         log_detail_lines.append(f'{item_type_labels.get(item_type, item_type)} "{description}": +{quantity:g} бр. → нова наличност {target.stock_quantity:g}{price_note}{notes_note}')
-
-    if not added_any:
-        db.session.rollback()
-        flash('Няма валидни артикули за добавяне.', 'danger')
-        return redirect(url_for('admin_delivery_notes'))
-
-    db.session.commit()
-    supplier_name = note.supplier.name if note.supplier else '-'
-    header = f'Стокова разписка №{note.id} (доставчик: {supplier_name}, № {note.note_number or "-"}, дата {note.note_date or "-"})'
-    log_action(f'Стокова разписка №{note.id}: ' + ', '.join(log_parts), details=header + '\n' + '\n'.join(log_detail_lines))
-    flash('Стоковата разписка беше записана и наличностите бяха обновени.', 'success')
-    return redirect(url_for('admin_delivery_notes'))
+    return added_any, log_parts, log_detail_lines
 
 
 @app.route('/admin/delivery-notes/<int:note_id>/print')
@@ -6386,8 +6769,12 @@ def admin_client_delivery_notes():
     materials_data = [{'id': m.id, 'name': format_material_option(m), 'price': None, 'stock': m.stock_quantity} for m in materials]
     details_data = [{'id': d.id, 'name': d.name, 'price': d.total_price, 'stock': d.stock_quantity} for d in details]
     products_data = [{'id': p.id, 'name': p.name, 'price': None, 'stock': p.stock_quantity} for p in products]
+    # for each note's "Редактирай" (edit_client_delivery_note)
+    note_rows = {note.id: [{'type': it.target_type, 'target_id': it.target_id, 'name': it.description_snapshot,
+                            'qty': it.quantity, 'unit_price': it.unit_price, 'notes': it.notes}
+                           for it in note.items] for note in notes}
     return render_template(
-        'admin_client_delivery_notes.html', clients=clients, notes=notes, materials=materials,
+        'admin_client_delivery_notes.html', clients=clients, notes=notes, note_rows=note_rows, materials=materials,
         materials_data=materials_data, details_data=details_data, products_data=products_data,
         active_page='admin_client_delivery_notes'
     )
@@ -6404,31 +6791,60 @@ def create_client_delivery_note():
     admin_client_delivery_notes()'s docstring for why, unlike
     create_delivery_note() there's no _find_or_create_delivery_target here).
     """
-    try:
-        items = json.loads(request.form.get('items_json', ''))
-        if not isinstance(items, list):
-            items = []
-    except (TypeError, ValueError):
-        items = []
-
+    items = _delivery_note_form_items()
     if not items:
         flash('Моля добавете поне един артикул към стоковата разписка.', 'danger')
         return redirect(url_for('admin_client_delivery_notes'))
 
-    client_id_raw = request.form.get('client_id', '')
-    client_id = int(client_id_raw) if client_id_raw and client_id_raw.isdigit() else None
-    note_date_raw = request.form.get('note_date', '').strip()
-    note_date = datetime.strptime(note_date_raw, '%Y-%m-%d').date() if note_date_raw else None
-
-    note = ClientDeliveryNote(
-        client_id=client_id,
-        note_number=request.form.get('note_number', '').strip() or None,
-        note_date=note_date,
-        created_by_id=current_user.id,
-    )
+    note = ClientDeliveryNote(created_by_id=current_user.id)
+    _set_delivery_note_header(note, 'client_id')
     db.session.add(note)
     db.session.flush()
 
+    added_any, log_parts, log_detail_lines = _apply_client_delivery_note_items(note, items)
+    if not added_any:
+        db.session.rollback()
+        flash('Няма валидни артикули за добавяне.', 'danger')
+        return redirect(url_for('admin_client_delivery_notes'))
+
+    db.session.commit()
+    client_name = note.client.name if note.client else '-'
+    header = f'Стокова разписка (издадена) №{note.id} (клиент: {client_name}, № {note.note_number or "-"}, дата {note.note_date or "-"})'
+    log_action(f'Издадена стокова разписка №{note.id}: ' + ', '.join(log_parts), details=header + '\n' + '\n'.join(log_detail_lines))
+    flash('Стоковата разписка беше записана и наличностите бяха обновени.', 'success')
+    return redirect(url_for('admin_client_delivery_notes'))
+
+
+@app.route('/admin/client-delivery-notes/<int:note_id>/edit', methods=['POST'])
+@role_required(['admin', 'worker'])
+def edit_client_delivery_note(note_id):
+    """Rewrites a ClientDeliveryNote: the old lines' stock is given back,
+    then the submitted lines are issued fresh - mirrors edit_delivery_note()."""
+    note = ClientDeliveryNote.query.get_or_404(note_id)
+    items = _delivery_note_form_items()
+    if not items:
+        flash('Разписката трябва да има поне един артикул.', 'danger')
+        return redirect(url_for('admin_client_delivery_notes'))
+
+    old_lines = _reverse_note_items(note.items, sign=-1)
+    _set_delivery_note_header(note, 'client_id')
+    added_any, log_parts, log_detail_lines = _apply_client_delivery_note_items(note, items)
+    if not added_any:
+        db.session.rollback()
+        flash('Няма валидни артикули - разписката не е променена.', 'danger')
+        return redirect(url_for('admin_client_delivery_notes'))
+
+    db.session.commit()
+    client_name = note.client.name if note.client else '-'
+    header = f'Стокова разписка (издадена) №{note.id} (клиент: {client_name}, № {note.note_number or "-"}, дата {note.note_date or "-"})'
+    log_action(f'Редактирана издадена стокова разписка №{note.id}: ' + ', '.join(log_parts),
+               details=header + '\nПреди:\n' + '\n'.join(old_lines) + '\nСлед:\n' + '\n'.join(log_detail_lines))
+    flash('Стоковата разписка беше редактирана и наличностите бяха преизчислени.', 'success')
+    return redirect(url_for('admin_client_delivery_notes'))
+
+
+def _apply_client_delivery_note_items(note, items):
+    """The line loop behind create/edit_client_delivery_note()."""
     item_type_labels = {'material': 'материал', 'detail': 'детайл', 'product': 'продукт'}
     added_any = False
     log_parts = []
@@ -6469,18 +6885,7 @@ def create_client_delivery_note():
         price_note = f', цена {unit_price:g} €' if unit_price is not None else ''
         notes_note = f', бележка: {row.get("notes")}' if (row.get('notes') or '').strip() else ''
         log_detail_lines.append(f'{item_type_labels.get(item_type, item_type)} "{description}": -{quantity:g} бр. → нова наличност {target.stock_quantity:g}{price_note}{notes_note}')
-
-    if not added_any:
-        db.session.rollback()
-        flash('Няма валидни артикули за добавяне.', 'danger')
-        return redirect(url_for('admin_client_delivery_notes'))
-
-    db.session.commit()
-    client_name = note.client.name if note.client else '-'
-    header = f'Стокова разписка (издадена) №{note.id} (клиент: {client_name}, № {note.note_number or "-"}, дата {note.note_date or "-"})'
-    log_action(f'Издадена стокова разписка №{note.id}: ' + ', '.join(log_parts), details=header + '\n' + '\n'.join(log_detail_lines))
-    flash('Стоковата разписка беше записана и наличностите бяха обновени.', 'success')
-    return redirect(url_for('admin_client_delivery_notes'))
+    return added_any, log_parts, log_detail_lines
 
 
 @app.route('/admin/client-delivery-notes/<int:note_id>/print')
@@ -6806,6 +7211,35 @@ def admin_update_user_role(user_id):
     return redirect(url_for('admin_users'))
 
 
+@app.route('/admin/users/<int:user_id>/update', methods=['POST'])
+@role_required('admin')
+def admin_update_user(user_id):
+    """Role + linked Client in one go - backs the edit dialog on
+    admin_users.html (the two single-field routes above/below are kept for
+    anything still posting to them)."""
+    user_to_update = User.query.get_or_404(user_id)
+    role = request.form.get('role', user_to_update.role)
+    if role not in ('regular_user', 'worker', 'admin', 'web_designer', 'quality_control'):
+        flash('Невалидна роля.', 'danger')
+        return redirect(url_for('admin_users'))
+    if user_id == current_user.id and role != user_to_update.role:
+        flash('Не можете да променяте собствената си роля.', 'danger')
+        return redirect(url_for('admin_users'))
+    client_id_raw = request.form.get('client_id', '')
+    client_id = int(client_id_raw) if client_id_raw.isdigit() else None
+    if client_id and not db.session.get(Client, client_id):
+        flash('Невалиден клиент.', 'danger')
+        return redirect(url_for('admin_users'))
+
+    user_to_update.role = role
+    user_to_update.client_id = client_id
+    log_action(describe_changes(f'потребител "{user_to_update.username}"', user_to_update,
+                                {'role': 'роля', 'client_id': 'клиент'}))
+    db.session.commit()
+    flash(f'Потребителят {user_to_update.username} беше обновен успешно.', 'success')
+    return redirect(url_for('admin_users'))
+
+
 @app.route('/admin/update_client/<int:user_id>', methods=['POST'])
 @login_required
 def admin_update_user_client(user_id):
@@ -6889,7 +7323,7 @@ def _parse_erp_number(form):
 def _parse_material_type(form):
     """Reads the material 'type' dropdown, defaulting to 'sheets' for blank/unknown values."""
     raw = form.get('type', '').strip()
-    return raw if raw in MATERIAL_TYPE_LABELS else 'sheets'
+    return raw if raw in material_type_labels() else 'sheets'
 
 
 def _material_variant_exists(display_name, material_type, brand, cost_per_m2, cutting_speed_mm_per_min,
@@ -6953,30 +7387,29 @@ def admin_update_material(key):
     material = MaterialPrice.query.filter_by(key=key).first_or_404()
     material_type = _parse_material_type(request.form)
 
+    # Price (cost_per_m2/price_per_unit) is NOT editable here - it only ever
+    # comes from the intake price on a delivery note (see
+    # _find_or_create_delivery_target).
     try:
-        cost_per_m2 = float(request.form.get('cost_per_m2', ''))
         # Rods/profiles are cut to length on a saw, never pierced or DXF-cut
         # - no cutting/drill speed for either.
-        skip_speed_fields = material_type in ('rods', 'profiles')
+        skip_speed_fields = not material_type_cfg(material_type).has_cutting
         cutting_speed_mm_per_min = None if skip_speed_fields else float(request.form.get('cutting_speed_mm_per_min', ''))
         # Entered as seconds per pierce (shop-floor friendly), stored as the
         # pierces/min rate the pricing formula (_service_time_cost) uses.
         pierce_time_sec = None if skip_speed_fields else float(request.form.get('pierce_time_sec', ''))
         sheet_length_mm, sheet_width_mm, thickness_mm, height_mm = _parse_sheet_dimensions(request.form)
-        price_per_kg_m2 = _parse_optional_float(request.form, 'price_per_kg_m2')
-        price_per_kg_m = _parse_optional_float(request.form, 'price_per_kg_m')
         weight_kg = _parse_optional_float(request.form, 'weight_kg')
-        price_per_unit = _parse_optional_float(request.form, 'price_per_unit')
         min_quantity = _parse_optional_float(request.form, 'min_quantity')
         erp_number = _parse_erp_number(request.form)
     except ValueError:
-        flash('Всички цени, размери и ERP № трябва да бъдат валидни числа.', 'danger')
+        flash('Всички размери, скорости и ERP № трябва да бъдат валидни числа.', 'danger')
         return redirect(url_for('admin_materials'))
 
-    if cost_per_m2 < 0 or (cutting_speed_mm_per_min is not None and cutting_speed_mm_per_min <= 0) \
+    if (cutting_speed_mm_per_min is not None and cutting_speed_mm_per_min <= 0) \
             or (pierce_time_sec is not None and pierce_time_sec <= 0) \
             or (min_quantity is not None and min_quantity < 0):
-        flash('Цената не може да бъде отрицателна, а скоростта на рязане/времето за пробождане трябва да бъдат положителни числа.', 'danger')
+        flash('Скоростта на рязане/времето за пробождане трябва да бъдат положителни числа, а мин. количество - неотрицателно.', 'danger')
         return redirect(url_for('admin_materials'))
     pierce_rate_per_min = 60.0 / pierce_time_sec if pierce_time_sec else None
 
@@ -6985,19 +7418,14 @@ def admin_update_material(key):
         flash(f'ERP № {erp_number} вече се използва от {conflict}.', 'danger')
         return redirect(url_for('admin_materials'))
 
-    # Round to 2 decimals - keeps prices in a simple, everyday currency
-    # format rather than accumulating long float tails over repeated edits.
-    material.cost_per_m2 = round(cost_per_m2, 2)
+    material.display_name = request.form.get('display_name', '').strip() or material.display_name
     material.cutting_speed_mm_per_min = round(cutting_speed_mm_per_min, 2) if cutting_speed_mm_per_min is not None else None
     material.pierce_rate_per_min = round(pierce_rate_per_min, 2) if pierce_rate_per_min is not None else None
     material.sheet_length_mm = sheet_length_mm
     material.sheet_width_mm = sheet_width_mm
     material.thickness_mm = thickness_mm
     material.height_mm = height_mm
-    material.price_per_kg_m2 = round(price_per_kg_m2, 2) if price_per_kg_m2 is not None else None
-    material.price_per_kg_m = round(price_per_kg_m, 2) if price_per_kg_m is not None else None
     material.weight_kg = round(weight_kg, 2) if weight_kg is not None else None
-    material.price_per_unit = round(price_per_unit, 2) if price_per_unit is not None else None
     material.min_quantity = round(min_quantity, 2) if min_quantity is not None else None
     material.erp_number = erp_number
     material.code_number = request.form.get('code_number', '').strip() or None
@@ -7007,16 +7435,15 @@ def admin_update_material(key):
     material.display_name_en = request.form.get('display_name_en', '').strip() or None
     material.display_name_de = request.form.get('display_name_de', '').strip() or None
     log_action(describe_changes(f'материал "{material.display_name}"', material, {
-        'cost_per_m2': 'цена лв/м²', 'cutting_speed_mm_per_min': 'ск. рязане mm/min',
+        'cutting_speed_mm_per_min': 'ск. рязане mm/min',
         'pierce_rate_per_min': 'пробождания/min', 'sheet_length_mm': 'дължинаmm',
         'sheet_width_mm': 'ширина mm', 'thickness_mm': 'дебелина mm', 'height_mm': 'височина mm',
-        'price_per_kg_m2': 'цена лв/кг(м²)', 'price_per_kg_m': 'цена лв/кг(м)', 'weight_kg': 'тегло кг',
-        'price_per_unit': 'цена за цяло', 'min_quantity': 'мин. количество', 'erp_number': 'ERP №',
+        'display_name': 'име', 'weight_kg': 'тегло кг', 'min_quantity': 'мин. количество', 'erp_number': 'ERP №',
         'code_number': 'КД №', 'type': 'тип', 'brand': 'марка', 'notes': 'забележка',
     }))
     db.session.commit()
 
-    flash(f'Цените за "{material.display_name}" бяха обновени успешно.', 'success')
+    flash(f'Материалът "{material.display_name}" беше обновен успешно.', 'success')
     return redirect(url_for('admin_materials'))
 
 
@@ -7037,36 +7464,35 @@ def admin_add_material():
 
     # Rods/profiles are cut to length on a saw, never pierced or DXF-cut -
     # no cutting/drill speed for either.
-    skip_speed_fields = material_type in ('rods', 'profiles')
+    skip_speed_fields = not material_type_cfg(material_type).has_cutting
 
+    # No price input: a new material starts at cost_per_m2 = 0 ("няма
+    # доставна цена") until its first delivery note sets the real intake
+    # price (see _find_or_create_delivery_target).
     try:
-        cost_per_m2 = float(request.form.get('cost_per_m2', ''))
         cutting_speed_mm_per_min = None if skip_speed_fields else float(request.form.get('cutting_speed_mm_per_min', ''))
         # Entered as seconds per pierce (shop-floor friendly), stored as the
         # pierces/min rate the pricing formula (_service_time_cost) uses.
         pierce_time_sec = None if skip_speed_fields else float(request.form.get('pierce_time_sec', ''))
         sheet_length_mm, sheet_width_mm, thickness_mm, height_mm = _parse_sheet_dimensions(request.form)
-        price_per_kg_m2 = _parse_optional_float(request.form, 'price_per_kg_m2')
-        price_per_kg_m = _parse_optional_float(request.form, 'price_per_kg_m')
         weight_kg = _parse_optional_float(request.form, 'weight_kg')
-        price_per_unit = _parse_optional_float(request.form, 'price_per_unit')
         min_quantity = _parse_optional_float(request.form, 'min_quantity')
         erp_number = _parse_erp_number(request.form)
     except ValueError:
-        flash('Всички цени, размери и ERP № трябва да бъдат валидни числа.', 'danger')
+        flash('Всички размери, скорости и ERP № трябва да бъдат валидни числа.', 'danger')
         return redirect(url_for('admin_materials'))
 
-    if cost_per_m2 < 0 or (cutting_speed_mm_per_min is not None and cutting_speed_mm_per_min <= 0) \
+    if (cutting_speed_mm_per_min is not None and cutting_speed_mm_per_min <= 0) \
             or (pierce_time_sec is not None and pierce_time_sec <= 0) \
             or (min_quantity is not None and min_quantity < 0):
-        flash('Цената не може да бъде отрицателна, а скоростта на рязане/времето за пробождане трябва да бъдат положителни числа.', 'danger')
+        flash('Скоростта на рязане/времето за пробождане трябва да бъдат положителни числа, а мин. количество - неотрицателно.', 'danger')
         return redirect(url_for('admin_materials'))
     pierce_rate_per_min = 60.0 / pierce_time_sec if pierce_time_sec else None
 
     # Only a byte-for-byte resubmit (double click) is rejected - a difference
     # in any property (e.g. thickness) always makes a distinct catalog row,
     # even under the same name/brand.
-    if _material_variant_exists(display_name, material_type, brand, round(cost_per_m2, 2),
+    if _material_variant_exists(display_name, material_type, brand, 0.0,
                                  round(cutting_speed_mm_per_min, 2) if cutting_speed_mm_per_min is not None else None,
                                  round(pierce_rate_per_min, 2) if pierce_rate_per_min is not None else None,
                                  sheet_length_mm, sheet_width_mm, thickness_mm, height_mm):
@@ -7085,17 +7511,14 @@ def admin_add_material():
     new_material = MaterialPrice(
         key='pending',  # placeholder, replaced with a real unique key below
         display_name=display_name,
-        cost_per_m2=round(cost_per_m2, 2),
+        cost_per_m2=0.0,
         cutting_speed_mm_per_min=round(cutting_speed_mm_per_min, 2) if cutting_speed_mm_per_min is not None else None,
         pierce_rate_per_min=round(pierce_rate_per_min, 2) if pierce_rate_per_min is not None else None,
         sheet_length_mm=sheet_length_mm,
         sheet_width_mm=sheet_width_mm,
         thickness_mm=thickness_mm,
         height_mm=height_mm,
-        price_per_kg_m2=round(price_per_kg_m2, 2) if price_per_kg_m2 is not None else None,
-        price_per_kg_m=round(price_per_kg_m, 2) if price_per_kg_m is not None else None,
         weight_kg=round(weight_kg, 2) if weight_kg is not None else None,
-        price_per_unit=round(price_per_unit, 2) if price_per_unit is not None else None,
         min_quantity=round(min_quantity, 2) if min_quantity is not None else None,
         erp_number=erp_number,
         code_number=request.form.get('code_number', '').strip() or None,
@@ -7110,7 +7533,7 @@ def admin_add_material():
     new_material.key = f'material_{new_material.id}'
     db.session.commit()
 
-    log_action(f'Създаден материал "{display_name}" (цена {new_material.cost_per_m2:g} лв/м², тип {material_type})')
+    log_action(f'Създаден материал "{display_name}" (тип {material_type}, без цена до първа доставка)')
     flash(f'Материалът "{display_name}" беше добавен успешно.', 'success')
     return redirect(url_for('admin_materials'))
 
@@ -8734,10 +9157,10 @@ def admin_production_report():
 
         # A produced piece is a piece that now physically exists, so moving
         # quantity_produced up (or down, on a correction) moves the linked
-        # Detail's stock_quantity by the same delta - same _bump_stock() used
+        # Detail's (or component-less Product's - OrderItem.stock_target)
+        # stock_quantity by the same delta - same _bump_stock() used
         # by delivery-note intake, just triggered by production instead of a
-        # goods-received note. No-op for a product OrderItem's own row (it
-        # has no detail) and for a component whose source Detail was since
+        # goods-received note. No-op for a component whose source Detail was since
         # deleted from the catalog (detail_id nullable, only detail_name_snapshot
         # survives).
         if target_type == 'component':
@@ -8755,8 +9178,8 @@ def admin_production_report():
             produced_qty = max(0, min(produced_qty, order_item.quantity_ordered))
             stock_delta = produced_qty - order_item.quantity_produced
             order_item.quantity_produced = produced_qty
-            if stock_delta and order_item.detail:
-                _bump_stock(order_item.detail, stock_delta)
+            if stock_delta and order_item.stock_target:
+                _bump_stock(order_item.stock_target, stock_delta)
             target_percent = order_item.percent_complete
             target_label = f'артикул "{order_item.item_name}"'
         else:
@@ -8831,7 +9254,8 @@ def admin_production_orders():
     details_data = [{
         'id': d.id,
         'name': d.name,
-        'is_linear': d.material.type in ('rods', 'pipes', 'profiles'),
+        'is_linear': material_is_linear(d.material.type),
+        'unit': material_unit_short(d.material.type),
         'per_piece_qty': _detail_material_unit_qty(d),
         # Price is appended here (not baked into format_material_option()
         # itself, which is shared by every other material <select> in the
@@ -8844,7 +9268,7 @@ def admin_production_orders():
             # raw MaterialPrice.stock_quantity - sheet stock is a sheet
             # count, and showing that raw number next to an area figure
             # would silently compare the wrong units.
-            {'id': m.id, 'label': f'{format_material_option(m)} — {m.cost_per_m2:.2f} €{"/м" if m.type in ("rods", "pipes", "profiles") else "/м²"}',
+            {'id': m.id, 'label': f'{format_material_option(m)} — {m.cost_per_m2:.2f} €/{material_unit_short(m.type)}',
              'stock': round(_material_available_qty(m), 3)}
             for m in MaterialPrice.query.filter_by(
                 display_name=d.material.display_name, brand=d.material.brand, type=d.material.type,
@@ -8887,8 +9311,8 @@ def create_production_order():
         return redirect(url_for('admin_production_orders'))
 
     per_piece_qty = _detail_material_unit_qty(detail)
-    is_linear = material.type in ('rods', 'pipes', 'profiles')
-    unit_label = 'мм' if is_linear else 'м²'
+    is_linear = material_is_linear(material.type)
+    unit_label = 'мм' if is_linear else material_unit_short(material.type)
     to_display = (lambda q: round(q * 1000, 1)) if is_linear else (lambda q: round(q, 3))
 
     # Sheet/other stock is counted in whole raw sheets, not a running m²
@@ -9049,15 +9473,16 @@ def print_label(target_type, target_id):
             edit_target_type, edit_target_id = 'detail', row.detail.id
     elif target_type == 'item':
         row = OrderItem.query.get_or_404(target_id)
-        if not row.detail:
-            flash('Този артикул е продукт, а не самостоятелен детайл - етикет не може да бъде отпечатан за него.', 'danger')
+        made = row.stock_target
+        if not made:
+            flash('Този продукт се отчита по детайли - отпечатайте етикет за всеки компонент.', 'danger')
             return redirect(url_for('admin_production_report'))
-        name = row.detail.name
+        name = made.name
         quantity = row.quantity_produced
         order = row.order
-        erp_number = row.detail.erp_number
-        code_number = row.detail.code_number
-        edit_target_type, edit_target_id = 'detail', row.detail.id
+        erp_number = made.erp_number
+        code_number = made.code_number
+        edit_target_type, edit_target_id = ('detail' if row.detail else 'product'), made.id
     elif target_type == 'detail':
         row = Detail.query.get_or_404(target_id)
         name = row.name
@@ -10892,31 +11317,29 @@ def api_quick_create_material():
     brand = request.form.get('brand', '').strip() or None
     # Rods/profiles are cut to length on a saw, never pierced or DXF-cut -
     # no cutting/drill speed for either.
-    skip_speed_fields = material_type in ('rods', 'profiles')
+    skip_speed_fields = not material_type_cfg(material_type).has_cutting
 
+    # No price input - same as admin_add_material(): 0 until the first delivery.
     try:
-        cost_per_m2 = float(request.form.get('cost_per_m2', ''))
         cutting_speed_mm_per_min = None if skip_speed_fields else float(request.form.get('cutting_speed_mm_per_min', ''))
         # Entered as seconds per pierce (shop-floor friendly), stored as the
         # pierces/min rate the pricing formula (_service_time_cost) uses.
         pierce_time_sec = None if skip_speed_fields else float(request.form.get('pierce_time_sec', ''))
         sheet_length_mm, sheet_width_mm, thickness_mm, height_mm = _parse_sheet_dimensions(request.form)
-        price_per_kg_m2 = _parse_optional_float(request.form, 'price_per_kg_m2')
-        price_per_kg_m = _parse_optional_float(request.form, 'price_per_kg_m')
         weight_kg = _parse_optional_float(request.form, 'weight_kg')
         erp_number = _parse_erp_number(request.form)
     except ValueError:
-        return jsonify({'status': 'error', 'message': 'Всички цени, размери и ERP № трябва да бъдат валидни числа.'}), 400
+        return jsonify({'status': 'error', 'message': 'Всички размери, скорости и ERP № трябва да бъдат валидни числа.'}), 400
 
-    if cost_per_m2 < 0 or (cutting_speed_mm_per_min is not None and cutting_speed_mm_per_min <= 0) \
+    if (cutting_speed_mm_per_min is not None and cutting_speed_mm_per_min <= 0) \
             or (pierce_time_sec is not None and pierce_time_sec <= 0):
-        return jsonify({'status': 'error', 'message': 'Цената не може да бъде отрицателна, а скоростта на рязане/времето за пробождане трябва да бъдат положителни числа.'}), 400
+        return jsonify({'status': 'error', 'message': 'Скоростта на рязане/времето за пробождане трябва да бъдат положителни числа.'}), 400
     pierce_rate_per_min = 60.0 / pierce_time_sec if pierce_time_sec else None
 
     # Only a byte-for-byte resubmit (double click) is rejected - a difference
     # in any property (e.g. thickness) always makes a distinct catalog row,
     # even under the same name/brand.
-    if _material_variant_exists(display_name, material_type, brand, round(cost_per_m2, 2),
+    if _material_variant_exists(display_name, material_type, brand, 0.0,
                                  round(cutting_speed_mm_per_min, 2) if cutting_speed_mm_per_min is not None else None,
                                  round(pierce_rate_per_min, 2) if pierce_rate_per_min is not None else None,
                                  sheet_length_mm, sheet_width_mm, thickness_mm, height_mm):
@@ -10929,15 +11352,13 @@ def api_quick_create_material():
     new_material = MaterialPrice(
         key='pending',
         display_name=display_name,
-        cost_per_m2=round(cost_per_m2, 2),
+        cost_per_m2=0.0,
         cutting_speed_mm_per_min=round(cutting_speed_mm_per_min, 2) if cutting_speed_mm_per_min is not None else None,
         pierce_rate_per_min=round(pierce_rate_per_min, 2) if pierce_rate_per_min is not None else None,
         sheet_length_mm=sheet_length_mm,
         sheet_width_mm=sheet_width_mm,
         thickness_mm=thickness_mm,
         height_mm=height_mm,
-        price_per_kg_m2=round(price_per_kg_m2, 2) if price_per_kg_m2 is not None else None,
-        price_per_kg_m=round(price_per_kg_m, 2) if price_per_kg_m is not None else None,
         weight_kg=round(weight_kg, 2) if weight_kg is not None else None,
         erp_number=erp_number,
         code_number=request.form.get('code_number', '').strip() or None,
@@ -10948,7 +11369,7 @@ def api_quick_create_material():
     db.session.flush()
     new_material.key = f'material_{new_material.id}'
     db.session.commit()
-    log_action(f'Създаден материал "{display_name}" (бърз избор, цена {new_material.cost_per_m2:g} лв/м², тип {material_type})')
+    log_action(f'Създаден материал "{display_name}" (бърз избор, тип {material_type}, без цена до първа доставка)')
 
     return jsonify({
         'status': 'success',
@@ -12438,6 +12859,16 @@ def admin_power_rename_device(device_id):
         flash(f'Вече има друга машина с MQTT тема "{mqtt_topic}".', 'danger')
         return redirect(url_for('admin_power'))
 
+    # The edit dialog on admin_power.html also carries the linked-machines
+    # checklist (with_machines=1) so one "Запази" saves everything;
+    # admin_power_set_device_machines() stays for machines-only posts.
+    machines = None
+    if request.form.get('with_machines'):
+        machines = _resolve_machines_or_none(_parse_machine_ids(request.form))
+        if machines is None:
+            flash('Една от избраните машини не съществува.', 'danger')
+            return redirect(url_for('admin_power'))
+
     old_name = device.name
     device.name = name
     device.host = host or None
@@ -12445,6 +12876,8 @@ def admin_power_rename_device(device_id):
     device.connection_type = connection_type
     panel_id_raw = request.form.get('panel_id', '')
     device.panel_id = int(panel_id_raw) if panel_id_raw.isdigit() and db.session.get(ElectricalPanel, int(panel_id_raw)) else None
+    if machines is not None:
+        device.machines = machines
     db.session.commit()
     log_action(f'Редактиран електромер "{old_name}" → "{name}"')
     flash(f'Машината "{name}" беше обновена.', 'success')
@@ -16714,6 +17147,17 @@ def upload_offer_item_image():
     })
 
 
+def _offer_product_json(p):
+    """One entry of admin_offer_edit.html's PRODUCTS array."""
+    pricing = calculate_product_pricing(p)
+    return {
+        'id': p.id, 'name': p.name, 'price': pricing['sell_price'],
+        'details_subtotal': pricing['details_subtotal'],
+        'extra_costs_subtotal': pricing['extra_costs_subtotal'],
+        'markup_percent': p.markup_percent,
+    }
+
+
 def _offer_picker_context():
     """Shared context for the offer create/edit form: catalog rows to pick
     from (as plain JSON-friendly dicts, for the add-item panel's JS) and the
@@ -16728,15 +17172,7 @@ def _offer_picker_context():
     frozen column - neither a later catalog price change nor a later edit to
     the client's discount percent ever touches an already-saved offer.
     """
-    products = []
-    for p in Product.query.order_by(Product.name).all():
-        pricing = calculate_product_pricing(p)
-        products.append({
-            'id': p.id, 'name': p.name, 'price': pricing['sell_price'],
-            'details_subtotal': pricing['details_subtotal'],
-            'extra_costs_subtotal': pricing['extra_costs_subtotal'],
-            'markup_percent': p.markup_percent,
-        })
+    products = [_offer_product_json(p) for p in Product.query.order_by(Product.name).all()]
     details = [{'id': d.id, 'name': d.name, 'price': d.total_price} for d in Detail.query.order_by(Detail.name).all()]
     clients = Client.query.order_by(Client.name).all()
     client_pricing = {
@@ -16997,6 +17433,57 @@ def admin_offer_create_order(offer_id):
     return redirect(url_for('admin_production_report'))
 
 
+@app.route('/api/offer-item-to-product', methods=['POST'])
+@role_required('admin')
+def api_offer_item_to_product():
+    """Turns a free-text offer line into a catalog Product so it can go on
+    an order (admin_offer_create_order() only takes product/detail lines).
+    A product with the same name (case-insensitive) is reused instead of
+    duplicated. A new one has no Details - its price is the line's price as
+    a single ProductExtraCost, so the order gets the quoted price. When
+    offer_item_id is given (an already-saved line) that OfferItem is
+    relinked right away; an unsaved line is relinked by the editor's JS and
+    stored with the next offer save."""
+    name = (request.form.get('name') or '').strip()[:150]
+    if not name:
+        return jsonify({'status': 'error', 'message': 'Редът няма наименование.'}), 400
+    # a product line needs both (see _save_offer), or the next save drops it
+    try:
+        unit_price = float(request.form.get('unit_price', ''))
+        quantity = float(request.form.get('quantity', ''))
+    except ValueError:
+        return jsonify({'status': 'error', 'message': 'Редът трябва да има количество и цена.'}), 400
+    if unit_price < 0 or quantity <= 0:
+        return jsonify({'status': 'error', 'message': 'Невалидно количество или цена.'}), 400
+
+    item = None
+    item_id = request.form.get('offer_item_id', '')
+    if item_id.isdigit():
+        item = OfferItem.query.get(int(item_id))
+        if not item or item.item_type != 'text':
+            return jsonify({'status': 'error', 'message': 'Редът не е свободен текст.'}), 400
+
+    # compared in Python: SQLite's lower() is ASCII-only (Cyrillic names)
+    key = name.casefold()
+    product = next((p for p in Product.query.all() if p.name.strip().casefold() == key), None)
+    created = product is None
+    if created:
+        description = Markup(request.form.get('description_html') or '').striptags() or None
+        product = Product(name=name, description=description, markup_percent=0.0,
+                          code_number=(request.form.get('code') or '').strip()[:100] or None)
+        product.extra_costs.append(ProductExtraCost(label='Цена от оферта', amount=round(unit_price, 2)))
+        db.session.add(product)
+        db.session.flush()
+    if item:
+        item.item_type = 'product'
+        item.product_id = product.id
+        item.unit = item.unit or 'бр'
+    db.session.commit()
+    log_action(f'{"Създаден продукт" if created else "Свързан продукт"} "{product.name}" от ред в оферта'
+               + (f' № {item.offer.number}' if item else ''))
+    return jsonify({'status': 'success', 'created': created, 'product': _offer_product_json(product)})
+
+
 @app.route('/admin/offers/<int:offer_id>/delete', methods=['POST'])
 @role_required('admin')
 def admin_offer_delete(offer_id):
@@ -17040,7 +17527,8 @@ def admin_offer_duplicate(offer_id):
     db.session.commit()
     log_action(f'Дублирана оферта № {source.number} → № {new_offer.number}')
     flash(f'Офертата беше дублирана като № {new_offer.number}.', 'success')
-    return redirect(url_for('admin_offer_edit', offer_id=new_offer.id))
+    # back to the list, which opens the copy in its edit frame (?open=)
+    return redirect(url_for('admin_offers', open=new_offer.id))
 
 
 @app.route('/admin/offers/<int:offer_id>/print')
@@ -17203,7 +17691,7 @@ def get_material_details(name: str) -> str:
     material = matches[0]
     return (
         f'{format_material_option(material)}\n'
-        f'Тип: {MATERIAL_TYPE_LABELS.get(material.type, material.type)}\n'
+        f'Тип: {material_type_labels().get(material.type, material.type)}\n'
         f'Цена: {material.cost_per_m2:g} €/м²\n'
         f'Наличност: {material.stock_quantity:g}'
     )
@@ -17349,7 +17837,7 @@ def get_machine_details(name: str) -> str:
 @anthropic.beta_tool
 def list_material_types() -> str:
     """Връща възможните типове материали (за филтриране в list_materials)."""
-    return '\n'.join(f'{key} - {label}' for key, label in MATERIAL_TYPE_LABELS.items())
+    return '\n'.join(f'{key} - {label}' for key, label in material_type_labels().items())
 
 
 @anthropic.beta_tool
@@ -17533,6 +18021,9 @@ if __name__ == '__main__':
         # Populate the MaterialPrice table with defaults on first run only -
         # existing rows (including any admin-edited prices) are never touched.
         seed_material_prices()
+        # Default material types (лист/прът/профил/тръба/други) - only if the
+        # MaterialType table is completely empty.
+        seed_material_types()
         # Same pattern for the billable Services catalog (hourly rates the
         # pricing engine needs - see calculate_cnc_price()).
         seed_billable_services()

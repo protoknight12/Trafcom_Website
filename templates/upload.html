@@ -55,7 +55,7 @@
             {% include 'partials/csrf_field.html' %}
             <div class="form-group" style="margin-bottom: 20px;">
                 <label for="material">{{ _('Материал за изчисление *') }}</label>
-                <select name="material" id="material" required class="material-picker">
+                <select name="material" id="material" data-create="{{ create_url('material') }}" required class="material-picker">
                     {% include 'partials/material_options.html' %}
                 </select>
             </div>
@@ -78,7 +78,7 @@
 
             <div class="form-group" style="margin-bottom: 24px;">
                 <label for="machine_id">{{ _('Свържи с машина (незадължително)') }}</label>
-                <select name="machine_id" id="machine_id">
+                <select name="machine_id" id="machine_id" data-create="{{ create_url('machine') }}">
                     <option value="">-- {{ _('Без конкретна машина') }} --</option>
                     {% for machine in machines %}
                     <option value="{{ machine.id }}">{{ machine.name }} ({% if machine.status == 'idle' %}{{ _('Свободна') }}{% elif machine.status == 'running' %}{{ _('Работи') }}{% else %}{{ _('Поддръжка') }}{% endif %})</option>

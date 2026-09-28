@@ -23,7 +23,7 @@
     {% endwith %}
 
     {% if current_user.is_admin or current_user.role == 'quality_control' %}
-    <section class="admin-card">
+    <section class="admin-card" data-dialog-section="+ Нов преглед">
         <h3>Нов преглед от ръководството</h3>
         <p class="section-subtitle">ISO 9001 §9.3 - при създаване се записва снимка на текущите CAPA/одит/калибриране данни; входовете и решенията се попълват след това в самия преглед.</p>
         <form action="{{ url_for('admin_add_management_review') }}" method="POST" class="admin-form">
@@ -71,7 +71,7 @@
                     <td>{{ review.snapshot_overdue_calibration_count }}</td>
                     <td>{{ review.actions|length }}</td>
                     <td class="text-right">
-                        <a href="{{ url_for('admin_edit_management_review', review_id=review.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Отвори</a>
+                        <a href="{{ url_for('admin_edit_management_review', review_id=review.id) }}" data-frame="stay" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Отвори</a>
                     </td>
                     <td class="text-right">
                         {% if current_user.is_admin or current_user.role == 'quality_control' %}

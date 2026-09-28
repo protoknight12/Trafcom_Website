@@ -28,7 +28,8 @@
         <h3>Библиотека с детайли</h3>
         <p class="section-subtitle">Добавете преизползваеми детайли (DXF + материал), от които се изграждат продуктите.</p>
 
-        <form action="{{ url_for('admin_add_detail') }}" method="POST" enctype="multipart/form-data" class="admin-form" style="margin-bottom: 1.5rem;">
+        <form action="{{ url_for('admin_add_detail') }}" method="POST" enctype="multipart/form-data" class="admin-form" style="margin-bottom: 1.5rem;"
+              data-dialog-section="+ Нов детайл" data-dialog-heading="Нов детайл">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="detail_name">Име на детайла</label>
@@ -36,13 +37,13 @@
             </div>
             <div class="form-group" style="grid-column: span 2;">
                 <label for="detail_material">Материал</label>
-                <select id="detail_material" name="material" class="material-picker">
+                <select id="detail_material" data-create="{{ create_url('material') }}" name="material" class="material-picker">
                     {% include 'partials/material_options.html' %}
                 </select>
             </div>
             <div class="form-group">
                 <label for="detail_service">Услуга (рязане, незадължително)</label>
-                <select id="detail_service" name="service_id">
+                <select id="detail_service" data-create="{{ create_url('service') }}" name="service_id">
                     <option value="">-- Изберете услуга --</option>
                     {% for s in services %}
                     <option value="{{ s.id }}">{{ s.name }} ({% if s.pricing_mode == 'length' %}{{ "%.2f"|format(s.price_per_meter_eur) }} €/м{% else %}{{ "%.2f"|format(s.price_per_hour_eur) }} €/час{% endif %})</option>
@@ -71,7 +72,7 @@
             </div>
             <div class="form-group">
                 <label for="detail_owner_client_id">Собственик (клиент) - празно = публичен детайл</label>
-                <select id="detail_owner_client_id" name="owner_client_id">
+                <select id="detail_owner_client_id" data-create="{{ create_url('client') }}" name="owner_client_id">
                     <option value="">-- Публичен (видим за всички клиенти) --</option>
                     {% for c in clients %}
                     <option value="{{ c.id }}">{{ c.name }}</option>
@@ -82,7 +83,7 @@
             <div class="form-group" style="flex-basis: 100%;">
                 <label>Допълнителни операции (незадължително - фрезоване, зачистване...)</label>
                 <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: flex-end;">
-                    <select id="nd_op_service_id" style="flex: 1; min-width: 200px;">
+                    <select id="nd_op_service_id" data-create="{{ create_url('service') }}" style="flex: 1; min-width: 200px;">
                         <option value="">-- Изберете услуга --</option>
                         {% for s in services %}
                         <option value="{{ s.id }}">{{ s.name }} ({{ "%.2f"|format(s.price_per_hour_eur) }} €/час)</option>
@@ -137,16 +138,11 @@
                     <td>{{ detail.stock_quantity|round(2) }}</td>
                     <td class="text-small text-muted">{{ detail.erp_number or '-' }} / {{ detail.code_number or '-' }}</td>
                     <td>
-                        <form action="{{ url_for('admin_update_detail_owner', detail_id=detail.id) }}" method="POST" style="display:flex; gap:4px;">
-                            {% include 'partials/csrf_field.html' %}
-                            <select name="owner_client_id" class="material-price-input" style="width: auto;">
-                                <option value="">-- Публичен --</option>
-                                {% for c in clients %}
-                                <option value="{{ c.id }}" {% if detail.owner_client_id == c.id %}selected{% endif %}>{{ c.name }}</option>
-                                {% endfor %}
-                            </select>
-                            <button type="submit" class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;">Запази</button>
-                        </form>
+                        {{ detail.owner_client.name if detail.owner_client else 'Публичен' }}
+                        <button type="button" class="btn-secondary" style="padding: 4px 8px; font-size: 0.75rem; margin-left: 4px;" data-dialog="detailOwnerDialog"
+                                data-action="{{ url_for('admin_update_detail_owner', detail_id=detail.id) }}"
+                                data-title="Собственик: {{ detail.name }}"
+                                data-values='{{ {"owner_client_id": detail.owner_client_id or ""}|tojson|forceescape }}'>Промени</button>
                     </td>
                     <td class="text-right">
                         <form action="{{ url_for('print_label', target_type='detail', target_id=detail.id) }}" method="GET" style="display:flex; gap:4px; align-items:center; justify-content:flex-end;">
@@ -174,6 +170,20 @@
         </div>
     </section>
 
+    <dialog id="detailOwnerDialog" class="form-dialog">
+        <h3 data-dialog-title>Собственик на детайла</h3>
+        <form method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label>Собственик (клиент) - празно = публичен детайл</label>
+                <select name="owner_client_id" id="detail_owner_dialog_client_id" data-create="{{ create_url('client') }}">
+                    <option value="">-- Публичен --</option>
+                    {% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="btn-submit">Запази</button>
+        </form>
+    </dialog>
 </main>
 
 <script src="{{ url_for('static', filename='js/table_search.js') }}"></script>
@@ -264,5 +274,10 @@
     applyDetailManualPriceVisibility();
 </script>
 
+<script>
+    // "+" create-new next to a select (form_dialog.js): keep this page's own
+    // catalog arrays in step with the option that was just added.
+    document.addEventListener('create-new', function (e) { mergeCatalog(e.detail.doc, 'ND_SERVICES', ND_SERVICES); });
+</script>
 </body>
 </html>

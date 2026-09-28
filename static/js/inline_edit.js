@@ -3,5 +3,8 @@
 // opened it so the list stays in sync, matching Wikipedia's "edit in a
 // separate view, save, and the article updates" flow.
 function openEditWindow(url) {
-    window.open(url, 'trafcom_edit', 'width=560,height=560');
+    // Shared frame dialog (form_dialog.js, loaded by the navbar); plain
+    // popup only on a page without it.
+    if (window.openFrameDialog) window.openFrameDialog(url);
+    else window.open(url, 'trafcom_edit', 'width=560,height=560');
 }

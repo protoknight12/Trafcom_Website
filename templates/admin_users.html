@@ -25,7 +25,7 @@
     {% endwith %}
 
     <div class="admin-grid">
-        <section class="admin-card">
+        <section class="admin-card" data-dialog-section="+ Нов потребител">
             <h3>Създаване на нов потребител</h3>
             <form action="{{ url_for('admin_create_user') }}" method="POST" class="admin-form">
                 {% include 'partials/csrf_field.html' %}
@@ -49,7 +49,7 @@
                 </div>
                 <div class="form-group">
                     <label for="new_user_client_id">Клиент (за собствени цени)</label>
-                    <select id="new_user_client_id" name="client_id">
+                    <select id="new_user_client_id" data-create="{{ create_url('client') }}" name="client_id">
                         <option value="">-- Без клиент --</option>
                         {% for c in clients %}
                         <option value="{{ c.id }}">{{ c.name }}</option>
@@ -122,27 +122,10 @@
                         <span class="text-muted text-small">Текуща сесия</span>
                         {% else %}
                         <div style="display: flex; gap: 8px; justify-content: flex-end; align-items: center; flex-wrap: wrap;">
-                            <form action="{{ url_for('admin_update_user_role', user_id=user.id) }}" method="POST" style="display:inline; display: flex; gap: 6px;">
-                                {% include 'partials/csrf_field.html' %}
-                                <select name="role" class="material-price-input" style="width: auto;">
-                                    <option value="regular_user" {% if user.role == 'regular_user' %}selected{% endif %}>Клиент</option>
-                                    <option value="worker" {% if user.role == 'worker' %}selected{% endif %}>Служител</option>
-                                    <option value="web_designer" {% if user.role == 'web_designer' %}selected{% endif %}>Уеб дизайнер</option>
-                                    <option value="quality_control" {% if user.role == 'quality_control' %}selected{% endif %}>Контрол на качеството</option>
-                                    <option value="admin" {% if user.role == 'admin' %}selected{% endif %}>Администратор</option>
-                                </select>
-                                <button type="submit" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem; border-radius: 4px;">Промени роля</button>
-                            </form>
-                            <form action="{{ url_for('admin_update_user_client', user_id=user.id) }}" method="POST" style="display:inline; display: flex; gap: 6px;">
-                                {% include 'partials/csrf_field.html' %}
-                                <select name="client_id" class="material-price-input" style="width: auto;">
-                                    <option value="">-- Без клиент --</option>
-                                    {% for c in clients %}
-                                    <option value="{{ c.id }}" {% if user.client_id == c.id %}selected{% endif %}>{{ c.name }}</option>
-                                    {% endfor %}
-                                </select>
-                                <button type="submit" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem; border-radius: 4px;">Промени клиент</button>
-                            </form>
+                            <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;" data-dialog="userEditDialog"
+                                    data-action="{{ url_for('admin_update_user', user_id=user.id) }}"
+                                    data-title="Редакция: {{ user.username }}"
+                                    data-values='{{ {"role": user.role, "client_id": user.client_id or ""}|tojson|forceescape }}'>Редактирай</button>
                             <form action="{{ url_for('admin_delete_user', user_id=user.id) }}" method="POST" onsubmit="return confirm('Изтриването на потребителя ще премахне и цялата му библиотека с чертежи! Потвърждавате ли?');" style="display:inline;">
                                 {% include 'partials/csrf_field.html' %}
                                 <button type="submit" class="btn-delete">Изтрий профила</button>
@@ -165,6 +148,31 @@
             </table>
         </div>
     </section>
+
+    <dialog id="userEditDialog" class="form-dialog">
+        <h3 data-dialog-title>Редакция на потребител</h3>
+        <form method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="edit_user_role">Роля</label>
+                <select id="edit_user_role" name="role">
+                    <option value="regular_user">Клиент</option>
+                    <option value="worker">Служител (цех)</option>
+                    <option value="web_designer">Уеб дизайнер</option>
+                    <option value="quality_control">Контрол на качеството</option>
+                    <option value="admin">Администратор</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="edit_user_client_id">Клиент (за собствени цени)</label>
+                <select id="edit_user_client_id" data-create="{{ create_url('client') }}" name="client_id">
+                    <option value="">-- Без клиент --</option>
+                    {% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="btn-submit">Запази</button>
+        </form>
+    </dialog>
 
 </main>
 

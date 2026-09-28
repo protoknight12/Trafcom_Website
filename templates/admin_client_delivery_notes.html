@@ -29,8 +29,8 @@
     {% endif %}
     {% endwith %}
 
-    <section class="admin-card">
-        <h3>Нова стокова разписка към клиент</h3>
+    <section class="admin-card" id="clientDeliveryNoteSection" data-dialog-section="+ Нова стокова разписка">
+        <h3 data-dialog-title>Нова стокова разписка към клиент</h3>
         <p class="section-subtitle">Изберете клиента и артикулите, които напускат склада - всеки ред намалява наличността на съответния материал, детайл или продукт. Могат да се избират само артикули, които вече са в каталога.</p>
 
         <form action="{{ url_for('create_client_delivery_note') }}" method="POST" id="clientDeliveryNoteForm">
@@ -70,7 +70,7 @@
             <div class="add-item-row">
                 <div class="form-group" id="material_selector">
                     <label for="cdn_material_select">Материал *</label>
-                    <select id="cdn_material_select" class="material-picker">
+                    <select id="cdn_material_select" data-create="{{ create_url('material') }}" class="material-picker">
                         <option value="">-- Изберете материал --</option>
                         {% for type_key, group in materials|groupby('type') %}
                         <optgroup label="{{ material_type_label(type_key) }}">
@@ -86,7 +86,7 @@
                 </div>
                 <div class="form-group" id="detail_selector" style="display: none;">
                     <label for="cdn_detail_select">Детайл *</label>
-                    <select id="cdn_detail_select">
+                    <select id="cdn_detail_select" data-create="{{ create_url('detail') }}">
                         <option value="">-- Изберете детайл --</option>
                         {% for d in details_data %}
                         <option value="{{ d.id }}" data-price="{{ d.price if d.price is not none else '' }}" data-stock="{{ d.stock if d.stock is not none else 0 }}">{{ d.name }} (наличност: {{ '%g'|format(d.stock or 0) }})</option>
@@ -95,7 +95,7 @@
                 </div>
                 <div class="form-group" id="product_selector" style="display: none;">
                     <label for="cdn_product_select">Продукт *</label>
-                    <select id="cdn_product_select">
+                    <select id="cdn_product_select" data-create="{{ create_url('product') }}">
                         <option value="">-- Изберете продукт --</option>
                         {% for p in products_data %}
                         <option value="{{ p.id }}" data-price="{{ p.price if p.price is not none else '' }}" data-stock="{{ p.stock if p.stock is not none else 0 }}">{{ p.name }} (наличност: {{ '%g'|format(p.stock or 0) }})</option>
@@ -115,7 +115,7 @@
                     <input type="text" id="cdn_notes" placeholder="напр. партида, забележка">
                 </div>
                 <div class="form-group" style="flex: 0 0 auto;">
-                    <button type="button" class="btn-secondary" onclick="addClientDeliveryRow()" style="padding: 12px 20px;">+ Добави</button>
+                    <button type="button" class="btn-secondary" id="cdnAddRowBtn" onclick="addClientDeliveryRow()" style="padding: 12px 20px;">+ Добави</button>
                 </div>
             </div>
 
@@ -138,12 +138,12 @@
             </div>
 
             <input type="hidden" name="items_json" id="itemsJsonInput">
-            <button type="submit" class="btn-submit" style="width: 100%; margin-top: 16px;" id="submitNoteBtn" disabled>Запази разписка и обнови наличности</button>
+            <button type="submit" class="btn-submit" style="width: 100%; margin-top: 16px;" id="submitNoteBtn" data-dialog-submit data-edit-label="Запази промените и преизчисли наличности" disabled>Запази разписка и обнови наличности</button>
         </form>
     </section>
 
-    <div id="quickClientModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
-        <div class="admin-card" style="width: 100%; max-width: 500px; margin: 20px; background-color: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 28px; box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15); position: relative;">
+    <dialog id="quickClientModal" class="form-dialog">
+        <div>
             <span onclick="closeQuickClientModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
             <h3 style="margin-top: 0; margin-bottom: 16px;">Бързо създаване на клиент</h3>
             <form id="quickClientForm">
@@ -190,7 +190,7 @@
                 <div id="qc_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
             </form>
         </div>
-    </div>
+    </dialog>
 
     <section class="admin-card">
         <h3>История на разписките</h3>
@@ -220,7 +220,19 @@
                         </div>
                         {% endfor %}
                     </td>
-                    <td><a href="{{ url_for('admin_client_delivery_note_print', note_id=note.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Печат</a></td>
+                    <td style="white-space: nowrap;">
+                        <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;"
+                                data-dialog="clientDeliveryNoteSection-dialog" data-note-id="{{ note.id }}"
+                                data-action="{{ url_for('edit_client_delivery_note', note_id=note.id) }}"
+                                data-title="Редакция на стокова разписка №{{ note.id }}"
+                                data-values='{{ {"client_id": note.client_id or "", "note_number": note.note_number or "", "note_date": note.note_date.isoformat() if note.note_date else ""}|tojson|forceescape }}'>Редактирай</button>
+                        <a href="{{ url_for('admin_client_delivery_note_print', note_id=note.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Печат</a>
+                        <form action="{{ url_for('delete_client_delivery_note', note_id=note.id) }}" method="POST" style="display: inline;"
+                              onsubmit="return confirm('Да се изтрие ли стокова разписка №{{ note.id }}? Изписаните количества ще бъдат върнати в наличностите.');">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete" style="padding: 6px 12px; font-size: 0.85rem;">Изтрий</button>
+                        </form>
+                    </td>
                 </tr>
                 {% else %}
                 <tr>
@@ -243,11 +255,11 @@
         document.getElementById('qcCompanyFields').style.display = isCompany ? 'block' : 'none';
     }
     function openQuickClientModal() {
-        document.getElementById('quickClientModal').style.display = 'flex';
+        document.getElementById('quickClientModal').showModal();
         document.getElementById('qc_error').style.display = 'none';
     }
     function closeQuickClientModal() {
-        document.getElementById('quickClientModal').style.display = 'none';
+        document.getElementById('quickClientModal').close();
         document.getElementById('quickClientForm').reset();
         toggleQcCompanyFields();
     }
@@ -334,19 +346,60 @@
             if (!confirm('Количеството (' + qty + ') надвишава наличността (' + stock + '). Продължавате ли?')) return;
         }
 
-        cdnItems.push({
+        const newRow = {
             type: type, target_id: parseInt(sel.value, 10), name: opt.textContent.replace(/ \(наличност:.*\)$/, ''),
             qty: qty, unit_price: unitPrice,
             notes: document.getElementById('cdn_notes').value.trim() || null,
-        });
+        };
+        if (cdnEditingIndex !== null) {
+            cdnItems[cdnEditingIndex] = newRow;
+            stopCdnRowEdit();
+        } else {
+            cdnItems.push(newRow);
+        }
         document.getElementById('cdn_notes').value = '';
         renderCdnTable();
     }
 
     function removeCdnRow(index) {
         cdnItems.splice(index, 1);
+        stopCdnRowEdit();
         renderCdnTable();
     }
+
+    // "Редактирай" on a line: loads it back into the add fields above,
+    // "+ Добави" then replaces it instead of adding a new one.
+    let cdnEditingIndex = null;
+    function stopCdnRowEdit() {
+        cdnEditingIndex = null;
+        document.getElementById('cdnAddRowBtn').textContent = '+ Добави';
+    }
+    function editCdnRow(index) {
+        const item = cdnItems[index];
+        const radio = document.querySelector('input[name="cdn_item_type"][value="' + item.type + '"]');
+        radio.checked = true;
+        radio.dispatchEvent(new Event('change'));
+        const sel = document.getElementById(currentSelectField(item.type));
+        sel.value = String(item.target_id);
+        sel.dispatchEvent(new Event('change'));
+        document.getElementById('cdn_qty').value = item.qty;
+        document.getElementById('cdn_price').value = item.unit_price != null ? item.unit_price : '';
+        document.getElementById('cdn_notes').value = item.notes || '';
+        cdnEditingIndex = index;
+        document.getElementById('cdnAddRowBtn').textContent = 'Запази реда';
+        document.getElementById('cdn_qty').focus();
+    }
+
+    // The note dialog opens either empty ("+ Нова ...") or with a recorded
+    // note's lines (its "Редактирай" carries data-note-id).
+    const NOTE_ROWS = {{ note_rows|tojson }};
+    document.addEventListener('dialog-open', function (e) {
+        if (e.target.id !== 'clientDeliveryNoteSection-dialog') return;
+        const noteId = e.detail.button.dataset.noteId;
+        cdnItems = noteId ? JSON.parse(JSON.stringify(NOTE_ROWS[noteId] || [])) : [];
+        stopCdnRowEdit();
+        renderCdnTable();
+    });
 
     const TYPE_LABELS = { material: 'Материал', detail: 'Детайл', product: 'Продукт' };
 
@@ -367,6 +420,14 @@
 
                 const actionTd = document.createElement('td');
                 actionTd.className = 'text-right';
+                actionTd.style.whiteSpace = 'nowrap';
+                const editBtn = document.createElement('button');
+                editBtn.type = 'button';
+                editBtn.className = 'btn-secondary';
+                editBtn.style.cssText = 'padding: 6px 10px; font-size: 0.8rem; margin-right: 6px;';
+                editBtn.textContent = 'Редактирай';
+                editBtn.addEventListener('click', function () { editCdnRow(idx); });
+                actionTd.appendChild(editBtn);
                 const removeBtn = document.createElement('button');
                 removeBtn.type = 'button';
                 removeBtn.className = 'btn-delete';

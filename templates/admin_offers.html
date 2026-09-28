@@ -25,7 +25,7 @@
     <section class="admin-card">
         <h3>Оферти</h3>
         <p class="section-subtitle">Генериране на оферти за печат/PDF - продукти, детайли или свободен текст в един ред.</p>
-        <a href="{{ url_for('admin_offer_new') }}" class="btn-submit" style="display: inline-block; margin-bottom: 1rem;">+ Нова оферта</a>
+        <a href="{{ url_for('admin_offer_new') }}" data-frame data-frame-scope="/admin/offers/" class="btn-submit" style="display: inline-block; margin-bottom: 1rem;">+ Нова оферта</a>
 
         {% if offers %}
         <div class="form-group" style="max-width: 360px;">
@@ -58,7 +58,7 @@
                     <td>{{ offer.created_at.strftime('%d.%m.%Y') }}</td>
                     <td>{{ offer.valid_until.strftime('%d.%m.%Y') if offer.valid_until else '-' }}</td>
                     <td class="text-right">{{ '%.2f'|format(offer.total) }} €</td>
-                    <td class="text-right"><a href="{{ url_for('admin_offer_edit', offer_id=offer.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редакция</a></td>
+                    <td class="text-right"><a href="{{ url_for('admin_offer_edit', offer_id=offer.id) }}" data-frame data-frame-scope="/admin/offers/" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редакция</a></td>
                     <td class="text-right"><a href="{{ url_for('admin_offer_print', offer_id=offer.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;" target="_blank">Печат / PDF</a></td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_offer_duplicate', offer_id=offer.id) }}" method="POST" style="display:inline;">
@@ -88,5 +88,18 @@
 </main>
 <script src="{{ url_for('static', filename='js/table_search.js') }}"></script>
 <script>initTableSearch('adminOffersSearchInput', 'adminOffersTableBody');</script>
+<script>
+    // ?open=<id> (after "Дублирай") opens that offer's editor in the frame
+    // dialog; the param is dropped first so reloading the list after the
+    // frame closes doesn't reopen it.
+    document.addEventListener('DOMContentLoaded', function () {
+        const params = new URLSearchParams(window.location.search);
+        const openId = params.get('open');
+        if (!openId || !/^\d+$/.test(openId)) return;
+        params.delete('open');
+        history.replaceState(null, '', window.location.pathname + (params.toString() ? '?' + params : ''));
+        window.openFrameDialog('/admin/offers/' + openId + '/edit', false, '/admin/offers/');
+    });
+</script>
 </body>
 </html>

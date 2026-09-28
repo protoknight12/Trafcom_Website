@@ -49,15 +49,12 @@
         return [g.w, g.h, g.t].filter(function (v) { return v; }).map(function (v) { return v + 'mm'; }).join(' × ');
     }
 
-    function unitFor(type) {
-        return (type === 'rods' || type === 'pipes' || type === 'profiles') ? 'm' : 'm²';
-    }
 
     function leafLabel(opt) {
         const price = opt.dataset.price;
         const parts = [];
         if (opt.dataset.id) parts.push('#' + opt.dataset.id);
-        if (price) parts.push(parseFloat(price).toFixed(2) + ' €/' + unitFor(opt.dataset.type));
+        if (price) parts.push(parseFloat(price).toFixed(2) + ' €/' + (opt.dataset.unit || 'м²'));
         parts.push(opt.dataset.brand || '-');
         return parts.join(' · ');
     }

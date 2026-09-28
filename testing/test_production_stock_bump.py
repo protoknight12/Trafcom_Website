@@ -106,6 +106,31 @@ def test_producing_a_product_component_bumps_the_components_detail_stock(client)
         assert Detail.query.get(detail_id).stock_quantity == 3
 
 
+def test_product_without_details_is_produced_whole_into_its_own_stock(client):
+    # e.g. a product converted from an offer's free-text line - no components
+    # to track, so the line itself is produced and lands in the product's stock
+    c = client[0]
+    with flask_app.app_context():
+        product = Product(name='QA Free Product', markup_percent=0)
+        order = Order(order_number='ORD-QA-2', user_id=User.query.first().id, customer_name='QA', status='new')
+        db.session.add_all([product, order])
+        db.session.flush()
+        item = OrderItem(order_id=order.id, product_id=product.id, quantity_ordered=4, unit_price=120.0)
+        db.session.add(item)
+        db.session.commit()
+        product_id, item_id, order_id = product.id, item.id, order.id
+        assert item.percent_complete == 0  # not "100% done" just because there's nothing to track
+    assert 'data-target-id="%d"' % item_id in c.get('/admin/production').get_data(as_text=True)
+
+    data = c.post('/admin/production', data={'target_type': 'item', 'target_id': item_id, 'produced_qty': '4'}).get_json()
+    assert data['item_percent'] == 100 and data['order_status'] == 'completed'
+    with flask_app.app_context():
+        assert Product.query.get(product_id).stock_quantity == 4
+        assert Order.query.get(order_id).status == 'completed'
+    label = c.get(f'/admin/print-label/item/{item_id}')
+    assert label.status_code == 200 and 'QA Free Product' in label.get_data(as_text=True)
+
+
 def test_repeated_updates_accumulate_by_delta_not_overwrite(client):
     c, detail_id, item_id, _component_id = client
     c.post('/admin/production', data={'target_type': 'item', 'target_id': item_id, 'produced_qty': '10'})

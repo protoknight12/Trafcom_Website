@@ -46,7 +46,7 @@
             </div>
             <div style="display: flex; align-items: center; gap: 8px; margin-left: auto; margin-right: 16px;">
                 <label for="machine_select_{{ order.id }}" style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">Машина:</label>
-                <select id="machine_select_{{ order.id }}" onchange="assignMachine({{ order.id }}, this)" style="padding: 6px 10px; background-color: #1a1f30; color: #fff; border: 1px solid #333; border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: all 0.2s ease;">
+                <select id="machine_select_{{ order.id }}" data-create="{{ create_url('machine') }}" onchange="assignMachine({{ order.id }}, this)" style="padding: 6px 10px; background-color: #1a1f30; color: #fff; border: 1px solid #333; border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: all 0.2s ease;">
                     <option value="">-- Без машина --</option>
                     {% for m in machines %}
                     <option value="{{ m.id }}" {% if order.machine_id == m.id %}selected{% endif %}>{{ m.name }}</option>
@@ -83,7 +83,7 @@
                     </td>
                     <td class="text-center">{{ item.quantity_ordered }} бр. <span class="text-muted text-small" id="item-remaining-{{ item.id }}">(остават {{ item.quantity_remaining }})</span></td>
                     <td class="text-center">
-                        {% if item.detail %}
+                        {% if item.stock_target %}
                         <div class="text-small text-muted" style="margin-bottom: 4px;">Общо изработени: <span id="item-total-{{ item.id }}">{{ item.quantity_produced }}</span> бр.</div>
                         <div style="display: flex; gap: 6px; justify-content: center; align-items: center;">
                             <input type="number" class="qty-updater" style="width: 70px;" step="1"
@@ -131,7 +131,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="4" style="padding-left: 30px; color: var(--text-muted); font-style: italic;">Този продукт няма добавени детайли.</td>
+                    <td colspan="4" style="padding-left: 30px; color: var(--text-muted); font-style: italic;">Продуктът няма детайли - отчита се като цял продукт и изработеното влиза директно в склада му.</td>
                 </tr>
                 {% endfor %}
                 {% endif %}

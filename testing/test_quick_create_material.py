@@ -77,7 +77,8 @@ def test_quick_create_material_full_fields(admin_client):
     with flask_app.app_context():
         m = MaterialPrice.query.filter_by(display_name='QA Титан').first()
         assert m is not None
-        assert m.cost_per_m2 == 100 and m.brand == 'QA-Brand' and m.sheet_length_mm == 2000
+        # A posted price is ignored - material price only comes from a delivery note.
+        assert m.cost_per_m2 == 0 and m.brand == 'QA-Brand' and m.sheet_length_mm == 2000
         assert m.pierce_rate_per_min == 0.5  # 120 sec/pierce -> 60/120 pierces per minute
         assert m.erp_number is not None  # auto-generated
 

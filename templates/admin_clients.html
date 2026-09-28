@@ -22,7 +22,7 @@
     {% endif %}
     {% endwith %}
 
-    <section class="admin-card">
+    <section class="admin-card" data-dialog-section="+ Нов клиент">
         <h3>Добавяне на нов клиент</h3>
         <p class="section-subtitle">Само името е задължително - останалите полета са по избор.</p>
         <form action="{{ url_for('admin_add_client') }}" method="POST" class="admin-form">
@@ -103,10 +103,10 @@
                     <td>{{ client.phone or '-' }}</td>
                     <td>{{ client.eik or '-' }}</td>
                     <td class="text-right">
-                        <a href="{{ url_for('admin_client_pricing', client_id=client.id) }}" class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;">Отстъпки/надценки</a>
+                        <a href="{{ url_for('admin_client_pricing', client_id=client.id) }}" data-frame class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;">Отстъпки/надценки</a>
                     </td>
                     <td class="text-right">
-                        <a href="{{ url_for('edit_client_window', client_id=client.id) }}" class="btn-secondary" target="_blank" rel="noopener" style="padding: 6px 10px; font-size: 0.78rem;">Редакция</a>
+                        <a href="{{ url_for('edit_client_window', client_id=client.id) }}" class="btn-secondary" data-frame style="padding: 6px 10px; font-size: 0.78rem;">Редакция</a>
                     </td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_client', client_id=client.id) }}" method="POST"
@@ -136,7 +136,7 @@
         }
     </script>
 
-    <section class="admin-card">
+    <section class="admin-card" data-dialog-section="+ Нов куриер">
         <h3>Добавяне на нов куриер</h3>
         <form action="{{ url_for('admin_add_deliverer') }}" method="POST" class="admin-form">
             {% include 'partials/csrf_field.html' %}
@@ -200,7 +200,7 @@
                     <td>{{ deliverer.phone or '-' }}</td>
                     <td>{{ deliverer.eik or '-' }}</td>
                     <td class="text-right">
-                        <a href="{{ url_for('edit_deliverer_window', deliverer_id=deliverer.id) }}" class="btn-secondary" target="_blank" rel="noopener" style="padding: 6px 10px; font-size: 0.78rem;">Редакция</a>
+                        <a href="{{ url_for('edit_deliverer_window', deliverer_id=deliverer.id) }}" class="btn-secondary" data-frame style="padding: 6px 10px; font-size: 0.78rem;">Редакция</a>
                     </td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_deliverer', deliverer_id=deliverer.id) }}" method="POST"

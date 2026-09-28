@@ -113,7 +113,7 @@
         }
     </script>
 
-    <button type="button" class="btn-secondary" style="margin-top: 12px; width: 100%;" onclick="window.opener && window.opener.location.reload(); window.close();">Затвори</button>
+    <button type="button" class="btn-secondary" style="margin-top: 12px; width: 100%;" onclick="if (window.self !== window.top && window.parent.closeFrameDialog) { window.parent.closeFrameDialog(true); } else { window.opener && window.opener.location.reload(); window.close(); }">Затвори</button>
 </div>
 
 </body>

@@ -30,7 +30,7 @@
     {% endif %}
     {% endwith %}
 
-    <section class="admin-card">
+    <section class="admin-card" data-dialog-section="+ Нов конвектор">
         <h3>Нов конвектор</h3>
         <p class="section-subtitle">Отоплителен/охладителен конвектор, превключван през собствено Shelly реле (Shelly 1/1PM или Plus/Pro 1/1PM). Свържете го към помещение от картата, или въведете свободно място, ако не е в нито едно заведено помещение.</p>
         <form action="{{ url_for('admin_add_convector') }}" method="POST" class="admin-form">
@@ -70,7 +70,7 @@
             </div>
             <div class="form-group">
                 <label for="new_conv_room">Помещение (по избор)</label>
-                <select id="new_conv_room" name="room_id">
+                <select id="new_conv_room" data-create="{{ create_url('room') }}" name="room_id">
                     <option value="">-- няма --</option>
                     {% for r in rooms %}
                     <option value="{{ r.id }}">{{ r.building.name }} / {{ r.name }}</option>
@@ -119,7 +119,7 @@
                         </form>
                     </td>
                     <td class="text-right">
-                        <a href="{{ url_for('edit_convector_window', conv_id=c.id) }}" onclick="window.open(this.href, 'editConvector', 'width=480,height=520'); return false;" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
+                        <a href="{{ url_for('edit_convector_window', conv_id=c.id) }}" data-frame class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
                     </td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_convector', conv_id=c.id) }}" method="POST"

@@ -29,7 +29,7 @@
     {% endif %}
     {% endwith %}
 
-    <section class="admin-card">
+    <section class="admin-card" data-dialog-section="+ Нов доставчик">
         <h3>Добавяне на доставчик</h3>
         <form action="{{ url_for('admin_add_supplier') }}" method="POST" class="admin-form">
             {% include 'partials/csrf_field.html' %}
@@ -58,8 +58,8 @@
         </form>
     </section>
 
-    <section class="admin-card">
-        <h3>Нова стокова разписка</h3>
+    <section class="admin-card" id="deliveryNoteSection" data-dialog-section="+ Нова стокова разписка">
+        <h3 data-dialog-title>Нова стокова разписка</h3>
         <p class="section-subtitle">Въведете данните от фактурата/стоковата разписка на доставчика - всеки ред увеличава наличността на съответния материал, детайл или продукт.</p>
 
         <form action="{{ url_for('create_delivery_note') }}" method="POST" id="deliveryNoteForm">
@@ -67,7 +67,7 @@
             <div class="add-item-row" style="margin-bottom: 16px;">
                 <div class="form-group">
                     <label for="supplier_id">Доставчик</label>
-                    <select id="supplier_id" name="supplier_id">
+                    <select id="supplier_id" data-create="{{ create_url('supplier') }}" name="supplier_id">
                         <option value="">-- Без доставчик --</option>
                         {% for s in suppliers %}
                         <option value="{{ s.id }}">{{ s.name }}</option>
@@ -103,13 +103,12 @@
                     <input type="text" id="dn_material_name_new" placeholder="Име на новия материал" autocomplete="off" style="display: none; margin-top: 8px;">
                     <div id="dn_material_type_group" style="display: none; margin-top: 8px;">
                         <select id="dn_material_type" style="width: 100%;">
-                            {% for type_key, type_label in MATERIAL_TYPE_LABELS.items() %}
+                            {% for type_key, type_label in material_type_labels().items() %}
                             <option value="{{ type_key }}" {% if type_key == 'sheets' %}selected{% endif %}>{{ type_label }}</option>
                             {% endfor %}
                         </select>
                     </div>
                     <div id="dn_material_new_pricing" style="display: none; margin-top: 8px; gap: 8px; flex-wrap: wrap;">
-                        <input type="number" id="dn_material_cost_per_m2" step="0.01" min="0" placeholder="Цена/м² (€) *" style="flex: 1; min-width: 120px;">
                         <input type="number" id="dn_material_cutting_speed_mm_per_min" step="0.01" min="0.01" placeholder="Скорост рязане (мм/мин) *" style="flex: 1; min-width: 120px;">
                         <input type="number" id="dn_material_pierce_rate_per_min" step="0.01" min="0.01" placeholder="Скорост пробиване (проб./мин) *" style="flex: 1; min-width: 120px;">
                     </div>
@@ -213,7 +212,7 @@
                     <input type="text" id="dn_notes" placeholder="напр. партида, забележка">
                 </div>
                 <div class="form-group" style="flex: 0 0 auto;">
-                    <button type="button" class="btn-secondary" onclick="addDeliveryRow()" style="padding: 12px 20px;">+ Добави</button>
+                    <button type="button" class="btn-secondary" id="dnAddRowBtn" onclick="addDeliveryRow()" style="padding: 12px 20px;">+ Добави</button>
                 </div>
             </div>
 
@@ -237,13 +236,13 @@
             </div>
 
             <input type="hidden" name="items_json" id="itemsJsonInput">
-            <button type="submit" class="btn-submit" style="width: 100%; margin-top: 16px;" id="submitNoteBtn" disabled>Запази разписка и обнови наличности</button>
+            <button type="submit" class="btn-submit" style="width: 100%; margin-top: 16px;" id="submitNoteBtn" data-dialog-submit data-edit-label="Запази промените и преизчисли наличности" disabled>Запази разписка и обнови наличности</button>
         </form>
     </section>
 
     {% if current_user.is_admin %}
-    <div id="quickDetailModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
-        <div class="admin-card" style="width: 100%; max-width: 500px; margin: 20px; background-color: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 28px; box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15); position: relative;">
+    <dialog id="quickDetailModal" class="form-dialog">
+        <div>
             <span onclick="closeQuickDetailModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
             <h3 style="margin-top: 0; margin-bottom: 16px;">Бързо създаване на детайл</h3>
             <form id="quickDetailForm" enctype="multipart/form-data">
@@ -263,7 +262,7 @@
                 </div>
                 <div class="form-group" style="margin-bottom: 15px;">
                     <label for="qd_service">Услуга (рязане, незадължително)</label>
-                    <select id="qd_service" name="service_id">
+                    <select id="qd_service" data-create="{{ create_url('service') }}" name="service_id">
                         <option value="">-- Изберете услуга --</option>
                         {% for s in services %}
                         <option value="{{ s.id }}">{{ s.name }} ({% if s.pricing_mode == 'length' %}{{ "%.2f"|format(s.price_per_meter_eur) }} €/м{% else %}{{ "%.2f"|format(s.price_per_hour_eur) }} €/час{% endif %})</option>
@@ -294,10 +293,10 @@
                 <div id="qd_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
             </form>
         </div>
-    </div>
+    </dialog>
 
-    <div id="quickMaterialModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1100; align-items: center; justify-content: center;">
-        <div class="admin-card" style="width: 100%; max-width: 500px; margin: 20px; background-color: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 28px; box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15); position: relative; max-height: 90vh; overflow-y: auto;">
+    <dialog id="quickMaterialModal" class="form-dialog">
+        <div>
             <span onclick="closeQuickMaterialModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
             <h3 style="margin-top: 0; margin-bottom: 16px;">Бързо създаване на материал</h3>
             <form id="quickMaterialForm">
@@ -309,7 +308,7 @@
                 <div class="form-group" style="margin-bottom: 15px;">
                     <label for="qm_type">Тип (форма на суровината)</label>
                     <select id="qm_type" name="type">
-                        {% for type_key, type_label in MATERIAL_TYPE_LABELS.items() %}
+                        {% for type_key, type_label in material_type_labels().items() %}
                         <option value="{{ type_key }}" {% if type_key == 'sheets' %}selected{% endif %}>{{ type_label }}</option>
                         {% endfor %}
                     </select>
@@ -317,10 +316,6 @@
                 <div class="form-group" style="margin-bottom: 15px;">
                     <label for="qm_brand">Марка (незадължително)</label>
                     <input type="text" id="qm_brand" name="brand" placeholder="напр. Alcoa">
-                </div>
-                <div class="form-group" style="margin-bottom: 15px;">
-                    <label for="qm_cost_per_m2" id="qm_cost_per_m2_label">Цена на м² плоча (€)</label>
-                    <input type="number" id="qm_cost_per_m2" step="0.01" min="0" name="cost_per_m2" required>
                 </div>
                 <div class="form-group" style="margin-bottom: 15px;" id="qm_cutting_speed_mm_per_min_group">
                     <label for="qm_cutting_speed_mm_per_min">Скорост на рязане (мм/мин)</label>
@@ -354,7 +349,7 @@
                 <div id="qm_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
             </form>
         </div>
-    </div>
+    </dialog>
     {% endif %}
 
     <section class="admin-card">
@@ -392,7 +387,19 @@
                         </div>
                         {% endfor %}
                     </td>
-                    <td><a href="{{ url_for('admin_delivery_note_print', note_id=note.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Печат</a></td>
+                    <td style="white-space: nowrap;">
+                        <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;"
+                                data-dialog="deliveryNoteSection-dialog" data-note-id="{{ note.id }}"
+                                data-action="{{ url_for('edit_delivery_note', note_id=note.id) }}"
+                                data-title="Редакция на стокова разписка №{{ note.id }}"
+                                data-values='{{ {"supplier_id": note.supplier_id or "", "note_number": note.note_number or "", "note_date": note.note_date.isoformat() if note.note_date else ""}|tojson|forceescape }}'>Редактирай</button>
+                        <a href="{{ url_for('admin_delivery_note_print', note_id=note.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Печат</a>
+                        <form action="{{ url_for('delete_delivery_note', note_id=note.id) }}" method="POST" style="display: inline;"
+                              onsubmit="return confirm('Да се изтрие ли стокова разписка №{{ note.id }}? Заприходените количества ще бъдат извадени от наличностите.');">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete" style="padding: 6px 12px; font-size: 0.85rem;">Изтрий</button>
+                        </form>
+                    </td>
                 </tr>
                 {% else %}
                 <tr>
@@ -462,11 +469,11 @@
     let qdTargetSelectId = null;
     function openQuickDetailModal(targetSelectId) {
         qdTargetSelectId = targetSelectId;
-        document.getElementById('quickDetailModal').style.display = 'flex';
+        document.getElementById('quickDetailModal').showModal();
         document.getElementById('qd_error').style.display = 'none';
     }
     function closeQuickDetailModal() {
-        document.getElementById('quickDetailModal').style.display = 'none';
+        document.getElementById('quickDetailModal').close();
         document.getElementById('quickDetailForm').reset();
         applyQdManualPriceVisibility();
     }
@@ -520,11 +527,11 @@
     let qmTargetSelectId = null;
     function openQuickMaterialModal(targetSelectId) {
         qmTargetSelectId = targetSelectId;
-        document.getElementById('quickMaterialModal').style.display = 'flex';
+        document.getElementById('quickMaterialModal').showModal();
         document.getElementById('qm_error').style.display = 'none';
     }
     function closeQuickMaterialModal() {
-        document.getElementById('quickMaterialModal').style.display = 'none';
+        document.getElementById('quickMaterialModal').close();
         document.getElementById('quickMaterialForm').reset();
         applyQuickMaterialDimensionLabels();
     }
@@ -532,13 +539,8 @@
     // Relabels/hides the 3 generic dimension fields based on the chosen type -
     // mirrors MATERIAL_DIMENSION_LABELS/material_price_m2_label in app.py, same
     // as the standalone add-material form on admin_materials.html.
-    const QM_DIMENSION_FIELD_LABELS = {
-        sheets: ['Дължина на плочата (мм)', 'Ширина на плочата (мм)', 'Дебелина (мм)'],
-        rods: ['Дължина (мм)', 'Диаметър (мм)', null],
-        pipes: ['Дължина (мм)', 'Външен диаметър (мм)', 'Дебелина на стената (мм)'],
-        profiles: ['Дължина (мм)', 'Ширина (мм)', 'Дебелина на стената (мм)'],
-        other: [null, null, null],
-    };
+    const MATERIAL_TYPES = {{ material_types_js()|tojson }};
+    const QM_DIMENSION_FIELD_LABELS = Object.fromEntries(Object.entries(MATERIAL_TYPES).map(function (e) { return [e[0], e[1].dims]; }));
     const QM_DIMENSION_FIELD_IDS = ['qm_sheet_length_mm', 'qm_sheet_width_mm', 'qm_thickness_mm'];
 
     function applyQuickMaterialDimensionLabels() {
@@ -554,17 +556,14 @@
                 group.style.display = 'none';
             }
         });
-        document.getElementById('qm_cost_per_m2_label').textContent =
-            typeSelect.value === 'sheets' ? 'Цена на м² плоча (€)' :
-            typeSelect.value === 'rods' ? 'Цена на линеен метър (€)' : 'Цена на м² материал (€)';
 
-        // Rods are cut to length on a saw, never pierced or DXF-cut - no
+        // Saw-cut types (MaterialType.has_cutting off) are never pierced or DXF-cut - no
         // cutting/drill speed for them.
-        const isRod = typeSelect.value === 'rods';
+        const noCutting = !(MATERIAL_TYPES[typeSelect.value] || {}).cutting;
         ['qm_cutting_speed_mm_per_min', 'qm_pierce_time_sec'].forEach(function (fieldId) {
             const group = document.getElementById(fieldId + '_group');
             const input = document.getElementById(fieldId);
-            if (isRod) {
+            if (noCutting) {
                 group.style.display = 'none';
                 input.required = false;
                 input.value = '';
@@ -625,14 +624,14 @@
             thicknessLabel.textContent = DN_DIMENSION_DEFAULT_LABELS.thickness;
         }
 
-        // Rods are cut to length on a saw, never pierced or DXF-cut - no
+        // Saw-cut types (MaterialType.has_cutting off) are never pierced or DXF-cut - no
         // cutting/drill speed inputs for them. Those inputs only exist for
         // brand-new materials, so this only matters in the isNew branch.
         if (type === 'material' && isNew) {
-            const isRod = materialType === 'rods';
-            pierceInput.style.display = isRod ? 'none' : '';
-            cuttingSpeedInput.style.display = isRod ? 'none' : '';
-            if (isRod) {
+            const noCutting = !(MATERIAL_TYPES[materialType] || {}).cutting;
+            pierceInput.style.display = noCutting ? 'none' : '';
+            cuttingSpeedInput.style.display = noCutting ? 'none' : '';
+            if (noCutting) {
                 pierceInput.value = '';
                 cuttingSpeedInput.value = '';
             }
@@ -734,7 +733,7 @@
         materialPricing.style.display = showMaterialPricing ? 'flex' : 'none';
         document.getElementById('dn_material_type_group').style.display = showMaterialPricing ? 'block' : 'none';
         if (!showMaterialPricing) {
-            ['dn_material_cost_per_m2', 'dn_material_cutting_speed_mm_per_min', 'dn_material_pierce_rate_per_min'].forEach(function (id) {
+            ['dn_material_cutting_speed_mm_per_min', 'dn_material_pierce_rate_per_min'].forEach(function (id) {
                 document.getElementById(id).value = '';
             });
         }
@@ -836,15 +835,14 @@
 
         let costPerM2 = null, cuttingSpeed = null, pierceRate = null, materialType = null;
         if (type === 'material' && isNewItem) {
-            costPerM2 = numOrNull('dn_material_cost_per_m2');
             materialType = document.getElementById('dn_material_type').value;
-            // Rods are cut to length on a saw, never pierced or DXF-cut - no
+            // Saw-cut types (MaterialType.has_cutting off) are never pierced or DXF-cut - no
             // cutting/drill speed required for them.
-            const isRod = materialType === 'rods';
-            cuttingSpeed = isRod ? null : numOrNull('dn_material_cutting_speed_mm_per_min');
-            pierceRate = isRod ? null : numOrNull('dn_material_pierce_rate_per_min');
-            if (costPerM2 === null || (!isRod && (cuttingSpeed === null || pierceRate === null))) {
-                alert('Моля въведете цена/м², скорост на рязане и скорост на пробиване за новия материал.');
+            const noCutting = !(MATERIAL_TYPES[materialType] || {}).cutting;
+            cuttingSpeed = noCutting ? null : numOrNull('dn_material_cutting_speed_mm_per_min');
+            pierceRate = noCutting ? null : numOrNull('dn_material_pierce_rate_per_min');
+            if (!noCutting && (cuttingSpeed === null || pierceRate === null)) {
+                alert('Моля въведете скорост на рязане и скорост на пробиване за новия материал.');
                 return;
             }
         } else if (type === 'material') {
@@ -862,7 +860,7 @@
             ? dnProductComponents.map(function (c) { return { detail_id: c.detailId, quantity: c.quantity }; })
             : [];
 
-        dnItems.push({
+        const newRow = {
             type: type, name: name, material_key: materialKey, qty: qty, unit_price: unitPrice,
             width: numOrNull('dn_width'), height: numOrNull('dn_height'), thickness: numOrNull('dn_thickness'),
             brand: document.getElementById('dn_brand').value.trim() || null,
@@ -870,7 +868,15 @@
             cost_per_m2: costPerM2, cutting_speed_mm_per_min: cuttingSpeed, pierce_rate_per_min: pierceRate,
             material_type: materialType,
             components: components,
-        });
+        };
+        if (dnEditingIndex !== null) {
+            // an existing line of an edited note keeps its item_id (see edit_delivery_note)
+            if (dnItems[dnEditingIndex].item_id) newRow.item_id = dnItems[dnEditingIndex].item_id;
+            dnItems[dnEditingIndex] = newRow;
+            stopDnRowEdit();
+        } else {
+            dnItems.push(newRow);
+        }
         document.getElementById('dn_notes').value = '';
         dnProductComponents = [];
         renderDnProductComponentsTable();
@@ -879,8 +885,49 @@
 
     function removeDnRow(index) {
         dnItems.splice(index, 1);
+        stopDnRowEdit();
         renderDnTable();
     }
+
+    // "Редактирай" on a line: loads it back into the add fields above,
+    // "+ Добави" then replaces it instead of adding a new one.
+    let dnEditingIndex = null;
+    function stopDnRowEdit() {
+        dnEditingIndex = null;
+        document.getElementById('dnAddRowBtn').textContent = '+ Добави';
+    }
+    function editDnRow(index) {
+        const item = dnItems[index];
+        const radio = document.querySelector('input[name="dn_item_type"][value="' + item.type + '"]');
+        radio.checked = true;
+        radio.dispatchEvent(new Event('change'));
+        const sel = document.getElementById(currentSelectField(item.type));
+        sel.value = item.type === 'material' ? item.material_key : item.name;
+        sel.dispatchEvent(new Event('change'));  // catalog defaults first, the line's own values below
+        if (item.type === 'detail') document.getElementById('dn_detail_material_id').value = item.material_key || '';
+        const set = function (id, v) { document.getElementById(id).value = v == null ? '' : v; };
+        set('dn_qty', item.qty);
+        set('dn_price', item.unit_price);
+        set('dn_width', item.width);
+        set('dn_height', item.height);
+        set('dn_thickness', item.thickness);
+        set('dn_brand', item.brand);
+        set('dn_notes', item.notes);
+        dnEditingIndex = index;
+        document.getElementById('dnAddRowBtn').textContent = 'Запази реда';
+        document.getElementById('dn_qty').focus();
+    }
+
+    // The note dialog opens either empty ("+ Нова ...") or with a recorded
+    // note's lines (its "Редактирай" carries data-note-id).
+    const NOTE_ROWS = {{ note_rows|tojson }};
+    document.addEventListener('dialog-open', function (e) {
+        if (e.target.id !== 'deliveryNoteSection-dialog') return;
+        const noteId = e.detail.button.dataset.noteId;
+        dnItems = noteId ? JSON.parse(JSON.stringify(NOTE_ROWS[noteId] || [])) : [];
+        stopDnRowEdit();
+        renderDnTable();
+    });
 
     const TYPE_LABELS = { material: 'Материал', detail: 'Детайл', product: 'Продукт' };
 
@@ -909,6 +956,14 @@
 
                 const actionTd = document.createElement('td');
                 actionTd.className = 'text-right';
+                actionTd.style.whiteSpace = 'nowrap';
+                const editBtn = document.createElement('button');
+                editBtn.type = 'button';
+                editBtn.className = 'btn-secondary';
+                editBtn.style.cssText = 'padding: 6px 10px; font-size: 0.8rem; margin-right: 6px;';
+                editBtn.textContent = 'Редактирай';
+                editBtn.addEventListener('click', function () { editDnRow(idx); });
+                actionTd.appendChild(editBtn);
                 const removeBtn = document.createElement('button');
                 removeBtn.type = 'button';
                 removeBtn.className = 'btn-delete';
@@ -936,7 +991,7 @@
                     type: c.type, name: c.name, material_key: c.material_key, qty: c.qty, unit_price: c.unit_price,
                     width: c.width, height: c.height, thickness: c.thickness, brand: c.brand, notes: c.notes,
                     cost_per_m2: c.cost_per_m2, cutting_speed_mm_per_min: c.cutting_speed_mm_per_min, pierce_rate_per_min: c.pierce_rate_per_min,
-                    material_type: c.material_type, components: c.components,
+                    material_type: c.material_type, components: c.components, item_id: c.item_id || null,
                 };
             })
         );

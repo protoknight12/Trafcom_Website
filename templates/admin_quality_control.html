@@ -141,7 +141,7 @@
     {% endif %}
     {% endwith %}
 
-    <section class="admin-card">
+    <section class="admin-card"{% if not edit_check %} data-dialog-section="+ Нова QC проверка"{% endif %}>
         <div style="display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px;">
             <h3 style="margin: 0;">{{ 'Редакция на QC проверка #' ~ edit_check.id if edit_check else 'Нова QC проверка' }}</h3>
             <div style="display: flex; gap: 14px; align-items: baseline;">
@@ -296,7 +296,7 @@
                         {% if check.iso8015 %}<br><span class="badge badge-pass" style="margin-top: 4px;">ISO 8015</span>{% endif %}
                     </td>
                     <td class="text-right">
-                        <a href="{{ url_for('admin_edit_quality_check', check_id=check.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
+                        <a href="{{ url_for('admin_edit_quality_check', check_id=check.id) }}" data-frame class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
                     </td>
                     <td class="text-right">
                         <a href="{{ url_for('admin_quality_check_print', check_id=check.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;" target="_blank">Печат</a>
@@ -318,8 +318,8 @@
         {% endif %}
     </section>
 
-    <div class="qc-modal-overlay" id="qcInstrumentModal">
-        <div class="qc-modal-box">
+    <dialog id="qcInstrumentModal" class="form-dialog">
+        <div>
             <span class="qc-modal-close" onclick="closeQcInstrumentModal()">&times;</span>
             <h3 style="margin-top: 0; margin-bottom: 16px;">Бързо създаване на инструмент</h3>
             <form id="qcInstrumentForm">
@@ -344,7 +344,7 @@
                 <div id="qi_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
             </form>
         </div>
-    </div>
+    </dialog>
 
     <datalist id="qcMeasurementTypes">
         <option value="Диаметър">
@@ -946,11 +946,11 @@
     let qcInstrumentTargetSelect = null;
     function openQcInstrumentModal(targetSelect) {
         qcInstrumentTargetSelect = targetSelect;
-        document.getElementById('qcInstrumentModal').style.display = 'flex';
+        document.getElementById('qcInstrumentModal').showModal();
         document.getElementById('qi_error').style.display = 'none';
     }
     function closeQcInstrumentModal() {
-        document.getElementById('qcInstrumentModal').style.display = 'none';
+        document.getElementById('qcInstrumentModal').close();
         document.getElementById('qcInstrumentForm').reset();
     }
 

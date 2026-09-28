@@ -90,7 +90,7 @@
             <label>{{ _('Операции за този детайл (незадължително - рязане, огъване, пробиване...)') }}</label>
             <p class="text-small text-muted" style="margin-top: -4px;">{{ _('Приложени само към детайла, който ще бъде добавен към количката по-долу.') }}</p>
             <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: flex-end;">
-                <select id="pending_op_service_id" style="flex: 1; min-width: 200px;">
+                <select id="pending_op_service_id" data-create="{{ create_url('service') }}" style="flex: 1; min-width: 200px;">
                     <option value="">-- {{ _('Изберете услуга') }} --</option>
                     {% for s in services %}
                     <option value="{{ s.id }}">{{ localized(s, 'name') }} ({{ "%.2f"|format(client_service_rate(s)) }} €/{{ _('час') }})</option>
@@ -146,7 +146,7 @@
             {% include 'partials/csrf_field.html' %}
             <div class="form-group" style="margin-bottom: 20px;">
                 <label for="machine_id">{{ _('Назначи машина (по избор)') }}</label>
-                <select id="machine_id" name="machine_id">
+                <select id="machine_id" data-create="{{ create_url('machine') }}" name="machine_id">
                     <option value="">-- {{ _('Без конкретна машина') }} --</option>
                     {% for machine in machines %}
                     <option value="{{ machine.id }}">{{ machine.name }} ({% if machine.status == 'idle' %}{{ _('Свободна') }}{% elif machine.status == 'running' %}{{ _('Работи') }}{% else %}{{ _('Поддръжка') }}{% endif %})</option>
@@ -196,8 +196,8 @@
 
 <!-- Modals for Quick Create -->
 {% if current_user.is_admin %}
-<div id="quickDetailModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
-    <div class="admin-card" style="width: 100%; max-width: 500px; margin: 20px; background-color: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 28px; box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15); position: relative;">
+<dialog id="quickDetailModal" class="form-dialog">
+    <div>
         <span onclick="closeQuickDetailModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
         <h3 style="margin-top: 0; margin-bottom: 16px;">Бързо създаване на детайл</h3>
         <form id="quickDetailForm" enctype="multipart/form-data">
@@ -217,7 +217,7 @@
             </div>
             <div class="form-group" style="margin-bottom: 15px;">
                 <label for="qd_service">Услуга (рязане, незадължително)</label>
-                <select id="qd_service" name="service_id">
+                <select id="qd_service" data-create="{{ create_url('service') }}" name="service_id">
                     <option value="">-- Изберете услуга --</option>
                     {% for s in services %}
                     <option value="{{ s.id }}">{{ s.name }} ({% if s.pricing_mode == 'length' %}{{ "%.2f"|format(s.price_per_meter_eur) }} €/м{% else %}{{ "%.2f"|format(s.price_per_hour_eur) }} €/час{% endif %})</option>
@@ -248,10 +248,10 @@
             <div id="qd_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
         </form>
     </div>
-</div>
+</dialog>
 
-<div id="quickMaterialModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1100; align-items: center; justify-content: center;">
-    <div class="admin-card" style="width: 100%; max-width: 500px; margin: 20px; background-color: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 28px; box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15); position: relative; max-height: 90vh; overflow-y: auto;">
+<dialog id="quickMaterialModal" class="form-dialog">
+    <div>
         <span onclick="closeQuickMaterialModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
         <h3 style="margin-top: 0; margin-bottom: 16px;">Бързо създаване на материал</h3>
         <form id="quickMaterialForm">
@@ -263,7 +263,7 @@
             <div class="form-group" style="margin-bottom: 15px;">
                 <label for="qm_type">Тип (форма на суровината)</label>
                 <select id="qm_type" name="type">
-                    {% for type_key, type_label in MATERIAL_TYPE_LABELS.items() %}
+                    {% for type_key, type_label in material_type_labels().items() %}
                     <option value="{{ type_key }}" {% if type_key == 'sheets' %}selected{% endif %}>{{ type_label }}</option>
                     {% endfor %}
                 </select>
@@ -271,10 +271,6 @@
             <div class="form-group" style="margin-bottom: 15px;">
                 <label for="qm_brand">Марка (незадължително)</label>
                 <input type="text" id="qm_brand" name="brand" placeholder="напр. Alcoa">
-            </div>
-            <div class="form-group" style="margin-bottom: 15px;">
-                <label for="qm_cost_per_m2" id="qm_cost_per_m2_label">Цена на м² плоча (€)</label>
-                <input type="number" id="qm_cost_per_m2" step="0.01" min="0" name="cost_per_m2" required>
             </div>
             <div class="form-group" style="margin-bottom: 15px;" id="qm_cutting_speed_mm_per_min_group">
                 <label for="qm_cutting_speed_mm_per_min">Скорост на рязане (мм/мин)</label>
@@ -308,10 +304,10 @@
             <div id="qm_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
         </form>
     </div>
-</div>
+</dialog>
 
-<div id="quickProductModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
-    <div class="admin-card" style="width: 100%; max-width: 500px; margin: 20px; background-color: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 28px; box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15); position: relative;">
+<dialog id="quickProductModal" class="form-dialog">
+    <div>
         <span onclick="closeQuickProductModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
         <h3 style="margin-top: 0; margin-bottom: 16px;">Бързо създаване на продукт</h3>
         <form id="quickProductForm">
@@ -331,7 +327,7 @@
             <div class="form-group" style="margin-bottom: 10px;">
                 <label for="qp_detail_id">Компоненти (детайли)</label>
                 <div style="display: flex; gap: 8px;">
-                    <select id="qp_detail_id" style="flex: 1;">
+                    <select id="qp_detail_id" data-create="{{ create_url('detail') }}" style="flex: 1;">
                         <optgroup label="Детайли">
                         {% for d in details %}
                         <option value="{{ d.id }}">{{ d.name }}</option>
@@ -353,11 +349,11 @@
             <div id="qp_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
         </form>
     </div>
-</div>
+</dialog>
 {% endif %}
 
-<div id="quickClientModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
-    <div class="admin-card" style="width: 100%; max-width: 500px; margin: 20px; background-color: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 28px; box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15); position: relative;">
+<dialog id="quickClientModal" class="form-dialog">
+    <div>
         <span onclick="closeQuickClientModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
         <h3 style="margin-top: 0; margin-bottom: 16px;">{{ _('Бързо създаване на клиент') }}</h3>
         <form id="quickClientForm">
@@ -408,10 +404,10 @@
             <div id="qc_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
         </form>
     </div>
-</div>
+</dialog>
 
-<div id="quickDelivererModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
-    <div class="admin-card" style="width: 100%; max-width: 500px; margin: 20px; background-color: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 28px; box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15); position: relative;">
+<dialog id="quickDelivererModal" class="form-dialog">
+    <div>
         <span onclick="closeQuickDelivererModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
         <h3 style="margin-top: 0; margin-bottom: 16px;">{{ _('Бързо създаване на куриер') }}</h3>
         <form id="quickDelivererForm">
@@ -449,7 +445,7 @@
             <div id="qdv_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>
         </form>
     </div>
-</div>
+</dialog>
 
 <script src="{{ url_for('static', filename='js/material_picker.js') }}"></script>
 <script>
@@ -780,20 +776,20 @@
 
     // Modal Control Functions
     function openQuickClientModal() {
-        document.getElementById('quickClientModal').style.display = 'flex';
+        document.getElementById('quickClientModal').showModal();
         document.getElementById('qc_error').style.display = 'none';
     }
     function closeQuickClientModal() {
-        document.getElementById('quickClientModal').style.display = 'none';
+        document.getElementById('quickClientModal').close();
         document.getElementById('quickClientForm').reset();
         toggleQcCompanyFields();
     }
     function openQuickDelivererModal() {
-        document.getElementById('quickDelivererModal').style.display = 'flex';
+        document.getElementById('quickDelivererModal').showModal();
         document.getElementById('qdv_error').style.display = 'none';
     }
     function closeQuickDelivererModal() {
-        document.getElementById('quickDelivererModal').style.display = 'none';
+        document.getElementById('quickDelivererModal').close();
         document.getElementById('quickDelivererForm').reset();
     }
 
@@ -870,11 +866,11 @@
         });
     });
     function openQuickDetailModal() {
-        document.getElementById('quickDetailModal').style.display = 'flex';
+        document.getElementById('quickDetailModal').showModal();
         document.getElementById('qd_error').style.display = 'none';
     }
     function closeQuickDetailModal() {
-        document.getElementById('quickDetailModal').style.display = 'none';
+        document.getElementById('quickDetailModal').close();
         document.getElementById('quickDetailForm').reset();
         applyQdManualPriceVisibility();
     }
@@ -891,11 +887,11 @@
     let qmTargetSelectId = null;
     function openQuickMaterialModal(targetSelectId) {
         qmTargetSelectId = targetSelectId;
-        document.getElementById('quickMaterialModal').style.display = 'flex';
+        document.getElementById('quickMaterialModal').showModal();
         document.getElementById('qm_error').style.display = 'none';
     }
     function closeQuickMaterialModal() {
-        document.getElementById('quickMaterialModal').style.display = 'none';
+        document.getElementById('quickMaterialModal').close();
         document.getElementById('quickMaterialForm').reset();
         applyQuickMaterialDimensionLabels();
     }
@@ -903,13 +899,8 @@
     // Relabels/hides the 3 generic dimension fields based on the chosen type -
     // mirrors MATERIAL_DIMENSION_LABELS/material_price_m2_label in app.py, same
     // as the standalone add-material form on admin_materials.html.
-    const QM_DIMENSION_FIELD_LABELS = {
-        sheets: ['Дължина на плочата (мм)', 'Ширина на плочата (мм)', 'Дебелина (мм)'],
-        rods: ['Дължина (мм)', 'Диаметър (мм)', null],
-        pipes: ['Дължина (мм)', 'Външен диаметър (мм)', 'Дебелина на стената (мм)'],
-        profiles: ['Дължина (мм)', 'Ширина (мм)', 'Дебелина на стената (мм)'],
-        other: [null, null, null],
-    };
+    const MATERIAL_TYPES = {{ material_types_js()|tojson }};
+    const QM_DIMENSION_FIELD_LABELS = Object.fromEntries(Object.entries(MATERIAL_TYPES).map(function (e) { return [e[0], e[1].dims]; }));
     const QM_DIMENSION_FIELD_IDS = ['qm_sheet_length_mm', 'qm_sheet_width_mm', 'qm_thickness_mm'];
 
     function applyQuickMaterialDimensionLabels() {
@@ -925,17 +916,14 @@
                 group.style.display = 'none';
             }
         });
-        document.getElementById('qm_cost_per_m2_label').textContent =
-            typeSelect.value === 'sheets' ? 'Цена на м² плоча (€)' :
-            typeSelect.value === 'rods' ? 'Цена на линеен метър (€)' : 'Цена на м² материал (€)';
 
-        // Rods are cut to length on a saw, never pierced or DXF-cut - no
+        // Saw-cut types (MaterialType.has_cutting off) are never pierced or DXF-cut - no
         // cutting/drill speed for them.
-        const isRod = typeSelect.value === 'rods';
+        const noCutting = !(MATERIAL_TYPES[typeSelect.value] || {}).cutting;
         ['qm_cutting_speed_mm_per_min', 'qm_pierce_time_sec'].forEach(function (fieldId) {
             const group = document.getElementById(fieldId + '_group');
             const input = document.getElementById(fieldId);
-            if (isRod) {
+            if (noCutting) {
                 group.style.display = 'none';
                 input.required = false;
                 input.value = '';
@@ -950,11 +938,11 @@
     applyQuickMaterialDimensionLabels();
 
     function openQuickProductModal() {
-        document.getElementById('quickProductModal').style.display = 'flex';
+        document.getElementById('quickProductModal').showModal();
         document.getElementById('qp_error').style.display = 'none';
     }
     function closeQuickProductModal() {
-        document.getElementById('quickProductModal').style.display = 'none';
+        document.getElementById('quickProductModal').close();
         document.getElementById('quickProductForm').reset();
         qpComponents = [];
         renderQpComponentsTable();
@@ -1140,6 +1128,11 @@
         });
     });
     {% endif %}
+</script>
+<script>
+    // "+" create-new next to a select (form_dialog.js): keep this page's own
+    // catalog arrays in step with the option that was just added.
+    document.addEventListener('create-new', function (e) { mergeCatalog(e.detail.doc, 'PRODUCTS', PRODUCTS); mergeCatalog(e.detail.doc, 'DETAILS', DETAILS); mergeCatalog(e.detail.doc, 'SERVICES_DATA', SERVICES_DATA); });
 </script>
 </body>
 </html>

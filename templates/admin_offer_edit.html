@@ -43,11 +43,29 @@
         <p class="section-subtitle">
             {% if offer %}Редакцията презаписва всички редове на офертата.{% else %}Номерът на офертата се генерира автоматично при запазване.{% endif %}
         </p>
-        {% if offer %}
-        <a href="{{ url_for('admin_offer_print', offer_id=offer.id) }}" class="btn-secondary" target="_blank" style="display: inline-block; margin-bottom: 1rem;">Печат / PDF</a>
-        {% endif %}
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem;">
+            <button type="button" class="btn-submit btn-inline" onclick="document.getElementById('offerDataDialog').showModal()">Редактирай данните</button>
+            {% if offer %}
+            <a href="{{ url_for('admin_offer_print', offer_id=offer.id) }}" class="btn-secondary" target="_blank">Печат / PDF</a>
+            {% endif %}
+        </div>
+        <div class="table-responsive">
+            <table class="users-table" id="offerSummary">
+                <tbody>
+                <tr><th style="width: 220px;">Обект / заглавие</th><td data-summary="object_title"></td></tr>
+                <tr><th>Клиент</th><td data-summary="client_id"></td></tr>
+                <tr><th>Подписал</th><td data-summary="signed_by"></td></tr>
+                <tr><th>Валидна до</th><td data-summary="valid_until"></td></tr>
+                <tr><th>Отстъпка</th><td data-summary="discount_percent"></td></tr>
+                <tr><th>Условия / бележки</th><td data-summary="footer_notes" style="white-space: pre-line;"></td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
 
-        <form id="offerForm" action="{{ url_for('admin_offer_edit', offer_id=offer.id) if offer else url_for('admin_offer_new') }}" method="POST" class="admin-form">
+    <dialog id="offerDataDialog" class="form-dialog">
+        <h3>Данни на офертата</h3>
+        <form id="offerForm" action="{{ url_for('admin_offer_edit', offer_id=offer.id) if offer else url_for('admin_offer_new') }}" method="POST" class="admin-form" novalidate>
             {% include 'partials/csrf_field.html' %}
 
             <div class="form-group">
@@ -57,7 +75,7 @@
             </div>
             <div class="form-group">
                 <label for="client_id">Клиент (незадължително)</label>
-                <select id="client_id" name="client_id">
+                <select id="client_id" data-create="{{ create_url('client') }}" name="client_id">
                     <option value="">-- без клиент --</option>
                     {% for c in clients %}
                     <option value="{{ c.id }}" {% if offer and offer.client_id == c.id %}selected{% endif %}>{{ c.name }}</option>
@@ -83,10 +101,12 @@
                 <label for="footer_notes">Условия / бележки под таблицата (по един ред) - валидността се смята автоматично от "Валидна до"</label>
                 <textarea id="footer_notes" name="footer_notes" rows="4" style="width: 100%; box-sizing: border-box; background-color: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); padding: 0.6rem 0.75rem;">{% if offer %}{{ offer.footer_notes or '' }}{% else %}Всички цени са в EUR без включен ДДС{% endif %}</textarea>
             </div>
+            <p class="text-small text-muted" style="grid-column: 1 / -1; margin: 0;">Промените се записват заедно с офертата - с бутона „Запази офертата“.</p>
+            <button type="button" class="btn-submit" style="grid-column: 1 / -1;" onclick="document.getElementById('offerDataDialog').close()">Готово</button>
         </form>
-    </section>
+    </dialog>
 
-    <section class="admin-card">
+    <section class="admin-card" id="offerItemForm" data-dialog-section="+ Добави ред">
         <h3>Добавяне на ред</h3>
         <div class="item-type-toggle" style="display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 12px;">
             <label><input type="radio" name="item_type" value="product" checked> Продукт</label>
@@ -96,7 +116,7 @@
 
         <div id="product_selector" class="form-group">
             <label for="item_product_id">Продукт</label>
-            <select id="item_product_id">
+            <select id="item_product_id" data-create="{{ create_url('product') }}">
                 <option value="">-- избери продукт --</option>
                 {% for p in products %}
                 <option value="{{ p.id }}">{{ p.name }}</option>
@@ -105,7 +125,7 @@
         </div>
         <div id="detail_selector" class="form-group" style="display:none;">
             <label for="item_detail_id">Детайл</label>
-            <select id="item_detail_id">
+            <select id="item_detail_id" data-create="{{ create_url('detail') }}">
                 <option value="">-- избери детайл --</option>
                 {% for d in details %}
                 <option value="{{ d.id }}">{{ d.name }}</option>
@@ -159,7 +179,7 @@
             <div id="item_description" class="rte-box" contenteditable="true"></div>
         </div>
 
-        <button type="button" class="btn-submit" onclick="addToCart()">Добави ред</button>
+        <button type="button" class="btn-submit" id="offerItemSubmit" onclick="addToCart()">Добави ред</button>
     </section>
 
     <section class="admin-card">
@@ -197,7 +217,7 @@
     </section>
 
     {% if offer %}
-    <section class="admin-card">
+    <section class="admin-card" data-dialog-section="+ Създай поръчка от офертата">
         <h3>Създаване на поръчка от избраните редове</h3>
         <p class="section-subtitle">
             Отметни продукт/детайл редовете по-долу (текстовите редове и редовете, добавени в тази сесия и още
@@ -219,7 +239,7 @@
             </table>
         </div>
         <p class="text-small text-muted" id="orderSelectorNote"></p>
-        <form action="{{ url_for('admin_offer_create_order', offer_id=offer.id) }}" method="POST" class="admin-form" id="createOrderForm">
+        <form action="{{ url_for('admin_offer_create_order', offer_id=offer.id) }}" method="POST" class="admin-form" id="createOrderForm" target="_top">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="order_customer_name">Име на клиент</label>
@@ -372,6 +392,66 @@
         ['item_dim_w', 'item_dim_l', 'item_dim_h'].forEach(function (id) { document.getElementById(id).value = ''; });
     }
 
+    // The add-row dialog doubles as the edit-row dialog: a row's
+    // "Редактирай" button carries data-row-index (see renderCart), the
+    // "+ Добави ред" button doesn't.
+    let editingIndex = null;
+
+    function setItemType(type) {
+        const radio = document.querySelector('input[name="item_type"][value="' + type + '"]');
+        radio.checked = true;
+        radio.dispatchEvent(new Event('change'));
+    }
+
+    function resetItemForm() {
+        editingIndex = null;
+        setItemType('product');
+        document.getElementById('item_product_id').value = '';
+        document.getElementById('item_detail_id').value = '';
+        document.getElementById('item_code').value = '';
+        document.getElementById('item_name_manual').value = '';
+        clearDimensions();
+        document.getElementById('item_qty').value = '1';
+        document.getElementById('item_unit').value = 'бр';
+        document.getElementById('item_unit_price').value = '';
+        clearPendingImage();
+        document.getElementById('item_description').innerHTML = '';
+        document.getElementById('offerItemSubmit').textContent = 'Добави ред';
+    }
+
+    function fillItemForm(item) {
+        setItemType(item.type);
+        // set the catalog pick WITHOUT firing change - that would overwrite
+        // the row's own (possibly hand-edited) price with the catalog price
+        document.getElementById('item_product_id').value = item.product_id || '';
+        document.getElementById('item_detail_id').value = item.detail_id || '';
+        document.getElementById('item_name_manual').value = item.type === 'text' ? (item.name || '') : '';
+        document.getElementById('item_code').value = item.code || '';
+        const dims = (item.dimensions || '').split('/').map(function (v) { return v.trim(); });
+        ['item_dim_w', 'item_dim_l', 'item_dim_h'].forEach(function (id, i) { document.getElementById(id).value = dims[i] || ''; });
+        document.getElementById('item_qty').value = item.quantity != null ? item.quantity : '';
+        document.getElementById('item_unit').value = item.unit || '';
+        document.getElementById('item_unit_price').value = item.unit_price != null ? item.unit_price : '';
+        document.getElementById('item_description').innerHTML = item.description_html || '';
+        if (item.image_filename) {
+            pendingImageFilename = item.image_filename;
+            const previewEl = document.getElementById('item_image_preview');
+            previewEl.src = OFFER_IMAGE_URL_PREFIX + item.image_filename;
+            previewEl.style.display = 'inline-block';
+        }
+        document.getElementById('offerItemSubmit').textContent = 'Запази реда';
+    }
+
+    document.addEventListener('dialog-open', function (e) {
+        if (e.target.id !== 'offerItemForm-dialog') return;
+        const idx = e.detail.button.dataset.rowIndex;
+        resetItemForm();
+        if (idx !== undefined) {
+            editingIndex = parseInt(idx, 10);
+            fillItemForm(cart[editingIndex]);
+        }
+    });
+
     function addToCart() {
         const type = document.querySelector('input[name="item_type"]:checked').value;
         let descriptionHtml = document.getElementById('item_description').innerHTML.trim();
@@ -380,14 +460,23 @@
         let name;
         let productId = null;
         let detailId = null;
+        const editing = editingIndex !== null ? cart[editingIndex] : null;
         if (type === 'text') {
             name = document.getElementById('item_name_manual').value.trim();
         } else {
             const sel = document.getElementById(type === 'product' ? 'item_product_id' : 'item_detail_id');
             const source = (type === 'product' ? PRODUCTS : DETAILS).find(function (x) { return x.id === parseInt(sel.value, 10); });
-            if (!source) { alert('Моля изберете ' + (type === 'product' ? 'продукт' : 'детайл') + '.'); return; }
-            name = source.name;
-            if (type === 'product') productId = source.id; else detailId = source.id;
+            if (source) {
+                name = source.name;
+                if (type === 'product') productId = source.id; else detailId = source.id;
+            } else if (editing && editing.type === type && !sel.value) {
+                // an older saved row with no catalog link - keep it as it was
+                name = editing.name;
+                productId = editing.product_id || null;
+                detailId = editing.detail_id || null;
+            } else {
+                alert('Моля изберете ' + (type === 'product' ? 'продукт' : 'детайл') + '.'); return;
+            }
         }
 
         const code = document.getElementById('item_code').value.trim();
@@ -408,23 +497,61 @@
             if (unitPrice === null || isNaN(unitPrice) || unitPrice < 0) { alert('Моля въведете валидна цена.'); return; }
         }
 
-        cart.push({
+        const item = {
             type: type, code: code, name: name, description_html: descriptionHtml,
             dimensions: readDimensions(), quantity: qty,
             unit: document.getElementById('item_unit').value.trim(), unit_price: unitPrice,
             image_filename: pendingImageFilename || '',
             product_id: productId, detail_id: detailId,
-        });
+        };
+        if (editing) {
+            if (editing.id != null) item.id = editing.id;  // keeps the order-selector tick on this row
+            cart[editingIndex] = item;
+        } else {
+            cart.push(item);
+        }
 
-        document.getElementById('item_code').value = '';
-        document.getElementById('item_name_manual').value = '';
-        clearDimensions();
-        document.getElementById('item_qty').value = '1';
-        document.getElementById('item_unit').value = 'бр';
-        document.getElementById('item_unit_price').value = '';
-        clearPendingImage();
-        document.getElementById('item_description').innerHTML = '';
+        resetItemForm();
         renderCart();
+        // the add-row form lives in a dialog (form_dialog.js) - close it once the row is in
+        const dlg = document.getElementById('item_description').closest('dialog');
+        if (dlg) dlg.close();
+    }
+
+    function findProductByName(name) {
+        const key = name.trim().toLocaleLowerCase();
+        return PRODUCTS.find(function (p) { return p.name.trim().toLocaleLowerCase() === key; });
+    }
+
+    // Free-text row -> catalog product (api_offer_item_to_product), so it can
+    // go on an order. A saved row is relinked on the server right away; an
+    // unsaved one keeps the link in `cart` until the offer is saved.
+    function convertToProduct(idx, btn) {
+        const item = cart[idx];
+        const fd = new FormData();
+        fd.append('csrf_token', document.querySelector('#offerForm input[name="csrf_token"]').value);
+        ['name', 'code', 'description_html', 'quantity', 'unit_price'].forEach(function (k) { fd.append(k, item[k] != null ? item[k] : ''); });
+        if (item.id != null) fd.append('offer_item_id', item.id);
+        btn.disabled = true;
+        fetch('/api/offer-item-to-product', { method: 'POST', body: fd })
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                if (data.status !== 'success') { alert(data.message || 'Грешка при преобразуването.'); btn.disabled = false; return; }
+                const p = data.product;
+                if (!PRODUCTS.some(function (x) { return x.id === p.id; })) {
+                    PRODUCTS.push(p);
+                    const opt = document.createElement('option');
+                    opt.value = p.id;
+                    opt.textContent = p.name;
+                    document.getElementById('item_product_id').appendChild(opt);
+                }
+                item.type = 'product';
+                item.product_id = p.id;
+                item.unit = item.unit || 'бр';
+                renderCart();
+                if (item.id == null) alert('Продуктът е ' + (data.created ? 'създаден' : 'свързан') + '. Запазете офертата, за да може редът да влезе в поръчка.');
+            })
+            .catch(function () { alert('Връзката със сървъра беше прекъсната.'); btn.disabled = false; });
     }
 
     function removeFromCart(index) {
@@ -461,6 +588,28 @@
 
                 const actionTd = document.createElement('td');
                 actionTd.className = 'text-right';
+                const editBtn = document.createElement('button');
+                editBtn.type = 'button';
+                editBtn.className = 'btn-secondary';
+                editBtn.style.cssText = 'padding: 6px 10px; font-size: 0.8rem; margin-right: 6px;';
+                editBtn.textContent = 'Редактирай';
+                editBtn.setAttribute('data-dialog', 'offerItemForm-dialog');
+                editBtn.dataset.rowIndex = idx;
+                editBtn.dataset.title = 'Редакция на ред' + (item.name ? ': ' + item.name : '');
+                actionTd.appendChild(editBtn);
+                // only a priced line can become a product line (a note can't)
+                if (item.type === 'text' && item.name && item.quantity != null && item.unit_price != null) {
+                    const exists = findProductByName(item.name);
+                    const convBtn = document.createElement('button');
+                    convBtn.type = 'button';
+                    convBtn.className = 'btn-secondary';
+                    convBtn.style.cssText = editBtn.style.cssText;
+                    convBtn.textContent = exists ? 'Свържи с продукт' : 'Преобразувай';
+                    convBtn.title = exists ? 'Вече има продукт „' + exists.name + '“ - редът ще сочи към него'
+                                           : 'Създава продукт от този ред, за да може да влезе в поръчка';
+                    convBtn.addEventListener('click', function () { convertToProduct(idx, convBtn); });
+                    actionTd.appendChild(convBtn);
+                }
                 const removeBtn = document.createElement('button');
                 removeBtn.type = 'button';
                 removeBtn.className = 'btn-delete';
@@ -569,6 +718,29 @@
 
     document.getElementById('discount_percent').addEventListener('input', renderCart);
 
+    // Read-only summary of the offer's own fields; the inputs themselves live
+    // in #offerDataDialog (still the form that gets submitted).
+    function renderOfferSummary() {
+        const val = function (id) { return document.getElementById(id).value.trim(); };
+        const clientSel = document.getElementById('client_id');
+        const validUntil = val('valid_until');
+        const summary = {
+            object_title: val('object_title'),
+            client_id: clientSel.value ? clientSel.options[clientSel.selectedIndex].text : '',
+            signed_by: val('signed_by'),
+            valid_until: validUntil ? validUntil.split('-').reverse().join('.') : '',
+            discount_percent: val('discount_percent') ? val('discount_percent') + ' %' : '',
+            footer_notes: val('footer_notes'),
+        };
+        Object.keys(summary).forEach(function (k) {
+            document.querySelector('[data-summary="' + k + '"]').textContent = summary[k] || '—';
+        });
+    }
+    ['input', 'change'].forEach(function (evt) { document.getElementById('offerForm').addEventListener(evt, renderOfferSummary); });
+    renderOfferSummary();
+    // a brand-new offer starts with its data dialog open
+    if (!HAS_OFFER) document.getElementById('offerDataDialog').showModal();
+
     if (HAS_OFFER) {
         document.getElementById('createOrderForm').addEventListener('submit', function () {
             const container = document.getElementById('createOrderItemIds');
@@ -591,6 +763,11 @@
     }
 
     renderCart();
+</script>
+<script>
+    // "+" create-new next to a select (form_dialog.js): keep this page's own
+    // catalog arrays in step with the option that was just added.
+    document.addEventListener('create-new', function (e) { mergeCatalog(e.detail.doc, 'PRODUCTS', PRODUCTS); mergeCatalog(e.detail.doc, 'DETAILS', DETAILS); });
 </script>
 </body>
 </html>

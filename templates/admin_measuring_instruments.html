@@ -73,7 +73,7 @@
 
     <p><a href="{{ url_for('admin_quality_control') }}">&larr; Обратно към Контрол на качеството</a></p>
 
-    <section class="admin-card">
+    <section class="admin-card" id="instrumentForm" data-dialog-section="+ Нов инструмент">
         <h3>Добавяне на нов инструмент</h3>
         <p class="section-subtitle">Измервателни инструменти (шублер, микрометър, CMM ...) за избор при записване на QC измервания.</p>
         <form action="{{ url_for('admin_add_measuring_instrument') }}" method="POST" class="admin-form">
@@ -98,7 +98,7 @@
                 <label for="new_instrument_description">Описание (незадължително)</label>
                 <textarea id="new_instrument_description" name="description" rows="2" style="width: 100%; padding: 0.6rem 0.75rem; background-color: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm);"></textarea>
             </div>
-            <button type="submit" class="btn-submit">Добави инструмент</button>
+            <button type="submit" class="btn-submit" data-dialog-submit>Добави инструмент</button>
         </form>
     </section>
 
@@ -122,28 +122,13 @@
                 </thead>
                 <tbody>
                 {% for instrument in instruments %}
-                {% set form_id = 'inst-form-' ~ instrument.id %}
                 <tr>
-                    <td>
-                        <form id="{{ form_id }}" action="{{ url_for('admin_update_measuring_instrument', instrument_id=instrument.id) }}" method="POST">
-                            {% include 'partials/csrf_field.html' %}
-                        </form>
-                        #{{ instrument.id }}
-                    </td>
-                    <td><input type="text" name="name" form="{{ form_id }}" value="{{ instrument.name }}"
-                               class="material-price-input" required></td>
-                    <td><input type="number" step="any" min="0" name="accuracy_value" form="{{ form_id }}"
-                               value="{{ instrument.accuracy_value if instrument.accuracy_value is not none else '' }}"
-                               class="material-price-input" style="width: 90px;" placeholder="напр. 0.01"></td>
-                    <td><input type="text" name="accuracy_unit" form="{{ form_id }}"
-                               value="{{ instrument.accuracy_unit or '' }}"
-                               class="material-price-input" style="width: 70px;" placeholder="мм"></td>
-                    <td><input type="text" name="description" form="{{ form_id }}"
-                               value="{{ instrument.description or '' }}"
-                               class="material-price-input" style="width: 220px;" placeholder="Описание"></td>
-                    <td><input type="number" min="1" step="1" name="calibration_interval_months" form="{{ form_id }}"
-                               value="{{ instrument.calibration_interval_months if instrument.calibration_interval_months is not none else '' }}"
-                               class="material-price-input" style="width: 70px;" placeholder="напр. 12"></td>
+                    <td>#{{ instrument.id }}</td>
+                    <td><strong>{{ instrument.name }}</strong></td>
+                    <td>{{ '%g'|format(instrument.accuracy_value) if instrument.accuracy_value is not none else '—' }}</td>
+                    <td>{{ instrument.accuracy_unit or '—' }}</td>
+                    <td>{{ instrument.description or '—' }}</td>
+                    <td>{{ instrument.calibration_interval_months if instrument.calibration_interval_months is not none else '—' }}</td>
                     <td>
                         {% set latest_cal = instrument.latest_calibration %}
                         {% if instrument.calibration_status == 'valid' %}
@@ -184,7 +169,13 @@
                         </details>
                         {% endif %}
                     </td>
-                    <td class="text-right"><button type="submit" form="{{ form_id }}" class="btn-save-price" style="background-color: var(--accent-primary); color: var(--text-main); border: none; border-radius: var(--border-radius-sm); padding: 0.5rem 0.9rem; cursor: pointer; font-weight: 600; font-size: 0.85rem;">Запази</button></td>
+                    <td class="text-right">
+                        <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;" data-dialog="instrumentForm-dialog"
+                                data-action="{{ url_for('admin_update_measuring_instrument', instrument_id=instrument.id) }}"
+                                data-title="Редакция: {{ instrument.name }}"
+                                data-values='{{ {"name": instrument.name, "accuracy_value": instrument.accuracy_value, "accuracy_unit": instrument.accuracy_unit,
+                                    "description": instrument.description, "calibration_interval_months": instrument.calibration_interval_months}|tojson|forceescape }}'>Редактирай</button>
+                    </td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_measuring_instrument', instrument_id=instrument.id) }}" method="POST"
                               onsubmit="return confirm('Изтриване на инструмент &quot;{{ instrument.name|e }}&quot;? Това е възможно само ако няма QC измервания, направени с него.');" style="display:inline;">
@@ -204,8 +195,8 @@
 
 </main>
 
-<div class="cal-modal-overlay" id="calModal">
-    <div class="cal-modal-box">
+<dialog id="calModal" class="form-dialog">
+    <div>
         <span class="cal-modal-close" onclick="closeCalModal()">&times;</span>
         <h3 style="margin-top: 0; margin-bottom: 16px;">Ново калибриране на <span id="calModalInstrumentName"></span></h3>
         <form id="calForm" method="POST" enctype="multipart/form-data">
@@ -237,16 +228,16 @@
             <button type="submit" class="btn-submit" style="width: 100%;">Запази калибрирането</button>
         </form>
     </div>
-</div>
+</dialog>
 
 <script>
 function openCalModal(instrumentId, instrumentName) {
     document.getElementById('calModalInstrumentName').textContent = instrumentName;
     document.getElementById('calForm').action = '/admin/quality/instruments/' + instrumentId + '/calibrate';
-    document.getElementById('calModal').style.display = 'flex';
+    document.getElementById('calModal').showModal();
 }
 function closeCalModal() {
-    document.getElementById('calModal').style.display = 'none';
+    document.getElementById('calModal').close();
     document.getElementById('calForm').reset();
 }
 </script>

@@ -76,7 +76,7 @@
     {% endif %}
     {% endwith %}
 
-    <section class="admin-card">
+    <section class="admin-card" id="serviceForm" data-dialog-section="+ Нова услуга">
         <h3>Добавяне на нова услуга</h3>
         <p class="section-subtitle">Услуги (напр. "Лазерно рязане", "Фрезоване - 3 оси") с цена на час, използвана от ценовия
             калкулатор (DXF рязане и допълнителни операции върху детайли).</p>
@@ -143,7 +143,7 @@
             <div class="form-group">
                 <label><input type="checkbox" name="show_price" checked> Показвай цената на страница /services</label>
             </div>
-            <button type="submit" class="btn-submit">Добави услуга</button>
+            <button type="submit" class="btn-submit" data-dialog-submit>Добави услуга</button>
         </form>
     </section>
 
@@ -152,16 +152,11 @@
             const mode = document.getElementById('new_service_pricing_mode').value;
             document.getElementById('new_service_price_meter_group').style.display = mode === 'length' ? '' : 'none';
         }
-
-        function toggleServicePriceMeter(formId) {
-            const mode = document.getElementById('mode-' + formId).value;
-            document.getElementById('meter-' + formId).style.display = mode === 'length' ? 'inline-block' : 'none';
-        }
     </script>
 
     <section class="admin-card">
         <h3>Списък с услуги</h3>
-        <p class="section-subtitle">Редактирайте цената на час и типа машина. Промените влизат в сила незабавно за всички нови изчисления.</p>
+        <p class="section-subtitle">Натиснете „Редактирай“ за промяна. Промените влизат в сила незабавно за всички нови изчисления.</p>
 
         <div class="table-responsive">
             <table class="users-table">
@@ -181,58 +176,29 @@
                 </thead>
                 <tbody>
                 {% for service in services %}
-                {% set form_id = 'svc-form-' ~ service.id %}
                 <tr>
                     <td>
-                        <form id="{{ form_id }}" action="{{ url_for('admin_update_service', service_id=service.id) }}" method="POST">
-                            {% include 'partials/csrf_field.html' %}
-                        </form>
-                        <input type="text" name="name" form="{{ form_id }}" value="{{ service.name }}" class="service-price-input" style="width: 160px;" required>
-                        <input type="text" name="name_en" form="{{ form_id }}" value="{{ service.name_en or '' }}" class="service-price-input" style="width: 160px; margin-top: 4px;" placeholder="EN">
-                        <input type="text" name="name_de" form="{{ form_id }}" value="{{ service.name_de or '' }}" class="service-price-input" style="width: 160px; margin-top: 4px;" placeholder="DE">
+                        <strong>{{ service.name }}</strong>
+                        {% if service.name_en or service.name_de %}<div class="text-muted text-small">{{ [service.name_en, service.name_de]|select|join(' / ') }}</div>{% endif %}
                     </td>
-                    <td>
-                        <select name="machine_type" form="{{ form_id }}" class="service-price-input">
-                            <option value="" {% if not service.machine_type %}selected{% endif %}>-- Без тип --</option>
-                            {% for t in known_machine_types %}
-                            <option value="{{ t }}" {% if t == service.machine_type %}selected{% endif %}>{{ t }}</option>
-                            {% endfor %}
-                        </select>
+                    <td>{{ service.machine_type or '—' }}</td>
+                    <td>{{ service.machines|map(attribute='name')|join(', ') or '—' }}</td>
+                    <td>{{ '%.2f'|format(service.price_per_hour_eur) }}</td>
+                    <td>{{ 'По дължина' if service.pricing_mode == 'length' else 'По време' }}</td>
+                    <td>{{ '%.2f'|format(service.price_per_meter_eur) if service.pricing_mode == 'length' and service.price_per_meter_eur else '—' }}</td>
+                    <td>{{ service.description or '—' }}</td>
+                    <td class="text-center">{{ '✓' if service.show_price else '—' }}</td>
+                    <td class="text-right">
+                        <button type="button" class="btn-save-price" data-dialog="serviceForm-dialog"
+                                data-action="{{ url_for('admin_update_service', service_id=service.id) }}"
+                                data-title="Редакция: {{ service.name }}"
+                                data-values='{{ {"name": service.name, "name_en": service.name_en, "name_de": service.name_de,
+                                    "machine_type": service.machine_type or "", "machine_ids": service.machines|map(attribute="id")|list,
+                                    "price_per_hour_eur": service.price_per_hour_eur, "pricing_mode": service.pricing_mode or "time",
+                                    "price_per_meter_eur": service.price_per_meter_eur, "description": service.description,
+                                    "description_en": service.description_en, "description_de": service.description_de,
+                                    "show_price": service.show_price}|tojson|forceescape }}'>Редактирай</button>
                     </td>
-                    <td>
-                        <div class="machine-checkbox-group">
-                            {% set linked_ids = service.machines|map(attribute='id')|list %}
-                            {% for m in all_machines %}
-                            <label><input type="checkbox" name="machine_ids" form="{{ form_id }}" value="{{ m.id }}" {% if m.id in linked_ids %}checked{% endif %}>{{ m.name }}{% if m.machine_type %} ({{ m.machine_type }}){% endif %}</label>
-                            {% else %}
-                            <span class="text-muted text-small">Няма добавени машини.</span>
-                            {% endfor %}
-                        </div>
-                    </td>
-                    <td><input type="number" step="0.01" min="0.01" name="price_per_hour_eur" form="{{ form_id }}"
-                               value="{{ '%.2f'|format(service.price_per_hour_eur) }}" class="service-price-input" required></td>
-                    <td>
-                        <select name="pricing_mode" form="{{ form_id }}" class="service-price-input" onchange="toggleServicePriceMeter('{{ form_id }}')" id="mode-{{ form_id }}">
-                            <option value="time" {% if service.pricing_mode != 'length' %}selected{% endif %}>По време</option>
-                            <option value="length" {% if service.pricing_mode == 'length' %}selected{% endif %}>По дължина</option>
-                        </select>
-                    </td>
-                    <td>
-                        <input type="number" step="0.01" min="0.01" name="price_per_meter_eur" form="{{ form_id }}"
-                               value="{{ '%.2f'|format(service.price_per_meter_eur) if service.price_per_meter_eur else '' }}"
-                               class="service-price-input" id="meter-{{ form_id }}"
-                               style="display: {% if service.pricing_mode == 'length' %}inline-block{% else %}none{% endif %};">
-                    </td>
-                    <td>
-                        <input type="text" name="description" form="{{ form_id }}" value="{{ service.description or '' }}"
-                               class="service-price-input" style="width: 180px;" placeholder="Описание">
-                        <input type="text" name="description_en" form="{{ form_id }}" value="{{ service.description_en or '' }}"
-                               class="service-price-input" style="width: 180px; margin-top: 4px;" placeholder="EN">
-                        <input type="text" name="description_de" form="{{ form_id }}" value="{{ service.description_de or '' }}"
-                               class="service-price-input" style="width: 180px; margin-top: 4px;" placeholder="DE">
-                    </td>
-                    <td class="text-center"><input type="checkbox" name="show_price" form="{{ form_id }}" {% if service.show_price %}checked{% endif %}></td>
-                    <td class="text-right"><button type="submit" form="{{ form_id }}" class="btn-save-price">Запази</button></td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_service', service_id=service.id) }}" method="POST"
                               onsubmit="return confirm('Изтриване на услуга &quot;{{ service.name|e }}&quot;? Това е възможно само ако не се използва.');" style="display:inline;">

@@ -116,7 +116,7 @@
             </div>
             <div class="form-group">
                 <label for="owner_id">Отговорник</label>
-                <select id="owner_id" name="owner_id" {{ 'disabled' if readonly }}>
+                <select id="owner_id" data-create="{{ create_url('user') }}" name="owner_id" {{ 'disabled' if readonly }}>
                     <option value="">-- няма --</option>
                     {% for u in users %}
                     <option value="{{ u.id }}" {% if entry.owner_id == u.id %}selected{% endif %}>{{ u.username }}</option>

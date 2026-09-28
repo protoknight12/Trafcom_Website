@@ -31,7 +31,7 @@
     {% endif %}
     {% endwith %}
 
-    <section class="admin-card">
+    <section class="admin-card" data-dialog-section="+ Нова заявка за материали">
         <h3 style="margin-bottom: 4px;">Нова заявка за материали</h3>
         <p class="section-subtitle" style="margin: 0 0 16px 0;">Добавете колкото материали са необходими, след което запишете - всеки се появява като отделна заявка по-долу.</p>
 
@@ -41,7 +41,7 @@
             <div class="add-item-row">
                 <div class="form-group">
                     <label for="reqMaterialSelect">Материал</label>
-                    <select id="reqMaterialSelect">
+                    <select id="reqMaterialSelect" data-create="{{ create_url('material') }}">
                         {% for type_key, group in materials|groupby('type') %}
                         <optgroup label="{{ material_type_label(type_key) }}">
                             {% for material in group %}
@@ -105,21 +105,10 @@
                     <td class="text-center"><span class="status-badge status-{{ req.status }}">{{ req.status_label }}</span></td>
                     <td>{{ req.supplier.name if req.supplier else '-' }}</td>
                     <td>
-                        <form method="POST" action="{{ url_for('update_material_request', request_id=req.id) }}" style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <select name="status" class="request-status-select" onchange="toggleSupplier(this)">
-                                {% for key, label in status_labels.items() %}
-                                <option value="{{ key }}" {% if req.status == key %}selected{% endif %}>{{ label }}</option>
-                                {% endfor %}
-                            </select>
-                            <select name="supplier_id" class="request-supplier-select" {% if req.status != 'ordered' %}hidden{% endif %}>
-                                <option value="">— доставчик —</option>
-                                {% for s in suppliers %}
-                                <option value="{{ s.id }}" {% if req.supplier_id == s.id %}selected{% endif %}>{{ s.name }}</option>
-                                {% endfor %}
-                            </select>
-                            <button type="submit" class="btn-secondary">Запази</button>
-                        </form>
+                        <button type="button" class="btn-secondary" data-dialog="requestStatusDialog"
+                                data-action="{{ url_for('update_material_request', request_id=req.id) }}"
+                                data-title="Заявка: {{ format_material_option(req.material) if req.material else 'Изтрит материал' }}"
+                                data-values='{{ {"status": req.status, "supplier_id": req.supplier_id or ""}|tojson|forceescape }}'>Промени статус</button>
                     </td>
                 </tr>
                 {% else %}
@@ -130,11 +119,31 @@
         </div>
     </section>
 
+    <dialog id="requestStatusDialog" class="form-dialog">
+        <h3 data-dialog-title>Статус на заявката</h3>
+        <form method="POST" class="admin-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="form-group">
+                <label>Статус</label>
+                <select name="status" class="request-status-select" onchange="toggleSupplier(this)">
+                    {% for key, label in status_labels.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="form-group request-supplier-group">
+                <label>Доставчик</label>
+                <select name="supplier_id" id="request_supplier_id" data-create="{{ create_url('supplier') }}" class="request-supplier-select">
+                    <option value="">— доставчик —</option>
+                    {% for s in suppliers %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="btn-submit">Запази</button>
+        </form>
+    </dialog>
+
 </main>
 <script>
     function toggleSupplier(select) {
-        var supplierSelect = select.closest('form').querySelector('.request-supplier-select');
-        supplierSelect.hidden = select.value !== 'ordered';
+        select.closest('form').querySelector('.request-supplier-group').hidden = select.value !== 'ordered';
     }
 
     let reqItems = [];

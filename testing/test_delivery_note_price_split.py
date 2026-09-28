@@ -63,13 +63,13 @@ def test_no_price_reuses_existing_row(ctx):
 
 def test_same_price_reuses_existing_row(ctx):
     target = _find_or_create_delivery_target(
-        'material', 'Стомана 2мм', None, 1000, 2000, 2.0, 10.0, None, material_type='sheets')
+        'material', 'Стомана 2мм', None, 1000, 2000, 2.0, 20.0, None, material_type='sheets')  # whole 2 m² sheet = 10 €/m²
     assert target.id == ctx
 
 
 def test_different_price_creates_new_price_lot(ctx):
     target = _find_or_create_delivery_target(
-        'material', 'Стомана 2мм', None, 1000, 2000, 2.0, 12.5, None, material_type='sheets')
+        'material', 'Стомана 2мм', None, 1000, 2000, 2.0, 25.0, None, material_type='sheets')  # whole sheet -> 12.5 €/m²
     assert target.id != ctx, "a different price must not pool onto the existing row"
     assert target.cost_per_m2 == 12.5
     assert target.display_name == 'Стомана 2мм'
@@ -80,3 +80,17 @@ def test_different_price_creates_new_price_lot(ctx):
 
     same_rows = MaterialPrice.query.filter_by(display_name='Стомана 2мм', type='sheets').count()
     assert same_rows == 2, "both price lots stay selectable as distinct catalog rows"
+
+
+def test_first_delivery_prices_an_unpriced_material_in_place(ctx):
+    # Admins can't type a material price anymore - a new material starts at
+    # 0 and its first delivery sets the price on that same row (no new lot).
+    m = MaterialPrice.query.get(ctx)
+    m.cost_per_m2 = 0.0
+    db.session.commit()
+    # 40 € per whole 1000x2000 sheet -> 20 €/m²
+    target = _find_or_create_delivery_target(
+        'material', 'Стомана 2мм', None, 1000, 2000, 2.0, 40.0, 'sheet_steel_2mm', material_type='sheets')
+    assert target.id == ctx
+    assert target.cost_per_m2 == 20.0 and target.price_per_unit == 40.0
+    assert MaterialPrice.query.count() == 1

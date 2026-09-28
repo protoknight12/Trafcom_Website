@@ -40,7 +40,7 @@
     {% endwith %}
 
     {% if current_user.is_admin or current_user.role == 'quality_control' %}
-    <section class="admin-card">
+    <section class="admin-card" data-dialog-section="+ Нов запис за риск">
         <h3>Нов запис в регистъра на риска</h3>
         <p class="section-subtitle">ISO 9001 §6.1 - идентифициране на риск или възможност; оценка по матрица 5x5 (вероятност &times; въздействие). Действието за намаляване/оползотворяване се попълва след това в "Редактирай".</p>
         <form action="{{ url_for('admin_add_risk_entry') }}" method="POST" class="admin-form">
@@ -87,7 +87,7 @@
             </div>
             <div class="form-group">
                 <label for="new_owner_id">Отговорник</label>
-                <select id="new_owner_id" name="owner_id">
+                <select id="new_owner_id" data-create="{{ create_url('user') }}" name="owner_id">
                     <option value="">-- няма --</option>
                     {% for u in users %}
                     <option value="{{ u.id }}">{{ u.username }}</option>
@@ -154,7 +154,7 @@
                     <td>{{ entry.status_label }}</td>
                     <td>{{ entry.review_date.strftime('%d.%m.%Y') if entry.review_date else '—' }}</td>
                     <td class="text-right">
-                        <a href="{{ url_for('admin_edit_risk_entry', entry_id=entry.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
+                        <a href="{{ url_for('admin_edit_risk_entry', entry_id=entry.id) }}" data-frame class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
                     </td>
                     <td class="text-right">
                         {% if current_user.is_admin or current_user.role == 'quality_control' %}

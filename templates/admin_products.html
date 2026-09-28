@@ -28,7 +28,8 @@
         <h3>Продукти</h3>
         <p class="section-subtitle">Продуктите се изграждат от детайли plus допълнителни разходи (боядисване, монтаж, транспорт и др.).</p>
 
-        <form action="{{ url_for('admin_add_product') }}" method="POST" class="admin-form" style="margin-bottom: 1.5rem;">
+        <form action="{{ url_for('admin_add_product') }}" method="POST" class="admin-form" style="margin-bottom: 1.5rem;"
+              data-dialog-section="+ Нов продукт" data-dialog-heading="Нов продукт">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="product_name">Име на продукта</label>

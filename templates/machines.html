@@ -61,7 +61,7 @@
     {% endwith %}
 
     {% if current_user.is_admin or current_user.can_edit_content %}
-    <section class="admin-card">
+    <section class="admin-card" data-dialog-section="+ Нова машина">
         <h3>Добавяне на нова машина</h3>
         <p class="section-subtitle">Въведете наименование на машината, за да я добавите към производствения списък.</p>
         <form action="{{ url_for('add_machine') }}" method="POST" class="admin-form" style="display: flex; gap: 12px; align-items: flex-end;">
@@ -130,15 +130,10 @@
                     </td>
                     {% if current_user.is_staff %}
                     <td class="text-right">
-                        <form action="{{ url_for('update_machine_status', id=m.id) }}" method="POST" class="machine-action-form" style="justify-content: flex-end; margin: 0; padding: 0;">
-                            {% include 'partials/csrf_field.html' %}
-                            <select name="status" class="select-status">
-                                <option value="idle" {% if m.status == 'idle' %}selected{% endif %}>Свободна</option>
-                                <option value="running" {% if m.status == 'running' %}selected{% endif %}>Работи</option>
-                                <option value="maintenance" {% if m.status == 'maintenance' %}selected{% endif %}>Поддръжка</option>
-                            </select>
-                            <button type="submit" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem; border-radius: 4px;">Запази</button>
-                        </form>
+                        <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;" data-dialog="machineStatusDialog"
+                                data-action="{{ url_for('update_machine_status', id=m.id) }}"
+                                data-title="Статус: {{ m.name }}"
+                                data-values='{{ {"status": m.status}|tojson|forceescape }}'>Промени статус</button>
                     </td>
                     {% endif %}
                     {% if current_user.is_admin %}
@@ -160,6 +155,23 @@
             </table>
         </div>
     </section>
+    {% if current_user.is_staff %}
+    <dialog id="machineStatusDialog" class="form-dialog">
+        <h3 data-dialog-title>Статус на машината</h3>
+        <form method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label>Статус</label>
+                <select name="status">
+                    <option value="idle">Свободна</option>
+                    <option value="running">Работи</option>
+                    <option value="maintenance">Поддръжка</option>
+                </select>
+            </div>
+            <button type="submit" class="btn-submit">Запази</button>
+        </form>
+    </dialog>
+    {% endif %}
 </main>
 <script src="{{ url_for('static', filename='js/inline_edit.js') }}"></script>
 </body>

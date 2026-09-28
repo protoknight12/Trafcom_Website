@@ -75,9 +75,6 @@
            clip MAC/IP values and desync from the header - see the "Редактирай"
            button below). */
         .data-table td { vertical-align: top; }
-        .edit-row { display: none; background-color: var(--bg-input); }
-        .edit-row.open { display: table-row; }
-        .edit-row td { padding-top: 10px; padding-bottom: 10px; }
         .edit-form-grid { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
         .edit-form-grid .form-group { min-width: 110px; }
         .edit-form-grid label { font-size: 0.72rem; color: var(--text-muted); display: block; margin-bottom: 2px; }
@@ -144,7 +141,7 @@
         </div>
     </section>
 
-    <section class="admin-card">
+    <section class="admin-card" data-dialog-section="+ Ново устройство">
         <h3>Ново устройство</h3>
         <form action="{{ url_for('admin_network_add_device') }}" method="POST" class="admin-form">
             {% include 'partials/csrf_field.html' %}
@@ -189,37 +186,16 @@
                     <td>{{ '✓' if d.is_dhcp_server else '—' }}</td>
                     <td style="max-width:220px; white-space:normal; word-break:break-word;">{{ d.notes or '—' }}</td>
                     <td class="text-right">
-                        <button type="button" class="btn-secondary edit-toggle" data-target="edit-device-{{ d.id }}" style="padding:5px 10px; font-size:0.8rem;">Редактирай</button>
+                        <button type="button" class="btn-secondary" style="padding:5px 10px; font-size:0.8rem;" data-dialog="networkDeviceEditDialog"
+                                data-action="{{ url_for('admin_network_edit_device', device_id=d.id) }}"
+                                data-title="Редакция: {{ d.name }}"
+                                data-values='{{ {"name": d.name, "vendor": d.vendor, "device_role": d.device_role, "model": d.model,
+                                    "management_ip": d.management_ip, "mac_address": d.mac_address, "management_vlan": d.management_vlan,
+                                    "notes": d.notes, "is_dhcp_server": d.is_dhcp_server}|tojson|forceescape }}'>Редактирай</button>
                         <form action="{{ url_for('admin_network_delete_device', device_id=d.id) }}" method="POST"
                               onsubmit="return confirm('Изтриване на устройство &quot;{{ d.name|e }}&quot;?');" style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete" style="padding:5px 10px; font-size:0.8rem;">Изтрий</button>
-                        </form>
-                    </td>
-                </tr>
-                <tr class="edit-row" id="edit-device-{{ d.id }}">
-                    <td colspan="11">
-                        <form action="{{ url_for('admin_network_edit_device', device_id=d.id) }}" method="POST" class="edit-form-grid">
-                            {% include 'partials/csrf_field.html' %}
-                            <div class="form-group"><label>Име</label><input type="text" name="name" value="{{ d.name }}" required></div>
-                            <div class="form-group"><label>Производител</label>
-                                <select name="vendor">{% for k, v in vendors.items() %}<option value="{{ k }}" {% if k == d.vendor %}selected{% endif %}>{{ v }}</option>{% endfor %}</select>
-                            </div>
-                            <div class="form-group"><label>Роля</label>
-                                <select name="device_role">{% for k, v in roles.items() %}<option value="{{ k }}" {% if k == d.device_role %}selected{% endif %}>{{ v }}</option>{% endfor %}</select>
-                            </div>
-                            <div class="form-group"><label>Модел</label><input type="text" name="model" value="{{ d.model or '' }}"></div>
-                            <div class="form-group"><label>Management IP</label><input type="text" name="management_ip" value="{{ d.management_ip or '' }}"></div>
-                            <div class="form-group"><label>MAC адрес</label><input type="text" name="mac_address" value="{{ d.mac_address or '' }}"></div>
-                            <div class="form-group"><label>Management VLAN</label><input type="number" name="management_vlan" value="{{ d.management_vlan or '' }}" min="1" max="4094"></div>
-                            <div class="form-group" style="flex:1; min-width:220px;"><label>Бележки</label><input type="text" name="notes" value="{{ d.notes or '' }}"></div>
-                            <div class="form-group">
-                                <label style="display:flex; align-items:center; gap:4px;">
-                                    <input type="checkbox" name="is_dhcp_server" {% if d.is_dhcp_server %}checked{% endif %} style="width:auto;"> DHCP сървър
-                                </label>
-                            </div>
-                            <button type="submit" class="btn-submit">Запази</button>
-                            <button type="button" class="btn-secondary edit-toggle" data-target="edit-device-{{ d.id }}">Откажи</button>
                         </form>
                     </td>
                 </tr>
@@ -250,15 +226,10 @@
                     <td>{{ '✓' if d.is_dhcp_server else '—' }}</td>
                     <td>{{ '✓ зададен' if d.has_api_credentials else '— не е зададен' }}</td>
                     <td>
-                        <form action="{{ url_for('admin_network_device_api_credentials', device_id=d.id) }}" method="POST" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-                            {% include 'partials/csrf_field.html' %}
-                            <input type="text" name="api_username" placeholder="потребител" class="rename-input" style="width:110px;" autocomplete="off">
-                            <input type="password" name="api_password" placeholder="парола" class="rename-input" style="width:110px;" autocomplete="new-password">
-                            {% if d.vendor == 'cisco' %}
-                            <input type="password" name="api_enable_secret" placeholder="enable парола (ако има)" class="rename-input" style="width:150px;" autocomplete="new-password">
-                            {% endif %}
-                            <button type="submit" class="btn-secondary" style="padding:5px 10px; font-size:0.8rem;">Запази</button>
-                        </form>
+                        <button type="button" class="btn-secondary" style="padding:5px 10px; font-size:0.8rem;" data-dialog="apiCredentialsDialog"
+                                data-action="{{ url_for('admin_network_device_api_credentials', device_id=d.id) }}"
+                                data-title="Достъп: {{ d.name }}"
+                                data-values='{{ {"is_cisco": "1" if d.vendor == "cisco" else ""}|tojson|forceescape }}'>{{ 'Смени достъп' if d.has_api_credentials else 'Задай достъп' }}</button>
                         {% if d.has_api_credentials %}
                         <form action="{{ url_for('admin_network_device_api_credentials', device_id=d.id) }}" method="POST"
                               onsubmit="return confirm('Премахване на достъпа за {{ d.name|e }}?');" style="display:inline;">
@@ -355,16 +326,16 @@
         </details>
     </section>
 
-    <section class="admin-card">
+    <section class="admin-card" data-dialog-section="+ Нова връзка">
         <h3>Нова връзка</h3>
         {% if devices|length >= 2 %}
         <form action="{{ url_for('admin_network_add_link') }}" method="POST" class="admin-form">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group"><label>От устройство</label>
-                <select name="device_a_id" required>{% for d in devices %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select>
+                <select name="device_a_id" id="link_device_a_id" data-create="{{ create_url('network_device') }}" required>{% for d in devices %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select>
             </div>
             <div class="form-group"><label>Към устройство</label>
-                <select name="device_b_id" required>{% for d in devices %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select>
+                <select name="device_b_id" id="link_device_b_id" data-create="{{ create_url('network_device') }}" required>{% for d in devices %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select>
             </div>
             <div class="form-group"><label>Тип връзка</label>
                 <select name="link_type">{% for k, v in link_types.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
@@ -414,6 +385,48 @@
         {% endif %}
     </section>
 
+    <dialog id="networkDeviceEditDialog" class="form-dialog">
+        <h3 data-dialog-title>Редакция на устройство</h3>
+        <form method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group"><label>Име</label><input type="text" name="name" required></div>
+            <div class="form-group"><label>Производител</label>
+                <select name="vendor">{% for k, v in vendors.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+            </div>
+            <div class="form-group"><label>Роля</label>
+                <select name="device_role">{% for k, v in roles.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+            </div>
+            <div class="form-group"><label>Модел</label><input type="text" name="model"></div>
+            <div class="form-group"><label>Management IP</label><input type="text" name="management_ip"></div>
+            <div class="form-group"><label>MAC адрес</label><input type="text" name="mac_address"></div>
+            <div class="form-group"><label>Management VLAN</label><input type="number" name="management_vlan" min="1" max="4094"></div>
+            <div class="form-group" style="width:100%;"><label>Бележки</label><input type="text" name="notes" style="width:100%;"></div>
+            <div class="form-group">
+                <label style="display:flex; align-items:center; gap:4px;"><input type="checkbox" name="is_dhcp_server" style="width:auto;"> DHCP сървър</label>
+            </div>
+            <button type="submit" class="btn-submit">Запази</button>
+        </form>
+    </dialog>
+
+    <dialog id="apiCredentialsDialog" class="form-dialog">
+        <h3 data-dialog-title>API/SSH достъп</h3>
+        <p class="section-subtitle">Паролите никога не се показват повторно - въведете ги наново, за да ги смените.</p>
+        <form method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <input type="hidden" name="is_cisco">
+            <div class="form-group"><label>Потребител</label><input type="text" name="api_username" autocomplete="off" required></div>
+            <div class="form-group"><label>Парола</label><input type="password" name="api_password" autocomplete="new-password" required></div>
+            <div class="form-group" id="apiEnableSecretGroup"><label>Enable парола (Cisco, ако има)</label><input type="password" name="api_enable_secret" autocomplete="new-password"></div>
+            <button type="submit" class="btn-submit">Запази</button>
+        </form>
+    </dialog>
+    <script>
+        // enable secret only means something for Cisco IOS
+        document.addEventListener('dialog-open', function (e) {
+            if (e.target.id !== 'apiCredentialsDialog') return;
+            document.getElementById('apiEnableSecretGroup').style.display = (e.detail.values || {}).is_cisco ? '' : 'none';
+        });
+    </script>
 </main>
 
 <script>
@@ -422,14 +435,6 @@
     var cards = Array.from(document.querySelectorAll('.net-card'));
     var svg = document.getElementById('connectionsSvg');
     var tsEl = document.getElementById('mapTs');
-
-    // --- Edit-row toggles (Устройства table) ---
-    document.querySelectorAll('.edit-toggle').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-            var row = document.getElementById(btn.getAttribute('data-target'));
-            if (row) row.classList.toggle('open');
-        });
-    });
 
     var links = [
         {% for l in links %}{a: '{{ l.device_a_id }}', b: '{{ l.device_b_id }}', vlan: {{ l.vlan or 'null' }}, line: null},

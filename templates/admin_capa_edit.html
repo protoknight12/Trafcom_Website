@@ -71,7 +71,7 @@
 
             <div class="form-group">
                 <label for="responsible_id">Отговорник</label>
-                <select id="responsible_id" name="responsible_id" {{ 'disabled' if readonly }}>
+                <select id="responsible_id" data-create="{{ create_url('user') }}" name="responsible_id" {{ 'disabled' if readonly }}>
                     <option value="">-- няма --</option>
                     {% for u in users %}
                     <option value="{{ u.id }}" {% if capa.responsible_id == u.id %}selected{% endif %}>{{ u.username }}</option>

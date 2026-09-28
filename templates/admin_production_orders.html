@@ -32,7 +32,7 @@
     {% endif %}
     {% endwith %}
 
-    <section class="admin-card">
+    <section class="admin-card" data-dialog-section="+ Нова задача за производство">
         <h3>Нова задача за производство</h3>
         <p class="section-subtitle">Изберете детайл, количество и от коя партида материал да се произведе - нужният материал се изчислява автоматично.</p>
 
@@ -41,7 +41,7 @@
             <div class="po-wizard-row">
                 <div class="form-group">
                     <label for="po_detail_select">Детайл *</label>
-                    <select id="po_detail_select" name="detail_id" required>
+                    <select id="po_detail_select" data-create="{{ create_url('detail') }}" name="detail_id" required>
                         {% for d in details %}
                         <option value="{{ d.id }}">{{ d.name }} (наличност: {{ d.stock_quantity|round(0) }} бр.)</option>
                         {% else %}
@@ -86,7 +86,7 @@
                 <tr>
                     <td>{{ job.detail.name }}</td>
                     <td class="text-center">{{ job.quantity }}</td>
-                    <td>{{ format_material_option(job.material) }} — {{ "%.2f"|format(job.material.cost_per_m2) }} €{{ '/м' if job.is_linear_material else '/м²' }}
+                    <td>{{ format_material_option(job.material) }} — {{ "%.2f"|format(job.material.cost_per_m2) }} €/{{ material_unit_short(job.material.type) }}
                         <span style="color: var(--text-muted);">(наличност: {{ job.material_available_display }} {{ job.unit_label }})</span></td>
                     <td class="text-right">{{ job.planned_display }} {{ job.unit_label }}</td>
                     <td class="text-right">{{ (job.actual_display ~ ' ' ~ job.unit_label) if job.actual_display is not none else '-' }}</td>
@@ -159,7 +159,7 @@
         const stockEl = document.getElementById('po_material_stock');
         const m = d && d.materials.find(function (x) { return x.id === materialId; });
         if (!d || !m) { stockEl.textContent = ''; return; }
-        const display = d.is_linear ? (m.stock * 1000).toFixed(1) + ' мм' : m.stock.toFixed(3) + ' м²';
+        const display = d.is_linear ? (m.stock * 1000).toFixed(1) + ' мм' : m.stock.toFixed(3) + ' ' + d.unit;
         stockEl.textContent = 'Налично количество на партидата: ' + display;
     }
 
@@ -170,7 +170,7 @@
         const previewEl = document.getElementById('po_preview');
         if (!d || !qty) { previewEl.textContent = ''; return; }
         const needed = d.per_piece_qty * qty;
-        const display = d.is_linear ? (needed * 1000).toFixed(1) + ' мм' : needed.toFixed(3) + ' м²';
+        const display = d.is_linear ? (needed * 1000).toFixed(1) + ' мм' : needed.toFixed(3) + ' ' + d.unit;
         previewEl.textContent = 'Необходим материал: ' + display;
     }
 
@@ -180,6 +180,11 @@
         document.getElementById('po_quantity').addEventListener('input', poUpdatePreview);
         poUpdateMaterialOptions();
     }
+</script>
+<script>
+    // "+" create-new next to a select (form_dialog.js): keep this page's own
+    // catalog arrays in step with the option that was just added.
+    document.addEventListener('create-new', function (e) { mergeCatalog(e.detail.doc, 'PO_DETAILS', PO_DETAILS); });
 </script>
 </body>
 </html>

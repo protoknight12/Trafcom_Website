@@ -64,7 +64,7 @@
     {% endif %}
     {% endwith %}
 
-    <section class="admin-card">
+    <section class="admin-card" data-dialog-section="+ Нова сграда">
         <h3>Нова сграда</h3>
         <form action="{{ url_for('admin_add_building') }}" method="POST" class="admin-form">
             {% include 'partials/csrf_field.html' %}
@@ -84,12 +84,12 @@
         {% for b in buildings %}
         <div class="building-block">
             <div class="building-header">
-                <form action="{{ url_for('admin_rename_building', building_id=b.id) }}" method="POST" style="display:flex; gap: 8px; align-items: center;">
-                    {% include 'partials/csrf_field.html' %}
-                    <strong>Сграда:</strong>
-                    <input type="text" name="name" value="{{ b.name }}" class="inline-input" required>
-                    <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Запази</button>
-                </form>
+                <div style="display:flex; gap: 8px; align-items: center;">
+                    <strong>Сграда: {{ b.name }}</strong>
+                    <button type="button" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;" data-dialog="nameDialog"
+                            data-action="{{ url_for('admin_rename_building', building_id=b.id) }}" data-title="Преименуване на сграда"
+                            data-values='{{ {"name": b.name}|tojson|forceescape }}'>Преименувай</button>
+                </div>
                 <form action="{{ url_for('admin_delete_building', building_id=b.id) }}" method="POST"
                       onsubmit="return confirm('Изтриване на сграда &quot;{{ b.name|e }}&quot;?');">
                     {% include 'partials/csrf_field.html' %}
@@ -99,12 +99,12 @@
 
             {% for r in b.rooms %}
             <div class="room-row">
-                <form action="{{ url_for('admin_rename_room', room_id=r.id) }}" method="POST" style="display:flex; gap: 8px; align-items: center;">
-                    {% include 'partials/csrf_field.html' %}
-                    <span class="text-muted text-small">Помещение:</span>
-                    <input type="text" name="name" value="{{ r.name }}" class="inline-input" required>
-                    <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Запази</button>
-                </form>
+                <div style="display:flex; gap: 8px; align-items: center;">
+                    <span class="text-muted text-small">Помещение:</span> {{ r.name }}
+                    <button type="button" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;" data-dialog="nameDialog"
+                            data-action="{{ url_for('admin_rename_room', room_id=r.id) }}" data-title="Преименуване на помещение"
+                            data-values='{{ {"name": r.name}|tojson|forceescape }}'>Преименувай</button>
+                </div>
                 <div style="display: flex; gap: 8px;">
                     <a href="{{ url_for('admin_factory_map_room', room_id=r.id) }}" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Карта</a>
                     <form action="{{ url_for('admin_delete_room', room_id=r.id) }}" method="POST"
@@ -116,17 +116,28 @@
             </div>
             {% endfor %}
 
-            <form action="{{ url_for('admin_add_room', building_id=b.id) }}" method="POST" style="display:flex; gap: 8px; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color);">
-                {% include 'partials/csrf_field.html' %}
-                <input type="text" name="name" placeholder="Ново помещение..." class="inline-input" required>
-                <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Добави помещение</button>
-            </form>
+            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color);">
+                <button type="button" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;" data-dialog="nameDialog"
+                        data-action="{{ url_for('admin_add_room', building_id=b.id) }}" data-title="Ново помещение в {{ b.name }}">+ Добави помещение</button>
+            </div>
         </div>
         {% endfor %}
         {% else %}
         <p class="no-data text-center">Няма добавени сгради.</p>
         {% endif %}
     </section>
+
+    <dialog id="nameDialog" class="form-dialog">
+        <h3 data-dialog-title>Име</h3>
+        <form method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label>Име</label>
+                <input type="text" name="name" required>
+            </div>
+            <button type="submit" class="btn-submit">Запази</button>
+        </form>
+    </dialog>
 
 </main>
 

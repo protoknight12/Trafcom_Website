@@ -66,7 +66,7 @@
                 <tbody id="materialsTableBody">
                 {% for group in material_groups %}
                 {% set lots = group.lots %}
-                {% set unit = 'м' if lots[0].type in ['rods', 'pipes', 'profiles'] else 'м²' %}
+                {% set unit = material_unit_short(lots[0].type) %}
                 {% if lots|length == 1 %}
                 {% set material = lots[0] %}
                 {% if material.stock_quantity <= 0 %}

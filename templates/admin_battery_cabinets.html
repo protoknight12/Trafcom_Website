@@ -39,7 +39,7 @@
         </div>
     </section>
 
-    <section class="admin-card">
+    <section class="admin-card" data-dialog-section="+ Нов шкаф">
         <h3>Нов шкаф</h3>
         <p class="section-subtitle">Шкаф (Cabinet) е физическото тяло, в което седят един или повече stack-а батерии.</p>
         <form action="{{ url_for('admin_add_cabinet') }}" method="POST" class="admin-form">
@@ -64,7 +64,7 @@
             <div class="cabinet-header">
                 <h4>{{ cab.name }}</h4>
                 <div style="display:flex; gap:8px;">
-                    <a href="{{ url_for('edit_cabinet_window', cabinet_id=cab.id) }}" onclick="window.open(this.href, 'editCabinet', 'width=480,height=420'); return false;" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
+                    <a href="{{ url_for('edit_cabinet_window', cabinet_id=cab.id) }}" data-frame class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
                     <form action="{{ url_for('admin_delete_cabinet', cabinet_id=cab.id) }}" method="POST"
                           onsubmit="return confirm('Изтриване на шкаф &quot;{{ cab.name|e }}&quot; заедно с всички негови stack-ове и батерии?');" style="display:inline;">
                         {% include 'partials/csrf_field.html' %}
@@ -103,7 +103,7 @@
                         <td class="text-small" data-live-for="{{ st.id }}">&mdash;</td>
                         <td class="text-small text-muted">{{ [st.brand, st.model, st.serial_number] | select | join(' / ') or '—' }}</td>
                         <td>
-                            <a href="{{ url_for('admin_stack_batteries_window', stack_id=st.id) }}" onclick="window.open(this.href, 'stackBatteries', 'width=520,height=560'); return false;"
+                            <a href="{{ url_for('admin_stack_batteries_window', stack_id=st.id) }}" data-frame="stay"
                                class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 6px; text-decoration: none;">
                                 <span>Батерии</span>
                                 <span class="stack-count-pill {{ 'out-of-range' if out_of_range else '' }}">{{ count }}{% if st.min_batteries or st.max_batteries %} / {{ st.min_batteries or '?' }}-{{ st.max_batteries or '?' }}{% endif %}</span>
@@ -112,7 +112,7 @@
                         <td class="text-small text-muted">{{ (st.total_energy_kwh ~ ' kWh') if st.total_energy_kwh is not none else '—' }}</td>
                         <td class="text-small text-muted">{{ st.place_label }}</td>
                         <td class="text-right">
-                            <a href="{{ url_for('edit_stack_window', stack_id=st.id) }}" onclick="window.open(this.href, 'editStack', 'width=480,height=620'); return false;" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
+                            <a href="{{ url_for('edit_stack_window', stack_id=st.id) }}" data-frame class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
                         </td>
                         <td class="text-right">
                             <form action="{{ url_for('admin_delete_stack', stack_id=st.id) }}" method="POST"
@@ -130,76 +130,82 @@
             <p class="no-data text-center">Няма добавени stack-ове в този шкаф.</p>
             {% endif %}
 
-            <form action="{{ url_for('admin_add_stack') }}" method="POST" class="add-stack-form">
-                {% include 'partials/csrf_field.html' %}
-                <input type="hidden" name="cabinet_id" value="{{ cab.id }}">
-                <div class="form-group">
-                    <label>Нов stack - име</label>
-                    <input type="text" name="name" required placeholder="напр. Stack A" style="width: 140px;">
-                </div>
-                <div class="form-group">
-                    <label>Източник на живи данни</label>
-                    <select name="source_type" style="width: 160px;">
-                        {% for k, v in source_types.items() %}
-                        <option value="{{ k }}">{{ v }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Инвертор</label>
-                    <select name="inverter_device_id" style="width: 160px;">
-                        <option value="">-- няма --</option>
-                        {% for d in solis_devices %}
-                        <option value="{{ d.id }}">{{ d.name }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>БМС порт</label>
-                    <select name="bms_port" style="width: 120px;">
-                        <option value="">-- няма --</option>
-                        {% for k, v in bms_ports.items() %}
-                        <option value="{{ k }}">{{ v }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Марка (по избор)</label>
-                    <input type="text" name="brand" style="width: 120px;">
-                </div>
-                <div class="form-group">
-                    <label>Модел (по избор)</label>
-                    <input type="text" name="model" style="width: 120px;">
-                </div>
-                <div class="form-group">
-                    <label>Сериен номер (по избор)</label>
-                    <input type="text" name="serial_number" style="width: 140px;">
-                </div>
-                <div class="form-group">
-                    <label>Мин. батерии</label>
-                    <input type="text" name="min_batteries" style="width: 80px;" placeholder="напр. 3">
-                </div>
-                <div class="form-group">
-                    <label>Макс. батерии</label>
-                    <input type="text" name="max_batteries" style="width: 80px;" placeholder="напр. 11">
-                </div>
-                <div class="form-group">
-                    <label>Помещение</label>
-                    <select name="room_id" style="width: 160px;">
-                        <option value="">-- няма --</option>
-                        {% for r in rooms %}
-                        <option value="{{ r.id }}">{{ r.building.name }} / {{ r.name }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <button type="submit" class="btn-submit">Добави stack</button>
-            </form>
+            <button type="button" class="btn-secondary" style="margin-top: 10px; padding: 6px 12px; font-size: 0.85rem;" data-dialog="stackAddDialog"
+                    data-title="Нов stack в {{ cab.name }}" data-values='{{ {"cabinet_id": cab.id}|tojson|forceescape }}'>+ Нов stack</button>
         </div>
         {% endfor %}
         {% else %}
         <p class="no-data text-center">Няма добавени шкафове.</p>
         {% endif %}
     </section>
+
+    <dialog id="stackAddDialog" class="form-dialog">
+        <h3 data-dialog-title>Нов stack</h3>
+        <form action="{{ url_for('admin_add_stack') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <input type="hidden" name="cabinet_id" value="">
+            <div class="form-group">
+                <label>Име</label>
+                <input type="text" name="name" required placeholder="напр. Stack A">
+            </div>
+            <div class="form-group">
+                <label>Източник на живи данни</label>
+                <select name="source_type">
+                    {% for k, v in source_types.items() %}
+                    <option value="{{ k }}">{{ v }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Инвертор</label>
+                <select name="inverter_device_id" id="stack_inverter_device_id" data-create="{{ create_url('inverter') }}">
+                    <option value="">-- няма --</option>
+                    {% for d in solis_devices %}
+                    <option value="{{ d.id }}">{{ d.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>БМС порт</label>
+                <select name="bms_port">
+                    <option value="">-- няма --</option>
+                    {% for k, v in bms_ports.items() %}
+                    <option value="{{ k }}">{{ v }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Марка (по избор)</label>
+                <input type="text" name="brand">
+            </div>
+            <div class="form-group">
+                <label>Модел (по избор)</label>
+                <input type="text" name="model">
+            </div>
+            <div class="form-group">
+                <label>Сериен номер (по избор)</label>
+                <input type="text" name="serial_number">
+            </div>
+            <div class="form-group">
+                <label>Мин. батерии</label>
+                <input type="text" name="min_batteries" placeholder="напр. 3">
+            </div>
+            <div class="form-group">
+                <label>Макс. батерии</label>
+                <input type="text" name="max_batteries" placeholder="напр. 11">
+            </div>
+            <div class="form-group">
+                <label>Помещение</label>
+                <select name="room_id" id="stack_room_id" data-create="{{ create_url('room') }}">
+                    <option value="">-- няма --</option>
+                    {% for r in rooms %}
+                    <option value="{{ r.id }}">{{ r.building.name }} / {{ r.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="btn-submit" data-edit-label="Добави stack">Добави stack</button>
+        </form>
+    </dialog>
 
 </main>
 <script>
