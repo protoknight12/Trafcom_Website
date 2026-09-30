@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="{{ get_locale() }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>{{ _('Фабрика 3D') }} - Trafcom</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .f3-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+        .f3-bar .grp { display: flex; gap: 6px; flex-wrap: wrap; }
+        .f3-bar .sep { color: var(--text-muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; margin-left: 12px; }
+        .f3-btn { background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-muted);
+                  padding: 7px 14px; border-radius: 4px; cursor: pointer; font-size: 0.9rem; }
+        .f3-btn.active { background: rgba(var(--accent-rgb), 0.25); border-color: var(--accent-primary); color: var(--text-main); font-weight: bold; }
+        #f3-wrap { position: relative; height: 72vh; min-height: 420px; border: 1px solid var(--border-color);
+                   border-radius: var(--border-radius-md); overflow: hidden; background: var(--bg-input); }
+        #f3-wrap canvas { display: block; width: 100%; height: 100%; }
+        #f3-info { position: absolute; left: 12px; bottom: 12px; max-width: 300px; max-height: 60%; overflow-y: auto; background: var(--bg-surface); border: 1px solid var(--border-color);
+                   border-radius: 6px; padding: 10px 14px; min-width: 180px; display: none; }
+        #f3-info b { display: block; margin-bottom: 4px; }
+        #f3-hint { position: absolute; right: 12px; bottom: 10px; font-size: 0.75rem; color: var(--text-muted); }
+        .f3-legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; font-size: 0.85rem; color: var(--text-muted); }
+        .f3-legend i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+    </style>
+    <script type="importmap">
+    { "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+    </script>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+<main class="dashboard-container" style="margin-top: 20px; max-width: 1400px;">
+    <h1 style="margin-top:0">{{ _('Фабрика 3D') }}</h1>
+    <div class="f3-bar">
+        <span class="sep" style="margin-left:0">{{ _('Изглед') }}</span>
+        <div class="grp" id="f3-views">
+            <button class="f3-btn active" data-v="iso">{{ _('Изометричен') }}</button>
+            <button class="f3-btn" data-v="top">{{ _('Отгоре') }}</button>
+            <button class="f3-btn" data-v="front">{{ _('Отпред') }}</button>
+            <button class="f3-btn" data-v="side">{{ _('Отстрани') }}</button>
+        </div>
+        <span class="sep">{{ _('Зона') }}</span>
+        <div class="grp" id="f3-rooms"></div>
+        <span class="sep">{{ _('Стени') }}</span>
+        <div class="grp"><button class="f3-btn active" id="f3-walls">{{ _('Прозрачни') }}</button></div>
+        <span class="sep">{{ _('Покрив') }}</span>
+        <div class="grp"><button class="f3-btn active" id="f3-roof">{{ _('Показан') }}</button></div>
+        <span class="sep">{{ _('Соларни панели') }}</span>
+        <div class="grp"><button class="f3-btn active" id="f3-solar">{{ _('Показани') }}</button></div>
+    </div>
+    <div id="f3-wrap">
+        <div id="f3-info"></div>
+        <div id="f3-hint">{{ _('Влачене - въртене · колело - мащаб · десен бутон - местене · клик върху машина - детайли') }}</div>
+    </div>
+    <div class="f3-legend">
+        <span><i style="background:#e07a2f"></i>{{ _('Лазер') }}</span>
+        <span><i style="background:#3b82f6"></i>{{ _('Фрезов център') }}</span>
+        <span><i style="background:#14b8a6"></i>{{ _('Струг') }}</span>
+        <span><i style="background:#a855f7"></i>{{ _('Абкант') }}</span>
+        <span><i style="background:#94a3b8"></i>{{ _('Друго') }}</span>
+        <span><i style="background:#facc15"></i>{{ _('Инвертор') }}</span>
+        <span><i style="background:#22c55e"></i>{{ _('Батериен блок') }}</span>
+        <span><i style="background:#ef4444"></i>{{ _('Ел. табло') }}</span>
+    </div>
+</main>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const MACHINES = {{ machines|tojson }};
+const EQUIP = {{ equipment|tojson }};   // HallEquipment: inverter / battery / panel, elevation = bottom above the floor
+const SOLAR = {{ solar|tojson }};   // {l, w (m), slopes: [[[row, col], ...], ...]} from SolarPanel   // HallMachine rows (+ linked machine card), edited on /admin/hall
+const CAT = { laser: [0xe07a2f, "{{ _('Лазер') }}"], mill: [0x3b82f6, "{{ _('Фрезов център') }}"], lathe: [0x14b8a6, "{{ _('Струг') }}"],
+              press: [0xa855f7, "{{ _('Абкант') }}"], util: [0x94a3b8, "{{ _('Друго') }}"] };
+
+// ---- floor plan, metres: X along the hall (axis 1 -> 15), Z from the back wall (axis Б) to the front (axis А) ----
+// Traced from Hale_Teteven технология-Model.pdf; the red dashed (non-existent) items are left out.
+const W = 56, D = 12, H = 5;
+const SHAPES = {{ shapes|tojson }};   // HallShape rows: wall / door / room / block, edited on /admin/hall
+
+const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+const wrap = document.getElementById('f3-wrap');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(dark ? 0x12161c : 0xe9eef4);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 600);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+wrap.prepend(renderer.domElement);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI / 2 - 0.02;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.1));
+const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+sun.position.set(20, 50, 40);
+scene.add(sun);
+
+function box(x0, x1, z0, z1, y0, y1, mat) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0), mat);
+    m.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+    scene.add(m);
+    return m;
+}
+function label(text, x, y, z, size) {
+    const c = document.createElement('canvas'); c.width = 768; c.height = 96;
+    const g = c.getContext('2d');
+    g.font = 'bold 44px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.lineWidth = 8; g.strokeStyle = dark ? '#12161c' : '#e9eef4'; g.strokeText(text, 384, 48);
+    g.fillStyle = dark ? '#e6edf5' : '#1b2430'; g.fillText(text, 384, 48);
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthTest: false }));
+    s.scale.set(size * 8, size, 1); s.position.set(x, y, z); s.renderOrder = 10;
+    scene.add(s);
+}
+
+// floor, then walls / doors / marked rooms / neighbouring buildings from HallShape
+box(0, W, 0, D, -0.3, 0, new THREE.MeshStandardMaterial({ color: dark ? 0x2a323d : 0xcfd8e3 }));
+const oldMat = new THREE.MeshStandardMaterial({ color: dark ? 0x3a3f47 : 0xb7bcc4 });
+const wallMat = new THREE.MeshStandardMaterial({ color: dark ? 0x5b6b80 : 0x8fa3ba, transparent: true, opacity: 0.35, depthWrite: false });
+const doorMat = new THREE.MeshStandardMaterial({ color: 0xf5b301, transparent: true, opacity: 0.55 });
+const ROOM_COLORS = [0x60a5fa, 0x34d399, 0xf472b6, 0xfbbf24, 0xa78bfa];
+let roomNo = 0;
+SHAPES.forEach(s => {
+    const x1 = s.x + s.width, z1 = s.z + s.depth, cx = s.x + s.width / 2, cz = s.z + s.depth / 2;
+    const y0 = s.elevation || 0, y1 = y0 + s.height;
+    if (s.kind === 'wall') box(s.x, x1, s.z, z1, y0, y1, wallMat);
+    else if (s.kind === 'door') { box(s.x, x1, s.z, z1, y0, y1, doorMat); if (s.label) label(s.label, cx, y1 + 0.7, z1 + 0.5, 1.8); }
+    else if (s.kind === 'block') { box(s.x, x1, s.z, z1, y0, y1, oldMat); if (s.label) label(s.label, cx, y1 + 1.5, cz, 2); }
+    else {                                  // marked room: one tinted slab per floor + an outline of the whole volume
+        const col = ROOM_COLORS[roomNo++ % ROOM_COLORS.length], fh = s.height > 0 ? s.height : 3, n = s.floors || 1;
+        const mat = new THREE.MeshStandardMaterial({ color: col, transparent: true, opacity: 0.3 });
+        for (let i = 0; i < n; i++) box(s.x, x1, s.z, z1, y0 + i * fh, y0 + i * fh + 0.05, mat);
+        if (n > 1 || y0 > 0) {
+            const edges = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(s.width, n * fh, s.depth)), new THREE.LineBasicMaterial({ color: col }));
+            edges.position.set(cx, y0 + n * fh / 2, cz); scene.add(edges);
+        }
+        if (s.label) label(s.label + (n > 1 ? ' (' + n + ' ' + "{{ _('етажа') }}" + ')' : ''), cx, y0 + 0.6, cz, 1.8);
+    }
+});
+
+// roof: gable of sandwich panels running down the slope (ridge along X at mid-depth, eaves at wall height H)
+const roof = new THREE.Group();
+const RISE = 1.2, half = D / 2, run = Math.hypot(half, RISE), tilt = Math.atan2(RISE, half);
+{
+    const PW = 1.0, GAP = 0.04;
+    const panelMat = new THREE.MeshStandardMaterial({ color: dark ? 0x8391a3 : 0xdfe6ee, side: THREE.DoubleSide });
+    const seamMat = new THREE.MeshStandardMaterial({ color: dark ? 0x2b333e : 0x7d8a99 });
+    [-1, 1].forEach(sgn => {                                   // sgn -1: back slope (z 0..6), +1: front slope (z 6..12)
+        const slope = new THREE.Group();
+        slope.position.set(W / 2, H + RISE / 2 + 0.05, half + sgn * half / 2);
+        slope.rotation.x = sgn * tilt;
+        const under = new THREE.Mesh(new THREE.BoxGeometry(W, 0.08, run), seamMat);
+        slope.add(under);
+        for (let x0 = 0; x0 < W - 0.01; x0 += PW) {
+            const w = Math.min(PW, W - x0) - GAP;
+            const p = new THREE.Mesh(new THREE.BoxGeometry(w, 0.1, run), panelMat);
+            p.position.set(x0 + w / 2 + GAP / 2 - W / 2, 0.02, 0);
+            slope.add(p);
+        }
+        roof.add(slope);
+    });
+    // gable ends (triangles) so the roof closes against the end walls
+    const tri = new THREE.Shape([new THREE.Vector2(0, 0), new THREE.Vector2(D, 0), new THREE.Vector2(half, RISE)]);
+    [0, W].forEach(x => {
+        const g = new THREE.Mesh(new THREE.ShapeGeometry(tri), new THREE.MeshStandardMaterial({ color: dark ? 0x5b6b80 : 0x8fa3ba, side: THREE.DoubleSide }));
+        g.rotation.y = -Math.PI / 2; g.position.set(x, H, 0);
+        roof.add(g);
+    });
+}
+scene.add(roof);
+
+// solar modules (SolarPanel rows from /admin/solar-roof): one slope per Solis inverter, row 1 nearest the ridge.
+// Which inverter sits on which slope is not stored anywhere - first inverter = back slope, second = front.
+const solar = new THREE.Group();
+{
+    const L = SOLAR.l, PWID = SOLAR.w, G = 0.03;
+    const geo = new THREE.BoxGeometry(L - G, 0.06, PWID - G);
+    const frame = new THREE.MeshStandardMaterial({ color: 0xcfd6de });
+    const cells = new THREE.MeshStandardMaterial({ color: 0x14285a, metalness: 0.3, roughness: 0.35 });
+    SOLAR.slopes.slice(0, 2).forEach((panels, i) => {
+        const back = i === 0, slope = new THREE.Group();
+        slope.position.set(W / 2, H + RISE / 2 + 0.05, half + (back ? -1 : 1) * half / 2);
+        slope.rotation.x = (back ? -1 : 1) * tilt;
+        panels.forEach(([row, col]) => {
+            const d = 0.3 + (row - 0.5) * PWID;                       // distance from the ridge along the slope
+            const m = new THREE.Mesh(geo, cells);
+            m.position.set(1.0 + (col - 0.5) * L - W / 2, 0.16, back ? run / 2 - d : -run / 2 + d);
+            const f = new THREE.Mesh(new THREE.BoxGeometry(L, 0.04, PWID), frame);
+            f.position.set(m.position.x, 0.13, m.position.z);
+            slope.add(f, m);
+        });
+        solar.add(slope);
+    });
+}
+scene.add(solar);
+
+// machines and equipment (both sit `elevation` metres above the floor)
+const pickables = [];
+MACHINES.forEach(m => {
+    const y0 = m.elevation || 0;
+    const mesh = box(m.x, m.x + m.width, m.z, m.z + m.depth, y0, y0 + m.height, new THREE.MeshStandardMaterial({ color: (CAT[m.category] || CAT.util)[0] }));
+    mesh.userData = m;
+    pickables.push(mesh);
+    if (m.no != null) label(String(m.no), mesh.position.x, y0 + m.height + 1.6, mesh.position.z, 2.4);
+});
+const EQ = { inverter: [0xfacc15, "{{ _('Инвертор') }}"], battery: [0x22c55e, "{{ _('Батериен блок') }}"], panel: [0xef4444, "{{ _('Ел. табло') }}"] };
+EQUIP.forEach(e => {
+    const y0 = e.elevation || 0;
+    const mesh = box(e.x, e.x + e.width, e.z, e.z + e.depth, y0, y0 + e.height, new THREE.MeshStandardMaterial({ color: EQ[e.kind][0] }));
+    mesh.userData = Object.assign({ equip: true }, e);
+    pickables.push(mesh);
+    label(e.label, mesh.position.x, y0 + e.height + 0.8, mesh.position.z, 1.3);
+});
+
+// ---- camera views + zones ----
+const DIRS = { iso: [-1, 1.1, 1.3], top: [0, 2.4, 0.001], front: [0, 0.55, 1.6], side: [1.6, 0.55, 0] };
+const ZONES = [["{{ _('Цялото хале') }}", 28, 62], ["{{ _('Лява част') }}", 14, 32], ["{{ _('Дясна част') }}", 45, 26]];
+let view = 'iso', tx = 28, span = 62, anim = null;
+function goView() {
+    const target = new THREE.Vector3(tx, 0, D / 2);
+    const dir = new THREE.Vector3(...DIRS[view]).normalize().multiplyScalar(span * 1.05);
+    anim = { t: 0, fromP: camera.position.clone(), fromT: controls.target.clone(), toP: target.clone().add(dir), toT: target };
+}
+document.querySelectorAll('#f3-views .f3-btn').forEach(b => b.onclick = () => {
+    view = b.dataset.v;
+    document.querySelectorAll('#f3-views .f3-btn').forEach(o => o.classList.toggle('active', o === b));
+    goView();
+});
+const zbar = document.getElementById('f3-rooms');
+ZONES.forEach(([name, cx, sp], i) => {
+    const b = document.createElement('button');
+    b.className = 'f3-btn' + (i === 0 ? ' active' : ''); b.textContent = name;
+    b.onclick = () => { tx = cx; span = sp; zbar.querySelectorAll('.f3-btn').forEach(o => o.classList.toggle('active', o === b)); goView(); };
+    zbar.appendChild(b);
+});
+const roofBtn = document.getElementById('f3-roof');
+roofBtn.onclick = () => {
+    roof.visible = roofBtn.classList.toggle('active');
+    roofBtn.textContent = roof.visible ? "{{ _('Показан') }}" : "{{ _('Скрит') }}";
+};
+const solarBtn = document.getElementById('f3-solar');
+solarBtn.onclick = () => {
+    solar.visible = solarBtn.classList.toggle('active');
+    solarBtn.textContent = solar.visible ? "{{ _('Показани') }}" : "{{ _('Скрити') }}";
+};
+const wallBtn = document.getElementById('f3-walls');
+wallBtn.onclick = () => {
+    const solid = !wallBtn.classList.toggle('active');
+    wallMat.opacity = solid ? 0.9 : 0.35; wallMat.depthWrite = solid;
+    wallBtn.textContent = solid ? "{{ _('Плътни') }}" : "{{ _('Прозрачни') }}";
+};
+
+// ---- click a machine ----
+const info = document.getElementById('f3-info'), ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
+let picked = null, down = null;
+renderer.domElement.addEventListener('pointerdown', e => down = [e.clientX, e.clientY]);
+renderer.domElement.addEventListener('pointerup', e => {
+    if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 5) return;   // a drag, not a click
+    const r = renderer.domElement.getBoundingClientRect();
+    mouse.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(mouse, camera);
+    const hit = ray.intersectObjects(pickables)[0];
+    if (picked) picked.material.emissive.setHex(0);
+    picked = hit ? hit.object : null;
+    if (!picked) { info.style.display = 'none'; return; }
+    picked.material.emissive.setHex(0x333333);
+    const m = picked.userData;
+    info.replaceChildren();
+    const add = (tag, text, style) => { const e = document.createElement(tag); e.textContent = text; if (style) e.style.cssText = style; info.append(e); return e; };
+    if (m.equip) {
+        add('b', m.label); add('div', EQ[m.kind][1]);
+        add('div', "{{ _('На') }} " + (m.elevation || 0) + " {{ _('м от пода') }}", 'font-size:0.85rem');
+        info.style.display = 'block';
+        return;
+    }
+    const c = m.card;
+    if (c && c.image) { const i = document.createElement('img'); i.src = c.image; i.alt = ''; i.style.cssText = 'max-width:100%;max-height:120px;display:block;margin-bottom:6px;border-radius:4px'; info.append(i); }
+    add('b', (m.no != null ? '№ ' + m.no + ' · ' : '') + (c ? c.title : m.name));
+    add('div', (CAT[m.category] || CAT.util)[1]);
+    if (m.elevation) add('div', "{{ _('На') }} " + m.elevation + " {{ _('м от пода') }}", 'font-size:0.85rem');
+    if (c) {
+        c.specs.forEach(([l, v]) => add('div', l + ': ' + v, 'font-size:0.85rem'));
+        if (c.description) add('div', c.description, 'font-size:0.85rem;margin-top:6px;color:var(--text-muted)');
+    }
+    info.style.display = 'block';
+});
+
+function resize() {
+    const w = wrap.clientWidth, h = wrap.clientHeight;
+    renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(wrap);
+resize();
+goView();
+camera.position.copy(anim.toP); controls.target.copy(anim.toT); anim = null;
+
+(function loop() {
+    requestAnimationFrame(loop);
+    if (anim) {
+        anim.t = Math.min(1, anim.t + 0.04);
+        const k = 1 - Math.pow(1 - anim.t, 3);
+        camera.position.lerpVectors(anim.fromP, anim.toP, k);
+        controls.target.lerpVectors(anim.fromT, anim.toT, k);
+        if (anim.t === 1) anim = null;
+    }
+    controls.update();
+    renderer.render(scene, camera);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="{{ get_locale() }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Хале 3D - редактор - Trafcom</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .hl-layout { display: grid; grid-template-columns: 1fr 320px; gap: 20px; align-items: start; }
+        .hl-panel { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 16px; }
+        #hl-svg { width: 100%; background: var(--bg-input); border: 1px solid var(--border-color); border-radius: 4px; touch-action: none; display: block; }
+        #hl-svg .grid { stroke: var(--border-color); stroke-width: 0.03; }
+        #hl-svg .hall { fill: none; stroke: var(--text-muted); stroke-width: 0.1; stroke-dasharray: 0.4 0.3; }
+        #hl-svg .s { cursor: move; }
+        #hl-svg .s.wall { fill: #64748b; stroke: transparent; stroke-width: 0.6; }
+        #hl-svg .s.door { fill: #f5b301; stroke: transparent; stroke-width: 0.6; }
+        #hl-svg .s.block { fill: #b7bcc4; fill-opacity: 0.6; }
+        #hl-svg .s.room { fill-opacity: 0.22; stroke: var(--text-muted); stroke-width: 0.06; stroke-dasharray: 0.3 0.2; }
+        #hl-svg .m { cursor: move; stroke: var(--text-main); stroke-width: 0.06; fill-opacity: 0.9; }
+        #hl-svg .q { cursor: move; stroke: var(--text-main); stroke-width: 0.06; }
+        #hl-svg .sel { stroke: var(--accent-primary) !important; stroke-width: 0.2 !important; stroke-dasharray: none !important; }
+        #hl-svg text { font-size: 0.9px; text-anchor: middle; dominant-baseline: middle; pointer-events: none; fill: #fff; font-weight: bold; }
+        #hl-svg text.lbl { fill: var(--text-muted); font-weight: normal; font-size: 0.8px; }
+        .hl-panel label { display: block; font-size: 0.8rem; color: var(--text-muted); margin: 8px 0 2px; }
+        .hl-panel input, .hl-panel select { width: 100%; background: var(--bg-input); border: 1px solid var(--border-color);
+            color: var(--text-main); padding: 6px 8px; border-radius: 4px; box-sizing: border-box; }
+        .hl-tools { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+        .hl-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .hl-btns { display: flex; gap: 8px; margin-top: 14px; }
+        .hl-add { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+        #hl-msg { min-height: 1.2em; margin-top: 8px; font-size: 0.85rem; }
+        @media (max-width: 900px) { .hl-layout { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+<main class="dashboard-container" style="margin-top: 20px; max-width: 1500px;">
+    <h1 style="margin-top:0">Хале 3D - редактор (изглед отгоре)</h1>
+    <p style="color: var(--text-muted)">Влачете машина, оборудване, стена, врата или помещение, за да ги преместите; размерите и връзките се задават вдясно.
+        <b>Разстояние от пода</b> е височината на долната им страна. <b>Помещение</b> е маркирана зона с височина на етаж и брой етажи;
+        вързва се към помещение от „Карта на фабриката". <b>Инвертор / батериен блок / табло</b> се вързват към вече въведените такива.
+        Показва се на клиентите в <a href="{{ url_for('factory3d') }}">Фабрика 3D</a>.</p>
+    <div class="hl-layout">
+        <div class="hl-panel">
+            <div class="hl-tools">
+                <button class="btn" id="z-in" type="button" title="Увеличи">+</button>
+                <button class="btn" id="z-out" type="button" title="Намали">−</button>
+                <button class="btn" id="z-reset" type="button">Цялото хале</button>
+                <span id="z-info" style="color:var(--text-muted);font-size:0.85rem"></span>
+                <label style="margin:0 0 0 auto;display:flex;align-items:center;gap:6px">Стъпка
+                    <select id="snap" style="width:auto"><option value="0.1">10 см</option><option value="0.05">5 см</option><option value="0.01">1 см</option><option value="0.5">50 см</option></select>
+                </label>
+            </div>
+            <svg id="hl-svg" viewBox="-5 -5 72 23"></svg>
+            <div style="color:var(--text-muted);font-size:0.8rem;margin-top:6px">Колело - увеличение · влачене на празно място - местене на плана · стрелки - преместване на избрания елемент (Shift = ×10)</div>
+        </div>
+        <div class="hl-panel">
+            <div id="hl-form" style="display:none">
+                <label>Име</label><input id="f-name">
+                <div id="g-machine">
+                    <div class="hl-row">
+                        <div><label>Номер на плана</label><input id="f-no" type="number" step="1"></div>
+                        <div><label>Вид</label><select id="f-category">{% for k, v in categories.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></div>
+                    </div>
+                    <label>Карта на машината</label>
+                    <select id="f-card"><option value="">- без карта -</option>
+                        {% for c in cards %}<option value="{{ c.id }}">{{ c.title }} ({{ 'начална' if c.page == 'index' else 'услуги' }})</option>{% endfor %}
+                    </select>
+                </div>
+                <div id="g-shape">
+                    <label>Вид елемент</label>
+                    <select id="f-kind">{% for k, v in shape_kinds.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+                    <div id="g-room">
+                        <label>Свързано помещение</label>
+                        <select id="f-room"><option value="">- не е свързано -</option>
+                            {% for r in rooms %}<option value="{{ r.id }}">{{ r.label }}</option>{% endfor %}
+                        </select>
+                        <label>Етажност (брой етажи)</label><input id="f-floors" type="number" step="1" min="1" max="10">
+                    </div>
+                </div>
+                <div id="g-equip">
+                    <label>Вид оборудване</label>
+                    <select id="f-ekind">{% for k, v in equipment_kinds.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+                    <label>Свързан с</label>
+                    <select id="f-ref"></select>
+                </div>
+                <div class="hl-row">
+                    <div><label>X, м</label><input id="f-x" type="number" step="0.1"></div>
+                    <div><label>Z, м</label><input id="f-z" type="number" step="0.1"></div>
+                    <div><label>Дължина (X), м</label><input id="f-width" type="number" step="0.1" min="0.1"></div>
+                    <div><label>Ширина (Z), м</label><input id="f-depth" type="number" step="0.1" min="0.1"></div>
+                    <div><label id="l-height">Височина, м</label><input id="f-height" type="number" step="0.1" min="0" max="10"></div>
+                    <div><label>Разстояние от пода, м</label><input id="f-elevation" type="number" step="0.1" min="0" max="20"></div>
+                </div>
+                <div class="hl-btns">
+                    <button class="btn btn-primary" id="hl-save" type="button">Запази</button>
+                    <button class="btn" id="hl-del" type="button" style="color:#ef4444">Изтрий</button>
+                </div>
+            </div>
+            <div id="hl-empty" style="color: var(--text-muted)">Изберете елемент от плана.</div>
+            <div id="hl-msg"></div>
+            <div class="hl-add">
+                <button class="btn" data-add="machine" type="button">+ Машина</button>
+                <button class="btn" data-add="inverter" type="button">+ Инвертор</button>
+                <button class="btn" data-add="battery" type="button">+ Батериен блок</button>
+                <button class="btn" data-add="panel" type="button">+ Ел. табло</button>
+                <button class="btn" data-add="wall" type="button">+ Стена</button>
+                <button class="btn" data-add="door" type="button">+ Врата</button>
+                <button class="btn" data-add="room" type="button">+ Помещение</button>
+            </div>
+        </div>
+    </div>
+</main>
+
+<script>
+const MACHINES = {{ machines|tojson }}.map(o => Object.assign(o, { _t: 'machine' }));
+const SHAPES = {{ shapes|tojson }}.map(o => Object.assign(o, { _t: 'shape' }));
+const EQUIP = {{ equipment|tojson }}.map(o => Object.assign(o, { _t: 'equip' }));
+const CHOICES = {{ equipment_choices|tojson }};
+const COLORS = { laser: '#e07a2f', mill: '#3b82f6', lathe: '#14b8a6', press: '#a855f7', util: '#94a3b8' };
+const EQ_COLORS = { inverter: '#facc15', battery: '#22c55e', panel: '#ef4444' };
+const EQ_ABBR = { inverter: 'И', battery: 'Б', panel: 'Т' };
+const ROOM_COLORS = ['#60a5fa', '#34d399', '#f472b6', '#fbbf24', '#a78bfa'];
+const svg = document.getElementById('hl-svg'), NS = 'http://www.w3.org/2000/svg';
+const $ = id => document.getElementById(id);
+const COMMON = ['name', 'x', 'z', 'width', 'depth', 'height', 'elevation'];
+const LISTS = { machine: MACHINES, shape: SHAPES, equip: EQUIP };
+const URLS = { machine: ['{{ url_for("admin_hall_save") }}', '/admin/hall/'], shape: ['{{ url_for("admin_hall_shape_save") }}', '/admin/hall/shape/'],
+               equip: ['{{ url_for("admin_hall_equipment_save") }}', '/admin/hall/equipment/'] };
+let sel = null;
+
+const el = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
+const msg = (t, err) => { $('hl-msg').textContent = t; $('hl-msg').style.color = err ? '#ef4444' : '#22c55e'; };
+let step = 0.1;
+const snap = v => Math.round(Math.round(v / step) * step * 1000) / 1000, clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const pt = e => { const p = svg.createSVGPoint(); p.x = e.clientX; p.y = e.clientY; return p.matrixTransform(svg.getScreenCTM().inverse()); };
+
+// ---- zoom / pan: the viewBox is the camera; the aspect ratio stays fixed ----
+const VB0 = { x: -5, y: -5, w: 72, h: 23 };
+let vb = Object.assign({}, VB0);
+function setVB() {
+    svg.setAttribute('viewBox', `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+    $('z-info').textContent = Math.round(VB0.w / vb.w * 100) + '%';
+}
+function zoomAt(p, factor) {
+    const w = clamp(vb.w * factor, 2, VB0.w * 1.5), r = w / vb.w;
+    vb = { x: p.x - (p.x - vb.x) * r, y: p.y - (p.y - vb.y) * r, w, h: w * VB0.h / VB0.w };
+    setVB();
+}
+const center = () => ({ x: vb.x + vb.w / 2, y: vb.y + vb.h / 2 });
+svg.addEventListener('wheel', e => { e.preventDefault(); zoomAt(pt(e), e.deltaY < 0 ? 0.8 : 1.25); }, { passive: false });
+$('z-in').onclick = () => zoomAt(center(), 0.7);
+$('z-out').onclick = () => zoomAt(center(), 1 / 0.7);
+$('z-reset').onclick = () => { vb = Object.assign({}, VB0); setVB(); };
+svg.addEventListener('pointerdown', e => {        // only reached from empty space - elements stop propagation
+    const start = [e.clientX, e.clientY, vb.x, vb.y], k = () => vb.w / svg.clientWidth;
+    let moved = false;
+    const move = ev => {
+        moved = true;
+        vb.x = start[2] - (ev.clientX - start[0]) * k(); vb.y = start[3] - (ev.clientY - start[1]) * k(); setVB();
+    };
+    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); if (!moved) select(null); };
+    addEventListener('pointermove', move); addEventListener('pointerup', up);
+});
+$('snap').onchange = () => { step = Number($('snap').value); };
+
+function draw() {
+    svg.replaceChildren();
+    for (let i = 0; i <= 56; i += 4) svg.appendChild(el('line', { class: 'grid', x1: i, y1: 0, x2: i, y2: 12 }));
+    svg.appendChild(el('rect', { class: 'hall', x: 0, y: 0, width: 56, height: 12 }));
+    const order = { room: 0, block: 1, wall: 2, door: 3 };
+    [...SHAPES].sort((a, b) => order[a.kind] - order[b.kind]).forEach(s => {
+        const attrs = { class: 's ' + s.kind + (s === sel ? ' sel' : ''), x: s.x, y: s.z, width: s.width, height: s.depth };
+        if (s.kind === 'room') attrs.fill = ROOM_COLORS[SHAPES.filter(o => o.kind === 'room').indexOf(s) % ROOM_COLORS.length];
+        const r = el('rect', attrs);
+        r.addEventListener('pointerdown', e => startDrag(e, s));
+        svg.appendChild(r);
+        if (s.kind !== 'wall' && s.label) {
+            const t = el('text', { class: 'lbl', x: s.x + s.width / 2, y: s.z + (s.kind === 'door' ? -0.8 : s.depth / 2) });
+            t.textContent = s.label + (s.kind === 'room' && s.floors > 1 ? ' (' + s.floors + ' ет.)' : ''); svg.appendChild(t);
+        }
+    });
+    MACHINES.forEach(m => {
+        const r = el('rect', { class: 'm' + (m === sel ? ' sel' : ''), x: m.x, y: m.z, width: m.width, height: m.depth, fill: COLORS[m.category] || COLORS.util });
+        r.addEventListener('pointerdown', e => startDrag(e, m));
+        svg.appendChild(r);
+        const t = el('text', { x: m.x + m.width / 2, y: m.z + m.depth / 2 }); t.textContent = m.no ?? '';
+        svg.appendChild(t);
+    });
+    EQUIP.forEach(q => {      // small boxes - drawn at least 0.8 m so they stay grabbable
+        const w = Math.max(q.width, 0.8), d = Math.max(q.depth, 0.8);
+        const r = el('rect', { class: 'q' + (q === sel ? ' sel' : ''), x: q.x, y: q.z, width: w, height: d, fill: EQ_COLORS[q.kind] });
+        r.addEventListener('pointerdown', e => startDrag(e, q));
+        svg.appendChild(r);
+        const t = el('text', { x: q.x + w / 2, y: q.z + d / 2 }); t.style.fill = '#000'; t.textContent = EQ_ABBR[q.kind]; svg.appendChild(t);
+    });
+}
+
+function fillRef(kind, value) {
+    $('f-ref').innerHTML = '<option value="">- без връзка -</option>' + (CHOICES[kind] || []).map(c => `<option value="${c.id}">${c.label.replace(/</g, '&lt;')}</option>`).join('');
+    $('f-ref').value = value ?? '';
+}
+function select(o) {
+    sel = o;
+    $('hl-form').style.display = o ? '' : 'none'; $('hl-empty').style.display = o ? 'none' : '';
+    if (o) {
+        $('g-machine').style.display = o._t === 'machine' ? '' : 'none';
+        $('g-shape').style.display = o._t === 'shape' ? '' : 'none';
+        $('g-equip').style.display = o._t === 'equip' ? '' : 'none';
+        COMMON.forEach(f => $('f-' + f).value = o[f] ?? '');
+        if (o._t === 'machine') { $('f-no').value = o.no ?? ''; $('f-category').value = o.category; $('f-card').value = o.card_id ?? ''; }
+        else if (o._t === 'shape') { $('f-kind').value = o.kind; $('f-room').value = o.room_id ?? ''; $('f-floors').value = o.floors ?? 1; }
+        else { $('f-ekind').value = o.kind; fillRef(o.kind, o.ref_id); }
+        syncKind();
+    }
+    draw();
+}
+function syncKind() {
+    const isRoom = sel && sel._t === 'shape' && $('f-kind').value === 'room';
+    $('g-room').style.display = isRoom ? '' : 'none';
+    $('l-height').textContent = isRoom ? 'Височина на етаж, м' : 'Височина, м';
+}
+$('f-kind').onchange = syncKind;
+$('f-ekind').onchange = () => fillRef($('f-ekind').value, null);
+
+function startDrag(e, o) {
+    e.preventDefault(); e.stopPropagation();
+    select(o);
+    const p = pt(e), off = [p.x - o.x, p.y - o.z];
+    let moved = false;
+    const move = ev => {
+        const q = pt(ev), nx = snap(q.x - off[0]), nz = snap(q.y - off[1]);
+        if (o._t === 'machine') { o.x = clamp(nx, 0, 56 - o.width); o.z = clamp(nz, 0, 12 - o.depth); }
+        else { o.x = clamp(nx, -10, 80); o.z = clamp(nz, -10, 30); }
+        moved = true; $('f-x').value = o.x; $('f-z').value = o.z; draw();
+    };
+    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); if (moved) save(o); };
+    addEventListener('pointermove', move); addEventListener('pointerup', up);
+}
+
+let nudgeTimer = null;
+addEventListener('keydown', e => {
+    if (!sel || !e.key.startsWith('Arrow') || /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    e.preventDefault();
+    const d = step * (e.shiftKey ? 10 : 1);
+    const nx = sel.x + (e.key === 'ArrowRight' ? d : e.key === 'ArrowLeft' ? -d : 0), nz = sel.z + (e.key === 'ArrowDown' ? d : e.key === 'ArrowUp' ? -d : 0);
+    if (sel._t === 'machine') { sel.x = clamp(snap(nx), 0, 56 - sel.width); sel.z = clamp(snap(nz), 0, 12 - sel.depth); }
+    else { sel.x = clamp(snap(nx), -10, 80); sel.z = clamp(snap(nz), -10, 30); }
+    $('f-x').value = sel.x; $('f-z').value = sel.z; draw();
+    const o = sel; clearTimeout(nudgeTimer); nudgeTimer = setTimeout(() => { if (o.id || o.name !== undefined) save(o); }, 500);
+});
+
+async function post(url, body) {
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': window.CSRF_TOKEN }, body: JSON.stringify(body || {}) });
+    return [r.ok, await r.json().catch(() => ({}))];
+}
+async function save(o) {
+    const [ok, d] = await post(URLS[o._t][0], o);
+    if (!ok) return msg(d.error || 'Грешка при запис.', true);
+    Object.assign(o, d); msg('Запазено.'); draw();
+}
+$('hl-save').onclick = () => {
+    if (!sel) return;
+    COMMON.forEach(f => sel[f] = f === 'name' ? $('f-name').value : Number($('f-' + f).value));
+    if (sel._t === 'machine') {
+        sel.no = $('f-no').value === '' ? null : Number($('f-no').value);
+        sel.category = $('f-category').value; sel.card_id = $('f-card').value ? Number($('f-card').value) : null;
+    } else if (sel._t === 'shape') {
+        sel.kind = $('f-kind').value; sel.room_id = $('f-room').value ? Number($('f-room').value) : null; sel.floors = Number($('f-floors').value) || 1;
+    } else {
+        sel.kind = $('f-ekind').value; sel.ref_id = $('f-ref').value ? Number($('f-ref').value) : null;
+    }
+    save(sel);
+};
+$('hl-del').onclick = async () => {
+    if (!sel || !confirm('Да се изтрие ли избраният елемент?')) return;
+    if (sel.id) await post(URLS[sel._t][1] + sel.id + '/delete');
+    LISTS[sel._t].splice(LISTS[sel._t].indexOf(sel), 1);
+    select(null); msg('Изтрито.');
+};
+const eq = (kind, name, w, d, h, elev) => ({ _t: 'equip', id: null, kind, ref_id: null, name, x: 2, z: 2, width: w, depth: d, height: h, elevation: elev, label: name });
+const NEW = {
+    machine: { _t: 'machine', id: null, no: null, name: 'Нова машина', category: 'util', x: 2, z: 2, width: 2, depth: 2, height: 2, elevation: 0, card_id: null },
+    inverter: eq('inverter', '', 0.6, 0.3, 0.7, 1.2),
+    battery: eq('battery', '', 0.6, 0.6, 1.8, 0),
+    panel: eq('panel', '', 0.8, 0.25, 1.2, 1.4),
+    wall: { _t: 'shape', id: null, kind: 'wall', name: '', x: 2, z: 2, width: 4, depth: 0.4, height: 5, elevation: 0, floors: 1, room_id: null, label: '' },
+    door: { _t: 'shape', id: null, kind: 'door', name: 'Врата', x: 2, z: 2, width: 4, depth: 0.15, height: 4, elevation: 0, floors: 1, room_id: null, label: 'Врата' },
+    room: { _t: 'shape', id: null, kind: 'room', name: 'Ново помещение', x: 2, z: 2, width: 8, depth: 6, height: 3, elevation: 0, floors: 1, room_id: null, label: 'Ново помещение' },
+};
+document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => {
+    const o = Object.assign({}, NEW[b.dataset.add]);
+    LISTS[o._t].push(o); select(o);   // saved on first "Запази"/drag
+});
+draw();
+</script>
+</body>
+</html>

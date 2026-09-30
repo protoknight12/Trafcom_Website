@@ -2499,6 +2499,148 @@ class ServiceMachineCard(db.Model):
         return rows
 
 
+HALL_CATEGORIES = {'laser': 'Лазер', 'mill': 'Фрезов център', 'lathe': 'Струг', 'press': 'Абкант', 'util': 'Друго'}
+# Layout traced from the architect's floor plan (metres; X along the hall, Z from the back wall).
+# (no, name, category, x0, x1, z0, z1, height)
+HALL_SEED = [
+    (14, 'CNC лазерна машина Eckert', 'laser', 5.3, 16.7, 1.4, 4.7, 2.0),
+    (15, 'CNC лазерна машина CSF 3015/700', 'laser', 0.7, 3.6, 4.9, 9.1, 2.0),
+    (12, 'CNC абкант Durma', 'press', 5.6, 11.5, 9.2, 11.0, 2.2),
+    (13, 'CNC струг. обр. център Benzinger TNI B6', 'lathe', 13.0, 16.9, 9.2, 10.9, 2.2),
+    (11, 'Винтов компресор', 'util', 27.3, 28.5, 4.3, 6.9, 1.8),
+    (6, 'CNC струг. обр. център Benzinger TNI B8', 'lathe', 40.6, 46.8, 0.8, 2.4, 2.2),
+    (9, 'CNC струг Eguro', 'lathe', 46.8, 48.5, 0.8, 2.2, 2.0),
+    (10, 'CNC струг Eguro', 'lathe', 48.5, 50.2, 0.8, 2.2, 2.0),
+    (1, 'CNC верт. обр. център HURCO', 'mill', 50.2, 54.4, 0.8, 2.4, 2.6),
+    (7, 'CNC струг Star', 'lathe', 52.9, 55.9, 2.5, 4.0, 2.0),
+    (5, 'CNC струг. обр. център Gildemeister Twin 42', 'lathe', 53.4, 55.6, 5.2, 8.3, 2.4),
+    (2, 'CNC верт. обр. център HURCO', 'mill', 52.1, 54.6, 9.0, 10.9, 2.6),
+    (3, 'CNC верт. обр. център DMG DMU 75 monoblok', 'mill', 48.3, 51.3, 9.4, 11.3, 2.6),
+    (4, 'CNC струг. обр. център DMG CTX 510', 'lathe', 40.7, 44.6, 6.4, 7.8, 2.2),
+    (8, 'CNC струг Star', 'lathe', 48.4, 51.5, 6.4, 7.7, 2.0),
+]
+
+
+class HallMachine(db.Model):
+    """One machine box on the hall's 3D/top-down plan (/factory3d, edited on /admin/hall).
+    Position/size in metres; card_id links it to the machine card admins already maintain
+    (ServiceMachineCard) so a click on the client's 3D view shows that card."""
+    id = db.Column(db.Integer, primary_key=True)
+    no = db.Column(db.Integer, nullable=True)
+    name = db.Column(db.String(150), nullable=False)
+    category = db.Column(db.String(20), nullable=False, default='util')
+    x = db.Column(db.Float, nullable=False, default=1.0)
+    z = db.Column(db.Float, nullable=False, default=1.0)
+    width = db.Column(db.Float, nullable=False, default=2.0)
+    depth = db.Column(db.Float, nullable=False, default=2.0)
+    height = db.Column(db.Float, nullable=False, default=2.0)
+    elevation = db.Column(db.Float, nullable=False, default=0.0)   # bottom of the box above the floor, m
+    card_id = db.Column(db.Integer, db.ForeignKey('service_machine_card.id'), nullable=True)
+
+    card = db.relationship('ServiceMachineCard')
+
+    def as_dict(self):
+        return {'id': self.id, 'no': self.no, 'name': self.name, 'category': self.category, 'x': self.x, 'z': self.z,
+                'width': self.width, 'depth': self.depth, 'height': self.height, 'elevation': self.elevation, 'card_id': self.card_id}
+
+
+HALL_SHAPE_KINDS = {'wall': 'Стена', 'door': 'Врата', 'room': 'Помещение', 'block': 'Съседна сграда'}
+# (kind, name, x, z, width, depth, height) - walls/doors/rooms/neighbours traced from the same plan
+HALL_SHAPES_SEED = [
+    ('wall', '', 0, -0.4, 56, 0.4, 5), ('wall', '', -0.4, -0.4, 0.4, 12.8, 5), ('wall', '', 56, -0.4, 0.4, 12.8, 5),
+    ('wall', '', 0, 12, 20, 0.4, 5), ('wall', '', 24, 12, 16, 0.4, 5), ('wall', '', 44, 12, 8, 0.4, 5),
+    ('door', 'Врата', 20, 12, 4, 0.15, 4), ('door', 'Врата', 40, 12, 4, 0.15, 4), ('door', 'Врата', 52, 12, 4, 0.15, 4),
+    ('wall', '', 33.7, 0, 0.4, 3, 5),
+    ('wall', '', 28.9, 4.4, 5.2, 0.25, 3), ('wall', '', 28.9, 4.4, 0.25, 7.6, 3),
+    ('wall', '', 33.85, 4.4, 0.25, 7.6, 3), ('wall', '', 28.9, 11.75, 5.2, 0.25, 3),
+    ('room', 'Битов персонал', 28.9, 4.4, 5.2, 7.6, 3),
+    ('room', 'Производствено помещение - лява част', 0, 0, 28.9, 12, 5),
+    ('room', 'Производствено помещение - дясна част', 34.1, 0, 21.9, 12, 5),
+    ('block', 'Съществуваща сграда', -3.4, 0, 3.3, 12, 5), ('block', 'Съществуваща сграда', 13.8, -3.3, 34.2, 3.2, 5),
+    ('block', 'Сграда', 59.2, 12.2, 6.1, 3.6, 3),
+]
+
+
+class HallShape(db.Model):
+    """Non-machine parts of the hall plan, metres: wall / door / room (a marked area, optionally
+    linked to a Room of the factory map via room_id) / block (neighbouring building)."""
+    id = db.Column(db.Integer, primary_key=True)
+    kind = db.Column(db.String(10), nullable=False)
+    name = db.Column(db.String(150), nullable=True)
+    x = db.Column(db.Float, nullable=False, default=0.0)
+    z = db.Column(db.Float, nullable=False, default=0.0)
+    width = db.Column(db.Float, nullable=False, default=2.0)
+    depth = db.Column(db.Float, nullable=False, default=0.4)
+    height = db.Column(db.Float, nullable=False, default=5.0)   # rooms: height of ONE floor
+    elevation = db.Column(db.Float, nullable=False, default=0.0)  # bottom above the ground floor, m
+    floors = db.Column(db.Integer, nullable=False, default=1)      # rooms: number of storeys (етажност)
+    room_id = db.Column(db.Integer, db.ForeignKey('room.id'), nullable=True)
+
+    room = db.relationship('Room')
+
+    def as_dict(self):
+        return {'id': self.id, 'kind': self.kind, 'name': self.name or '', 'x': self.x, 'z': self.z, 'width': self.width,
+                'depth': self.depth, 'height': self.height, 'elevation': self.elevation, 'floors': self.floors, 'room_id': self.room_id,
+                'label': (f'{self.room.building.name} · {self.room.name}' if self.room else self.name) or ''}
+
+
+def _hall_shapes():
+    if HallShape.query.count() == 0:
+        for kind, name, x, z, w, d, h in HALL_SHAPES_SEED:
+            db.session.add(HallShape(kind=kind, name=name, x=x, z=z, width=w, depth=d, height=h))
+        db.session.commit()
+    return HallShape.query.order_by(HallShape.id).all()
+
+
+HALL_EQUIPMENT_KINDS = {'inverter': 'Инвертор', 'battery': 'Батериен блок', 'panel': 'Ел. табло'}
+
+
+class HallEquipment(db.Model):
+    """Inverter / battery stack / electrical panel placed on the hall plan (metres). elevation = distance
+    of its bottom from the floor. ref_id points at the ModbusDevice (inverter), BatteryStack or
+    ElectricalPanel it represents (no FK - kind decides the table; a deleted target just loses its label)."""
+    id = db.Column(db.Integer, primary_key=True)
+    kind = db.Column(db.String(10), nullable=False)
+    ref_id = db.Column(db.Integer, nullable=True)
+    name = db.Column(db.String(150), nullable=True)
+    x = db.Column(db.Float, nullable=False, default=1.0)
+    z = db.Column(db.Float, nullable=False, default=1.0)
+    width = db.Column(db.Float, nullable=False, default=0.6)
+    depth = db.Column(db.Float, nullable=False, default=0.4)
+    height = db.Column(db.Float, nullable=False, default=1.0)
+    elevation = db.Column(db.Float, nullable=False, default=0.0)
+
+    def target(self):
+        model = {'inverter': ModbusDevice, 'battery': BatteryStack, 'panel': ElectricalPanel}[self.kind]
+        return db.session.get(model, self.ref_id) if self.ref_id else None
+
+    def as_dict(self):
+        t = self.target()
+        return {'id': self.id, 'kind': self.kind, 'ref_id': self.ref_id, 'name': self.name or '', 'x': self.x, 'z': self.z,
+                'width': self.width, 'depth': self.depth, 'height': self.height, 'elevation': self.elevation,
+                'label': self.name or (t.name if t else '') or HALL_EQUIPMENT_KINDS[self.kind]}
+
+
+def _hall_equipment_choices():
+    """What can be linked, per kind: [{id, label}] of the existing inverters / battery stacks / panels."""
+    return {
+        'inverter': [{'id': d.id, 'label': d.name} for d in ModbusDevice.query.filter_by(device_type='solis_s6').order_by(ModbusDevice.name)],
+        'battery': [{'id': b.id, 'label': b.name} for b in BatteryStack.query.order_by(BatteryStack.name)],
+        'panel': [{'id': p.id, 'label': f'{p.room.building.name} · {p.room.name} · {p.name}'}
+                  for p in ElectricalPanel.query.join(Room).join(Building).order_by(Building.name, Room.name, ElectricalPanel.name)],
+    }
+
+
+def _hall_machines():
+    """All hall machines, seeding the plan's layout the first time (table exists after db.create_all)."""
+    if HallMachine.query.count() == 0:
+        for no, name, cat, x0, x1, z0, z1, h in HALL_SEED:
+            db.session.add(HallMachine(no=no, name=name, category=cat, x=x0, z=z0, width=round(x1 - x0, 2),
+                                       depth=round(z1 - z0, 2), height=h))
+        db.session.commit()
+    return HallMachine.query.order_by(HallMachine.no, HallMachine.id).all()
+
+
 class EditableText(db.Model):
     """
     Generic key/value store for wiki-style editable prose blocks on public pages
@@ -4164,7 +4306,7 @@ def _catalog_item_visible(owner_client_id, viewer_client):
 # navbar's "Приложения" dropdown. key -> label.
 CLIENT_APPS = {'upload': 'DXF CNC Калкулатор', 'generator': 'Параметричен Генератор',
                'generator_price': 'Генератор: изчисляване на цена (иначе само генерира файлове)',
-               'flashing': 'Облицовки от ламарина'}
+               'flashing': 'Облицовки от ламарина', 'factory3d': 'Фабрика 3D (карта)'}
 
 
 def generator_price_on():
@@ -5469,6 +5611,175 @@ def flashing():
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     services = allowed_only('services', Service.query.order_by(Service.name).all())
     return render_template('flashing.html', materials=materials, services=services, active_page='flashing')
+
+
+@app.route('/factory3d')
+@login_required
+@app_access_required('factory3d')
+def factory3d():
+    """Client-facing 3D model of the hall (layout in HallMachine, edited on /admin/hall). A machine
+    linked to a ServiceMachineCard shows that card on click."""
+    out = []
+    for m in _hall_machines():
+        d = m.as_dict()
+        c = m.card
+        d['card'] = {'title': c.title, 'specs': c.specs, 'description': c.description,
+                     'image': url_for('static', filename='img/machines/' + c.image_filename) if c.image_filename else None} if c else None
+        out.append(d)
+    solar = {'l': 2.278, 'w': 1.134, 'slopes': []}            # module size in m (default = TWMND-72HD), then one list per inverter
+    for inv in ModbusDevice.query.filter_by(device_type='solis_s6').order_by(ModbusDevice.id).all():
+        if inv.panel_model:
+            solar['l'], solar['w'] = inv.panel_model.length_mm / 1000, inv.panel_model.width_mm / 1000
+        solar['slopes'].append([[p.row, p.col] for p in SolarPanel.query.filter_by(inverter_device_id=inv.id)])
+    return render_template('factory3d.html', machines=out, solar=solar, shapes=[h.as_dict() for h in _hall_shapes()],
+                           equipment=[e.as_dict() for e in HallEquipment.query.order_by(HallEquipment.id)], active_page='factory3d')
+
+
+@app.route('/admin/hall')
+@role_required('admin')
+def admin_hall():
+    cards = ServiceMachineCard.query.filter_by(kind='machine').order_by(ServiceMachineCard.title).all()
+    return render_template('admin_hall.html', machines=[m.as_dict() for m in _hall_machines()],
+                           shapes=[h.as_dict() for h in _hall_shapes()], shape_kinds=HALL_SHAPE_KINDS,
+                           rooms=[{'id': r.id, 'label': f'{r.building.name} · {r.name}'} for r in Room.query.join(Building).order_by(Building.name, Room.name).all()],
+                           cards=[{'id': c.id, 'title': c.title, 'page': c.page} for c in cards],
+                           equipment=[e.as_dict() for e in HallEquipment.query.order_by(HallEquipment.id)],
+                           equipment_kinds=HALL_EQUIPMENT_KINDS, equipment_choices=_hall_equipment_choices(),
+                           categories=HALL_CATEGORIES, active_page='admin_hall')
+
+
+def _hall_apply(m, data):
+    """Copies validated JSON fields onto a HallMachine; returns an error string or None."""
+    try:
+        m.name = str(data.get('name', '')).strip()
+        m.no = int(data['no']) if str(data.get('no', '')).strip() else None
+        m.x = max(0.0, min(56.0, float(data['x'])))
+        m.z = max(0.0, min(12.0, float(data['z'])))
+        m.width = max(0.3, min(56.0, float(data['width'])))
+        m.depth = max(0.3, min(12.0, float(data['depth'])))
+        m.height = max(0.3, min(5.0, float(data['height'])))
+        m.elevation = max(0.0, min(20.0, float(data.get('elevation') or 0)))
+        card_id = data.get('card_id')
+        m.card_id = int(card_id) if card_id else None
+    except (KeyError, ValueError, TypeError):
+        return 'Невалидни данни.'
+    if not m.name:
+        return 'Моля въведете име.'
+    if data.get('category') not in HALL_CATEGORIES:
+        return 'Невалиден вид.'
+    m.category = data['category']
+    if m.card_id and not db.session.get(ServiceMachineCard, m.card_id):
+        return 'Картата не съществува.'
+    return None
+
+
+@app.route('/admin/hall/save', methods=['POST'])
+@role_required('admin')
+def admin_hall_save():
+    """Create (no id) or update one hall machine from JSON; returns it with its id."""
+    data = request.get_json(silent=True) or {}
+    m = db.session.get(HallMachine, int(data['id'])) if data.get('id') else HallMachine()
+    if m is None:
+        return jsonify({'error': 'Няма такава машина.'}), 404
+    err = _hall_apply(m, data)
+    if err:
+        db.session.rollback()
+        return jsonify({'error': err}), 400
+    db.session.add(m)
+    db.session.commit()
+    log_action(f'Хале 3D: запазена машина "{m.name}"')
+    return jsonify(m.as_dict())
+
+
+@app.route('/admin/hall/shape/save', methods=['POST'])
+@role_required('admin')
+def admin_hall_shape_save():
+    """Create (no id) or update one wall/door/room/block from JSON."""
+    data = request.get_json(silent=True) or {}
+    h = db.session.get(HallShape, int(data['id'])) if data.get('id') else HallShape()
+    if h is None:
+        return jsonify({'error': 'Няма такъв елемент.'}), 404
+    try:
+        h.x = max(-10.0, min(80.0, float(data['x'])))
+        h.z = max(-10.0, min(30.0, float(data['z'])))
+        h.width = max(0.1, min(80.0, float(data['width'])))
+        h.depth = max(0.1, min(40.0, float(data['depth'])))
+        h.height = max(0.0, min(10.0, float(data['height'])))
+        h.elevation = max(0.0, min(20.0, float(data.get('elevation') or 0)))
+        h.floors = max(1, min(10, int(data.get('floors') or 1)))
+        h.room_id = int(data['room_id']) if data.get('room_id') and data.get('kind') == 'room' else None
+    except (KeyError, ValueError, TypeError):
+        return jsonify({'error': 'Невалидни данни.'}), 400
+    if data.get('kind') not in HALL_SHAPE_KINDS:
+        return jsonify({'error': 'Невалиден вид.'}), 400
+    if h.room_id and not db.session.get(Room, h.room_id):
+        return jsonify({'error': 'Помещението не съществува.'}), 400
+    h.kind = data['kind']
+    h.name = str(data.get('name', '')).strip()[:150]
+    db.session.add(h)
+    db.session.commit()
+    log_action(f'Хале 3D: запазен елемент "{HALL_SHAPE_KINDS[h.kind]}" {h.name}'.strip())
+    return jsonify(h.as_dict())
+
+
+@app.route('/admin/hall/shape/<int:shape_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_hall_shape_delete(shape_id):
+    h = HallShape.query.get_or_404(shape_id)
+    log_action(f'Хале 3D: изтрит елемент "{HALL_SHAPE_KINDS[h.kind]}" {h.name or ""}'.strip())
+    db.session.delete(h)
+    db.session.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/admin/hall/equipment/save', methods=['POST'])
+@role_required('admin')
+def admin_hall_equipment_save():
+    """Create (no id) or update one inverter / battery stack / panel placed on the hall plan."""
+    data = request.get_json(silent=True) or {}
+    e = db.session.get(HallEquipment, int(data['id'])) if data.get('id') else HallEquipment()
+    if e is None:
+        return jsonify({'error': 'Няма такъв елемент.'}), 404
+    if data.get('kind') not in HALL_EQUIPMENT_KINDS:
+        return jsonify({'error': 'Невалиден вид.'}), 400
+    try:
+        e.kind = data['kind']
+        e.ref_id = int(data['ref_id']) if data.get('ref_id') else None
+        e.x = max(-10.0, min(80.0, float(data['x'])))
+        e.z = max(-10.0, min(30.0, float(data['z'])))
+        e.width = max(0.1, min(20.0, float(data['width'])))
+        e.depth = max(0.1, min(20.0, float(data['depth'])))
+        e.height = max(0.1, min(10.0, float(data['height'])))
+        e.elevation = max(0.0, min(20.0, float(data.get('elevation') or 0)))
+    except (KeyError, ValueError, TypeError):
+        return jsonify({'error': 'Невалидни данни.'}), 400
+    e.name = str(data.get('name', '')).strip()[:150]
+    if e.ref_id and e.target() is None:
+        return jsonify({'error': 'Свързаният елемент не съществува.'}), 400
+    db.session.add(e)
+    db.session.commit()
+    log_action(f'Хале 3D: запазен "{HALL_EQUIPMENT_KINDS[e.kind]}" {e.name}'.strip())
+    return jsonify(e.as_dict())
+
+
+@app.route('/admin/hall/equipment/<int:equipment_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_hall_equipment_delete(equipment_id):
+    e = HallEquipment.query.get_or_404(equipment_id)
+    log_action(f'Хале 3D: изтрит "{HALL_EQUIPMENT_KINDS[e.kind]}" {e.name or ""}'.strip())
+    db.session.delete(e)
+    db.session.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/admin/hall/<int:machine_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_hall_delete(machine_id):
+    m = HallMachine.query.get_or_404(machine_id)
+    log_action(f'Хале 3D: изтрита машина "{m.name}"')
+    db.session.delete(m)
+    db.session.commit()
+    return jsonify({'ok': True})
 
 
 @app.route('/api/flashing/calc', methods=['POST'])

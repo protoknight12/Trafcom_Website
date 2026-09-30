@@ -17,11 +17,12 @@
         <div class="nav-links" id="navLinks">
             <div class="nav-section-links">
                 <div class="dropdown">
-                    <a class="dropdown-trigger {{ 'active-nav-link' if active_page in ['generator', 'upload', 'flashing'] else '' }}" href="#" tabindex="0" onclick="event.preventDefault()">{{ _('Приложения') }} <span class="dropdown-arrow">▼</span></a>
+                    <a class="dropdown-trigger {{ 'active-nav-link' if active_page in ['generator', 'upload', 'flashing', 'factory3d'] else '' }}" href="#" tabindex="0" onclick="event.preventDefault()">{{ _('Приложения') }} <span class="dropdown-arrow">▼</span></a>
                     <div class="dropdown-content">
                         {% if client_allows('apps', 'upload') %}<a href="{{ url_for('upload') }}">{{ _('DXF CNC Калкулатор') }}</a>{% endif %}
                         {% if client_allows('apps', 'generator') %}<a href="{{ url_for('generator') }}">{{ _('Параметричен Генератор') }}</a>{% endif %}
                         {% if client_allows('apps', 'flashing') %}<a href="{{ url_for('flashing') }}">{{ _('Облицовки от ламарина') }}</a>{% endif %}
+                        {% if client_allows('apps', 'factory3d') %}<a href="{{ url_for('factory3d') }}">{{ _('Фабрика 3D') }}</a>{% endif %}
                     </div>
                 </div>
 
@@ -36,7 +37,7 @@
 
                     {% if current_user.is_admin or current_user.is_worker or current_user.can_edit_content or current_user.can_manage_quality %}
                         <div class="dropdown">
-                            <a class="dropdown-trigger {{ 'active-nav-link' if active_page in ['admin', 'admin_users', 'admin_materials', 'admin_details', 'admin_products', 'admin_services', 'admin_clients', 'admin_offers', 'admin_delivery_notes', 'admin_client_delivery_notes', 'production', 'admin_missing_stock', 'admin_production_orders', 'machines', 'admin_power', 'content', 'storage', 'admin_log', 'admin_generator_presets', 'admin_quality_control', 'admin_measuring_instruments', 'admin_documents', 'admin_capa', 'admin_audits', 'admin_management_reviews', 'admin_training', 'admin_risk_register', 'admin_customer_satisfaction', 'admin_factory_map', 'admin_buildings', 'admin_panels', 'admin_temperature_sensors', 'admin_solar_roof', 'admin_vehicles'] else '' }}" href="#" tabindex="0" onclick="event.preventDefault()">Управление <span class="dropdown-arrow">▼</span></a>
+                            <a class="dropdown-trigger {{ 'active-nav-link' if active_page in ['admin', 'admin_users', 'admin_materials', 'admin_details', 'admin_products', 'admin_services', 'admin_clients', 'admin_offers', 'admin_delivery_notes', 'admin_client_delivery_notes', 'production', 'admin_missing_stock', 'admin_production_orders', 'machines', 'admin_power', 'content', 'storage', 'admin_log', 'admin_generator_presets', 'admin_quality_control', 'admin_measuring_instruments', 'admin_documents', 'admin_capa', 'admin_audits', 'admin_management_reviews', 'admin_training', 'admin_risk_register', 'admin_customer_satisfaction', 'admin_factory_map', 'admin_hall', 'admin_buildings', 'admin_panels', 'admin_temperature_sensors', 'admin_solar_roof', 'admin_vehicles'] else '' }}" href="#" tabindex="0" onclick="event.preventDefault()">Управление <span class="dropdown-arrow">▼</span></a>
                             <div class="dropdown-content dropdown-content-grouped">
                                 {% if current_user.is_admin %}
                                     <a href="{{ url_for('admin_dashboard') }}" class="dropdown-home-link">Админ Панел</a>
@@ -119,6 +120,7 @@
                                         <span class="dropdown-trigger dropdown-sub-trigger">Съоръжения и енергия <span class="dropdown-arrow">▾</span></span>
                                         <div class="dropdown-content dropdown-content-sub">
                                             <a href="{{ url_for('admin_factory_map') }}">Карта на фабриката</a>
+                                            <a href="{{ url_for('admin_hall') }}">Хале 3D (редактор)</a>
                                             <a href="{{ url_for('admin_buildings') }}">Сгради и помещения</a>
                                             <a href="{{ url_for('admin_panels') }}">Ел. табла</a>
                                             <a href="{{ url_for('admin_temperature_sensors') }}">Температурни сензори</a>
