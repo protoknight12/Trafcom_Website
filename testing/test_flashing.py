@@ -94,7 +94,7 @@ def test_tapered_part_has_slanted_bend_lines_and_trapezoid_contour(client, tmp_p
     assert res.status_code == 200 and 'tapered' not in res.get_data(as_text=True)
     doc = ezdxf.read(io.StringIO(res.get_data(as_text=True)))
     line = [e for e in doc.modelspace() if e.dxftype() == 'LINE'][0]
-    assert line.dxf.end.y == 1000
+    assert line.dxf.end.y == 996  # trimmed by the far-end relief notch (depth 4)
 
 
 def test_inside_dimensions_convert_to_outside():
@@ -102,6 +102,110 @@ def test_inside_dimensions_convert_to_outside():
     ins = _flashing_unfold({**BASE, 'dim_mode': 'inside', 'flanges': [50 - 2, 30 - 2]})  # t=2, 90° -> +t per bend
     assert [f['outside'] for f in ins['flanges']] == [50, 30] and ins['flat_length'] == out['flat_length']
     assert ins['flanges'][0]['given'] == 48
+
+
+def test_corner_cuts_shape_the_contour():
+    rect = {'kind': 'rect', 'w': 5, 'h': 8}
+    u = _flashing_unfold({**BASE, 'corners': [rect] * 4})
+    assert len(u['contour']) == 12 and (0.0, 8.0) in u['contour'] and (5.0, 0.0) in u['contour']
+    assert (u['flat_length'] - 5, 0.0) in u['contour'] and (5.0, 1000.0) in u['contour']
+    ch = _flashing_unfold({**BASE, 'corners': [{'kind': 'chamfer', 'w': 5, 'h': 8}, None, None, {'kind': 'none'}]})
+    assert len(ch['contour']) == 5 and ch['contour'][:2] == [(0.0, 8.0), (5.0, 0.0)]
+    # tapered: the cut meets the SLANTED right edge, so the point stays on the edge line
+    t = _flashing_unfold({**BASE, 'flanges_end': [50, 60], 'corners': [None, rect, rect, None]})
+    x = max(c[0] for c in t['contour'] if c[1] == 8.0)
+    assert x == pytest.approx(t['flat_length'] + 30 * 8 / 1000, abs=1e-3)
+    with pytest.raises(ValueError):  # two cuts on one end wider than the flat together
+        _flashing_unfold({**BASE, 'corners': [{'kind': 'rect', 'w': 40, 'h': 8}, {'kind': 'rect', 'w': 40, 'h': 8}]})
+    with pytest.raises(ValueError):  # runs into the first bend relief
+        _flashing_unfold({**BASE, 'relief': True, 'relief_width': 3, 'relief_depth': 4,
+                          'corners': [{'kind': 'rect', 'w': 47, 'h': 8}]})
+
+
+def test_corner_cut_width_up_to_a_bend_line():
+    line = _flashing_unfold(BASE)['bends'][0]['line']
+    u = _flashing_unfold({**BASE, 'corners': [{'kind': 'rect', 'to_bend': 1, 'h': 8}, None, None, None]})
+    assert (line, 0.0) in u['contour']  # left cut stops exactly on the bend line
+    assert u['corner_cuts'][0]['w'] == pytest.approx(line, abs=1e-3)  # resolved width is reported back for the UI
+    u = _flashing_unfold({**BASE, 'corners': [None, {'kind': 'rect', 'to_bend': 1, 'h': 8}, None, None]})
+    assert (line, 0.0) in u['contour']  # right cut reaches back to the same line
+    # with relief notches it stops at the notch edge (line - relief/2) so the outline never folds back
+    r = _flashing_unfold({**BASE, 'relief': True, 'relief_width': 3, 'relief_depth': 4,
+                          'corners': [{'kind': 'rect', 'to_bend': 1, 'h': 8}, None, None, None]})
+    assert (line - 1.5, 4.0) in r['contour']  # the cut meets the notch wall (the retraced edge between them is dropped)
+    with pytest.raises(ValueError):
+        _flashing_unfold({**BASE, 'corners': [{'kind': 'rect', 'to_bend': 5, 'h': 8}]})
+
+
+def test_knots_map_flat_pattern_onto_profile():
+    u = _flashing_unfold({**BASE, 'profile': 'U', 'flanges': [30, 60, 30], 'angles': [90, 90]})
+    k = u['knots']
+    assert len(k) == 2 * len(u['flanges']) and k[0][0] == 0 and k[-1][0] == u['flat_length']
+    # web (side 2): 60 outside minus 2*(r+t)=8 -> 52 straight, on the profile and in the flat alike
+    web = ((k[3][1] - k[2][1]) ** 2 + (k[3][2] - k[2][2]) ** 2) ** 0.5
+    assert web == pytest.approx(52, abs=1e-3) and k[3][0] - k[2][0] == pytest.approx(52, abs=1e-3)
+    t = _flashing_unfold({**BASE, 'flanges_end': [50, 60]})
+    assert len(t['knots_end']) == len(t['knots'])
+    h = _flashing_unfold({**BASE, 'hem_end': True, 'hem_length': 8})
+    assert len(h['knots']) == 6  # the hem is its own knot pair, drawn beside the side it folds onto
+
+
+def test_end_cuts_between_bend_lines():
+    u0 = _flashing_unfold({**BASE, 'profile': 'U', 'flanges': [30, 60, 30], 'angles': [90, 90]})
+    a, b = u0['bends'][0]['line'], u0['bends'][1]['line']
+    u = _flashing_unfold({**BASE, 'profile': 'U', 'flanges': [30, 60, 30], 'angles': [90, 90],
+                          'end_cuts': [{'end': 'start', 'from': 'b1', 'to': 'b2', 'd': 10}]})
+    assert [(a, 0.0), (a, 10.0), (b, 10.0), (b, 0.0)] == [c for c in u['contour'] if c[0] in (a, b) and c[1] in (0.0, 10.0)]
+    # far end, typed width measured from a line; flat edge as the other limit
+    v = _flashing_unfold({**BASE, 'end_cuts': [{'end': 'end', 'from': 'b1', 'to': 'w', 'w': 10, 'd': 7}]})
+    line = v['bends'][0]['line']
+    assert (line, 1000.0) in v['contour'] and (line + 10, 993.0) in v['contour']
+    # a relief notch inside a deeper end cut is swallowed by it
+    r = _flashing_unfold({**BASE, 'relief': True, 'relief_width': 3, 'relief_depth': 4,
+                          'end_cuts': [{'end': 'start', 'from': 'e0', 'to': 'e1', 'd': 6}]})
+    assert len(r['contour']) == 8 and all(a != b for a, b in zip(r['contour'], r['contour'][1:]))  # whole-width cut + far-end relief only
+    with pytest.raises(ValueError):
+        _flashing_unfold({**BASE, 'end_cuts': [{'end': 'start', 'from': 'e1', 'to': 'b1', 'd': 5}]})  # reversed limits
+    with pytest.raises(ValueError):
+        _flashing_unfold({**BASE, 'end_cuts': [{'end': 'start', 'from': 'e0', 'to': 'w', 'w': 20, 'd': 5},
+                                               {'end': 'start', 'from': 'e0', 'to': 'w', 'w': 10, 'd': 5}]})
+
+
+def test_bend_lines_are_cut_where_material_is_removed():
+    u = _flashing_unfold({**BASE, 'relief': True, 'relief_width': 3, 'relief_depth': 4})
+    assert (u['bends'][0]['y0'], u['bends'][0]['y1']) == (4.0, 996.0)  # line passes through the relief notches
+    c = _flashing_unfold({**BASE, 'end_cuts': [{'end': 'start', 'from': 'e0', 'to': 'e1', 'd': 30}]})
+    assert (c['bends'][0]['y0'], c['bends'][0]['y1']) == (30.0, 1000.0)
+    k = _flashing_unfold({**BASE, 'corners': [{'kind': 'rect', 'w': 60, 'h': 12}, None, None, None]})
+    assert k['bends'][0]['y0'] == 12.0  # corner cut wider than the line's position swallows its start
+    a = _flashing_unfold({**BASE, 'end_cuts': [{'end': 'start', 'from': 'e0', 'to': 'b1', 'd': 30}]})
+    assert a['bends'][0]['y0'] == 0.0  # a cut that only ENDS on the line leaves the line intact
+
+
+def test_edge_to_edge_cut_leaves_no_sliver_edges(client):
+    u = _flashing_unfold({**BASE, 'end_cuts': [{'end': 'start', 'from': 'e0', 'to': 'e1', 'd': 30}]})
+    f = u['flat_length']
+    assert u['contour'] == [(0.0, 30.0), (f, 30.0), (f, 1000.0), (0.0, 1000.0)]
+    both = _flashing_unfold({**BASE, 'end_cuts': [{'end': 'start', 'from': 'e0', 'to': 'e1', 'd': 30},
+                                                  {'end': 'end', 'from': 'e0', 'to': 'e1', 'd': 20}]})
+    assert both['contour'] == [(0.0, 30.0), (f, 30.0), (f, 980.0), (0.0, 980.0)]
+    res = client.post('/api/flashing/dxf', json={**BASE, 'end_cuts': [{'end': 'start', 'from': 'e0', 'to': 'e1', 'd': 30}]})
+    doc = ezdxf.read(io.StringIO(res.get_data(as_text=True)))
+    ys = sorted({round(v[1]) for e in doc.modelspace() if e.dxftype() == 'LWPOLYLINE' for v in e.get_points()})
+    assert ys == [30, 1000]  # nothing left below the cut
+
+
+def test_end_cut_offsets():
+    u0 = _flashing_unfold({**BASE, 'profile': 'U', 'flanges': [30, 60, 30], 'angles': [90, 90]})
+    a, b = u0['bends'][0]['line'], u0['bends'][1]['line']
+    u = _flashing_unfold({**BASE, 'profile': 'U', 'flanges': [30, 60, 30], 'angles': [90, 90],
+                          'end_cuts': [{'end': 'start', 'from': 'b1', 'to': 'b2', 'd': 10, 'off0': 3, 'off1': 4}]})
+    assert (a + 3, 10.0) in u['contour'] and (b - 4, 10.0) in u['contour']
+    w = _flashing_unfold({**BASE, 'end_cuts': [{'end': 'start', 'from': 'b1', 'to': 'w', 'w': 10, 'd': 5, 'off0': 2}]})
+    assert (w['bends'][0]['line'] + 2, 5.0) in w['contour'] and (w['bends'][0]['line'] + 12, 5.0) in w['contour']
+    with pytest.raises(ValueError):  # offsets eat the whole span
+        _flashing_unfold({**BASE, 'profile': 'U', 'flanges': [30, 60, 30], 'angles': [90, 90],
+                          'end_cuts': [{'end': 'start', 'from': 'b1', 'to': 'b2', 'd': 10, 'off0': 30, 'off1': 30}]})
 
 
 def test_relief_and_holes_shape_the_contour():
@@ -147,7 +251,9 @@ def test_dxf_layers_units_and_pricing_ignores_bend_lines(client, tmp_path):
     res = client.post('/api/flashing/dxf', json={**BASE, 'profile': 'U', 'flanges': [30, 60, 30], 'angles': [90, 90]})
     assert res.status_code == 200
     doc = ezdxf.read(io.StringIO(res.get_data(as_text=True)))
-    assert doc.header.get('$INSUNITS') == 4
+    assert doc.header.get('$INSUNITS') == 4 and doc.header.get('$MEASUREMENT') == 1  # millimetres, metric
+    assert doc.header.get('$DIMLFAC', 1.0) == 1.0  # a 100x linear factor made SolidWorks import 100 mm as 10000 mm
+    assert doc.layers.get('BEND_UP').dxf.linetype == 'DASHED' and 'DASHED' in doc.linetypes
     layers = sorted(e.dxf.layer for e in doc.modelspace())
     assert layers == ['BEND_UP', 'BEND_UP', 'CUT']
     path = tmp_path / 'f.dxf'

@@ -102,6 +102,20 @@
                 <div><label>{{ _('Дълбочина, мм') }}</label><input type="number" id="f-relief-d" value="3" min="0.1" step="0.1"></div>
             </div>
 
+            <div class="fl-title">{{ _('Отщипване в ъглите на разгъвката') }}</div>
+            {% for name in [_('Ляво-долу'), _('Ляво-горе'), _('Дясно-горе'), _('Дясно-долу')] %}
+            <div class="fl-corner fl-grid" style="grid-template-columns: 1fr 1fr;">
+                <div><label>{{ name }}</label><select class="c-kind"><option value="none">{{ _('няма') }}</option><option value="rect">{{ _('правоъг.') }}</option><option value="chamfer">{{ _('скосено') }}</option></select></div>
+                <div><label>{{ _('Ширина до') }}</label><select class="c-bend"></select></div>
+                <div><label>{{ _('Ширина, мм') }}</label><input type="number" class="c-w" value="5" min="0.1" step="0.1"></div>
+                <div><label>{{ _('Дължина, мм') }}</label><input type="number" class="c-h" value="5" min="0.1" step="0.1"></div>
+            </div>
+            {% endfor %}
+
+            <div class="fl-title">{{ _('Ощипване отляво / отдясно (между линии)') }}</div>
+            <div id="fl-endcuts"></div>
+            <button type="button" class="fl-mini" id="fl-add-endcut" style="width:100%;">+ {{ _('Добави ощипване') }}</button>
+
             <div class="fl-title">{{ _('Отвори / изрязвания') }}</div>
             <div id="fl-holes"></div>
             <button type="button" class="fl-mini" id="fl-add-hole" style="width:100%;">+ {{ _('Добави отвор') }}</button>
@@ -145,8 +159,10 @@
 
             <div class="fl-title">{{ _('Сечение') }}</div>
             <svg id="svg-profile" class="fl-svg" viewBox="0 0 600 260"></svg>
+            <div class="fl-title">{{ _('Изометричен изглед') }}</div>
+            <svg id="svg-iso" class="fl-svg" viewBox="0 0 900 360"></svg>
             <div class="fl-title">{{ _('Разгъвка') }}</div>
-            <svg id="svg-flat" class="fl-svg" viewBox="0 0 600 260"></svg>
+            <svg id="svg-flat" class="fl-svg" viewBox="0 0 900 300"></svg>
 
             <div class="fl-title">{{ _('Огъвки') }}</div>
             <table class="fl-table" id="tbl-bends"></table>
@@ -211,6 +227,46 @@
     }
     document.querySelectorAll('#fl-profiles button').forEach(b => b.addEventListener('click', () => setProfile(b.dataset.p)));
 
+    // ---- end cuts: notches on the left (start) / right (far) end of the flat, between two lines ----
+    function addEndCut(e) {
+        e = e || { end: 'start', from: 'e0', to: 'e1', w: 10, d: 10 };
+        const el = document.createElement('div');
+        el.className = 'fl-hole fl-endcut';
+        el.innerHTML = `<div class="fl-grid" style="grid-template-columns: 1fr 1fr 1fr;">
+            <div><label>{{ _('Страна') }}</label><select class="e-end"><option value="start">{{ _('Отляво') }}</option><option value="end">{{ _('Отдясно') }}</option></select></div>
+            <div><label>{{ _('От') }}</label><select class="e-from"></select></div>
+            <div><label>{{ _('До') }}</label><select class="e-to"></select></div>
+            <div class="e-w-wrap"><label>{{ _('Ширина, мм') }}</label><input type="number" class="e-w" min="0.1" step="0.1"></div>
+            <div><label>{{ _('Отстъп от, мм') }}</label><input type="number" class="e-off0" min="0" step="0.1" value="0"></div>
+            <div class="e-off1-wrap"><label>{{ _('Отстъп до, мм') }}</label><input type="number" class="e-off1" min="0" step="0.1" value="0"></div>
+            <div><label>{{ _('По дължина, мм') }}</label><input type="number" class="e-d" min="0.1" step="0.1"></div>
+            <div style="text-align:right"><button type="button" class="fl-mini e-del" style="margin-top:16px">✕</button></div>
+        </div>`;
+        const q = c => el.querySelector(c);
+        q('.e-end').value = e.end; q('.e-w').value = e.w ?? 10; q('.e-d').value = e.d; q('.e-off0').value = e.off0 ?? 0; q('.e-off1').value = e.off1 ?? 0;
+        el.dataset.from = e.from; el.dataset.to = e.to;
+        q('.e-from').addEventListener('change', () => { el.dataset.from = q('.e-from').value; });
+        q('.e-to').addEventListener('change', () => { el.dataset.to = q('.e-to').value; q('.e-w-wrap').style.display = q('.e-to').value === 'w' ? '' : 'none'; q('.e-off1-wrap').style.display = q('.e-to').value === 'w' ? 'none' : ''; });
+        el.addEventListener('input', schedule);
+        q('.e-del').addEventListener('click', () => { el.remove(); schedule(); });
+        $('fl-endcuts').appendChild(el);
+        refreshEndCutLines(window.lastBends || []);
+    }
+    function refreshEndCutLines(bends) {
+        document.querySelectorAll('.fl-endcut').forEach(el => {
+            const line = b => `<option value="b${b.n}">{{ _('линия') }} ${LETTERS[b.n - 1]}</option>`;
+            const from = el.querySelector('.e-from'), to = el.querySelector('.e-to');
+            from.innerHTML = `<option value="e0">{{ _('ръб долу') }}</option>` + bends.map(line).join('');
+            to.innerHTML = bends.map(line).join('') + `<option value="e1">{{ _('ръб горе') }}</option><option value="w">{{ _('ширина') }}</option>`;
+            const ok = (sel, v) => [...sel.options].some(o => o.value === v);
+            from.value = ok(from, el.dataset.from) ? el.dataset.from : 'e0';
+            to.value = ok(to, el.dataset.to) ? el.dataset.to : 'e1';
+            el.querySelector('.e-w-wrap').style.display = to.value === 'w' ? '' : 'none';  // width only when typed
+            el.querySelector('.e-off1-wrap').style.display = to.value === 'w' ? 'none' : '';
+        });
+    }
+    $('fl-add-endcut').addEventListener('click', () => { addEndCut(); schedule(); });
+
     // ---- holes ----
     function flangeLabels() {
         const k = DEFAULTS[profile].flanges.length;
@@ -261,6 +317,10 @@
         relabel(); schedule();
     });
     $('f-dim-mode').addEventListener('change', schedule);
+    document.querySelectorAll('.fl-corner').forEach(el => {
+        el.addEventListener('input', schedule);
+        el.querySelector('.c-bend').addEventListener('change', e => { el.dataset.bend = e.target.value; });
+    });
     ['f-hem-start', 'f-hem-end'].forEach(id => $(id).addEventListener('change', () => { relabel(); refreshHoleFlanges(); schedule(); }));
     document.querySelectorAll('#f-thickness,#f-radius,#f-k,#f-length,#f-hem-length,#f-hem-radius,#f-hem-angle,#f-relief,#f-relief-w,#f-relief-d')
         .forEach(e => e.addEventListener('input', schedule));
@@ -277,7 +337,14 @@
             hem_start: $('f-hem-start').checked, hem_end: $('f-hem-end').checked,
             hem_length: num('f-hem-length'), hem_radius: num('f-hem-radius') || 0, hem_angle: num('f-hem-angle') || 180,
             relief: $('f-relief').checked, relief_width: num('f-relief-w'), relief_depth: num('f-relief-d'),
-            holes: [...document.querySelectorAll('.fl-hole')].map(el => {
+            corners: [...document.querySelectorAll('.fl-corner')].map(el => ({ kind: el.querySelector('.c-kind').value,
+                to_bend: parseInt(el.querySelector('.c-bend').value) || null,
+                w: parseFloat(el.querySelector('.c-w').value), h: parseFloat(el.querySelector('.c-h').value) })),
+            end_cuts: [...document.querySelectorAll('.fl-endcut')].map(el => ({
+                end: el.querySelector('.e-end').value, from: el.querySelector('.e-from').value, to: el.querySelector('.e-to').value,
+                w: parseFloat(el.querySelector('.e-w').value), d: parseFloat(el.querySelector('.e-d').value),
+                off0: parseFloat(el.querySelector('.e-off0').value) || 0, off1: parseFloat(el.querySelector('.e-off1').value) || 0 })),
+            holes: [...document.querySelectorAll('.fl-hole:not(.fl-endcut)')].map(el => {
                 const q = c => el.querySelector(c);
                 return { flange: parseInt(q('.h-flange').value), kind: q('.h-kind').value, u: parseFloat(q('.h-u').value),
                          y: parseFloat(q('.h-y').value), d: parseFloat(q('.h-d').value),
@@ -290,6 +357,13 @@
         $('f-hem-start').checked = !!s.hem_start; $('f-hem-end').checked = !!s.hem_end;
         $('f-hem-length').value = s.hem_length ?? 8; $('f-hem-radius').value = s.hem_radius ?? 0; $('f-hem-angle').value = s.hem_angle ?? 180;
         $('f-relief').checked = !!s.relief; $('f-relief-w').value = s.relief_width ?? 3; $('f-relief-d').value = s.relief_depth ?? 3;
+        document.querySelectorAll('.fl-corner').forEach((el, i) => {
+            const c = (s.corners || [])[i] || { kind: 'none', w: 5, h: 5 };
+            el.querySelector('.c-kind').value = c.kind; el.querySelector('.c-w').value = c.w; el.querySelector('.c-h').value = c.h;
+            el.dataset.bend = c.to_bend || '';
+        });
+        $('fl-endcuts').replaceChildren();
+        (s.end_cuts || []).forEach(addEndCut);
         $('fl-holes').replaceChildren();
         profile = s.profile;
         (s.holes || []).forEach(addHole);
@@ -322,6 +396,63 @@
         return { s, x: px => pad + (px - minX) * s, y: py => h - pad - (py - minY) * s };
     }
     function render(d) {
+        window.lastBends = d.bends;
+        refreshEndCutLines(d.bends);
+        // corner cuts: "width up to bend line" choices follow the current bends
+        document.querySelectorAll('.fl-corner').forEach(el => {
+            const sel = el.querySelector('.c-bend'), cur = sel.value || el.dataset.bend || '';
+            sel.innerHTML = '<option value="">{{ _('размер') }}</option>' + d.bends.map(b => `<option value="${b.n}">${LETTERS[b.n - 1]}</option>`).join('');
+            sel.value = d.bends.some(b => String(b.n) === cur) ? cur : '';
+            const w = el.querySelector('.c-w'), cut = d.corner_cuts[[...document.querySelectorAll('.fl-corner')].indexOf(el)];
+            w.disabled = !!sel.value;
+            if (sel.value && cut) w.value = f2(cut.w);  // show the width the chosen bend line resolves to
+        });
+        // isometric view: the flat pattern (contour, holes, corner cuts, reliefs, hems) wrapped onto the bent
+        // profile. Split into one region per side / bend zone (clipped in flat space), each mapped linearly.
+        {
+            const c30 = Math.cos(Math.PI / 6), L = d.length, KS = d.knots, KE = d.knots_end;
+            const knotsAt = f => KS.map((k, i) => [k[0] + (KE[i][0] - k[0]) * f, k[1] + (KE[i][1] - k[1]) * f, k[2] + (KE[i][2] - k[2]) * f]);
+            const bentAt = (x, y) => {   // flat (x, y) -> profile point at that distance along the length
+                const K = knotsAt(y / L);
+                let i = 0;
+                while (i < K.length - 2 && x > K[i + 1][0]) i++;
+                const a = K[i], b = K[i + 1], t = b[0] - a[0] > 1e-9 ? (x - a[0]) / (b[0] - a[0]) : 0;
+                return [a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+            };
+            const iso = (x, y) => { const p = bentAt(x, y); return [(y - p[0]) * c30, p[1] + (y + p[0]) / 2, y + p[0]]; };  // 3rd = depth
+            const clip = (poly, g) => {
+                const out = [];
+                poly.forEach((p, i) => {
+                    const q = poly[(i + 1) % poly.length], gp = g(p), gq = g(q);
+                    if (gp >= 0) out.push(p);
+                    if ((gp >= 0) !== (gq >= 0)) { const t = gp / (gp - gq); out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]); }
+                });
+                return out;
+            };
+            const rings = [d.contour, ...d.holes.map(h => h.kind === 'rect'
+                ? [[h.cx - h.w / 2, h.cy - h.h / 2], [h.cx + h.w / 2, h.cy - h.h / 2], [h.cx + h.w / 2, h.cy + h.h / 2], [h.cx - h.w / 2, h.cy + h.h / 2]]
+                : Array.from({ length: 24 }, (_, i) => [h.cx + h.d / 2 * Math.cos(i * Math.PI / 12), h.cy + h.d / 2 * Math.sin(i * Math.PI / 12)]))];
+            const regions = [];
+            for (let i = 0; i < KS.length - 1; i++) {
+                const left = y => KS[i][0] + (KE[i][0] - KS[i][0]) * y / L, right = y => KS[i + 1][0] + (KE[i + 1][0] - KS[i + 1][0]) * y / L;
+                const polys = rings.map(r => clip(clip(r, p => p[0] - left(p[1])), p => right(p[1]) - p[0])).filter(r => r.length >= 3).map(r => r.map(p => iso(p[0], p[1])));
+                if (polys.length) regions.push({ i, polys });
+            }
+            const all = regions.flatMap(r => r.polys.flat());
+            if (all.length) {
+                const q = fit(all, 900, 360, 40);
+                const depthOf = r => r.polys[0].reduce((a, p) => a + p[2], 0) / r.polys[0].length;
+                const pt = p => `${q.x(p[0])},${q.y(p[1])}`;
+                $('svg-iso').innerHTML = regions.sort((a, b) => depthOf(b) - depthOf(a)).map(r => {
+                    const bend = r.i % 2 === 1;
+                    return `<path fill-rule="evenodd" d="${r.polys.map(pl => 'M' + pl.map(pt).join(' L') + ' Z').join(' ')}" style="fill:var(--${bend ? 'accent-secondary' : 'accent-primary'});fill-opacity:${bend ? .2 : (r.i / 2) % 2 ? .3 : .45};stroke:var(--text-main);stroke-width:1;stroke-linejoin:round"/>`;
+                }).join('') + d.flanges.map((fl, j) => {
+                    const r = regions.find(r => r.i === 2 * j); if (!r) return '';
+                    const c = r.polys[0].reduce((a, p) => [a[0] + p[0] / r.polys[0].length, a[1] + p[1] / r.polys[0].length], [0, 0]);
+                    return `<text x="${q.x(c[0])}" y="${q.y(c[1])}" text-anchor="middle">${fl.n}</text>`;
+                }).join('');
+            }
+        }
         // cross-section: the sheet drawn at real thickness
         const P = d.profile, f = fit(d.tapered ? P.concat(d.profile_end) : P, 600, 260, 30);
         const endLine = d.tapered ? `<polyline class="sheet" style="opacity:.35;stroke-dasharray:6 4" fill="none" points="${d.profile_end.map(p => `${f.x(p[0])},${f.y(p[1])}`).join(' ')}" stroke-width="${Math.max(2, d.thickness * f.s)}"/>` : '';
@@ -333,17 +464,18 @@
         const corners = d.bends.map((b, i) => `<text x="${f.x(P[i + 1][0]) + 8}" y="${f.y(P[i + 1][1]) + 16}" style="fill:var(--accent-secondary);font-weight:bold;font-size:14px">${LETTERS[i]}</text>`).join('');
         $('svg-profile').innerHTML = endLine + `<polyline class="sheet" points="${pts}" stroke-width="${Math.max(2, d.thickness * f.s)}"/>${labels}${corners}`;
 
-        // flat pattern
-        const C = d.contour, g = fit(C, 600, 260, 30);
+        // flat pattern, drawn horizontally: screen X = length along the part, screen Y = flat width
+        const T = p => [p[1], p[0]];
+        const C = d.contour.map(T), g = fit(C, 900, 300, 50);
         const cut = `<polygon class="cut" points="${C.map(p => `${g.x(p[0])},${g.y(p[1])}`).join(' ')}"/>`;
         const holes = d.holes.map(h => h.kind === 'rect'
-            ? `<rect class="cut" x="${g.x(h.cx - h.w / 2)}" y="${g.y(h.cy + h.h / 2)}" width="${h.w * g.s}" height="${h.h * g.s}"/>`
-            : `<circle class="cut" cx="${g.x(h.cx)}" cy="${g.y(h.cy)}" r="${h.d / 2 * g.s}"/>`).join('');
-        const bends = d.bends.map(b => `<line class="${b.dir}" x1="${g.x(b.line)}" x2="${g.x(b.line_end)}" y1="${g.y(0) + 8}" y2="${g.y(d.length) - 8}"/>
-            <text x="${g.x(b.line) - 4}" y="${g.y(d.length) - 12}">${LETTERS[b.n - 1]}</text>`).join('');
-        const dims = `<text x="${g.x(d.flat_length / 2) - 25}" y="${g.y(0) + 22}">${f2(d.flat_length)} мм</text>
-            ${d.tapered ? `<text x="${g.x(d.flat_length_end / 2) - 25}" y="${g.y(d.length) - 28}">${f2(d.flat_length_end)} мм</text>` : ''}
-            <text x="${g.x(Math.max(d.flat_length, d.flat_length_end)) + 6}" y="${g.y(d.length / 2)}">${f2(d.length)}</text>`;
+            ? `<rect class="cut" x="${g.x(h.cy - h.h / 2)}" y="${g.y(h.cx + h.w / 2)}" width="${h.h * g.s}" height="${h.w * g.s}"/>`
+            : `<circle class="cut" cx="${g.x(h.cy)}" cy="${g.y(h.cx)}" r="${h.d / 2 * g.s}"/>`).join('');
+        const bends = d.bends.map(b => `<line class="${b.dir}" x1="${g.x(b.y0) - (b.y0 === 0 ? 8 : 0)}" x2="${g.x(b.y1) + (b.y1 === d.length ? 8 : 0)}" y1="${g.y(b.line + (b.line_end - b.line) * b.y0 / d.length)}" y2="${g.y(b.line + (b.line_end - b.line) * b.y1 / d.length)}"/>
+            <text x="${g.x(0) - 22}" y="${g.y(b.line) + 4}">${LETTERS[b.n - 1]}</text>`).join('');
+        const dims = `<text x="${g.x(d.length / 2) - 20}" y="${g.y(0) + 24}">${f2(d.length)} мм</text>
+            <text x="${g.x(d.length) + 12}" y="${g.y((d.tapered ? d.flat_length_end : d.flat_length) / 2)}">${f2(d.tapered ? d.flat_length_end : d.flat_length)}</text>
+            ${d.tapered ? `<text x="${g.x(0) - 12}" y="${g.y(d.flat_length) - 10}">${f2(d.flat_length)}</text>` : ''}`;
         $('svg-flat').innerHTML = cut + holes + bends + dims;
 
         $('fl-summary').textContent = `{{ _('Разгъвка') }}: ${d.tapered ? f2(d.flat_length) + '→' + f2(d.flat_length_end) : f2(d.flat_length)} × ${f2(d.length)} мм, ${d.bends.length} {{ _('огъвки') }}`;
@@ -392,7 +524,7 @@
         const res = await fetch('/api/flashing-presets', { method: 'POST', body: fd });
         if (res.ok) { $('preset-name').value = ''; loadPresets(name); }
     });
-    $('btn-preset-load').addEventListener('click', () => { const p = presets[$('preset-select').value]; if (p) apply(p.settings); });
+    $('btn-preset-load').addEventListener('click', () => { const p = presets[$('preset-select').value]; if (p) { apply(p.settings); $('preset-name').value = p.name; } });
     $('btn-preset-delete').addEventListener('click', async () => {
         const p = presets[$('preset-select').value];
         if (!p) return;

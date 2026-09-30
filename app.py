@@ -5193,9 +5193,11 @@ def _flashing_section(p, outs):
             leg = max(outs[i] if is_hem[i] else outs[i + 1], 0) - setback[i]
             side_setback[i] = (radii[i] + t) if angles[i] >= 90 else (radii[i] + t) * math.sin(a_rad) + max(leg, 0) * math.cos(a_rad)
     flanges, bends, x = [], [], 0.0
+    trim = []  # (setback at the flange's start, at its end) - where the straight part sits on the sharp-corner profile
     for j in range(n):
         sb = setback if is_hem[j] else side_setback
-        straight = outs[j] - (sb[j - 1] if j else 0) - (sb[j] if j < n - 1 else 0)
+        trim.append((sb[j - 1] if j else 0, sb[j] if j < n - 1 else 0))
+        straight = outs[j] - trim[j][0] - trim[j][1]
         if straight < 0:
             raise ValueError(f'Страна {labels[j]} е твърде къса за радиуса/дебелината на съседните огъвки.')
         flanges.append({'n': labels[j], 'given': given[j], 'outside': round(outs[j], 3), 'straight': round(straight, 3), 'x0': round(x, 3), 'x1': round(x + straight, 3)})
@@ -5209,13 +5211,29 @@ def _flashing_section(p, outs):
             x += allowance[j]
 
     # Cross-section with sharp corners (preview only).
-    pos, heading, profile = (0.0, 0.0), 0.0, [(0.0, 0.0)]
+    pos, heading, profile, headings = (0.0, 0.0), 0.0, [(0.0, 0.0)], []
     for j in range(n):
+        headings.append(heading)
         pos = (pos[0] + outs[j] * math.cos(heading), pos[1] + outs[j] * math.sin(heading))
         profile.append((round(pos[0], 3), round(pos[1], 3)))
         if j < n - 1:
             heading += signs[j] * math.radians(angles[j])
-    return {'flanges': flanges, 'bends': bends, 'flat': round(x, 3), 'profile': profile, 't': t}
+
+    # Knots [flat x, profile x, profile y] at each straight part's start/end: they map a point of the flat
+    # pattern onto the bent part (bend zones = straight chord between knots) for the isometric view. A hem
+    # lies one thickness beside the flange it folds onto, so it doesn't draw on top of it.
+    knots = []
+    for j in range(n):
+        ux, uy = math.cos(headings[j]), math.sin(headings[j])
+        off = 0.0
+        if is_hem[j]:
+            off = -signs[0] * t if j == 0 else signs[n - 2] * t
+        ox, oy = -uy * off, ux * off
+        a, b = profile[j], profile[j + 1]
+        knots.append([flanges[j]['x0'], a[0] + ux * trim[j][0] + ox, a[1] + uy * trim[j][0] + oy])
+        knots.append([flanges[j]['x1'], b[0] - ux * trim[j][1] + ox, b[1] - uy * trim[j][1] + oy])
+    return {'flanges': flanges, 'bends': bends, 'flat': round(x, 3), 'profile': profile, 't': t,
+            'knots': [[round(v, 3) for v in k] for k in knots]}
 
 
 def _flashing_unfold(p):
@@ -5234,8 +5252,10 @@ def _flashing_unfold(p):
         bd['line_end'] = bd_end['line']
     flat, flat_end = a['flat'], b['flat']
 
-    # Contour, with optional bend-relief notches at both strip ends (each end at its own bend positions).
-    bottom, top = [(0.0, 0.0)], []
+    # Contour. Notches on the two short ends (start y=0 / far end y=length) are items
+    # (lo0, lo1, hi0, hi1, depth, is_relief): x at the edge and at full depth (they differ where a side follows a
+    # slanted bend line). Bend-relief notches and "end cuts" between bend lines share this and are merged below.
+    bot_items, top_items = [], []
     if p.get('relief'):
         rw, rd = _fnum(p.get('relief_width'), 'ширина на релеф'), _fnum(p.get('relief_depth'), 'дълбочина на релеф')
         if rd * 2 >= length:
@@ -5246,10 +5266,144 @@ def _flashing_unfold(p):
                 raise ValueError('Релефите се застъпват или излизат извън разгъвката.')
         for bd in bends:
             lo, hi = bd['line'] - rw / 2, bd['line'] + rw / 2
-            bottom += [(lo, 0.0), (lo, rd), (hi, rd), (hi, 0.0)]
+            bot_items.append((lo, lo, hi, hi, rd, True))
             lo, hi = bd['line_end'] - rw / 2, bd['line_end'] + rw / 2
-            top = [(hi, length), (hi, length - rd), (lo, length - rd), (lo, length)] + top
-    contour = [(round(px, 3), round(py, 3)) for px, py in bottom + [(flat, 0.0), (flat_end, length)] + top + [(0.0, length)]]
+            top_items.append((lo, lo, hi, hi, rd, True))
+    # Corner cuts ("отщипване") at the four corners of the flat: rectangular notch or chamfer, w along the
+    # width, h along the length. Order: start-left, start-right, end-right, end-left.
+    def right_edge(y):
+        return flat + (flat_end - flat) * y / length
+    cuts = []  # (kind, w, h, snapped) per corner; a cut may run its width "up to bend N" instead of a typed size
+    for i, c in enumerate((p.get('corners') or [])[:4]):
+        kind = c.get('kind') if isinstance(c, dict) else None
+        if kind not in ('rect', 'chamfer'):
+            cuts.append(None)
+            continue
+        ch = _fnum(c.get('h'), f'ъгъл {i + 1}: дължина')
+        to_bend = c.get('to_bend')
+        if to_bend:
+            try:
+                bd = bends[int(to_bend) - 1]
+                if int(to_bend) < 1:
+                    raise IndexError
+            except (TypeError, ValueError, IndexError):
+                raise ValueError(f'Отщипване {i + 1}: невалидна линия на огъване.')
+            line, width = (bd['line'], flat) if i < 2 else (bd['line_end'], flat_end)
+            half = rw / 2 if p.get('relief') else 0  # stop at the relief notch's edge, not inside it
+            cw = line - half if i in (0, 3) else width - line - half
+            if cw <= 0:
+                raise ValueError(f'Отщипване {i + 1}: линията на огъване е до самия ръб.')
+        else:
+            cw = _fnum(c.get('w'), f'ъгъл {i + 1}: ширина')
+        cuts.append((kind, cw, ch, bool(to_bend)))
+    cuts += [None] * (4 - len(cuts))
+    w_of = lambda c: c[1] if c else 0
+    h_of = lambda c: c[2] if c else 0
+    if w_of(cuts[0]) + w_of(cuts[1]) > flat or w_of(cuts[3]) + w_of(cuts[2]) > flat_end             or h_of(cuts[0]) + h_of(cuts[3]) > length or h_of(cuts[1]) + h_of(cuts[2]) > length:
+        raise ValueError('Отщипванията са твърде големи и се застъпват.')
+    if p.get('relief') and bends:
+        for end, (c_l, c_r, first, last) in enumerate(((cuts[0], cuts[1], bends[0]['line'], bends[-1]['line']),
+                                                       (cuts[3], cuts[2], bends[0]['line_end'], bends[-1]['line_end']))):
+            if (c_l and not c_l[3] and c_l[1] > first - rw / 2) or (c_r and not c_r[3] and (flat_end if end else flat) - c_r[1] < last + rw / 2):
+                raise ValueError('Отщипване се засяга с релеф на огъвка.')
+
+    def corner(idx, x, y, sx, sy, edge_x=None):
+        # points for a cut at corner (x, y); sx/sy = +1/-1 direction pointing INTO the sheet along x / y.
+        # Returned in traversal order, entering along the vertical edge and leaving along the horizontal one (idx 0/2)
+        # or the reverse (idx 1/3) - callers pass them already ordered via `flip`.
+        kind, cw, ch, _ = cuts[idx]
+        ex = edge_x or (lambda yy: x)
+        pts_v = (ex(y + sy * ch), y + sy * ch)  # where the cut meets the vertical edge
+        pts_h = (x + sx * cw, y)                # where it meets the horizontal edge
+        if kind == 'chamfer':
+            return [pts_v, pts_h]
+        return [pts_v, (pts_h[0], y + sy * ch), pts_h]
+
+    head = corner(0, 0.0, 0.0, 1, 1) if cuts[0] else [(0.0, 0.0)]
+    c1 = corner(1, flat, 0.0, -1, 1, right_edge)[::-1] if cuts[1] else [(flat, 0.0)]
+    c2 = corner(2, flat_end, length, -1, -1, right_edge) if cuts[2] else [(flat_end, length)]
+    c3 = corner(3, 0.0, length, 1, -1)[::-1] if cuts[3] else [(0.0, length)]
+
+    # End cuts: a notch on the left (start) / right (far) end of the flat, spanning from one line to another
+    # (flat edge, a bend line, or a typed width from the start line) and `d` deep along the length.
+    def ref_x(ref, y, w=None, base=None):
+        if ref == 'e0':
+            return 0.0
+        if ref == 'e1':
+            return right_edge(y)
+        if ref == 'w':
+            return base + w
+        try:
+            bd = bends[int(str(ref)[1:]) - 1]
+            if str(ref)[0] != 'b' or int(str(ref)[1:]) < 1:
+                raise IndexError
+        except (ValueError, IndexError):
+            raise ValueError('Ощипване: невалидна линия на огъване.')
+        return bd['line'] + (bd['line_end'] - bd['line']) * y / length
+
+    for i, e in enumerate(p.get('end_cuts') or [], 1):
+        far = e.get('end') == 'end'
+        d = _fnum(e.get('d'), f'ощипване {i}: дълбочина')
+        if d >= length:
+            raise ValueError(f'Ощипване {i}: дълбочината е по-голяма от дължината.')
+        y_edge, y_deep = (length, length - d) if far else (0.0, d)
+        w = _fnum(e.get('w'), f'ощипване {i}: ширина') if e.get('to') == 'w' else None
+        off0 = _fnum(e.get('off0') or 0, f'ощипване {i}: отстъп от', allow_lo=True)
+        off1 = _fnum(e.get('off1') or 0, f'ощипване {i}: отстъп до', allow_lo=True) if e.get('to') != 'w' else 0.0
+        lo0, lo1 = ref_x(e.get('from'), y_edge) + off0, ref_x(e.get('from'), y_deep) + off0
+        hi0, hi1 = ref_x(e.get('to'), y_edge, w, lo0) - off1, ref_x(e.get('to'), y_deep, w, lo1) - off1
+        if not (0 <= lo0 < hi0 <= (flat_end if far else flat) + 1e-9 and 0 <= lo1 < hi1):
+            raise ValueError(f'Ощипване {i}: границите са обърнати или извън разгъвката.')
+        (top_items if far else bot_items).append((lo0, lo1, hi0, hi1, d, False))
+
+    def merge(items, left_cut, right_cut, width):
+        # a relief notch lying inside a deeper-or-equal end cut is swallowed by it; anything else that overlaps is an error
+        cuts_ = [it for it in items if not it[5]]
+        items = [it for it in items if not it[5] or not any(c[0] <= it[0] and it[2] <= c[2] and c[4] >= it[4] for c in cuts_)]
+        items.sort()
+        edges = [w_of(left_cut)] + [v for it in items for v in (it[0], it[2])] + [width - w_of(right_cut)]
+        if any(edges[k] > edges[k + 1] + 1e-9 for k in range(len(edges) - 1)):
+            raise ValueError('Ощипванията се застъпват помежду си или с отщипване в ъгъл.')
+        return items
+
+    bot_items = merge(bot_items, cuts[0], cuts[1], flat)
+    top_items = merge(top_items, cuts[3], cuts[2], flat_end)
+    bottom = head + [q for lo0, lo1, hi0, hi1, d, _ in bot_items for q in ((lo0, 0.0), (lo1, d), (hi1, d), (hi0, 0.0))]
+    top = [q for lo0, lo1, hi0, hi1, d, _ in reversed(top_items) for q in ((hi0, length), (hi1, length - d), (lo1, length - d), (lo0, length))]
+    # A bend line is only drawn over material: cut short where a notch or corner cut removes it at either end.
+    def inside(v, lo, hi):
+        return lo + 1e-6 < v < hi - 1e-6
+    for bd in bends:
+        y0, y1 = 0.0, length
+        for lo0, lo1, hi0, hi1, d, _ in bot_items:
+            if inside(bd['line'], lo0, hi0):
+                y0 = max(y0, d)
+        for lo0, lo1, hi0, hi1, d, _ in top_items:
+            if inside(bd['line_end'], lo0, hi0):
+                y1 = min(y1, length - d)
+        for c, line, dist, far in ((cuts[0], bd['line'], bd['line'], False), (cuts[1], bd['line'], flat - bd['line'], False),
+                                   (cuts[3], bd['line_end'], bd['line_end'], True), (cuts[2], bd['line_end'], flat_end - bd['line_end'], True)):
+            if c and dist < c[1] - 1e-6:
+                depth = c[2] if c[0] == 'rect' else c[2] * (1 - dist / c[1])
+                y0, y1 = (y0, min(y1, length - depth)) if far else (max(y0, depth), y1)
+        bd['y0'], bd['y1'] = round(y0, 3), round(y1, 3)
+    contour = []
+    for px, py in bottom + c1 + c2 + top + c3:
+        pt = (round(px, 3), round(py, 3))
+        if not contour or contour[-1] != pt:  # notches/corners can share a point with their neighbour
+            contour.append(pt)
+    # A cut that runs edge to edge leaves a zero-width sliver (the old edge retraced): drop every point where the
+    # outline turns straight back on itself (collinear, opposite direction), until none is left.
+    changed = True
+    while changed and len(contour) > 3:
+        changed = False
+        for i in range(len(contour)):
+            (ax, ay), (bx, by), (cx, cy) = contour[i - 1], contour[i], contour[(i + 1) % len(contour)]
+            u, v = (bx - ax, by - ay), (cx - bx, cy - by)
+            if abs(u[0] * v[1] - u[1] * v[0]) <= 1e-6 * (math.hypot(*u) * math.hypot(*v) + 1e-9) and u[0] * v[0] + u[1] * v[1] < 0:
+                del contour[i]
+                changed = True
+                break
 
     holes, warnings = [], []
     n = len(flanges)
@@ -5279,14 +5433,16 @@ def _flashing_unfold(p):
         holes.append({k_: round(v, 3) if isinstance(v, float) else v for k_, v in hole.items()})
 
     return {'flat_length': flat, 'flat_length_end': flat_end, 'tapered': b is not a, 'inside': p.get('dim_mode') == 'inside', 'length': length,
-            'flanges': flanges, 'bends': bends, 'profile': a['profile'], 'profile_end': b['profile'],
-            'contour': contour, 'holes': holes, 'warnings': warnings, 'thickness': a['t']}
+            'flanges': flanges, 'bends': bends, 'profile': a['profile'], 'profile_end': b['profile'], 'knots': a['knots'], 'knots_end': b['knots'],
+            'contour': contour, 'corner_cuts': [{'kind': c[0], 'w': round(c[1], 3), 'h': c[2]} if c else None for c in cuts], 'holes': holes, 'warnings': warnings, 'thickness': a['t']}
 
 
 def _flashing_dxf(u):
     """DXF (mm) for _flashing_unfold()'s result: CUT layer + dashed BEND_UP/BEND_DOWN lines."""
-    doc = ezdxf.new('R2000', setup=True)
+    # No setup=True: its dimension styles carry $DIMLFAC=100, which SolidWorks applies on import (100 mm -> 10000 mm).
+    doc = ezdxf.new('R2000')
     doc.units = ezdxf.units.MM
+    doc.linetypes.add('DASHED', pattern=[9.0, 6.0, -3.0], description='Dashed')
     doc.layers.add('CUT', color=7)
     doc.layers.add('BEND_UP', color=3, linetype='DASHED')
     doc.layers.add('BEND_DOWN', color=5, linetype='DASHED')
@@ -5299,7 +5455,8 @@ def _flashing_dxf(u):
         else:
             msp.add_circle((h['cx'], h['cy']), h['d'] / 2, dxfattribs={'layer': 'CUT'})
     for b in u['bends']:
-        msp.add_line((b['line'], 0), (b['line_end'], u['length']), dxfattribs={'layer': 'BEND_UP' if b['dir'] == 'up' else 'BEND_DOWN'})
+        bx = lambda y: b['line'] + (b['line_end'] - b['line']) * y / u['length']
+        msp.add_line((bx(b['y0']), b['y0']), (bx(b['y1']), b['y1']), dxfattribs={'layer': 'BEND_UP' if b['dir'] == 'up' else 'BEND_DOWN'})
     buf = io.StringIO()
     doc.write(buf)
     return io.BytesIO(buf.getvalue().encode('utf-8'))
