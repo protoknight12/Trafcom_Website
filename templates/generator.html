@@ -357,6 +357,7 @@
                 <button type="button" id="btn-download-jpg" class="size-btn">JPG</button>
             </div>
 
+            {% if generator_price_on() %}
             <div class="control-group-title">{{ _('Изчисляване на цена') }}</div>
             <div class="form-group" style="margin-bottom: 12px;">
                 <select id="in-material" data-create="{{ create_url('material') }}" class="material-picker" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-color); color: #fff; padding: 8px; border-radius: 4px;">
@@ -370,7 +371,9 @@
                     {% endfor %}
                 </select>
             </div>
+            <label style="display: block; margin-bottom: 12px; font-weight: normal;"><input type="checkbox" id="in-own-material"> {{ _('Материал на клиента (цената без материал)') }}</label>
             <button id="btn-calculate" class="btn-submit" style="width: 100%;">{{ _('Изчисли цена в Калкулатора') }}</button>
+            {% endif %}
         </div>
 
         <div class="preview-area">
@@ -396,12 +399,15 @@
     <!-- Hidden form that submits the generated DXF straight into the same
          /upload flow used by the main calculator - reuses all of its
          existing pricing/geometry logic instead of duplicating it. -->
+    {% if generator_price_on() %}
     <form id="sendToCalculatorForm" action="{{ url_for('upload') }}" method="POST" enctype="multipart/form-data" style="display: none;">
         {% include 'partials/csrf_field.html' %}
         <input type="hidden" name="material" id="calc-material-field">
         <input type="hidden" name="service_ids" id="calc-service-field">
+        <input type="hidden" name="own_material" id="calc-own-material-field" value="">
         <input type="file" name="file" id="calc-file-field">
     </form>
+    {% endif %}
 </main>
 
 <script src="{{ url_for('static', filename='js/material_picker.js') }}"></script>
@@ -1926,6 +1932,7 @@
     document.getElementById('btn-download-png').addEventListener('click', () => exportRasterImage('png'));
     document.getElementById('btn-download-jpg').addEventListener('click', () => exportRasterImage('jpg'));
 
+    {% if generator_price_on() %}
     document.getElementById('btn-calculate').addEventListener('click', async () => {
         const W = parseFloat(document.getElementById('in-width').value);
         const H = parseFloat(document.getElementById('in-height').value);
@@ -1943,9 +1950,11 @@
         document.getElementById('calc-file-field').files = dataTransfer.files;
         document.getElementById('calc-material-field').value = document.getElementById('in-material').value;
         document.getElementById('calc-service-field').value = document.getElementById('in-service').value;
+        document.getElementById('calc-own-material-field').value = document.getElementById('in-own-material').checked ? '1' : '';
 
         document.getElementById('sendToCalculatorForm').submit();
     });
+    {% endif %}
 
     window.addEventListener('load', render);
 </script>

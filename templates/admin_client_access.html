@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Достъп: {{ client.name }} - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Достъп за клиент: {{ client.name }}</h3>
+        <p class="section-subtitle">
+            Какво виждат и могат да избират потребителите, присъединени към този клиент.
+            Персоналът (админ/работник) не се ограничава. Собствените (частни) детайли/продукти на клиента са винаги видими.
+            <a href="{{ url_for('admin_clients') }}">&larr; Обратно към клиенти</a>
+        </p>
+
+        <form method="POST">
+            {% include 'partials/csrf_field.html' %}
+
+            {% for kind, label, options in sections %}
+            {% set allowed = access[kind] %}
+            <fieldset class="access-section" style="border: 1px solid var(--border-color, #ddd); border-radius: 6px; padding: 10px 14px; margin-bottom: 14px;">
+                <legend><strong>{{ label }}</strong></legend>
+                <label style="margin-right: 16px;">
+                    <input type="radio" name="{{ kind }}_mode" value="all" {% if allowed is none %}checked{% endif %}> Всички
+                </label>
+                <label style="margin-right: 16px;">
+                    <input type="radio" name="{{ kind }}_mode" value="only" {% if allowed %}checked{% endif %}> Само избраните
+                </label>
+                <label>
+                    <input type="radio" name="{{ kind }}_mode" value="off" {% if allowed is not none and not allowed %}checked{% endif %}> Изключено (скрито)
+                </label>
+                {% if kind == 'services' %}
+                <p class="text-small text-muted" style="margin: 6px 0 0;">DXF калкулаторът и генераторът изискват поне една услуга - при „Изключено“ изключете и тях от „Приложения“.</p>
+                {% endif %}
+                <div class="access-options" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 16px; margin-top: 8px; max-height: 260px; overflow-y: auto;">
+                    {% for key, name in options %}
+                    <label style="font-weight: normal;">
+                        <input type="checkbox" name="{{ kind }}" value="{{ key }}" {% if allowed is not none and key in allowed %}checked{% endif %}> {{ name }}
+                    </label>
+                    {% else %}
+                    <span class="text-muted">Няма записи.</span>
+                    {% endfor %}
+                </div>
+            </fieldset>
+            {% endfor %}
+
+            <button type="submit" class="btn-submit">Запази достъпа</button>
+        </form>
+    </section>
+
+</main>
+<script>
+    // Checklist only matters in "Само избраните" mode - grey it out otherwise.
+    document.querySelectorAll('.access-section').forEach(function (fs) {
+        var opts = fs.querySelector('.access-options');
+        function sync() {
+            var only = fs.querySelector('input[value="only"]').checked;
+            opts.style.opacity = only ? '1' : '0.45';
+            opts.querySelectorAll('input').forEach(function (i) { i.disabled = !only; });
+        }
+        fs.querySelectorAll('input[type=radio]').forEach(function (r) { r.addEventListener('change', sync); });
+        sync();
+    });
+</script>
+</body>
+</html>

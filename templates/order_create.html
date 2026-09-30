@@ -30,20 +30,25 @@
     {% endif %}
     {% endwith %}
 
-    <section class="admin-card">
+    {% set show_products = client_section_on('products') %}
+    {% set show_details = client_section_on('details') %}
+    {% if not show_products and not show_details %}
+    <section class="admin-card"><p class="no-data">{{ _('Нямате достъп до избор на продукти и детайли.') }}</p></section>
+    {% endif %}
+    <section class="admin-card" {% if not show_products and not show_details %}style="display: none;"{% endif %}>
         <h3>{{ _('Добавяне на артикул към поръчката') }}</h3>
         <p class="section-subtitle">{{ _('Добавете един или няколко продукта / детайла, след което изпратете цялата поръчка наведнъж.') }}</p>
 
         <div class="form-group">
             <label>{{ _('Тип артикул') }}</label>
             <div class="item-type-toggle">
-                <label><input type="radio" name="cart_item_type" value="product" checked> {{ _('Цялостен продукт (Модул)') }}</label>
-                <label><input type="radio" name="cart_item_type" value="detail"> {{ _('Отделен детайл (Компонент)') }}</label>
+                <label {% if not show_products %}style="display: none;"{% endif %}><input type="radio" name="cart_item_type" value="product" {% if show_products %}checked{% endif %}> {{ _('Цялостен продукт (Модул)') }}</label>
+                <label {% if not show_details %}style="display: none;"{% endif %}><input type="radio" name="cart_item_type" value="detail" {% if not show_products %}checked{% endif %}> {{ _('Отделен детайл (Компонент)') }}</label>
             </div>
         </div>
 
         <div class="add-item-row">
-            <div class="form-group" id="product_selector">
+            <div class="form-group" id="product_selector" {% if not show_products %}style="display: none;"{% endif %}>
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <label for="cart_product_id" style="margin-bottom: 0;">{{ _('Продукт *') }}</label>
                     {% if current_user.is_admin %}
@@ -60,7 +65,7 @@
                     </optgroup>
                 </select>
             </div>
-            <div class="form-group" id="detail_selector" style="display: none;">
+            <div class="form-group" id="detail_selector" {% if show_products %}style="display: none;"{% endif %}>
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <label for="cart_detail_id" style="margin-bottom: 0;">{{ _('Детайл *') }}</label>
                     {% if current_user.is_admin %}
@@ -82,11 +87,15 @@
                 <input type="number" id="cart_qty" value="1" min="1">
             </div>
             <div class="form-group" style="flex: 0 0 auto;">
+                <label style="font-weight: normal; white-space: nowrap;"><input type="checkbox" id="cart_own_material"> {{ _('Материал на клиента') }}</label>
+            </div>
+            <div class="form-group" style="flex: 0 0 auto;">
                 <button type="button" class="btn-secondary" onclick="addToCart()" style="padding: 12px 20px;">+ {{ _('Добави') }}</button>
             </div>
         </div>
 
-        <div class="form-group" id="detail_ops_section" style="display: none; margin-top: 16px;">
+        <div class="form-group" id="detail_ops_section" style="{% if show_products %}display: none; {% endif %}margin-top: 16px;">
+            <div {% if not client_section_on('services') %}style="display: none;"{% endif %}>
             <label>{{ _('Операции за този детайл (незадължително - рязане, огъване, пробиване...)') }}</label>
             <p class="text-small text-muted" style="margin-top: -4px;">{{ _('Приложени само към детайла, който ще бъде добавен към количката по-долу.') }}</p>
             <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: flex-end;">
@@ -106,6 +115,7 @@
                 </tbody>
             </table>
             <p class="text-small text-muted" id="pendingOpsTotal" style="margin-top: 6px;"></p>
+            </div>
 
             <div class="form-group" style="margin-top: 14px;">
                 <label for="pending_op_pdf">{{ _('Приложен PDF (незадължително - чертеж, спецификация...)') }}</label>
@@ -144,7 +154,7 @@
 
         <form method="POST" id="orderForm" style="margin-top: 24px;">
             {% include 'partials/csrf_field.html' %}
-            <div class="form-group" style="margin-bottom: 20px;">
+            <div class="form-group" style="margin-bottom: 20px;{% if not client_section_on('machines') %} display: none;{% endif %}">
                 <label for="machine_id">{{ _('Назначи машина (по избор)') }}</label>
                 <select id="machine_id" data-create="{{ create_url('machine') }}" name="machine_id">
                     <option value="">-- {{ _('Без конкретна машина') }} --</option>
@@ -176,7 +186,7 @@
                 {% endif %}
                 <input type="hidden" name="customer_name" id="customer_name">
             </div>
-            <div class="form-group" style="margin-bottom: 20px;">
+            <div class="form-group" style="margin-bottom: 20px;{% if not client_section_on('deliverers') %} display: none;{% endif %}">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <label for="deliverer_id" style="margin-bottom: 0;">{{ _('Куриер (по избор)') }}</label>
                     <button type="button" onclick="openQuickDelivererModal()" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ {{ _('Бързо създаване') }}</button>
@@ -481,12 +491,23 @@
         return applyClientAdjustment(basePrice, cp.detail_type, cp.detail_percent);
     }
 
+    // "Материал на клиента": services x (1 + the client's surcharge), no
+    // material cost - mirrors _own_material_factor().
+    function ownMaterialFactor() {
+        const cp = selectedClientPricing();
+        return 1 + ((cp && cp.own_material_percent) || 0) / 100;
+    }
+
     // A Product's list sell price with the selected client's Продукти
     // terms - mirrors calculate_product_pricing(client).
-    function productAdjustedPrice(p) {
+    function productAdjustedPrice(p, ownMaterial) {
         const cp = selectedClientPricing();
-        if (!cp) return p.price;
-        return applyClientAdjustment(p.price, cp.product_type, cp.product_percent);
+        let price = p.price;
+        if (ownMaterial) {
+            price = (p.details_ops_subtotal + p.extra_costs_subtotal) * ownMaterialFactor() * (1 + p.markup_percent / 100);
+        }
+        if (!cp) return price;
+        return applyClientAdjustment(price, cp.product_type, cp.product_percent);
     }
 
     function pendingOpCost(serviceId, durationMinutes) {
@@ -507,13 +528,14 @@
     function liveUnitPrice(item) {
         if (item.type === 'product') {
             const p = PRODUCTS.find(function (x) { return x.id === item.id; });
-            return p ? productAdjustedPrice(p) : (item.unitPrice || 0);
+            return p ? productAdjustedPrice(p, item.ownMaterial) : (item.unitPrice || 0);
         }
         const d = DETAILS.find(function (x) { return x.id === item.id; });
         if (!d) return item.unitPrice || 0;
         const opsCost = (item.operations || []).reduce(function (sum, op) {
             return sum + pendingOpCost(op.serviceId, op.durationMinutes);
         }, 0);
+        if (item.ownMaterial) return detailAdjustedPrice(d.ops_total * ownMaterialFactor()) + opsCost * ownMaterialFactor();
         return detailAdjustedPrice(d.price) + opsCost;
     }
 
@@ -592,6 +614,7 @@
     function addToCart() {
         const type = document.querySelector('input[name="cart_item_type"]:checked').value;
         const qty = parseInt(document.getElementById('cart_qty').value, 10);
+        const ownMaterial = document.getElementById('cart_own_material').checked;
 
         if (!qty || qty < 1) {
             alert("{{ _('Моля въведете валидно количество.') }}");
@@ -605,11 +628,11 @@
             const p = PRODUCTS.find(function (x) { return x.id === id; });
             if (!p) return;
 
-            const existing = cart.find(function (c) { return c.type === type && c.id === id; });
+            const existing = cart.find(function (c) { return c.type === type && c.id === id && !!c.ownMaterial === ownMaterial; });
             if (existing) {
                 existing.qty += qty;
             } else {
-                cart.push({ type: type, id: id, name: p.name, unitPrice: productAdjustedPrice(p), qty: qty });
+                cart.push({ type: type, id: id, name: p.name, unitPrice: productAdjustedPrice(p, ownMaterial), qty: qty, ownMaterial: ownMaterial });
             }
         } else {
             const sel = document.getElementById('cart_detail_id');
@@ -622,7 +645,9 @@
             const operations = pendingDetailOps.map(function (op) {
                 return { serviceId: op.serviceId, serviceName: op.serviceName, description: op.description, durationMinutes: op.durationMinutes };
             });
-            const unitPrice = detailAdjustedPrice(d.price) + opsCost;
+            const unitPrice = ownMaterial
+                ? detailAdjustedPrice(d.ops_total * ownMaterialFactor()) + opsCost * ownMaterialFactor()
+                : detailAdjustedPrice(d.price) + opsCost;
 
             const pdfInput = document.getElementById('pending_op_pdf');
             const pdfFile = pdfInput.files[0];
@@ -633,13 +658,13 @@
                     // always its own cart line - merging it into a plain (or
                     // differently-configured) line for the same detail would
                     // lose which operations/file go with which piece count.
-                    cart.push({ type: type, id: id, name: d.name, unitPrice: unitPrice, qty: qty, operations: operations, attachment: attachment || null });
+                    cart.push({ type: type, id: id, name: d.name, unitPrice: unitPrice, qty: qty, operations: operations, attachment: attachment || null, ownMaterial: ownMaterial });
                 } else {
-                    const existing = cart.find(function (c) { return c.type === type && c.id === id && (!c.operations || c.operations.length === 0) && !c.attachment; });
+                    const existing = cart.find(function (c) { return c.type === type && c.id === id && (!c.operations || c.operations.length === 0) && !c.attachment && !!c.ownMaterial === ownMaterial; });
                     if (existing) {
                         existing.qty += qty;
                     } else {
-                        cart.push({ type: type, id: id, name: d.name, unitPrice: unitPrice, qty: qty });
+                        cart.push({ type: type, id: id, name: d.name, unitPrice: unitPrice, qty: qty, ownMaterial: ownMaterial });
                     }
                 }
                 pendingDetailOps = [];
@@ -693,7 +718,7 @@
                 const tr = document.createElement('tr');
 
                 const nameTd = document.createElement('td');
-                nameTd.textContent = item.name;
+                nameTd.textContent = item.name + (item.ownMaterial ? " ({{ _('материал на клиента') }})" : '');
                 if (item.operations && item.operations.length > 0) {
                     const opsLine = document.createElement('div');
                     opsLine.className = 'text-small text-muted';
@@ -750,6 +775,7 @@
         document.getElementById('cartJsonInput').value = JSON.stringify(
             cart.map(function (c) {
                 const row = { type: c.type, id: c.id, qty: c.qty };
+                if (c.ownMaterial) row.own_material = true;
                 if (c.operations && c.operations.length > 0) {
                     row.operations = c.operations.map(function (op) {
                         return { service_id: op.serviceId, duration_minutes: op.durationMinutes, description: op.description };

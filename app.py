@@ -328,6 +328,9 @@ class DxfFile(db.Model):
     # cost_per_meter_cut/cost_per_pierce scheme); their calculated_price
     # stays a frozen historical value either way.
     services = db.relationship('Service', secondary='dxf_file_service', backref='dxf_files')
+    # Priced with the client's own material (no material cost, services +
+    # Client.own_material_surcharge_percent) - see calculate_cnc_price_multi_service().
+    own_material = db.Column(db.Boolean, nullable=False, default=False)
 
 
 # See DxfFile.services above - one upload can be priced against several
@@ -656,6 +659,14 @@ class Client(db.Model):
     detail_adjustment_percent = db.Column(db.Float, nullable=True)
     product_adjustment_type = db.Column(db.String(10), nullable=True)
     product_adjustment_percent = db.Column(db.Float, nullable=True)
+    # Per-client access limits, set on admin_client_access.html - JSON
+    # {"apps"|"machines"|"services"|"details"|"products": [allowed keys/ids]}.
+    # A missing key (or NULL column) = unrestricted - see client_allows().
+    access_json = db.Column(db.Text, nullable=True)
+    # "Материал на клиента" option (client supplies the material): the line's
+    # price drops the material cost and every service cost gets this extra
+    # % on top - see _own_material_factor(). NULL/0 = no surcharge.
+    own_material_surcharge_percent = db.Column(db.Float, nullable=True)
 
 
 class ClientServicePrice(db.Model):
@@ -997,6 +1008,8 @@ class OrderItem(db.Model):
     quantity_ordered = db.Column(db.Integer, nullable=False)
     quantity_produced = db.Column(db.Integer, default=0, nullable=False)  # only for items tracked whole (see stock_target)
     unit_price = db.Column(db.Float, nullable=False, default=0.0)
+    # Priced with the client's own material - see _own_material_factor().
+    own_material = db.Column(db.Boolean, nullable=False, default=False)
 
     product = db.relationship('Product')
     detail = db.relationship('Detail')
@@ -1008,11 +1021,8 @@ class OrderItem(db.Model):
 
     @property
     def item_name(self):
-        if self.product:
-            return self.product.name
-        if self.detail:
-            return self.detail.name
-        return 'Неизвестен артикул'
+        name = self.product.name if self.product else self.detail.name if self.detail else 'Неизвестен артикул'
+        return f'{name} (материал на клиента)' if self.own_material else name
 
     @property
     def line_total(self):
@@ -1153,7 +1163,22 @@ class ProductExtraCost(db.Model):
     amount = db.Column(db.Float, nullable=False)
 
 
-def calculate_product_pricing(product, client=None):
+def _own_material_factor(client):
+    """Multiplier on every service cost when the line uses the client's own
+    material: 1 + Client.own_material_surcharge_percent/100 (1.0 with no client). Applied to
+    everything that is left once the material is dropped."""
+    return 1 + ((client.own_material_surcharge_percent or 0) / 100.0) if client else 1.0
+
+
+def _detail_base_price(detail, client=None, own_material=False):
+    """A Detail's list price - or, with the client's own material, only its
+    services (Operations) times the client's surcharge, no material cost."""
+    if not own_material:
+        return detail.total_price
+    return round(sum(op.cost for op in detail.operations) * _own_material_factor(client), 2)
+
+
+def calculate_product_pricing(product, client=None, own_material=False):
     """
     Returns a dict with the full cost/price breakdown for a product:
     details subtotal, extra costs subtotal, total cost, markup amount, and
@@ -1165,8 +1190,11 @@ def calculate_product_pricing(product, client=None):
     _apply_adjustment(). The client's Детайли terms only ever apply to
     standalone details (detail_price_for()), never inside a product.
     """
-    details_subtotal = sum(pd.detail.total_price * pd.quantity for pd in product.product_details)
+    details_subtotal = sum(_detail_base_price(pd.detail, client, own_material) * pd.quantity
+                           for pd in product.product_details)
     extra_costs_subtotal = sum(ec.amount for ec in product.extra_costs)
+    if own_material:
+        extra_costs_subtotal *= _own_material_factor(client)
     total_cost = details_subtotal + extra_costs_subtotal
     markup_amount = total_cost * (product.markup_percent / 100.0)
     sell_price = total_cost + markup_amount
@@ -3979,6 +4007,9 @@ def analyze_dxf_geometry(file_path):
         shapes = []
 
         for entity in msp:
+            # Bend lines (e.g. /flashing's BEND_UP/BEND_DOWN layers) are marks, not cuts.
+            if entity.dxf.layer.upper().startswith('BEND'):
+                continue
             entity_length, entity_segments, entity_shapes = process_entity(entity)
             total_length += entity_length
             all_segments.extend(entity_segments)
@@ -4109,14 +4140,15 @@ def client_material_rate(material):
     return round(_apply_adjustment(material.cost_per_m2, client.material_adjustment_type, client.material_adjustment_percent), 2)
 
 
-def detail_price_for(detail, client):
+def detail_price_for(detail, client, own_material=False):
     """A Detail's total_price adjusted for one client's "Детайли"
     discount/markup - what a linked client actually sees/pays for a
     standalone catalog Detail (order_create.html, DXF-upload-adjacent
     displays). None/unlinked client -> unchanged list price."""
+    base = _detail_base_price(detail, client, own_material)
     if not client:
-        return detail.total_price
-    return round(_apply_adjustment(detail.total_price, client.detail_adjustment_type, client.detail_adjustment_percent), 2)
+        return base
+    return round(_apply_adjustment(base, client.detail_adjustment_type, client.detail_adjustment_percent), 2)
 
 
 def _catalog_item_visible(owner_client_id, viewer_client):
@@ -4126,6 +4158,77 @@ def _catalog_item_visible(owner_client_id, viewer_client):
     pre-existing behavior. A non-NULL owner restricts it to that one client
     only (checked by staff separately - see callers)."""
     return owner_client_id is None or (viewer_client is not None and owner_client_id == viewer_client.id)
+
+
+# Apps a client's access can be limited to (Client.access_json "apps") - the
+# navbar's "Приложения" dropdown. key -> label.
+CLIENT_APPS = {'upload': 'DXF CNC Калкулатор', 'generator': 'Параметричен Генератор',
+               'generator_price': 'Генератор: изчисляване на цена (иначе само генерира файлове)',
+               'flashing': 'Облицовки от ламарина'}
+
+
+def generator_price_on():
+    """Whether the generator may offer "Изчисли цена" - it sends the DXF through /upload,
+    so it needs both its own switch and the DXF calculator app. Jinja global."""
+    return client_allows('apps', 'generator_price') and client_allows('apps', 'upload')
+
+
+def client_access(client, kind):
+    """Set of allowed keys/ids of `kind` for this client, or None when
+    unrestricted (no client, no settings, or that kind never limited)."""
+    if not client or not client.access_json:
+        return None
+    try:
+        allowed = json.loads(client.access_json).get(kind)
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return None if allowed is None else set(allowed)
+
+
+def client_allows(kind, value):
+    """Whether the logged-in viewer's linked Client may use this app/machine/
+    service/detail/product. Staff, anonymous and unlinked users are never
+    limited (_viewer_client() is None for them). Jinja global."""
+    allowed = client_access(_viewer_client(), kind)
+    return allowed is None or value in allowed
+
+
+def client_section_on(kind):
+    """False when the viewer's client has this whole picker switched off
+    ("Изключено" = an empty allowlist) - templates hide the section. Jinja global."""
+    allowed = client_access(_viewer_client(), kind)
+    return allowed is None or bool(allowed)
+
+
+def allowed_only(kind, items):
+    """items (rows with .id) filtered down to what the viewer's client may use."""
+    return [i for i in items if client_allows(kind, i.id)]
+
+
+def catalog_item_allowed(item, viewer_client):
+    """_catalog_item_visible() plus the client's details/products allowlist.
+    A client's own private items are always visible - the allowlist only
+    narrows the public catalog."""
+    if item.owner_client_id is not None:
+        return _catalog_item_visible(item.owner_client_id, viewer_client)
+    allowed = client_access(viewer_client, 'products' if isinstance(item, Product) else 'details')
+    return allowed is None or item.id in allowed
+
+
+def app_access_required(app_key):
+    """Route decorator: blocks a client-linked user whose access settings
+    exclude this app (see CLIENT_APPS)."""
+    def decorator(f):
+        @wraps(f)
+        def wrapped(*args, **kwargs):
+            if not client_allows('apps', app_key):
+                if request.method != 'GET' or request.path.startswith('/api/'):
+                    return jsonify({'error': 'Нямате достъп до това приложение.'}), 403
+                flash(gettext('Нямате достъп до това приложение.'), 'danger')
+                return redirect(url_for('dashboard'))
+            return f(*args, **kwargs)
+        return wrapped
+    return decorator
 
 
 def _material_cost(width, height, material, client=None):
@@ -4304,7 +4407,8 @@ def calculate_material_price(width, height, material_key):
     return round(_material_cost(width, height, material), 2)
 
 
-def calculate_cnc_price_multi_service(width, height, total_length, pierce_count, material_key, service_ids, client=None):
+def calculate_cnc_price_multi_service(width, height, total_length, pierce_count, material_key, service_ids, client=None,
+                                      own_material=False):
     """
     Same engine as calculate_cnc_price(), but for the DXF calculator's
     multi-service checkbox selection (see upload.html / process_dxf_upload()
@@ -4323,8 +4427,16 @@ def calculate_cnc_price_multi_service(width, height, total_length, pierce_count,
 
     material_cost = _material_cost(width, height, material, client)
     time_cost = sum(_service_time_cost(total_length, pierce_count, material, s, client) for s in services)
+    setup_fee = BASE_SETUP_FEE
+    if own_material:
+        # Client brings the material: no material cost (we earn nothing on it),
+        # everything else - cutting time and setup fee - gets the client's surcharge.
+        factor = _own_material_factor(client)
+        material_cost = 0.0
+        time_cost *= factor
+        setup_fee *= factor
 
-    total_calculated_euro = material_cost + time_cost + BASE_SETUP_FEE
+    total_calculated_euro = material_cost + time_cost + setup_fee
     if client:
         total_calculated_euro = _apply_adjustment(total_calculated_euro, client.detail_adjustment_type, client.detail_adjustment_percent)
     return round(total_calculated_euro, 2)
@@ -4589,6 +4701,9 @@ def create_url(entity):
 
 
 app.jinja_env.globals['create_url'] = create_url
+app.jinja_env.globals['client_allows'] = client_allows
+app.jinja_env.globals['client_section_on'] = client_section_on
+app.jinja_env.globals['generator_price_on'] = generator_price_on
 # Was the static MATERIAL_TYPE_LABELS dict; now DB-backed (MaterialType), so
 # templates call it - only pages that actually list types hit the DB.
 app.jinja_env.globals['material_type_labels'] = material_type_labels
@@ -4721,7 +4836,7 @@ def services():
     # Products are a flat grid (like the index page's machine cards), not
     # sectioned by section_title - see ServiceMachineCard.kind.
     product_cards = ServiceMachineCard.query.filter_by(page='services', kind='product').order_by(ServiceMachineCard.id).all()
-    billable_services = Service.query.order_by(Service.name).all()
+    billable_services = allowed_only('services', Service.query.order_by(Service.name).all())
     return render_template('services.html', active_page='services', machine_sections=sections,
                             product_cards=product_cards, billable_services=billable_services)
 
@@ -4738,11 +4853,12 @@ def contact():
 
 @app.route('/generator')
 @login_required
+@app_access_required('generator')
 def generator():
     # Requires login, same as every other app (matches the "apps require an
     # account, the public site doesn't" design used across the project).
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
-    services = Service.query.order_by(Service.name).all()
+    services = allowed_only('services', Service.query.order_by(Service.name).all())
     return render_template('generator.html', materials=materials, services=services, active_page='generator')
 
 
@@ -4907,6 +5023,7 @@ def _generator_hole_polygon(hole_type, rad, length=None, cluster_mask=None, rhom
 
 @app.route('/api/generator/dxf', methods=['POST'])
 @login_required
+@app_access_required('generator')
 def api_generator_dxf():
     """
     Builds the Panel Generator's export server-side with ezdxf instead of
@@ -4989,6 +5106,276 @@ def admin_generator_preset_copy(preset_id):
     db.session.commit()
     flash(f'Пресет "{source.name}" е запазен във вашия акаунт.', 'success')
     return redirect(url_for('admin_generator_presets'))
+
+
+# ----- FLASHING / ОБКАНТВАЩИ ОБЛИЦОВКИ ОТ ЛАМАРИНА -----
+# Parametric bent-sheet profiles (L/U/Z/hat, optional 180° hems) -> flat
+# pattern DXF + bend spec. Sizes are OUTSIDE dimensions (to the virtual sharp
+# corner). Flat length = straight parts + a bend allowance per bend, with
+# BA = angle * (inner radius + K * thickness) and outside setback
+# OSSB = (r + t) * tan(angle / 2). Viewing convention (also for the DXF): the
+# face you look at is the one on the left of the cross-section's travel
+# direction; a bend folding toward the viewer is "нагоре" (+1), away is "надолу".
+
+FLASHING_PROFILES = {  # key -> (flange count, bend signs, +1 = up / CCW)
+    'L': (2, [1]), 'U': (3, [1, 1]), 'Z': (3, [1, -1]), 'HAT': (5, [1, -1, -1, 1]),
+}
+
+
+class FlashingPreset(db.Model):
+    """A user's saved /flashing parameter set (one row per user+name)."""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    settings_json = db.Column(db.Text, nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+
+def _fnum(value, name, lo=0.0, hi=None, allow_lo=False):
+    """float(value) within (lo, hi) - lo itself only when allow_lo - else ValueError."""
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f'Невалидна стойност: {name}.')
+    if x < lo or (x == lo and not allow_lo) or (hi is not None and x > hi):
+        raise ValueError(f'Невалидна стойност: {name}.')
+    return x
+
+
+def _flashing_section(p, outs):
+    """One cross-section (outside side sizes `outs`) -> flat layout along X, bend table, sharp-corner profile.
+    A tapered part is two of these: the start (y=0) and the end (y=length) section."""
+    count, signs = FLASHING_PROFILES[p['profile']]
+    t = _fnum(p.get('thickness'), 'дебелина')
+    r = _fnum(p.get('radius'), 'вътрешен радиус', allow_lo=True)
+    k = _fnum(p.get('k_factor'), 'K-фактор', hi=1.0, allow_lo=True)
+    angles = p.get('angles')
+    if not (isinstance(outs, list) and len(outs) == count and isinstance(angles, list) and len(angles) == count - 1):
+        raise ValueError('Невалиден брой страни/ъгли за профила.')
+    outs = [_fnum(v, f'страна {i + 1}') for i, v in enumerate(outs)]
+    angles = [_fnum(v, f'ъгъл {i + 1}', hi=179.0) for i, v in enumerate(angles)]
+    radii = [r] * (count - 1)
+    kinds = ['bend'] * (count - 1)
+
+    # Hems: an extra flange + fold (default 180°) on the inside of the neighbouring bend.
+    hem_r = _fnum(p.get('hem_radius') or 0, 'радиус на подгъвка', allow_lo=True)
+    hem_a = _fnum(p.get('hem_angle') or 180, 'ъгъл на подгъвка', hi=180.0)
+    if p.get('hem_start'):
+        outs.insert(0, _fnum(p.get('hem_length'), 'дължина на подгъвка'))
+        angles.insert(0, hem_a); signs = [signs[0]] + signs; radii.insert(0, hem_r); kinds.insert(0, 'hem')
+    if p.get('hem_end'):
+        outs.append(_fnum(p.get('hem_length'), 'дължина на подгъвка'))
+        angles.append(hem_a); signs = signs + [signs[-1]]; radii.append(hem_r); kinds.append('hem')
+
+    n = len(outs)
+    given = outs[:]
+    if p.get('dim_mode') == 'inside':
+        # Sizes entered to the INNER virtual sharp: each real bend adds t*tan(angle/2) per side to get the outside size.
+        outs = [o + sum(t * math.tan(math.radians(angles[b]) / 2) for b in (j - 1, j) if 0 <= b < n - 1 and kinds[b] == 'bend')
+                for j, o in enumerate(outs)]
+    # A hem is part of the side it folds from: labelled "<side>п", not a side of its own.
+    first = 1 if p.get('hem_start') else 0
+    labels = [str(j - first + 1) for j in range(n)]
+    if p.get('hem_start'):
+        labels[0] = '1п'
+    if p.get('hem_end'):
+        labels[-1] = f'{count}п'
+    setback = [(radii[i] + t) * (math.tan(math.radians(angles[i]) / 2) if angles[i] < 180 else 1) for i in range(n - 1)]
+    allowance = [math.radians(angles[i]) * (radii[i] + k * t) for i in range(n - 1)]
+    # A side that carries a hem keeps its stated size WITH the hem: its end is the
+    # farthest point of side+hem along the side (fold apex, or the leg's tip when
+    # the hem is opened less than 90°), so 50 stays 50 with or without a hem.
+    is_hem = [lab.endswith('п') for lab in labels]
+    side_setback = setback[:]
+    for i in range(n - 1):
+        if kinds[i] == 'hem':
+            a_rad = math.radians(angles[i])
+            leg = max(outs[i] if is_hem[i] else outs[i + 1], 0) - setback[i]
+            side_setback[i] = (radii[i] + t) if angles[i] >= 90 else (radii[i] + t) * math.sin(a_rad) + max(leg, 0) * math.cos(a_rad)
+    flanges, bends, x = [], [], 0.0
+    for j in range(n):
+        sb = setback if is_hem[j] else side_setback
+        straight = outs[j] - (sb[j - 1] if j else 0) - (sb[j] if j < n - 1 else 0)
+        if straight < 0:
+            raise ValueError(f'Страна {labels[j]} е твърде къса за радиуса/дебелината на съседните огъвки.')
+        flanges.append({'n': labels[j], 'given': given[j], 'outside': round(outs[j], 3), 'straight': round(straight, 3), 'x0': round(x, 3), 'x1': round(x + straight, 3)})
+        x += straight
+        if j < n - 1:
+            bends.append({
+                'n': j + 1, 'kind': kinds[j], 'angle': angles[j], 'dir': 'up' if signs[j] > 0 else 'down',
+                'radius': radii[j], 'allowance': round(allowance[j], 3), 'deduction': round(2 * setback[j] - allowance[j], 3),
+                'x0': round(x, 3), 'x1': round(x + allowance[j], 3), 'line': round(x + allowance[j] / 2, 3),
+            })
+            x += allowance[j]
+
+    # Cross-section with sharp corners (preview only).
+    pos, heading, profile = (0.0, 0.0), 0.0, [(0.0, 0.0)]
+    for j in range(n):
+        pos = (pos[0] + outs[j] * math.cos(heading), pos[1] + outs[j] * math.sin(heading))
+        profile.append((round(pos[0], 3), round(pos[1], 3)))
+        if j < n - 1:
+            heading += signs[j] * math.radians(angles[j])
+    return {'flanges': flanges, 'bends': bends, 'flat': round(x, 3), 'profile': profile, 't': t}
+
+
+def _flashing_unfold(p):
+    """Params dict -> flat pattern + bend table + preview geometry (raises ValueError).
+    Optional `flanges_end` = the side sizes at the far end (y=length) for a tapered part; the
+    bend lines then run slanted from their start position to their end position."""
+    if p.get('profile') not in FLASHING_PROFILES:
+        raise ValueError('Невалиден профил.')
+    length = _fnum(p.get('length'), 'дължина')
+    a = _flashing_section(p, p.get('flanges'))
+    b = _flashing_section(p, p['flanges_end']) if p.get('flanges_end') else a
+    flanges, bends = a['flanges'], a['bends']
+    for f, f_end in zip(flanges, b['flanges']):
+        f.update({'given_end': f_end['given'], 'outside_end': f_end['outside'], 'straight_end': f_end['straight'], 'x0_end': f_end['x0'], 'x1_end': f_end['x1']})
+    for bd, bd_end in zip(bends, b['bends']):
+        bd['line_end'] = bd_end['line']
+    flat, flat_end = a['flat'], b['flat']
+
+    # Contour, with optional bend-relief notches at both strip ends (each end at its own bend positions).
+    bottom, top = [(0.0, 0.0)], []
+    if p.get('relief'):
+        rw, rd = _fnum(p.get('relief_width'), 'ширина на релеф'), _fnum(p.get('relief_depth'), 'дълбочина на релеф')
+        if rd * 2 >= length:
+            raise ValueError('Релефите са твърде дълбоки за дължината.')
+        for key, width in (('line', flat), ('line_end', flat_end)):
+            edges = [0.0] + [v for bd in bends for v in (bd[key] - rw / 2, bd[key] + rw / 2)] + [width]
+            if any(edges[i] > edges[i + 1] for i in range(len(edges) - 1)):
+                raise ValueError('Релефите се застъпват или излизат извън разгъвката.')
+        for bd in bends:
+            lo, hi = bd['line'] - rw / 2, bd['line'] + rw / 2
+            bottom += [(lo, 0.0), (lo, rd), (hi, rd), (hi, 0.0)]
+            lo, hi = bd['line_end'] - rw / 2, bd['line_end'] + rw / 2
+            top = [(hi, length), (hi, length - rd), (lo, length - rd), (lo, length)] + top
+    contour = [(round(px, 3), round(py, 3)) for px, py in bottom + [(flat, 0.0), (flat_end, length)] + top + [(0.0, length)]]
+
+    holes, warnings = [], []
+    n = len(flanges)
+    for i, h in enumerate(p.get('holes') or [], 1):
+        try:
+            j = int(h.get('flange')) - 1
+            if not 0 <= j < n:
+                raise ValueError
+        except (TypeError, ValueError, AttributeError):
+            raise ValueError(f'Отвор {i}: невалидна страна.')
+        cy = _fnum(h.get('y'), f'отвор {i}: позиция по дължината', allow_lo=True)
+        fr = min(cy / length, 1.0)  # 0 at the start end, 1 at the far end (tapered sides interpolate linearly)
+        lerp = lambda v0, v1: v0 + (v1 - v0) * fr
+        f = flanges[j]
+        fx0, fx1, width = lerp(f['x0'], f['x0_end']), lerp(f['x1'], f['x1_end']), lerp(flat, flat_end)
+        cx = fx0 + _fnum(h.get('u'), f'отвор {i}: отстояние', allow_lo=True)
+        if h.get('kind') == 'rect':
+            hole = {'kind': 'rect', 'cx': cx, 'cy': cy, 'w': _fnum(h.get('w'), f'отвор {i}: ширина'), 'h': _fnum(h.get('h'), f'отвор {i}: височина')}
+            hx, hy = hole['w'] / 2, hole['h'] / 2
+        else:
+            hole = {'kind': 'circle', 'cx': cx, 'cy': cy, 'd': _fnum(h.get('d'), f'отвор {i}: диаметър')}
+            hx = hy = hole['d'] / 2
+        if cx - hx < 0 or cx + hx > width or cy - hy < 0 or cy + hy > length:
+            raise ValueError(f'Отвор {i} излиза извън разгъвката.')
+        if cx - hx < fx0 or cx + hx > fx1:
+            warnings.append(f'Отвор {i} навлиза в зона на огъване - деформира се при огъване.')
+        holes.append({k_: round(v, 3) if isinstance(v, float) else v for k_, v in hole.items()})
+
+    return {'flat_length': flat, 'flat_length_end': flat_end, 'tapered': b is not a, 'inside': p.get('dim_mode') == 'inside', 'length': length,
+            'flanges': flanges, 'bends': bends, 'profile': a['profile'], 'profile_end': b['profile'],
+            'contour': contour, 'holes': holes, 'warnings': warnings, 'thickness': a['t']}
+
+
+def _flashing_dxf(u):
+    """DXF (mm) for _flashing_unfold()'s result: CUT layer + dashed BEND_UP/BEND_DOWN lines."""
+    doc = ezdxf.new('R2000', setup=True)
+    doc.units = ezdxf.units.MM
+    doc.layers.add('CUT', color=7)
+    doc.layers.add('BEND_UP', color=3, linetype='DASHED')
+    doc.layers.add('BEND_DOWN', color=5, linetype='DASHED')
+    msp = doc.modelspace()
+    msp.add_lwpolyline(u['contour'], close=True, dxfattribs={'layer': 'CUT'})
+    for h in u['holes']:
+        if h['kind'] == 'rect':
+            x0, y0, x1, y1 = h['cx'] - h['w'] / 2, h['cy'] - h['h'] / 2, h['cx'] + h['w'] / 2, h['cy'] + h['h'] / 2
+            msp.add_lwpolyline([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], close=True, dxfattribs={'layer': 'CUT'})
+        else:
+            msp.add_circle((h['cx'], h['cy']), h['d'] / 2, dxfattribs={'layer': 'CUT'})
+    for b in u['bends']:
+        msp.add_line((b['line'], 0), (b['line_end'], u['length']), dxfattribs={'layer': 'BEND_UP' if b['dir'] == 'up' else 'BEND_DOWN'})
+    buf = io.StringIO()
+    doc.write(buf)
+    return io.BytesIO(buf.getvalue().encode('utf-8'))
+
+
+@app.route('/flashing')
+@login_required
+@app_access_required('flashing')
+def flashing():
+    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    services = allowed_only('services', Service.query.order_by(Service.name).all())
+    return render_template('flashing.html', materials=materials, services=services, active_page='flashing')
+
+
+@app.route('/api/flashing/calc', methods=['POST'])
+@login_required
+@app_access_required('flashing')
+def api_flashing_calc():
+    try:
+        return jsonify(_flashing_unfold(request.get_json(silent=True) or {}))
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+
+
+@app.route('/api/flashing/dxf', methods=['POST'])
+@login_required
+@app_access_required('flashing')
+def api_flashing_dxf():
+    data = request.get_json(silent=True) or {}
+    try:
+        u = _flashing_unfold(data)
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    width = f"{u['flat_length']:g}-{u['flat_length_end']:g}" if u['tapered'] else f"{u['flat_length']:g}"
+    name = f"Oblicovka_{data['profile']}_{width}x{u['length']:g}.dxf"
+    return send_file(_flashing_dxf(u), mimetype='application/dxf', as_attachment=True, download_name=name)
+
+
+@app.route('/api/flashing-presets')
+@login_required
+def api_flashing_presets_list():
+    rows = FlashingPreset.query.filter_by(user_id=current_user.id).order_by(FlashingPreset.name).all()
+    return jsonify({'status': 'success', 'presets': [{'id': p.id, 'name': p.name, 'settings': json.loads(p.settings_json)} for p in rows]})
+
+
+@app.route('/api/flashing-presets', methods=['POST'])
+@login_required
+def api_flashing_presets_save():
+    """Save (or overwrite by name) a /flashing preset for the current user."""
+    name = request.form.get('name', '').strip()
+    settings_json = request.form.get('settings_json', '')
+    if not name:
+        return jsonify({'status': 'error', 'message': gettext('Моля въведете име на пресет.')}), 400
+    try:
+        json.loads(settings_json)
+    except ValueError:
+        return jsonify({'status': 'error', 'message': gettext('Невалидни настройки.')}), 400
+    preset = FlashingPreset.query.filter_by(user_id=current_user.id, name=name).first()
+    if preset:
+        preset.settings_json = settings_json
+    else:
+        preset = FlashingPreset(name=name, settings_json=settings_json, user_id=current_user.id)
+        db.session.add(preset)
+    db.session.commit()
+    return jsonify({'status': 'success', 'id': preset.id})
+
+
+@app.route('/api/flashing-presets/<int:preset_id>/delete', methods=['POST'])
+@login_required
+def api_flashing_presets_delete(preset_id):
+    preset = FlashingPreset.query.get_or_404(preset_id)
+    if preset.user_id != current_user.id:
+        return jsonify({'status': 'error', 'message': gettext('Нямате достъп.')}), 403
+    db.session.delete(preset)
+    db.session.commit()
+    return jsonify({'status': 'success'})
 
 
 # ----- EMAIL DELIVERY -----
@@ -5345,7 +5732,7 @@ def sanitize_display_filename(filename):
 
 
 # Окончателно възстановен маршут за потребителското табло
-def process_dxf_upload(file, material_key, service_ids, machine_id=None):
+def process_dxf_upload(file, material_key, service_ids, machine_id=None, own_material=False):
     """
     Shared DXF-upload pipeline used by both /dashboard and /upload: saves
     the file to a temp path, extracts geometry, validates the material +
@@ -5380,11 +5767,13 @@ def process_dxf_upload(file, material_key, service_ids, machine_id=None):
             return None, None, 'Невалиден избор на материал.'
 
         services = Service.query.filter(Service.id.in_(service_ids)).all() if service_ids else []
+        services = allowed_only('services', services)
+        service_ids = [sv.id for sv in services]
         if not services:
             return None, None, 'Моля изберете поне една услуга.'
 
         price = calculate_cnc_price_multi_service(width, height, total_length, pierce_count, material_key, service_ids,
-                                                   client=current_user.client)
+                                                   client=current_user.client, own_material=own_material)
 
         dxf_file = DxfFile(
             filename=sanitize_display_filename(file.filename),
@@ -5396,7 +5785,8 @@ def process_dxf_upload(file, material_key, service_ids, machine_id=None):
             user_id=current_user.id,
             geometry_json=json.dumps(shapes),
             machine_id=machine_id,
-            services=services
+            services=services,
+            own_material=own_material
         )
         return dxf_file, pierce_count, None
     finally:
@@ -5412,7 +5802,7 @@ def dashboard():
     # own page (see upload()) so the two don't get conflated in the nav.
     user_uploads = DxfFile.query.filter_by(user_id=current_user.id).order_by(DxfFile.id.desc()).all()
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
-    services = Service.query.order_by(Service.name).all()
+    services = allowed_only('services', Service.query.order_by(Service.name).all())
     return render_template('library.html', uploads=user_uploads, materials=materials, services=services, active_page='dashboard')
 
 
@@ -5455,6 +5845,7 @@ def delete_account():
 
 @app.route('/upload', methods=['GET', 'POST'])
 @login_required
+@app_access_required('upload')
 def upload():
     if request.method == 'POST':
         file = request.files.get('file')
@@ -5471,9 +5862,12 @@ def upload():
             chosen_services = [int(v) for v in request.form.getlist('service_ids') if v.isdigit()]
             machine_id_raw = request.form.get('machine_id', '')
             selected_machine = int(machine_id_raw) if machine_id_raw and machine_id_raw.isdigit() else None
+            if selected_machine and not client_allows('machines', selected_machine):
+                selected_machine = None
 
             dxf_file, _pierce_count, error = process_dxf_upload(
-                file, chosen_material, chosen_services, machine_id=selected_machine
+                file, chosen_material, chosen_services, machine_id=selected_machine,
+                own_material=request.form.get('own_material') == '1'
             )
             if error:
                 flash(error, 'danger')
@@ -5489,9 +5883,9 @@ def upload():
             flash(gettext('Критична грешка при обработка/запис: %(error)s', error=str(e)), 'danger')
             return redirect(request.url)
 
-    machines = Machine.query.all()
+    machines = allowed_only('machines', Machine.query.all())
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
-    services = Service.query.order_by(Service.name).all()
+    services = allowed_only('services', Service.query.order_by(Service.name).all())
     return render_template('upload.html', machines=machines, materials=materials, services=services, active_page='upload')
 
 # ----------------- АДМИНИСТРАТОРСКИ МАРШРУТИ -----------------
@@ -6076,6 +6470,43 @@ def admin_client_pricing(client_id):
                             service_prices=service_prices, active_page='admin_clients')
 
 
+@app.route('/admin/clients/<int:client_id>/access', methods=['GET', 'POST'])
+@role_required('admin')
+def admin_client_access(client_id):
+    """What users linked to this client may use - apps, machines, couriers,
+    services, public details/products. Per section: "Всички" (no limit, key
+    absent from access_json), "Само избраните" (the checked ones) or
+    "Изключено" (empty list - the picker is hidden, see client_section_on())."""
+    client = Client.query.get_or_404(client_id)
+    sections = [
+        ('apps', 'Приложения', list(CLIENT_APPS.items())),
+        ('machines', 'Избор на машина', [(m.id, m.name) for m in Machine.query.order_by(Machine.name)]),
+        ('deliverers', 'Избор на куриер', [(dl.id, dl.name) for dl in Deliverer.query.order_by(Deliverer.name)]),
+        ('services', 'Услуги / операции', [(sv.id, sv.name) for sv in Service.query.order_by(Service.name)]),
+        ('details', 'Избор на детайли (общ каталог)',
+         [(d.id, d.name) for d in Detail.query.filter_by(owner_client_id=None).order_by(Detail.name)]),
+        ('products', 'Избор на продукти (общ каталог)',
+         [(pr.id, pr.name) for pr in Product.query.filter_by(owner_client_id=None).order_by(Product.name)]),
+    ]
+    if request.method == 'POST':
+        access = {}
+        for kind, _label, options in sections:
+            mode = request.form.get(f'{kind}_mode')
+            if mode == 'off':
+                access[kind] = []
+            elif mode == 'only':
+                valid = {str(k): k for k, _ in options}
+                access[kind] = [valid[v] for v in request.form.getlist(kind) if v in valid]
+        client.access_json = json.dumps(access) if access else None
+        db.session.commit()
+        log_action(f'Обновен достъп за клиент "{client.name}"', details=client.access_json)
+        flash('Достъпът за клиента беше обновен.', 'success')
+        return redirect(url_for('admin_client_access', client_id=client.id))
+    access = {kind: client_access(client, kind) for kind, _l, _o in sections}
+    return render_template('admin_client_access.html', client=client, sections=sections,
+                           access=access, active_page='admin_clients')
+
+
 @app.route('/admin/clients/<int:client_id>/pricing/update', methods=['POST'])
 @login_required
 def update_client_pricing(client_id):
@@ -6100,6 +6531,11 @@ def update_client_pricing(client_id):
         'detail_adjustment_type', 'detail_adjustment_percent')
     client.product_adjustment_type, client.product_adjustment_percent = _read_adjustment(
         'product_adjustment_type', 'product_adjustment_percent')
+    try:
+        surcharge = float(request.form.get('own_material_surcharge_percent', '').replace(',', '.') or 0)
+    except ValueError:
+        surcharge = 0.0
+    client.own_material_surcharge_percent = round(surcharge, 2) if surcharge > 0 else None
 
     existing ={sp.service_id: sp for sp in client.service_prices}
     for service in Service.query.all():
@@ -8036,11 +8472,11 @@ def detail_dxf_dashboard(detail_id):
     upload revisions onto another client's private part.
     """
     detail = Detail.query.get_or_404(detail_id)
-    if not current_user.is_staff and not _catalog_item_visible(detail.owner_client_id, current_user.client):
+    if not current_user.is_staff and not catalog_item_allowed(detail, current_user.client):
         flash('Нямате достъп до този детайл.', 'danger')
         return redirect(url_for('dashboard'))
     files = DetailDxfFile.query.filter_by(detail_id=detail_id).order_by(DetailDxfFile.uploaded_at.desc()).all()
-    services = Service.query.order_by(Service.name).all()
+    services = allowed_only('services', Service.query.order_by(Service.name).all())
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     # Plain dicts for the client-side pending-operations cart (see
     # detail_dxf_dashboard.html) to compute a live running total without a
@@ -8129,7 +8565,7 @@ def upload_detail_dxf(detail_id):
     any other attachment.
     """
     detail = Detail.query.get_or_404(detail_id)
-    if not current_user.is_staff and not _catalog_item_visible(detail.owner_client_id, current_user.client):
+    if not current_user.is_staff and not catalog_item_allowed(detail, current_user.client):
         flash('Нямате достъп до този детайл.', 'danger')
         return redirect(url_for('dashboard'))
     file = request.files.get('file')
@@ -8337,7 +8773,7 @@ def _order_item_operations_cost(order_item, rows, client=None):
         except (TypeError, ValueError):
             continue
         service = db.session.get(Service, service_id)
-        if duration_minutes <= 0 or not service:
+        if duration_minutes <= 0 or not service or not client_allows('services', service_id):
             continue
         description = (row.get('description') or '').strip() or None
         db.session.add(OrderItemOperation(
@@ -8922,6 +9358,8 @@ def create_order():
 
         machine_id_raw = request.form.get('machine_id', '')
         machine_id = int(machine_id_raw) if machine_id_raw and machine_id_raw.isdigit() else None
+        if machine_id and not client_allows('machines', machine_id):
+            machine_id = None
         client_id_raw = request.form.get('client_id', '')
         client_id = int(client_id_raw) if client_id_raw and client_id_raw.isdigit() else None
         if not current_user.is_staff:
@@ -8935,6 +9373,8 @@ def create_order():
             client_id = current_user.client_id
         deliverer_id_raw = request.form.get('deliverer_id', '')
         deliverer_id = int(deliverer_id_raw) if deliverer_id_raw and deliverer_id_raw.isdigit() else None
+        if deliverer_id and not client_allows('deliverers', deliverer_id):
+            deliverer_id = None
         # Whichever client this order is actually for - the picked Client if
         # one was chosen, else the ordering user's own linked client. Prices
         # frozen into unit_price below use this, so what got previewed in
@@ -8967,15 +9407,16 @@ def create_order():
             if qty < 1:
                 continue
 
+            own_material = bool(row.get('own_material'))
             if item_type == 'product':
                 product = Product.query.get(item_id)
                 if not product:
                     continue
-                if not current_user.is_staff and not _catalog_item_visible(product.owner_client_id, current_user.client):
+                if not current_user.is_staff and not catalog_item_allowed(product, current_user.client):
                     continue
-                pricing = calculate_product_pricing(product, pricing_client)
+                pricing = calculate_product_pricing(product, pricing_client, own_material)
                 order_item = OrderItem(
-                    order_id=new_order.id, product_id=product.id,
+                    order_id=new_order.id, product_id=product.id, own_material=own_material,
                     quantity_ordered=qty, unit_price=pricing['sell_price']
                 )
                 db.session.add(order_item)
@@ -8996,11 +9437,12 @@ def create_order():
                 detail = Detail.query.get(item_id)
                 if not detail:
                     continue
-                if not current_user.is_staff and not _catalog_item_visible(detail.owner_client_id, current_user.client):
+                if not current_user.is_staff and not catalog_item_allowed(detail, current_user.client):
                     continue
                 order_item = OrderItem(
                     order_id=new_order.id, detail_id=detail.id,
-                    quantity_ordered=qty, unit_price=detail_price_for(detail, pricing_client)
+                    quantity_ordered=qty, unit_price=detail_price_for(detail, pricing_client, own_material),
+                    own_material=own_material
                 )
                 db.session.add(order_item)
                 db.session.flush()  # need order_item.id for its operations
@@ -9008,6 +9450,8 @@ def create_order():
                 op_rows = row.get('operations')
                 if isinstance(op_rows, list) and op_rows:
                     ops_cost_per_unit = _order_item_operations_cost(order_item, op_rows, pricing_client)
+                    if own_material:
+                        ops_cost_per_unit *= _own_material_factor(pricing_client)
                     order_item.unit_price = round(order_item.unit_price + ops_cost_per_unit, 2)
 
                 _link_order_item_attachment(order_item, row.get('attachment'))
@@ -9047,11 +9491,11 @@ def create_order():
     # keep the full, unfiltered catalog (they build orders for any client).
     if not current_user.is_staff:
         viewer_client = current_user.client
-        products = [p for p in products if _catalog_item_visible(p.owner_client_id, viewer_client)]
-        details = [d for d in details if _catalog_item_visible(d.owner_client_id, viewer_client)]
-    machines = Machine.query.order_by(Machine.name).all()
+        products = [p for p in products if catalog_item_allowed(p, viewer_client)]
+        details = [d for d in details if catalog_item_allowed(d, viewer_client)]
+    machines = allowed_only('machines', Machine.query.order_by(Machine.name).all())
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
-    services = Service.query.order_by(Service.name).all()
+    services = allowed_only('services', Service.query.order_by(Service.name).all())
     # Non-staff can only ever place an order as their own linked client (see
     # the client_id override in the POST branch above) - so the picker only
     # offers that one client (or none, until they link one via the quick-
@@ -9062,7 +9506,7 @@ def create_order():
         clients = Client.query.order_by(Client.name).all()
     else:
         clients = [current_user.client] if current_user.client else []
-    deliverers = Deliverer.query.order_by(Deliverer.name).all()
+    deliverers = allowed_only('deliverers', Deliverer.query.order_by(Deliverer.name).all())
     # Pre-computed, JSON-friendly catalogs so the cart UI can add items and
     # show live prices/totals client-side without extra round-trips.
     products_data = [
@@ -9074,6 +9518,9 @@ def create_order():
             # client (see CLIENT_PRICING below) instead of just discounting
             # the already-marked-up sell price.
             'details_subtotal': calculate_product_pricing(p)['details_subtotal'],
+            # Same, but for the "Материал на клиента" option: services only (before the client's surcharge).
+            'details_ops_subtotal': round(sum(sum(op.cost for op in pd.detail.operations) * pd.quantity
+                                              for pd in p.product_details), 2),
             'extra_costs_subtotal': calculate_product_pricing(p)['extra_costs_subtotal'],
             'markup_percent': p.markup_percent,
         }
@@ -9083,7 +9530,8 @@ def create_order():
         {
             'id': d.id,
             'name': f"{localized(d, 'name')} ({localized(d.material, 'display_name')})" if d.material else localized(d, 'name'),
-            'price': d.total_price
+            'price': d.total_price,
+            'ops_total': _detail_base_price(d, None, True)
         }
         for d in details
     ]
@@ -9102,6 +9550,7 @@ def create_order():
             'detail_percent': c.detail_adjustment_percent,
             'product_type': c.product_adjustment_type,
             'product_percent': c.product_adjustment_percent,
+            'own_material_percent': c.own_material_surcharge_percent,
             'services': {
                 sp.service_id: {'type': sp.adjustment_type, 'percent': sp.adjustment_percent}
                 for sp in c.service_prices

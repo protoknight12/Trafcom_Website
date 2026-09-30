@@ -84,6 +84,16 @@
                 Прилага се върху крайната цена на Продукта (след надценката на продукта) - в поръчки, оферти и печатна оферта.
             </p>
 
+            <div class="form-group">
+                <label for="own_material_surcharge_percent">Материал на клиента - оскъпяване (%)</label>
+                <input type="text" id="own_material_surcharge_percent" name="own_material_surcharge_percent"
+                       value="{{ client.own_material_surcharge_percent or '' }}" inputmode="decimal" placeholder="напр. 15">
+            </div>
+            <p class="text-small text-muted" style="grid-column: 1 / -1; margin-top: -8px;">
+                Когато клиентът избере „Материал на клиента“ (детайл, продукт, DXF калкулатор, генератор), цената не включва материал,
+                а всичко останало (услуги, начална такса, допълнителни разходи на продукта) се увеличава с този процент - защото не печелим от материала.
+            </p>
+
             <h4 style="grid-column: 1 / -1; margin-bottom: 4px;">Услуги - процент по отделно за всяка услуга</h4>
             <div class="table-responsive" style="grid-column: 1 / -1;">
                 <table class="data-table">

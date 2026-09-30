@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="{{ get_locale() }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>{{ _('Облицовки от ламарина') }} - Trafcom</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .fl-layout { display: grid; grid-template-columns: 380px 1fr; gap: 24px; align-items: start; }
+        .fl-panel { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 20px; }
+        .fl-controls { max-height: 85vh; overflow-y: auto; }
+        .fl-title { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; color: var(--accent-secondary);
+                    margin: 18px 0 8px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px; }
+        .fl-title:first-child { margin-top: 0; }
+        .fl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+        .fl-grid label { font-size: 0.8rem; color: var(--text-muted); display: block; font-weight: normal; }
+        .fl-controls input[type=number], .fl-controls input[type=text], .fl-controls select {
+            width: 100%; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-main);
+            padding: 6px 8px; border-radius: 4px; box-sizing: border-box; }
+        .fl-profiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 8px; }
+        .fl-profiles button, .fl-mini { background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-muted);
+            padding: 8px 4px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
+        .fl-profiles button.active { background: rgba(124, 58, 237, 0.25); border-color: var(--accent-primary); color: var(--text-main); font-weight: bold; }
+        .fl-check { display: block; font-weight: normal; font-size: 0.85rem; margin: 6px 0; }
+        .fl-hole { border: 1px solid var(--border-color); border-radius: 4px; padding: 8px; margin-bottom: 8px; }
+        .fl-hole .fl-grid { grid-template-columns: repeat(3, 1fr); margin-bottom: 4px; }
+        .fl-row { display: flex; gap: 6px; margin-bottom: 8px; }
+        .fl-svg { width: 100%; background: var(--bg-input); border: 1px solid var(--border-color); border-radius: 4px; display: block; }
+        .fl-svg .cut { fill: none; stroke: var(--text-main); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+        .fl-svg .sheet { fill: none; stroke: var(--accent-primary); stroke-linejoin: round; stroke-linecap: butt; opacity: 0.9; }
+        .fl-svg .up { stroke: #22c55e; stroke-dasharray: 8 4; fill: none; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+        .fl-svg .down { stroke: #3b82f6; stroke-dasharray: 8 4; fill: none; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+        .fl-svg text { fill: var(--text-muted); font-size: 12px; font-family: sans-serif; }
+        .fl-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-bottom: 12px; }
+        .fl-table th, .fl-table td { border: 1px solid var(--border-color); padding: 4px 8px; text-align: right; }
+        .fl-table th { color: var(--text-muted); font-weight: normal; }
+        .fl-table td:first-child, .fl-table th:first-child { text-align: center; }
+        #fl-error { color: #ef4444; margin: 8px 0; min-height: 1.2em; }
+        #fl-warn { color: #f59e0b; margin: 4px 0; }
+        .fl-print-head { display: none; }
+        @media (max-width: 900px) { .fl-layout { grid-template-columns: 1fr; } }
+        @media print {
+            :root { --text-main: #000; --text-muted: #333; --bg-surface: #fff; --bg-input: #fff; --border-color: #999; }
+            body { background: #fff; color: #000; }
+            .no-print { display: none !important; }
+            .fl-layout { display: block; }
+            .fl-panel { border: none; padding: 0; }
+            .fl-print-head { display: block; }
+        }
+    </style>
+</head>
+<body>
+<div class="no-print">{% include 'partials/navbar.html' %}</div>
+
+<main class="dashboard-container" style="margin-top: 20px; max-width: 1400px;">
+    <div class="fl-layout">
+        <div class="fl-panel fl-controls no-print">
+            <div class="fl-title">{{ _('Профил') }}</div>
+            <div class="fl-profiles" id="fl-profiles">
+                <button type="button" data-p="L">Г</button>
+                <button type="button" data-p="U">U</button>
+                <button type="button" data-p="Z">Z</button>
+                <button type="button" data-p="HAT">{{ _('Шапка') }}</button>
+            </div>
+
+            <div class="fl-title">{{ _('Материал и дължина') }}</div>
+            <div class="fl-grid">
+                <div><label>{{ _('Дебелина, мм') }}</label><input type="number" id="f-thickness" value="1" min="0.1" step="0.1"></div>
+                <div><label>{{ _('Вътрешен радиус, мм') }}</label><input type="number" id="f-radius" value="1" min="0" step="0.1"></div>
+                <div><label>{{ _('K-фактор') }}</label><input type="number" id="f-k" value="0.4" min="0" max="1" step="0.01"></div>
+                <div><label>{{ _('Дължина, мм') }}</label><input type="number" id="f-length" value="1000" min="1" step="1"></div>
+            </div>
+
+            <div class="fl-title">{{ _('Страни - цифри (размери, мм)') }}</div>
+            <div class="fl-row">
+                <select id="f-dim-mode"><option value="outside">{{ _('Външни размери') }}</option><option value="inside">{{ _('Вътрешни размери') }}</option></select>
+            </div>
+            <label class="fl-check"><input type="checkbox" id="f-taper"> {{ _('Трапецовидна (различни размери в двата края)') }}</label>
+            <div class="fl-grid" id="fl-flanges"></div>
+            <div id="fl-end-wrap" style="display:none">
+                <div class="fl-title">{{ _('Страни в края на дължината') }}</div>
+                <div class="fl-grid" id="fl-flanges-end"></div>
+            </div>
+            <div class="fl-title">{{ _('Ъгли - букви (90° = прав ъгъл)') }}</div>
+            <div class="fl-grid" id="fl-angles"></div>
+
+            <div class="fl-title">{{ _('Подгъвки') }}</div>
+            <label class="fl-check"><input type="checkbox" id="f-hem-start"> {{ _('В началото') }}</label>
+            <label class="fl-check"><input type="checkbox" id="f-hem-end"> {{ _('В края') }}</label>
+            <div style="font-size:0.75rem; color: var(--text-muted);">{{ _('Подгъвката е част от страната, от която се огъва (в таблицата: 1п = подгъвка на страна 1). Тя има собствен ъгъл (буква) и дължина на подгъвката.') }}</div>
+            <div class="fl-grid">
+                <div><label>{{ _('Дължина на подгъвката') }}</label><input type="number" id="f-hem-length" value="8" min="1" step="0.5"></div>
+                <div><label>{{ _('Радиус на подгъвката') }}</label><input type="number" id="f-hem-radius" value="0" min="0" step="0.1"></div>
+                <div><label>{{ _('Ъгъл на подгъвката (180° = плоска)') }}</label><input type="number" id="f-hem-angle" value="180" min="1" max="180" step="1"></div>
+            </div>
+
+            <div class="fl-title">{{ _('Релефи на огъвките (в двата края)') }}</div>
+            <label class="fl-check"><input type="checkbox" id="f-relief"> {{ _('Изрязване в краищата на всяка огъвка') }}</label>
+            <div class="fl-grid">
+                <div><label>{{ _('Ширина, мм') }}</label><input type="number" id="f-relief-w" value="3" min="0.1" step="0.1"></div>
+                <div><label>{{ _('Дълбочина, мм') }}</label><input type="number" id="f-relief-d" value="3" min="0.1" step="0.1"></div>
+            </div>
+
+            <div class="fl-title">{{ _('Отвори / изрязвания') }}</div>
+            <div id="fl-holes"></div>
+            <button type="button" class="fl-mini" id="fl-add-hole" style="width:100%;">+ {{ _('Добави отвор') }}</button>
+
+            <div class="fl-title">{{ _('Пресети') }}</div>
+            <div class="fl-row">
+                <select id="preset-select"><option value="">-- {{ _('Избери пресет') }} --</option></select>
+                <button type="button" class="fl-mini" id="btn-preset-load">{{ _('Зареди') }}</button>
+                <button type="button" class="fl-mini" id="btn-preset-delete">✕</button>
+            </div>
+            <div class="fl-row">
+                <input type="text" id="preset-name" placeholder="{{ _('Име на пресет') }}">
+                <button type="button" class="btn-submit" id="btn-preset-save">{{ _('Запази') }}</button>
+            </div>
+
+            {% if current_user.is_admin %}
+            <div class="fl-title">{{ _('Запис като Детайл в каталога') }}</div>
+            <div class="fl-row"><input type="text" id="d-name" placeholder="{{ _('Име на детайла') }}"></div>
+            <div class="fl-row">
+                <select id="d-material" class="material-picker">{% include 'partials/material_options.html' %}</select>
+            </div>
+            <div class="fl-row">
+                <select id="d-service"><option value="">-- {{ _('Без услуга за рязане') }} --</option>
+                    {% for s in services %}<option value="{{ s.id }}">{{ localized(s, 'name') }}</option>{% endfor %}
+                </select>
+            </div>
+            <button type="button" class="btn-submit" id="btn-detail" style="width:100%;">{{ _('Запиши като Детайл') }}</button>
+            <div id="d-msg" style="margin-top:6px; font-size:0.85rem;"></div>
+            {% endif %}
+        </div>
+
+        <div class="fl-panel">
+            <div class="fl-print-head"><h2>{{ _('Спецификация на огъвките') }}</h2></div>
+            <div class="no-print" style="display:flex; gap:8px; margin-bottom:12px;">
+                <button type="button" class="btn-submit" id="btn-dxf">{{ _('Изтегли DXF разгъвка') }}</button>
+                <button type="button" class="fl-mini" onclick="window.print()">{{ _('Печат на спецификацията') }}</button>
+            </div>
+            <div id="fl-error"></div>
+            <div id="fl-warn"></div>
+            <div id="fl-summary" style="margin-bottom:12px; font-weight:bold;"></div>
+
+            <div class="fl-title">{{ _('Сечение') }}</div>
+            <svg id="svg-profile" class="fl-svg" viewBox="0 0 600 260"></svg>
+            <div class="fl-title">{{ _('Разгъвка') }}</div>
+            <svg id="svg-flat" class="fl-svg" viewBox="0 0 600 260"></svg>
+
+            <div class="fl-title">{{ _('Огъвки') }}</div>
+            <table class="fl-table" id="tbl-bends"></table>
+            <div class="fl-title">{{ _('Страни') }}</div>
+            <table class="fl-table" id="tbl-flanges"></table>
+            <p style="font-size:0.8rem; color: var(--text-muted);">
+                {{ _('Посока: „нагоре“ = огъва се към гледащия разгъвката, „надолу“ = обратно (DXF слой BEND_UP / BEND_DOWN). Размерите на страните са външни. Позиция на линията = разстояние от левия ръб на разгъвката до средата на огъвката.') }}
+            </p>
+        </div>
+    </div>
+</main>
+
+<script src="{{ url_for('static', filename='js/material_picker.js') }}"></script>
+<script>
+(function () {
+    const DEFAULTS = {
+        L: { flanges: [50, 30], angles: [90] },
+        U: { flanges: [30, 60, 30], angles: [90, 90] },
+        Z: { flanges: [20, 40, 20], angles: [90, 90] },
+        HAT: { flanges: [20, 30, 60, 30, 20], angles: [90, 90, 90, 90] },
+    };
+    const $ = id => document.getElementById(id);
+    const num = id => parseFloat($(id).value);
+    let profile = 'L';
+    let timer = null;
+
+    function numInput(cls, value, min, step) {
+        const i = document.createElement('input');
+        i.type = 'number'; i.className = cls; i.value = value; i.min = min; i.step = step;
+        i.addEventListener('input', schedule);
+        return i;
+    }
+    function labelled(text, input) {
+        const d = document.createElement('div');
+        const l = document.createElement('label'); l.textContent = text;
+        d.append(l, input);
+        return d;
+    }
+
+    function buildInputs(flanges, angles) {
+        $('fl-flanges').replaceChildren(...flanges.map(v => labelled('', numInput('in-flange', v, 0.1, 1))));
+        $('fl-flanges-end').replaceChildren(...flanges.map(v => labelled('', numInput('in-flange-end', v, 0.1, 1))));
+        $('fl-angles').replaceChildren(...angles.map(v => labelled('', numInput('in-angle', v, 1, 1))));
+        relabel();
+    }
+    // Sides are numbered 1..N along the strip (hems included), bends lettered А, Б, В...
+    const LETTERS = 'АБВГДЕЖЗ';
+    const hemOffset = () => ($('f-hem-start').checked ? 1 : 0);
+    function relabel() {
+        const off = hemOffset();
+        const taper = $('f-taper').checked;
+        document.querySelectorAll('#fl-flanges label').forEach((l, i) => l.textContent = `{{ _('Страна') }} ${i + 1}` + (taper ? ' ({{ _('начало') }})' : ''));
+        document.querySelectorAll('#fl-flanges-end label').forEach((l, i) => l.textContent = `{{ _('Страна') }} ${i + 1} ({{ _('край') }})`);
+        document.querySelectorAll('#fl-angles label').forEach((l, i) => l.textContent = `{{ _('Ъгъл') }} ${LETTERS[i + off]}`);
+    }
+
+    function setProfile(p, flanges, angles) {
+        profile = p;
+        document.querySelectorAll('#fl-profiles button').forEach(b => b.classList.toggle('active', b.dataset.p === p));
+        buildInputs(flanges || DEFAULTS[p].flanges, angles || DEFAULTS[p].angles);
+        schedule();
+    }
+    document.querySelectorAll('#fl-profiles button').forEach(b => b.addEventListener('click', () => setProfile(b.dataset.p)));
+
+    // ---- holes ----
+    function flangeLabels() {
+        const k = DEFAULTS[profile].flanges.length;
+        return [...($('f-hem-start').checked ? ['1п'] : []), ...Array.from({ length: k }, (_, i) => `${i + 1}`), ...($('f-hem-end').checked ? [`${k}п`] : [])];
+    }
+    function addHole(h) {
+        h = h || { flange: 1, kind: 'circle', u: 10, y: 100, d: 6, w: 10, h: 5 };
+        const el = document.createElement('div');
+        el.className = 'fl-hole';
+        el.innerHTML = `<div class="fl-grid">
+            <div><label>{{ _('Страна №') }}</label><select class="h-flange"></select></div>
+            <div><label>{{ _('Вид') }}</label><select class="h-kind"><option value="circle">{{ _('Кръгъл') }}</option><option value="rect">{{ _('Правоъгълен') }}</option></select></div>
+            <div style="text-align:right"><button type="button" class="fl-mini h-del" style="margin-top:16px">✕</button></div>
+            <div><label>{{ _('От ръба на стр., мм') }}</label><input type="number" class="h-u" min="0" step="0.1"></div>
+            <div><label>{{ _('По дължина, мм') }}</label><input type="number" class="h-y" min="0" step="0.1"></div>
+            <div class="h-circle"><label>⌀ {{ _('мм') }}</label><input type="number" class="h-d" min="0.1" step="0.1"></div>
+            <div class="h-rect" style="display:none"><label>{{ _('Шир. × Виск.') }}</label><input type="number" class="h-w" min="0.1" step="0.1" style="width:48%"><input type="number" class="h-h" min="0.1" step="0.1" style="width:48%"></div>
+        </div>`;
+        const q = c => el.querySelector(c);
+        q('.h-kind').value = h.kind; q('.h-u').value = h.u; q('.h-y').value = h.y; q('.h-d').value = h.d ?? 6;
+        q('.h-w').value = h.w ?? 10; q('.h-h').value = h.h ?? 5;
+        q('.h-flange').dataset.value = h.flange;
+        const toggle = () => {
+            q('.h-circle').style.display = q('.h-kind').value === 'circle' ? '' : 'none';
+            q('.h-rect').style.display = q('.h-kind').value === 'rect' ? '' : 'none';
+        };
+        q('.h-kind').addEventListener('change', () => { toggle(); schedule(); });
+        el.addEventListener('input', schedule);
+        q('.h-del').addEventListener('click', () => { el.remove(); schedule(); });
+        toggle();
+        $('fl-holes').appendChild(el);
+        refreshHoleFlanges();
+    }
+    function refreshHoleFlanges() {
+        const labels = flangeLabels(), n = labels.length;
+        document.querySelectorAll('.h-flange').forEach(s => {
+            const cur = s.value || s.dataset.value || '1';
+            s.innerHTML = labels.map((l, i) => `<option value="${i + 1}">${l}</option>`).join('');
+            s.value = Math.min(parseInt(cur), n);
+            s.onchange = schedule;
+        });
+    }
+    $('fl-add-hole').addEventListener('click', () => { addHole(); schedule(); });
+    $('f-taper').addEventListener('change', () => {
+        const on = $('f-taper').checked;
+        $('fl-end-wrap').style.display = on ? '' : 'none';
+        if (on) document.querySelectorAll('.in-flange').forEach((inp, i) => { document.querySelectorAll('.in-flange-end')[i].value = inp.value; });
+        relabel(); schedule();
+    });
+    $('f-dim-mode').addEventListener('change', schedule);
+    ['f-hem-start', 'f-hem-end'].forEach(id => $(id).addEventListener('change', () => { relabel(); refreshHoleFlanges(); schedule(); }));
+    document.querySelectorAll('#f-thickness,#f-radius,#f-k,#f-length,#f-hem-length,#f-hem-radius,#f-hem-angle,#f-relief,#f-relief-w,#f-relief-d')
+        .forEach(e => e.addEventListener('input', schedule));
+
+    // ---- settings <-> form ----
+    function collect() {
+        return {
+            profile,
+            thickness: num('f-thickness'), radius: num('f-radius'), k_factor: num('f-k'), length: num('f-length'),
+            flanges: [...document.querySelectorAll('.in-flange')].map(i => parseFloat(i.value)),
+            flanges_end: $('f-taper').checked ? [...document.querySelectorAll('.in-flange-end')].map(i => parseFloat(i.value)) : null,
+            dim_mode: $('f-dim-mode').value,
+            angles: [...document.querySelectorAll('.in-angle')].map(i => parseFloat(i.value)),
+            hem_start: $('f-hem-start').checked, hem_end: $('f-hem-end').checked,
+            hem_length: num('f-hem-length'), hem_radius: num('f-hem-radius') || 0, hem_angle: num('f-hem-angle') || 180,
+            relief: $('f-relief').checked, relief_width: num('f-relief-w'), relief_depth: num('f-relief-d'),
+            holes: [...document.querySelectorAll('.fl-hole')].map(el => {
+                const q = c => el.querySelector(c);
+                return { flange: parseInt(q('.h-flange').value), kind: q('.h-kind').value, u: parseFloat(q('.h-u').value),
+                         y: parseFloat(q('.h-y').value), d: parseFloat(q('.h-d').value),
+                         w: parseFloat(q('.h-w').value), h: parseFloat(q('.h-h').value) };
+            }),
+        };
+    }
+    function apply(s) {
+        $('f-thickness').value = s.thickness; $('f-radius').value = s.radius; $('f-k').value = s.k_factor; $('f-length').value = s.length;
+        $('f-hem-start').checked = !!s.hem_start; $('f-hem-end').checked = !!s.hem_end;
+        $('f-hem-length').value = s.hem_length ?? 8; $('f-hem-radius').value = s.hem_radius ?? 0; $('f-hem-angle').value = s.hem_angle ?? 180;
+        $('f-relief').checked = !!s.relief; $('f-relief-w').value = s.relief_width ?? 3; $('f-relief-d').value = s.relief_depth ?? 3;
+        $('fl-holes').replaceChildren();
+        profile = s.profile;
+        (s.holes || []).forEach(addHole);
+        $('f-dim-mode').value = s.dim_mode || 'outside';
+        $('f-taper').checked = !!s.flanges_end;
+        $('fl-end-wrap').style.display = s.flanges_end ? '' : 'none';
+        setProfile(s.profile, s.flanges, s.angles);
+        if (s.flanges_end) document.querySelectorAll('.in-flange-end').forEach((inp, i) => inp.value = s.flanges_end[i]);
+    }
+
+    // ---- calculate + render ----
+    function schedule() { clearTimeout(timer); timer = setTimeout(calc, 250); }
+    async function post(url, body) {
+        return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': window.CSRF_TOKEN }, body: JSON.stringify(body) });
+    }
+    async function calc() {
+        const res = await post('/api/flashing/calc', collect());
+        const data = await res.json();
+        $('fl-error').textContent = res.ok ? '' : (data.message || 'Грешка');
+        if (!res.ok) return;
+        $('fl-warn').textContent = data.warnings.join(' ');
+        render(data);
+    }
+
+    const f2 = v => (Math.round(v * 100) / 100).toString();
+    function fit(points, w, h, pad) {
+        const xs = points.map(p => p[0]), ys = points.map(p => p[1]);
+        const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+        const s = Math.min((w - 2 * pad) / ((maxX - minX) || 1), (h - 2 * pad) / ((maxY - minY) || 1));
+        return { s, x: px => pad + (px - minX) * s, y: py => h - pad - (py - minY) * s };
+    }
+    function render(d) {
+        // cross-section: the sheet drawn at real thickness
+        const P = d.profile, f = fit(d.tapered ? P.concat(d.profile_end) : P, 600, 260, 30);
+        const endLine = d.tapered ? `<polyline class="sheet" style="opacity:.35;stroke-dasharray:6 4" fill="none" points="${d.profile_end.map(p => `${f.x(p[0])},${f.y(p[1])}`).join(' ')}" stroke-width="${Math.max(2, d.thickness * f.s)}"/>` : '';
+        const pts = P.map(p => `${f.x(p[0])},${f.y(p[1])}`).join(' ');
+        const labels = d.flanges.map((fl, i) => {
+            const a = P[i], b = P[i + 1];
+            return `<text x="${f.x((a[0] + b[0]) / 2) + 6}" y="${f.y((a[1] + b[1]) / 2) - 6}">${fl.n}</text>`;
+        }).join('');
+        const corners = d.bends.map((b, i) => `<text x="${f.x(P[i + 1][0]) + 8}" y="${f.y(P[i + 1][1]) + 16}" style="fill:var(--accent-secondary);font-weight:bold;font-size:14px">${LETTERS[i]}</text>`).join('');
+        $('svg-profile').innerHTML = endLine + `<polyline class="sheet" points="${pts}" stroke-width="${Math.max(2, d.thickness * f.s)}"/>${labels}${corners}`;
+
+        // flat pattern
+        const C = d.contour, g = fit(C, 600, 260, 30);
+        const cut = `<polygon class="cut" points="${C.map(p => `${g.x(p[0])},${g.y(p[1])}`).join(' ')}"/>`;
+        const holes = d.holes.map(h => h.kind === 'rect'
+            ? `<rect class="cut" x="${g.x(h.cx - h.w / 2)}" y="${g.y(h.cy + h.h / 2)}" width="${h.w * g.s}" height="${h.h * g.s}"/>`
+            : `<circle class="cut" cx="${g.x(h.cx)}" cy="${g.y(h.cy)}" r="${h.d / 2 * g.s}"/>`).join('');
+        const bends = d.bends.map(b => `<line class="${b.dir}" x1="${g.x(b.line)}" x2="${g.x(b.line_end)}" y1="${g.y(0) + 8}" y2="${g.y(d.length) - 8}"/>
+            <text x="${g.x(b.line) - 4}" y="${g.y(d.length) - 12}">${LETTERS[b.n - 1]}</text>`).join('');
+        const dims = `<text x="${g.x(d.flat_length / 2) - 25}" y="${g.y(0) + 22}">${f2(d.flat_length)} мм</text>
+            ${d.tapered ? `<text x="${g.x(d.flat_length_end / 2) - 25}" y="${g.y(d.length) - 28}">${f2(d.flat_length_end)} мм</text>` : ''}
+            <text x="${g.x(Math.max(d.flat_length, d.flat_length_end)) + 6}" y="${g.y(d.length / 2)}">${f2(d.length)}</text>`;
+        $('svg-flat').innerHTML = cut + holes + bends + dims;
+
+        $('fl-summary').textContent = `{{ _('Разгъвка') }}: ${d.tapered ? f2(d.flat_length) + '→' + f2(d.flat_length_end) : f2(d.flat_length)} × ${f2(d.length)} мм, ${d.bends.length} {{ _('огъвки') }}`;
+        const dirTxt = { up: '↑ {{ _('нагоре') }}', down: '↓ {{ _('надолу') }}' };
+        $('tbl-bends').innerHTML = `<tr><th>{{ _('Ъгъл') }}</th><th>{{ _('Вид') }}</th><th>{{ _('Стойност') }}</th><th>{{ _('Посока') }}</th><th>R</th><th>BA</th><th>BD</th><th>{{ _('Позиция на линията') }}${d.tapered ? ' ({{ _('начало → край') }})' : ''}</th></tr>` +
+            d.bends.map(b => `<tr><td>${LETTERS[b.n - 1]}</td><td>${b.kind === 'hem' ? '{{ _('подгъвка') }}' : '{{ _('огъвка') }}'}</td><td>${b.angle}°</td><td>${dirTxt[b.dir]}</td>
+                <td>${f2(b.radius)}</td><td>${f2(b.allowance)}</td><td>${f2(b.deduction)}</td><td>${f2(b.line)}${d.tapered ? ' → ' + f2(b.line_end) : ''}</td></tr>`).join('');
+        $('tbl-flanges').innerHTML = `<tr><th>{{ _('Страна №') }}</th>${d.inside ? "<th>{{ _('Зададен (вътрешен)') }}</th>" : ''}<th>{{ _('Външен размер') }}</th><th>{{ _('Права част') }}</th><th>{{ _('От') }}</th><th>{{ _('До') }}</th></tr>` +
+            d.flanges.map(x => { const r = (a, b) => d.tapered ? `${f2(a)} → ${f2(b)}` : f2(a);
+                return `<tr><td>${x.n}</td>${d.inside ? `<td>${r(x.given, x.given_end)}</td>` : ''}<td>${r(x.outside, x.outside_end)}</td><td>${r(x.straight, x.straight_end)}</td><td>${r(x.x0, x.x0_end)}</td><td>${r(x.x1, x.x1_end)}</td></tr>`; }).join('');
+    }
+
+    function download(blob, name) {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob); a.download = name; a.click();
+        URL.revokeObjectURL(a.href);
+    }
+    async function fetchDxf() {
+        const res = await post('/api/flashing/dxf', collect());
+        if (!res.ok) throw new Error((await res.json()).message || 'DXF грешка');
+        const name = /filename\*?=(?:UTF-8'')?"?([^";]+)/.exec(res.headers.get('Content-Disposition') || '');
+        return { blob: await res.blob(), name: name ? decodeURIComponent(name[1]) : 'oblicovka.dxf' };
+    }
+    $('btn-dxf').addEventListener('click', async () => {
+        try { const r = await fetchDxf(); download(r.blob, r.name); } catch (e) { $('fl-error').textContent = e.message; }
+    });
+
+    // ---- presets ----
+    let presets = {};
+    async function loadPresets(select) {
+        try {
+            const data = await (await fetch('/api/flashing-presets')).json();
+            presets = {};
+            (data.presets || []).forEach(p => { presets[p.name] = p; });
+        } catch (e) { presets = {}; }
+        const sel = $('preset-select');
+        sel.innerHTML = '<option value="">-- {{ _('Избери пресет') }} --</option>' +
+            Object.keys(presets).sort().map(n => `<option value="${n.replace(/"/g, '&quot;')}">${n.replace(/</g, '&lt;')}</option>`).join('');
+        if (select && presets[select]) sel.value = select;
+    }
+    $('btn-preset-save').addEventListener('click', async () => {
+        const name = $('preset-name').value.trim();
+        if (!name) return;
+        const fd = new FormData();
+        fd.append('csrf_token', window.CSRF_TOKEN); fd.append('name', name); fd.append('settings_json', JSON.stringify(collect()));
+        const res = await fetch('/api/flashing-presets', { method: 'POST', body: fd });
+        if (res.ok) { $('preset-name').value = ''; loadPresets(name); }
+    });
+    $('btn-preset-load').addEventListener('click', () => { const p = presets[$('preset-select').value]; if (p) apply(p.settings); });
+    $('btn-preset-delete').addEventListener('click', async () => {
+        const p = presets[$('preset-select').value];
+        if (!p) return;
+        const fd = new FormData(); fd.append('csrf_token', window.CSRF_TOKEN);
+        await fetch(`/api/flashing-presets/${p.id}/delete`, { method: 'POST', body: fd });
+        loadPresets();
+    });
+
+    // ---- save as Detail (admin only: reuses /api/quick-create-detail) ----
+    const detailBtn = $('btn-detail');
+    if (detailBtn) detailBtn.addEventListener('click', async () => {
+        const msg = $('d-msg');
+        const name = $('d-name').value.trim();
+        if (!name) { msg.textContent = 'Моля въведете име на детайла.'; return; }
+        try {
+            const r = await fetchDxf();
+            const fd = new FormData();
+            fd.append('csrf_token', window.CSRF_TOKEN); fd.append('name', name);
+            fd.append('material', $('d-material').value); fd.append('service_id', $('d-service').value);
+            fd.append('file', new File([r.blob], r.name, { type: 'application/dxf' }));
+            const res = await fetch('/api/quick-create-detail', { method: 'POST', body: fd });
+            const data = await res.json();
+            msg.textContent = res.ok ? `Записан детайл „${data.detail.name}“ - ${f2(data.detail.price)} лв.` : (data.message || 'Грешка');
+        } catch (e) { msg.textContent = e.message; }
+    });
+
+    setProfile('L');
+    loadPresets();
+})();
+</script>
+</body>
+</html>

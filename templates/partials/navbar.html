@@ -17,10 +17,11 @@
         <div class="nav-links" id="navLinks">
             <div class="nav-section-links">
                 <div class="dropdown">
-                    <a class="dropdown-trigger {{ 'active-nav-link' if active_page in ['generator', 'upload'] else '' }}" href="#" tabindex="0" onclick="event.preventDefault()">{{ _('Приложения') }} <span class="dropdown-arrow">▼</span></a>
+                    <a class="dropdown-trigger {{ 'active-nav-link' if active_page in ['generator', 'upload', 'flashing'] else '' }}" href="#" tabindex="0" onclick="event.preventDefault()">{{ _('Приложения') }} <span class="dropdown-arrow">▼</span></a>
                     <div class="dropdown-content">
-                        <a href="{{ url_for('upload') }}">{{ _('DXF CNC Калкулатор') }}</a>
-                        <a href="{{ url_for('generator') }}">{{ _('Параметричен Генератор') }}</a>
+                        {% if client_allows('apps', 'upload') %}<a href="{{ url_for('upload') }}">{{ _('DXF CNC Калкулатор') }}</a>{% endif %}
+                        {% if client_allows('apps', 'generator') %}<a href="{{ url_for('generator') }}">{{ _('Параметричен Генератор') }}</a>{% endif %}
+                        {% if client_allows('apps', 'flashing') %}<a href="{{ url_for('flashing') }}">{{ _('Облицовки от ламарина') }}</a>{% endif %}
                     </div>
                 </div>
 

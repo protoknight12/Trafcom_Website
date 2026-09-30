@@ -104,6 +104,7 @@
                     <td>{{ client.eik or '-' }}</td>
                     <td class="text-right">
                         <a href="{{ url_for('admin_client_pricing', client_id=client.id) }}" data-frame class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;">Отстъпки/надценки</a>
+                        <a href="{{ url_for('admin_client_access', client_id=client.id) }}" data-frame class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;">Достъп</a>
                     </td>
                     <td class="text-right">
                         <a href="{{ url_for('edit_client_window', client_id=client.id) }}" class="btn-secondary" data-frame style="padding: 6px 10px; font-size: 0.78rem;">Редакция</a>

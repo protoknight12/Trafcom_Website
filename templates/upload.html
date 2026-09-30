@@ -76,7 +76,7 @@
                 <input type="file" id="dxf_file" name="file" accept=".dxf" required style="color: #fff;">
             </div>
 
-            <div class="form-group" style="margin-bottom: 24px;">
+            <div class="form-group" style="margin-bottom: 24px;{% if not client_section_on('machines') %} display: none;{% endif %}">
                 <label for="machine_id">{{ _('Свържи с машина (незадължително)') }}</label>
                 <select name="machine_id" id="machine_id" data-create="{{ create_url('machine') }}">
                     <option value="">-- {{ _('Без конкретна машина') }} --</option>
@@ -84,6 +84,10 @@
                     <option value="{{ machine.id }}">{{ machine.name }} ({% if machine.status == 'idle' %}{{ _('Свободна') }}{% elif machine.status == 'running' %}{{ _('Работи') }}{% else %}{{ _('Поддръжка') }}{% endif %})</option>
                     {% endfor %}
                 </select>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 24px;">
+                <label style="font-weight: normal;"><input type="checkbox" name="own_material" value="1"> {{ _('Материал на клиента (цената без материал)') }}</label>
             </div>
 
             <button type="submit" class="btn-submit" style="width: 100%;">{{ _('Качи и изчисли') }}</button>
