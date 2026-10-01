@@ -15,6 +15,7 @@
         #hl-svg .s { cursor: move; }
         #hl-svg .s.wall { fill: #64748b; stroke: transparent; stroke-width: 0.6; }
         #hl-svg .s.door { fill: #f5b301; stroke: transparent; stroke-width: 0.6; }
+        #hl-svg .s.window { fill: #9cc9ee; fill-opacity: 0.8; stroke: transparent; stroke-width: 0.5; }
         #hl-svg .s.fixture { fill: #b08968; }
         #hl-svg .s.stairs { fill: #c9b48c; stroke: #7c6a45; stroke-width: 0.04; }
         #hl-svg .s.block { fill: #b7bcc4; fill-opacity: 0.6; }
@@ -28,6 +29,7 @@
         .hl-panel input, .hl-panel select { width: 100%; background: var(--bg-input); border: 1px solid var(--border-color);
             color: var(--text-main); padding: 6px 8px; border-radius: 4px; box-sizing: border-box; }
         .hl-tools { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+        #hl-svg .acc { fill: #ffffff; fill-opacity: 0.55; stroke: var(--text-muted); stroke-width: 0.05; stroke-dasharray: 0.2 0.15; pointer-events: none; }
         .hl-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
         .hl-btns { display: flex; gap: 8px; margin-top: 14px; }
         .hl-add { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
@@ -65,6 +67,16 @@
                         <div><label>Номер на плана</label><input id="f-no" type="number" step="1"></div>
                         <div><label>Вид</label><select id="f-category">{% for k, v in categories.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></div>
                     </div>
+                    <div class="hl-row">
+                        <div><label>3D модел</label><select id="f-model"><option value="">- по вид -</option>{% for k, v in machine_models.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></div>
+                        <div><label>Лице към</label><select id="f-rotation"><option value="0">напред (+Z)</option><option value="90">надясно (+X)</option><option value="180">назад (−Z)</option><option value="270">наляво (−X)</option></select></div>
+                    </div>
+                    <label>Инвентар към машината (напр. прътоподавател), м</label>
+                    <div class="hl-row">
+                        <div><label>Дължина</label><input id="f-acc_length" type="number" step="0.1" min="0" max="20"></div>
+                        <div><label>Ширина</label><input id="f-acc_width" type="number" step="0.1" min="0.1" max="5"></div>
+                        <div><label>Височина</label><input id="f-acc_height" type="number" step="0.1" min="0.1" max="5"></div>
+                    </div>
                     <label>Карта на машината</label>
                     <select id="f-card"><option value="">- без карта -</option>
                         {% for c in cards %}<option value="{{ c.id }}">{{ c.title }} ({{ 'начална' if c.page == 'index' else 'услуги' }})</option>{% endfor %}
@@ -79,6 +91,12 @@
                             {% for r in rooms %}<option value="{{ r.id }}">{{ r.label }}</option>{% endfor %}
                         </select>
                     </div>
+                    <div id="g-fixture">
+                        <div class="hl-row">
+                            <div><label>3D модел</label><select id="f-fmodel"><option value="">- кутия -</option>{% for k, v in fixture_models.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></div>
+                            <div><label>Лице към</label><select id="f-frot"><option value="0">напред (+Z)</option><option value="90">надясно (+X)</option><option value="180">назад (−Z)</option><option value="270">наляво (−X)</option></select></div>
+                        </div>
+                    </div>
                     <div id="g-floors"><label id="l-floors">Етажност (брой етажи)</label><input id="f-floors" type="number" step="1" min="1" max="40"></div>
                 </div>
                 <div id="g-equip">
@@ -86,6 +104,7 @@
                     <select id="f-ekind">{% for k, v in equipment_kinds.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
                     <label>Свързан с</label>
                     <select id="f-ref"></select>
+                    <label>Лице към</label><select id="f-erot"><option value="0">напред (+Z)</option><option value="90">надясно (+X)</option><option value="180">назад (−Z)</option><option value="270">наляво (−X)</option></select>
                 </div>
                 <div class="hl-row">
                     <div><label>X, м</label><input id="f-x" type="number" step="0.1"></div>
@@ -111,6 +130,7 @@
                 <button class="btn" data-add="door" type="button">+ Врата</button>
                 <button class="btn" data-add="room" type="button">+ Помещение</button>
                 <button class="btn" data-add="fixture" type="button">+ Обзавеждане</button>
+                <button class="btn" data-add="window" type="button">+ Прозорец</button>
                 <button class="btn" data-add="stairs" type="button">+ Стълби</button>
             </div>
         </div>
@@ -169,6 +189,14 @@ svg.addEventListener('pointerdown', e => {        // only reached from empty spa
 });
 $('snap').onchange = () => { step = Number($('snap').value); };
 
+// the accessory sticks out of the machine's local -X end, rear-flush; the machine is turned by `rotation` about its centre
+function accessoryShape(m) {
+    const th = (m.rotation || 0) * Math.PI / 180, [lw, ld] = (m.rotation || 0) % 180 ? [m.depth, m.width] : [m.width, m.depth];
+    const cx = m.x + m.width / 2, cz = m.z + m.depth / 2, ax0 = -lw / 2 - m.acc_length, ax1 = -lw / 2, az0 = -ld / 2, az1 = -ld / 2 + m.acc_width;
+    const world = ([lx, lz]) => [cx + lx * Math.cos(th) + lz * Math.sin(th), cz - lx * Math.sin(th) + lz * Math.cos(th)];
+    const pts = [[ax0, az0], [ax1, az0], [ax1, az1], [ax0, az1]].map(world).map(p => p.join(',')).join(' ');
+    return el('polygon', { class: 'acc', points: pts });
+}
 function draw() {
     svg.replaceChildren();
     for (let i = 0; i <= 56; i += 4) svg.appendChild(el('line', { class: 'grid', x1: i, y1: 0, x2: i, y2: 12 }));
@@ -186,6 +214,7 @@ function draw() {
         }
     });
     MACHINES.forEach(m => {
+        if (m.acc_length > 0) svg.appendChild(accessoryShape(m));
         const r = el('rect', { class: 'm' + (m === sel ? ' sel' : ''), x: m.x, y: m.z, width: m.width, height: m.depth, fill: COLORS[m.category] || COLORS.util });
         r.addEventListener('pointerdown', e => startDrag(e, m));
         svg.appendChild(r);
@@ -213,9 +242,9 @@ function select(o) {
         $('g-shape').style.display = o._t === 'shape' ? '' : 'none';
         $('g-equip').style.display = o._t === 'equip' ? '' : 'none';
         COMMON.forEach(f => $('f-' + f).value = o[f] ?? '');
-        if (o._t === 'machine') { $('f-no').value = o.no ?? ''; $('f-category').value = o.category; $('f-card').value = o.card_id ?? ''; }
-        else if (o._t === 'shape') { $('f-kind').value = o.kind; $('f-room').value = o.room_id ?? ''; $('f-floors').value = o.floors ?? 1; }
-        else { $('f-ekind').value = o.kind; fillRef(o.kind, o.ref_id); }
+        if (o._t === 'machine') { $('f-no').value = o.no ?? ''; $('f-category').value = o.category; $('f-card').value = o.card_id ?? ''; $('f-model').value = o.model ?? ''; $('f-rotation').value = o.rotation ?? 0; ['acc_length', 'acc_width', 'acc_height'].forEach(k => $('f-' + k).value = o[k] ?? ''); }
+        else if (o._t === 'shape') { $('f-kind').value = o.kind; $('f-room').value = o.room_id ?? ''; $('f-floors').value = o.floors ?? 1; $('f-fmodel').value = o.model ?? ''; $('f-frot').value = o.rotation ?? 0; }
+        else { $('f-ekind').value = o.kind; fillRef(o.kind, o.ref_id); $('f-erot').value = o.rotation ?? 0; }
         syncKind();
     }
     draw();
@@ -224,6 +253,7 @@ function syncKind() {
     const kind = $('f-kind').value, isShape = sel && sel._t === 'shape';
     $('g-room').style.display = isShape && kind === 'room' ? '' : 'none';
     $('g-floors').style.display = isShape && (kind === 'room' || kind === 'stairs') ? '' : 'none';
+    $('g-fixture').style.display = isShape && kind === 'fixture' ? '' : 'none';
     $('l-floors').textContent = kind === 'stairs' ? 'Брой стъпала' : 'Етажност (брой етажи)';
     $('l-height').textContent = kind === 'room' ? 'Височина на етаж, м' : kind === 'stairs' ? 'Височина на изкачване, м' : 'Височина, м';
 }
@@ -272,10 +302,13 @@ $('hl-save').onclick = () => {
     if (sel._t === 'machine') {
         sel.no = $('f-no').value === '' ? null : Number($('f-no').value);
         sel.category = $('f-category').value; sel.card_id = $('f-card').value ? Number($('f-card').value) : null;
+        sel.model = $('f-model').value || null; sel.rotation = Number($('f-rotation').value);
+        ['acc_length', 'acc_width', 'acc_height'].forEach(k => sel[k] = Number($('f-' + k).value) || 0);
     } else if (sel._t === 'shape') {
         sel.kind = $('f-kind').value; sel.room_id = $('f-room').value ? Number($('f-room').value) : null; sel.floors = Number($('f-floors').value) || 1;
+        sel.model = $('f-fmodel').value || null; sel.rotation = Number($('f-frot').value);
     } else {
-        sel.kind = $('f-ekind').value; sel.ref_id = $('f-ref').value ? Number($('f-ref').value) : null;
+        sel.kind = $('f-ekind').value; sel.ref_id = $('f-ref').value ? Number($('f-ref').value) : null; sel.rotation = Number($('f-erot').value);
     }
     save(sel);
 };
@@ -293,6 +326,7 @@ const NEW = {
     panel: eq('panel', '', 0.8, 0.25, 1.2, 1.4),
     wall: { _t: 'shape', id: null, kind: 'wall', name: '', x: 2, z: 2, width: 4, depth: 0.4, height: 5, elevation: 0, floors: 1, room_id: null, label: '' },
     door: { _t: 'shape', id: null, kind: 'door', name: 'Врата', x: 2, z: 2, width: 4, depth: 0.15, height: 4, elevation: 0, floors: 1, room_id: null, label: 'Врата' },
+    window: { _t: 'shape', id: null, kind: 'window', name: '', x: 2, z: 2, width: 3, depth: 0.3, height: 1.4, elevation: 3.3, floors: 1, model: null, rotation: 0, room_id: null, label: '' },
     fixture: { _t: 'shape', id: null, kind: 'fixture', name: '', x: 2, z: 2, width: 1, depth: 0.6, height: 0.9, elevation: 0, floors: 1, room_id: null, label: '' },
     stairs: { _t: 'shape', id: null, kind: 'stairs', name: 'Стълби', x: 2, z: 2, width: 4.16, depth: 1.25, height: 2.38, elevation: 0, floors: 14, room_id: null, label: 'Стълби' },
     room: { _t: 'shape', id: null, kind: 'room', name: 'Ново помещение', x: 2, z: 2, width: 8, depth: 6, height: 3, elevation: 0, floors: 1, room_id: null, label: 'Ново помещение' },

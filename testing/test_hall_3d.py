@@ -54,7 +54,7 @@ def test_seed_move_link_and_client_page(admin_client):
     db.session.add(card)
     db.session.commit()
 
-    m = HallMachine.query.filter_by(no=14).one()
+    m = HallMachine.query.filter_by(no=3).one()
     body = m.as_dict() | {'x': 7.5, 'z': 2.0, 'card_id': card.id}
     r = admin_client.post('/admin/hall/save', json=body)
     assert r.status_code == 200 and r.get_json()['x'] == 7.5
@@ -119,6 +119,7 @@ def test_factory3d_passes_solar_slopes_per_inverter(admin_client):
 def test_equipment_elevation_link_and_room_floors(admin_client):
     from app import HallEquipment, HallShape, ElectricalPanel, Building, Room
     admin_client.get('/admin/hall')
+    seeded = HallEquipment.query.count()          # battery stacks seeded on first visit
     b = Building(name='Хале')
     db.session.add(b)
     db.session.flush()
@@ -141,4 +142,14 @@ def test_equipment_elevation_link_and_room_floors(admin_client):
     r = admin_client.post('/admin/hall/shape/save', json=s.as_dict() | {'floors': 3, 'height': 3.2, 'elevation': 0.5})
     assert (r.get_json()['floors'], r.get_json()['height'], r.get_json()['elevation']) == (3, 3.2, 0.5)
     assert admin_client.post(f"/admin/hall/equipment/{d['id']}/delete").status_code == 200
-    assert HallEquipment.query.count() == 0
+    assert HallEquipment.query.count() == seeded
+
+
+def test_machine_accessory_sized_separately(admin_client):
+    admin_client.get('/admin/hall')
+    m = HallMachine.query.filter_by(no=6).one()          # B8 lathe: seeded with a 3.5 m bar feeder
+    assert (m.acc_length, m.width) == (3.5, 2.4)
+    r = admin_client.post('/admin/hall/save', json=m.as_dict() | {'acc_length': 4.2, 'acc_width': 0.6, 'acc_height': 0.9})
+    d = r.get_json()
+    assert r.status_code == 200 and (d['acc_length'], d['acc_width'], d['acc_height']) == (4.2, 0.6, 0.9) and d['width'] == 2.4
+    assert admin_client.post('/admin/hall/save', json=m.as_dict() | {'acc_length': 0}).get_json()['acc_length'] == 0

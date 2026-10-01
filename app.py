@@ -2503,22 +2503,29 @@ HALL_CATEGORIES = {'laser': 'Лазер', 'mill': 'Фрезов център', '
 # Layout traced from the architect's floor plan (metres; X along the hall, Z from the back wall).
 # (no, name, category, x0, x1, z0, z1, height)
 HALL_SEED = [
-    (14, 'CNC лазерна машина Eckert', 'laser', 5.26, 16.75, 1.4, 4.44, 2.0),
-    (15, 'CNC лазерна машина CSF 3015/700', 'laser', 0.68, 3.63, 5.0, 9.18, 2.0),
-    (12, 'CNC абкант Durma', 'press', 5.6, 11.57, 9.24, 11.0, 2.2),
-    (13, 'CNC струг. обр. център Benzinger TNI B6', 'lathe', 13.0, 16.9, 9.24, 11.0, 2.2),
-    (11, 'Винтов компресор', 'util', 27.69, 28.59, 4.41, 6.88, 1.8),
-    (6, 'CNC струг. обр. център Benzinger TNI B8', 'lathe', 44.06, 46.69, 0.79, 2.04, 2.2),
-    (9, 'CNC струг Eguro', 'lathe', 46.83, 47.94, 0.79, 2.04, 2.0),
-    (10, 'CNC струг Eguro', 'lathe', 48.3, 49.81, 0.79, 2.04, 2.0),
-    (1, 'CNC верт. обр. център HURCO', 'mill', 50.27, 52.64, 0.79, 2.42, 2.6),
-    (7, 'CNC струг Star', 'lathe', 52.91, 54.5, 0.79, 3.64, 2.0),
-    (5, 'CNC струг. обр. център Gildemeister Twin 42', 'lathe', 53.38, 54.97, 5.12, 8.41, 2.4),
-    (2, 'CNC верт. обр. център HURCO', 'mill', 51.96, 53.39, 8.99, 11.32, 2.6),
-    (3, 'CNC верт. обр. център DMG DMU 75 monoblok', 'mill', 48.3, 51.35, 8.99, 11.32, 2.6),
-    (4, 'CNC струг. обр. център DMG CTX 510', 'lathe', 44.06, 47.1, 6.51, 7.76, 2.2),
-    (8, 'CNC струг Star', 'lathe', 48.42, 51.47, 6.51, 7.76, 2.0),
+    (3, 'CNC верт. обр. център DMG DMU 75 monoblok', 'mill', 45.5, 48.55, 9.2, 11.53, 3.2),
+    (4, 'CNC струг. обр. център DMG CTX 510', 'lathe', 36.6, 39.64, 6.0, 7.25, 2.2),
+    (5, 'CNC струг. обр. център Gildemeister Twin 42 №1', 'lathe', 53.4, 54.99, 8.8, 11.2, 2.4),
+    (6, 'CNC струг. обр. център Benzinger TNI B8', 'lathe', 41.97, 44.37, 1.3, 2.55, 2.2),
+    (17, 'CNC струг. обр. център Gildemeister Twin 42 №2', 'lathe', 50.3, 51.9, 0.8, 3.2, 2.4),
+    (18, 'CNC струг Star KJR (с прътоподавател)', 'lathe', 47.45, 49.85, 1.2, 2.7, 1.9),
+    (19, 'CNC фреза Fanuc Robodrill (4 оси)', 'mill', 43.4, 45.4, 7.0, 9.0, 2.6),
 ]
+# machines that were on the architect's plan but are gone from this hall (or moved to hall 2) - see migration/reset_hall_from_plan.py
+# accessory ("инвентар") of a machine, sized separately: (length, width, height) in m. It sticks out of the machine's
+# back-left side (local -X, see hall_models.js) - for a bar lathe this is the 3.5 m bar feeder.
+HALL_ACC_SEED = {5: (3.5, 0.7, 0.8), 6: (3.5, 0.7, 0.8), 17: (3.5, 0.7, 0.8), 18: (3.5, 0.7, 0.8)}
+HALL_SEED_REMOVED = {1, 2, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+
+
+# 3D look of a hall machine (static/js/hall_models.js): model key + which way its front faces
+# (degrees: 0 = +Z toward the front wall, 90 = +X, 180 = -Z, 270 = -X)
+HALL_MODELS = {'vmc': 'Вертикален обработващ център', 'lathe': 'Струг / обработващ център', 'bar_lathe': 'Струг с прътоподавател',
+               'dmu': 'DMG DMU 75 (с тъмен шкаф и стружкоотвод)', 'laser': 'Лазер за ламарина', 'press': 'Абкант', 'compressor': 'Компресор', 'dark_box': 'Голяма тъмна машина', 'box': 'Кутия'}
+HALL_FIXTURE_MODELS = {'extinguishers': 'Пожарогасители', 'hose_reel': 'Барабан за въздух', 'tool_cart': 'Работна количка',
+                       'armchair': 'Фотьойл', 'drill_press': 'Колонна бормашина', 'tv': 'Телевизор', 'locker': 'Метален шкаф', 'shelf': 'Стелаж'}
+HALL_LOOK_SEED = {3: ('dmu', 0), 4: ('lathe', 0), 5: ('bar_lathe', 270), 6: ('bar_lathe', 0), 17: ('bar_lathe', 90),
+                  18: ('bar_lathe', 0), 19: ('vmc', 0)}
 
 
 class HallMachine(db.Model):
@@ -2535,17 +2542,23 @@ class HallMachine(db.Model):
     depth = db.Column(db.Float, nullable=False, default=2.0)
     height = db.Column(db.Float, nullable=False, default=2.0)
     elevation = db.Column(db.Float, nullable=False, default=0.0)   # bottom of the box above the floor, m
+    model = db.Column(db.String(30), nullable=True)               # key of HALL_MODELS
+    rotation = db.Column(db.Integer, nullable=False, default=0)   # front direction, see HALL_LOOK_SEED
+    acc_length = db.Column(db.Float, nullable=False, default=0.0)  # accessory (e.g. bar feeder) sized separately; 0 = none
+    acc_width = db.Column(db.Float, nullable=False, default=0.7)
+    acc_height = db.Column(db.Float, nullable=False, default=0.8)
     card_id = db.Column(db.Integer, db.ForeignKey('service_machine_card.id'), nullable=True)
 
     card = db.relationship('ServiceMachineCard')
 
     def as_dict(self):
         return {'id': self.id, 'no': self.no, 'name': self.name, 'category': self.category, 'x': self.x, 'z': self.z,
-                'width': self.width, 'depth': self.depth, 'height': self.height, 'elevation': self.elevation, 'card_id': self.card_id}
+                'width': self.width, 'depth': self.depth, 'height': self.height, 'elevation': self.elevation, 'model': self.model, 'rotation': self.rotation,
+                'acc_length': self.acc_length, 'acc_width': self.acc_width, 'acc_height': self.acc_height, 'card_id': self.card_id}
 
 
-HALL_SHAPE_KINDS = {'wall': 'Стена', 'door': 'Врата', 'room': 'Помещение', 'fixture': 'Обзавеждане', 'stairs': 'Стълби', 'block': 'Съседна сграда'}
-# (kind, name, x, z, width, depth, height[, elevation[, floors]]) - read from the plan's vector drawing;
+HALL_SHAPE_KINDS = {'wall': 'Стена', 'door': 'Врата', 'room': 'Помещение', 'fixture': 'Обзавеждане', 'window': 'Прозорец', 'stairs': 'Стълби', 'block': 'Съседна сграда'}
+# (kind, name, x, z, width, depth, height[, elevation[, floors[, model]]]) - read from the plan's vector drawing;
 # for 'stairs' floors = number of steps, height = total rise
 HALL_SHAPES_SEED = [
     # exterior walls (0.25 m), sectional gates in the front wall at 24-28 / 40-44 / 52-56 m
@@ -2566,6 +2579,7 @@ HALL_SHAPES_SEED = [
     ('room', 'WC 1', 29.15, 10.28, 1.25, 1.7, 3), ('room', 'WC 2', 30.52, 10.28, 1.2, 1.7, 3), ('room', 'Баня', 31.84, 10.28, 1.95, 1.7, 3),
     ('room', 'Производствено помещение - лява част', 0.25, 0.26, 28.65, 11.72, 5),
     ('room', 'Производствено помещение - дясна част', 34.04, 0.26, 21.84, 11.72, 5),
+    ('window', 'Прозорци', 28.5, 11.95, 11, 0.3, 1.4, 3.3), ('window', 'Прозорци', 44.5, 11.95, 7, 0.3, 1.4, 3.3),
     # furniture / sanitary ware (x, z, size, height, elevation)
     ('fixture', 'Маса', 30.15, 5.38, 1.8, 0.8, 0.75),
     ('fixture', '', 30.1, 4.85, 0.5, 0.5, 0.45), ('fixture', '', 30.7, 4.85, 0.5, 0.5, 0.45), ('fixture', '', 31.3, 4.85, 0.5, 0.5, 0.45),
@@ -2573,6 +2587,11 @@ HALL_SHAPES_SEED = [
     ('fixture', 'Кухненски плот', 29.15, 7.83, 4.64, 0.57, 0.9), ('fixture', 'Гардероби', 29.2, 8.55, 1.8, 0.6, 1.9),
     ('fixture', '', 31.57, 8.56, 0.45, 0.38, 0.15, 0.8), ('fixture', '', 32.32, 8.56, 0.45, 0.38, 0.15, 0.8),
     ('fixture', '', 29.57, 11.3, 0.43, 0.55, 0.4), ('fixture', '', 30.92, 11.3, 0.43, 0.55, 0.4),
+    # TV on the back wall behind the B8 lathe, right of the panel, ~1.4 m to its bottom edge (owner: about 1.8 m up)
+    ('fixture', 'Телевизор', 40.7, 0.25, 1.4, 0.06, 0.8, 1.4, 1, 'tv'),
+    # rest corner between the B8 bar feeder and the CTX (video 96-110 s)
+    ('fixture', 'Фотьойл', 36.9, 3.5, 0.8, 0.8, 0.9, 0, 1, 'armchair'), ('fixture', 'Фотьойл', 39.0, 3.7, 0.8, 0.8, 0.9, 0, 1, 'armchair'),
+    ('fixture', 'Масичка', 37.9, 4.1, 0.9, 0.6, 0.55), ('fixture', 'Колонна бормашина', 35.4, 3.0, 0.5, 0.6, 1.7, 0, 1, 'drill_press'),
     # stairs: 14 steps 17 x 32 cm (13 treads = 4.16 m, rise 2.38 m), rising toward -X, landing at the top
     ('stairs', 'Стълби', 35.0, 10.6, 4.16, 1.25, 2.38, 0, 14), ('fixture', 'Площадка', 34.04, 10.6, 0.96, 1.25, 0.17, 2.21),
     # neighbours
@@ -2594,20 +2613,23 @@ class HallShape(db.Model):
     height = db.Column(db.Float, nullable=False, default=5.0)   # rooms: height of ONE floor
     elevation = db.Column(db.Float, nullable=False, default=0.0)  # bottom above the ground floor, m
     floors = db.Column(db.Integer, nullable=False, default=1)      # rooms: number of storeys (етажност)
+    model = db.Column(db.String(30), nullable=True)               # fixtures: key of HALL_FIXTURE_MODELS
+    rotation = db.Column(db.Integer, nullable=False, default=0)
     room_id = db.Column(db.Integer, db.ForeignKey('room.id'), nullable=True)
 
     room = db.relationship('Room')
 
     def as_dict(self):
         return {'id': self.id, 'kind': self.kind, 'name': self.name or '', 'x': self.x, 'z': self.z, 'width': self.width,
-                'depth': self.depth, 'height': self.height, 'elevation': self.elevation, 'floors': self.floors, 'room_id': self.room_id,
+                'depth': self.depth, 'height': self.height, 'elevation': self.elevation, 'floors': self.floors, 'model': self.model, 'rotation': self.rotation, 'room_id': self.room_id,
                 'label': (f'{self.room.building.name} · {self.room.name}' if self.room else self.name) or ''}
 
 
 def _hall_shape_from_seed(t):
     kind, name, x, z, w, d, h = t[:7]
     return HallShape(kind=kind, name=name, x=x, z=z, width=w, depth=d, height=h,
-                     elevation=t[7] if len(t) > 7 else 0.0, floors=t[8] if len(t) > 8 else 1)
+                     elevation=t[7] if len(t) > 7 else 0.0, floors=t[8] if len(t) > 8 else 1,
+                     model=t[9] if len(t) > 9 else None)
 
 
 def _hall_shapes():
@@ -2634,6 +2656,7 @@ class HallEquipment(db.Model):
     depth = db.Column(db.Float, nullable=False, default=0.4)
     height = db.Column(db.Float, nullable=False, default=1.0)
     elevation = db.Column(db.Float, nullable=False, default=0.0)
+    rotation = db.Column(db.Integer, nullable=False, default=0)   # front direction, see HALL_LOOK_SEED
 
     def target(self):
         model = {'inverter': ModbusDevice, 'battery': BatteryStack, 'panel': ElectricalPanel}[self.kind]
@@ -2642,8 +2665,20 @@ class HallEquipment(db.Model):
     def as_dict(self):
         t = self.target()
         return {'id': self.id, 'kind': self.kind, 'ref_id': self.ref_id, 'name': self.name or '', 'x': self.x, 'z': self.z,
-                'width': self.width, 'depth': self.depth, 'height': self.height, 'elevation': self.elevation,
+                'width': self.width, 'depth': self.depth, 'height': self.height, 'elevation': self.elevation, 'rotation': self.rotation,
                 'label': self.name or (t.name if t else '') or HALL_EQUIPMENT_KINDS[self.kind]}
+
+
+# (kind, name, x, z, width, depth, height, elevation, rotation) - Dyness battery stacks along the right wall facing the hall
+HALL_EQUIPMENT_SEED = [('battery', f'Батериен стек {i + 1}', 55.2, 0.8 + i * 0.75, 0.6, 0.6, 1.9, 0, 270) for i in range(4)]
+
+
+def _hall_equipment():
+    if HallEquipment.query.count() == 0:
+        for kind, name, x, z, w, d, h, el, rot in HALL_EQUIPMENT_SEED:
+            db.session.add(HallEquipment(kind=kind, name=name, x=x, z=z, width=w, depth=d, height=h, elevation=el, rotation=rot))
+        db.session.commit()
+    return HallEquipment.query.order_by(HallEquipment.id).all()
 
 
 def _hall_equipment_choices():
@@ -2660,8 +2695,11 @@ def _hall_machines():
     """All hall machines, seeding the plan's layout the first time (table exists after db.create_all)."""
     if HallMachine.query.count() == 0:
         for no, name, cat, x0, x1, z0, z1, h in HALL_SEED:
+            model, rot = HALL_LOOK_SEED.get(no, (None, 0))
+            al, aw, ah = HALL_ACC_SEED.get(no, (0.0, 0.7, 0.8))
             db.session.add(HallMachine(no=no, name=name, category=cat, x=x0, z=z0, width=round(x1 - x0, 2),
-                                       depth=round(z1 - z0, 2), height=h))
+                                       depth=round(z1 - z0, 2), height=h, model=model, rotation=rot,
+                                       acc_length=al, acc_width=aw, acc_height=ah))
         db.session.commit()
     return HallMachine.query.order_by(HallMachine.no, HallMachine.id).all()
 
@@ -5657,7 +5695,7 @@ def factory3d():
             solar['l'], solar['w'] = inv.panel_model.length_mm / 1000, inv.panel_model.width_mm / 1000
         solar['slopes'].append([[p.row, p.col] for p in SolarPanel.query.filter_by(inverter_device_id=inv.id)])
     return render_template('factory3d.html', machines=out, solar=solar, shapes=[h.as_dict() for h in _hall_shapes()],
-                           equipment=[e.as_dict() for e in HallEquipment.query.order_by(HallEquipment.id)], active_page='factory3d')
+                           equipment=[e.as_dict() for e in _hall_equipment()], active_page='factory3d')
 
 
 @app.route('/admin/hall')
@@ -5668,8 +5706,9 @@ def admin_hall():
                            shapes=[h.as_dict() for h in _hall_shapes()], shape_kinds=HALL_SHAPE_KINDS,
                            rooms=[{'id': r.id, 'label': f'{r.building.name} · {r.name}'} for r in Room.query.join(Building).order_by(Building.name, Room.name).all()],
                            cards=[{'id': c.id, 'title': c.title, 'page': c.page} for c in cards],
-                           equipment=[e.as_dict() for e in HallEquipment.query.order_by(HallEquipment.id)],
+                           equipment=[e.as_dict() for e in _hall_equipment()],
                            equipment_kinds=HALL_EQUIPMENT_KINDS, equipment_choices=_hall_equipment_choices(),
+                           machine_models=HALL_MODELS, fixture_models=HALL_FIXTURE_MODELS,
                            categories=HALL_CATEGORIES, active_page='admin_hall')
 
 
@@ -5684,6 +5723,10 @@ def _hall_apply(m, data):
         m.depth = max(0.3, min(12.0, float(data['depth'])))
         m.height = max(0.3, min(5.0, float(data['height'])))
         m.elevation = max(0.0, min(20.0, float(data.get('elevation') or 0)))
+        m.rotation = int(data.get('rotation') or 0)
+        m.acc_length = max(0.0, min(20.0, float(data.get('acc_length') or 0)))
+        m.acc_width = max(0.1, min(5.0, float(data.get('acc_width') or 0.7)))
+        m.acc_height = max(0.1, min(5.0, float(data.get('acc_height') or 0.8)))
         card_id = data.get('card_id')
         m.card_id = int(card_id) if card_id else None
     except (KeyError, ValueError, TypeError):
@@ -5693,6 +5736,9 @@ def _hall_apply(m, data):
     if data.get('category') not in HALL_CATEGORIES:
         return 'Невалиден вид.'
     m.category = data['category']
+    if m.rotation not in (0, 90, 180, 270) or (data.get('model') and data['model'] not in HALL_MODELS):
+        return 'Невалиден модел или посока.'
+    m.model = data.get('model') or None
     if m.card_id and not db.session.get(ServiceMachineCard, m.card_id):
         return 'Картата не съществува.'
     return None
@@ -5732,6 +5778,7 @@ def admin_hall_shape_save():
         h.height = max(0.0, min(10.0, float(data['height'])))
         h.elevation = max(0.0, min(20.0, float(data.get('elevation') or 0)))
         h.floors = max(1, min(40, int(data.get('floors') or 1)))
+        h.rotation = int(data.get('rotation') or 0)
         h.room_id = int(data['room_id']) if data.get('room_id') and data.get('kind') == 'room' else None
     except (KeyError, ValueError, TypeError):
         return jsonify({'error': 'Невалидни данни.'}), 400
@@ -5739,6 +5786,9 @@ def admin_hall_shape_save():
         return jsonify({'error': 'Невалиден вид.'}), 400
     if h.room_id and not db.session.get(Room, h.room_id):
         return jsonify({'error': 'Помещението не съществува.'}), 400
+    if h.rotation not in (0, 90, 180, 270) or (data.get('model') and data['model'] not in HALL_FIXTURE_MODELS):
+        return jsonify({'error': 'Невалиден модел или посока.'}), 400
+    h.model = data.get('model') or None
     h.kind = data['kind']
     h.name = str(data.get('name', '')).strip()[:150]
     db.session.add(h)
@@ -5776,8 +5826,11 @@ def admin_hall_equipment_save():
         e.depth = max(0.1, min(20.0, float(data['depth'])))
         e.height = max(0.1, min(10.0, float(data['height'])))
         e.elevation = max(0.0, min(20.0, float(data.get('elevation') or 0)))
+        e.rotation = int(data.get('rotation') or 0)
     except (KeyError, ValueError, TypeError):
         return jsonify({'error': 'Невалидни данни.'}), 400
+    if e.rotation not in (0, 90, 180, 270):
+        return jsonify({'error': 'Невалидна посока.'}), 400
     e.name = str(data.get('name', '')).strip()[:150]
     if e.ref_id and e.target() is None:
         return jsonify({'error': 'Свързаният елемент не съществува.'}), 400

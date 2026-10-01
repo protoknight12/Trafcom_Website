@@ -46,9 +46,13 @@
         <span class="sep">{{ _('Стени') }}</span>
         <div class="grp"><button class="f3-btn active" id="f3-walls">{{ _('Прозрачни') }}</button></div>
         <span class="sep">{{ _('Покрив') }}</span>
-        <div class="grp"><button class="f3-btn active" id="f3-roof">{{ _('Показан') }}</button></div>
+        <div class="grp"><button class="f3-btn" id="f3-roof">{{ _('Скрит') }}</button></div>
+        <span class="sep">{{ _('Машини: номера и имена') }}</span>
+        <div class="grp"><button class="f3-btn active" id="f3-mlabels">{{ _('Показани') }}</button></div>
+        <span class="sep">{{ _('Други надписи') }}</span>
+        <div class="grp"><button class="f3-btn active" id="f3-labels">{{ _('Показани') }}</button></div>
         <span class="sep">{{ _('Соларни панели') }}</span>
-        <div class="grp"><button class="f3-btn active" id="f3-solar">{{ _('Показани') }}</button></div>
+        <div class="grp"><button class="f3-btn" id="f3-solar">{{ _('Скрити') }}</button></div>
     </div>
     <div id="f3-wrap">
         <div id="f3-info"></div>
@@ -69,6 +73,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { buildMachine, buildAccessory, buildEquipment, buildFixture, makeTextures } from "{{ url_for('static', filename='js/hall_models.js') }}";
 
 const MACHINES = {{ machines|tojson }};
 const EQUIP = {{ equipment|tojson }};   // HallEquipment: inverter / battery / panel, elevation = bottom above the floor
@@ -88,14 +93,20 @@ scene.background = new THREE.Color(dark ? 0x12161c : 0xe9eef4);
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 600);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(devicePixelRatio);
+renderer.shadowMap.enabled = true;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
 wrap.prepend(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.maxPolarAngle = Math.PI / 2 - 0.02;
 scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.1));
 const sun = new THREE.DirectionalLight(0xffffff, 1.2);
-sun.position.set(20, 50, 40);
-scene.add(sun);
+sun.position.set(48, 50, 36);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -40, right: 40, top: 22, bottom: -22, near: 1, far: 160 });
+sun.target.position.set(28, 0, 6);
+scene.add(sun, sun.target);
 
 function box(x0, x1, z0, z1, y0, y1, mat) {
     const m = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0), mat);
@@ -103,7 +114,10 @@ function box(x0, x1, z0, z1, y0, y1, mat) {
     scene.add(m);
     return m;
 }
-function label(text, x, y, z, size) {
+const labels = new THREE.Group();          // rooms / doors / props / equipment captions
+const machineLabels = new THREE.Group();   // machine numbers + names, hidden separately
+scene.add(labels, machineLabels);
+function label(text, x, y, z, size, target = labels) {
     const c = document.createElement('canvas'); c.width = 768; c.height = 96;
     const g = c.getContext('2d');
     g.font = 'bold 44px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
@@ -111,13 +125,34 @@ function label(text, x, y, z, size) {
     g.fillStyle = dark ? '#e6edf5' : '#1b2430'; g.fillText(text, 384, 48);
     const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthTest: false }));
     s.scale.set(size * 8, size, 1); s.position.set(x, y, z); s.renderOrder = 10;
-    scene.add(s);
+    target.add(s);
+}
+
+// footprint helpers: a model is built for its local (w, d) and turned about Y so the world footprint stays (width, depth)
+const dims = (w, d, rot) => ((rot || 0) % 180 ? [d, w] : [w, d]);
+const pickables = [];
+function place(group, item, pickItem) {
+    group.position.set(item.x + item.width / 2, item.elevation || 0, item.z + item.depth / 2);
+    group.rotation.y = (item.rotation || 0) * Math.PI / 180;
+    group.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; if (pickItem) { o.userData.item = pickItem; o.userData.group = group; pickables.push(o); } } });
+    scene.add(group);
+    return group;
 }
 
 // floor, then walls / doors / marked rooms / neighbouring buildings from HallShape
-box(0, W, 0, D, -0.3, 0, new THREE.MeshStandardMaterial({ color: dark ? 0x2a323d : 0xcfd8e3 }));
+const TEX = makeTextures(dark);
+const floorTex = TEX.concrete.clone(); floorTex.repeat.set(W / 4, D / 4); floorTex.needsUpdate = true;
+box(0, W, 0, D, -0.3, 0, new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.85 })).receiveShadow = true;
 const oldMat = new THREE.MeshStandardMaterial({ color: dark ? 0x3a3f47 : 0xb7bcc4 });
-const wallMat = new THREE.MeshStandardMaterial({ color: dark ? 0x5b6b80 : 0x8fa3ba, transparent: true, opacity: 0.35, depthWrite: false });
+let wallOpacity = 0.35;
+const wallMats = [];
+function wallMaterial(len) {              // every wall gets its own copy so the 1 m panel texture repeats per metre of its length
+    const map = TEX.panel.clone(); map.repeat.set(Math.max(1, len), 1); map.needsUpdate = true;
+    const m = new THREE.MeshStandardMaterial({ map, roughness: 0.8, transparent: true, opacity: wallOpacity, depthWrite: wallOpacity > 0.8 });
+    wallMats.push(m);
+    return m;
+}
+const glassMat = new THREE.MeshStandardMaterial({ color: 0x9cc9ee, roughness: 0.1, metalness: 0.3, transparent: true, opacity: 0.45, depthWrite: false });
 const doorMat = new THREE.MeshStandardMaterial({ color: 0xf5b301, transparent: true, opacity: 0.55 });
 const fixtureMat = new THREE.MeshStandardMaterial({ color: dark ? 0x8a6f57 : 0xb08968 });
 const stairMat = new THREE.MeshStandardMaterial({ color: dark ? 0x9aa4b2 : 0xc9b48c });
@@ -126,15 +161,20 @@ let roomNo = 0;
 SHAPES.forEach(s => {
     const x1 = s.x + s.width, z1 = s.z + s.depth, cx = s.x + s.width / 2, cz = s.z + s.depth / 2;
     const y0 = s.elevation || 0, y1 = y0 + s.height;
-    if (s.kind === 'wall') box(s.x, x1, s.z, z1, y0, y1, wallMat);
-    else if (s.kind === 'door') { box(s.x, x1, s.z, z1, y0, y1, doorMat); if (s.label) label(s.label, cx, y1 + 0.7, z1 + 0.5, 1.8); }
-    else if (s.kind === 'fixture') { box(s.x, x1, s.z, z1, y0, y1, fixtureMat); if (s.label) label(s.label, cx, y1 + 0.4, cz, 0.6); }
+    if (s.kind === 'wall') box(s.x, x1, s.z, z1, y0, y1, wallMaterial(Math.max(s.width, s.depth)));
+    else if (s.kind === 'window') { const m = box(s.x, x1, s.z, z1, y0, y1, glassMat); const e = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry), new THREE.LineBasicMaterial({ color: 0x5a6470 })); e.position.copy(m.position); scene.add(e); }
+    else if (s.kind === 'door') { box(s.x, x1, s.z, z1, y0, y1, doorMat); if (s.label) label(s.label, cx, y1 + 0.7, z1 + 0.5, 1.1); }
+    else if (s.kind === 'fixture') {
+        if (s.model) { const [lw, ld] = dims(s.width, s.depth, s.rotation); place(buildFixture(s.model, lw, ld, s.height), s, null); }
+        else box(s.x, x1, s.z, z1, y0, y1, fixtureMat);
+        if (s.label) label(s.label, cx, y1 + 0.4, cz, 0.6);
+    }
     else if (s.kind === 'stairs') {            // `floors` = number of steps, `height` = total rise; lowest step at the +X end, rising toward -X
         const n = Math.max(2, s.floors || 14), rise = s.height / n, run = s.width / (n - 1);
         for (let i = 0; i < n - 1; i++) box(x1 - (i + 1) * run, x1 - i * run, s.z, z1, y0, y0 + (i + 1) * rise, stairMat);
         if (s.label) label(s.label, cx, y0 + s.height + 0.7, cz, 1.2);
     }
-    else if (s.kind === 'block') { box(s.x, x1, s.z, z1, y0, y1, oldMat); if (s.label) label(s.label, cx, y1 + 1.5, cz, 2); }
+    else if (s.kind === 'block') { box(s.x, x1, s.z, z1, y0, y1, oldMat); if (s.label) label(s.label, cx, y1 + 1.5, cz, 1.4); }
     else {                                  // marked room: one tinted slab per floor + an outline of the whole volume
         const col = ROOM_COLORS[roomNo++ % ROOM_COLORS.length], fh = s.height > 0 ? s.height : 3, n = s.floors || 1;
         const mat = new THREE.MeshStandardMaterial({ color: col, transparent: true, opacity: 0.3 });
@@ -143,7 +183,7 @@ SHAPES.forEach(s => {
             const edges = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(s.width, n * fh, s.depth)), new THREE.LineBasicMaterial({ color: col }));
             edges.position.set(cx, y0 + n * fh / 2, cz); scene.add(edges);
         }
-        if (s.label) label(s.label + (n > 1 ? ' (' + n + ' ' + "{{ _('етажа') }}" + ')' : ''), cx, y0 + 0.6, cz, Math.max(0.6, Math.min(1.8, Math.min(s.width, s.depth) * 0.5)));
+        if (s.label) label(s.label + (n > 1 ? ' (' + n + ' ' + "{{ _('етажа') }}" + ')' : ''), cx, y0 + 0.6, cz, Math.max(0.6, Math.min(1.1, Math.min(s.width, s.depth) * 0.4)));
     }
 });
 
@@ -176,6 +216,14 @@ const RISE = 1.2, half = D / 2, run = Math.hypot(half, RISE), tilt = Math.atan2(
         roof.add(g);
     });
 }
+// suspended ceiling with LED panels under the roof, cable duct along the back wall (both visible in the real hall)
+{
+    const cTex = TEX.ceiling.clone(); cTex.repeat.set((W - 0.6) / 2.4, (D - 0.6) / 2.4); cTex.needsUpdate = true;
+    const ceil = new THREE.Mesh(new THREE.PlaneGeometry(W - 0.6, D - 0.6), new THREE.MeshBasicMaterial({ map: cTex }));
+    ceil.rotation.x = Math.PI / 2; ceil.position.set(W / 2, 4.6, D / 2);
+    roof.add(ceil);
+}
+box(0.3, W - 0.3, 0.3, 0.45, 4.1, 4.3, new THREE.MeshStandardMaterial({ color: 0x15171b }));
 scene.add(roof);
 
 // solar modules (SolarPanel rows from /admin/solar-roof): one slope per Solis inverter, row 1 nearest the ridge.
@@ -202,23 +250,28 @@ const solar = new THREE.Group();
     });
 }
 scene.add(solar);
+roof.visible = false;     // hidden by default so the machines inside are visible; buttons below toggle them
+solar.visible = false;
 
 // machines and equipment (both sit `elevation` metres above the floor)
-const pickables = [];
+const DEFAULT_MODEL = { laser: 'laser', mill: 'vmc', lathe: 'lathe', press: 'press', util: 'box' };
 MACHINES.forEach(m => {
-    const y0 = m.elevation || 0;
-    const mesh = box(m.x, m.x + m.width, m.z, m.z + m.depth, y0, y0 + m.height, new THREE.MeshStandardMaterial({ color: (CAT[m.category] || CAT.util)[0] }));
-    mesh.userData = m;
-    pickables.push(mesh);
-    if (m.no != null) label(String(m.no), mesh.position.x, y0 + m.height + 1.6, mesh.position.z, 2.4);
+    const [lw, ld] = dims(m.width, m.depth, m.rotation);
+    const model = m.model || DEFAULT_MODEL[m.category] || 'box';
+    const g = place(buildMachine(model, lw, ld, m.height), m, m);
+    if (m.acc_length > 0) {                 // separately sized accessory (bar feeder ...), part of the same group
+        const acc = buildAccessory(model, lw, ld, m.acc_length, m.acc_width, m.acc_height);
+        acc.traverse(o => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; o.userData.item = m; o.userData.group = g; pickables.push(o); } });
+        g.add(acc);
+    }
+    const cap = [m.no, m.name.replace(/^CNC\s+/, '')].filter(v => v != null && v !== '').join(' · ');   // "3 · верт. обр. център DMG DMU 75 monoblok"
+    if (cap) label(cap, g.position.x, (m.elevation || 0) + m.height + 1.2, g.position.z, 0.9, machineLabels);
 });
-const EQ = { inverter: [0xfacc15, "{{ _('Инвертор') }}"], battery: [0x22c55e, "{{ _('Батериен блок') }}"], panel: [0xef4444, "{{ _('Ел. табло') }}"] };
+const EQ = { inverter: "{{ _('Инвертор') }}", battery: "{{ _('Батериен блок') }}", panel: "{{ _('Ел. табло') }}" };
 EQUIP.forEach(e => {
-    const y0 = e.elevation || 0;
-    const mesh = box(e.x, e.x + e.width, e.z, e.z + e.depth, y0, y0 + e.height, new THREE.MeshStandardMaterial({ color: EQ[e.kind][0] }));
-    mesh.userData = Object.assign({ equip: true }, e);
-    pickables.push(mesh);
-    label(e.label, mesh.position.x, y0 + e.height + 0.8, mesh.position.z, 1.3);
+    const [lw, ld] = dims(e.width, e.depth, e.rotation);
+    const g = place(buildEquipment(e.kind, lw, ld, e.height), e, Object.assign({ equip: true }, e));
+    label(e.label, g.position.x, (e.elevation || 0) + e.height + 0.8, g.position.z, 1.3);
 });
 
 // ---- camera views + zones ----
@@ -247,6 +300,16 @@ roofBtn.onclick = () => {
     roof.visible = roofBtn.classList.toggle('active');
     roofBtn.textContent = roof.visible ? "{{ _('Показан') }}" : "{{ _('Скрит') }}";
 };
+const mlabelsBtn = document.getElementById('f3-mlabels');
+mlabelsBtn.onclick = () => {
+    machineLabels.visible = mlabelsBtn.classList.toggle('active');
+    mlabelsBtn.textContent = machineLabels.visible ? "{{ _('Показани') }}" : "{{ _('Скрити') }}";
+};
+const labelsBtn = document.getElementById('f3-labels');
+labelsBtn.onclick = () => {
+    labels.visible = labelsBtn.classList.toggle('active');
+    labelsBtn.textContent = labels.visible ? "{{ _('Показани') }}" : "{{ _('Скрити') }}";
+};
 const solarBtn = document.getElementById('f3-solar');
 solarBtn.onclick = () => {
     solar.visible = solarBtn.classList.toggle('active');
@@ -255,7 +318,8 @@ solarBtn.onclick = () => {
 const wallBtn = document.getElementById('f3-walls');
 wallBtn.onclick = () => {
     const solid = !wallBtn.classList.toggle('active');
-    wallMat.opacity = solid ? 0.9 : 0.35; wallMat.depthWrite = solid;
+    wallOpacity = solid ? 1 : 0.35;
+    wallMats.forEach(m => { m.opacity = wallOpacity; m.depthWrite = solid; m.needsUpdate = true; });
     wallBtn.textContent = solid ? "{{ _('Плътни') }}" : "{{ _('Прозрачни') }}";
 };
 
@@ -268,16 +332,16 @@ renderer.domElement.addEventListener('pointerup', e => {
     const r = renderer.domElement.getBoundingClientRect();
     mouse.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
     ray.setFromCamera(mouse, camera);
-    const hit = ray.intersectObjects(pickables)[0];
-    if (picked) picked.material.emissive.setHex(0);
-    picked = hit ? hit.object : null;
-    if (!picked) { info.style.display = 'none'; return; }
-    picked.material.emissive.setHex(0x333333);
-    const m = picked.userData;
+    const hit = ray.intersectObjects(pickables, false)[0];
+    if (picked) { scene.remove(picked); picked = null; }
+    if (!hit) { info.style.display = 'none'; return; }
+    picked = new THREE.BoxHelper(hit.object.userData.group, 0xffcc00);
+    scene.add(picked);
+    const m = hit.object.userData.item;
     info.replaceChildren();
     const add = (tag, text, style) => { const e = document.createElement(tag); e.textContent = text; if (style) e.style.cssText = style; info.append(e); return e; };
     if (m.equip) {
-        add('b', m.label); add('div', EQ[m.kind][1]);
+        add('b', m.label); add('div', EQ[m.kind]);
         add('div', "{{ _('На') }} " + (m.elevation || 0) + " {{ _('м от пода') }}", 'font-size:0.85rem');
         info.style.display = 'block';
         return;
