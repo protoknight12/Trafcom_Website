@@ -15,6 +15,8 @@
         #hl-svg .s { cursor: move; }
         #hl-svg .s.wall { fill: #64748b; stroke: transparent; stroke-width: 0.6; }
         #hl-svg .s.door { fill: #f5b301; stroke: transparent; stroke-width: 0.6; }
+        #hl-svg .s.fixture { fill: #b08968; }
+        #hl-svg .s.stairs { fill: #c9b48c; stroke: #7c6a45; stroke-width: 0.04; }
         #hl-svg .s.block { fill: #b7bcc4; fill-opacity: 0.6; }
         #hl-svg .s.room { fill-opacity: 0.22; stroke: var(--text-muted); stroke-width: 0.06; stroke-dasharray: 0.3 0.2; }
         #hl-svg .m { cursor: move; stroke: var(--text-main); stroke-width: 0.06; fill-opacity: 0.9; }
@@ -76,8 +78,8 @@
                         <select id="f-room"><option value="">- не е свързано -</option>
                             {% for r in rooms %}<option value="{{ r.id }}">{{ r.label }}</option>{% endfor %}
                         </select>
-                        <label>Етажност (брой етажи)</label><input id="f-floors" type="number" step="1" min="1" max="10">
                     </div>
+                    <div id="g-floors"><label id="l-floors">Етажност (брой етажи)</label><input id="f-floors" type="number" step="1" min="1" max="40"></div>
                 </div>
                 <div id="g-equip">
                     <label>Вид оборудване</label>
@@ -108,6 +110,8 @@
                 <button class="btn" data-add="wall" type="button">+ Стена</button>
                 <button class="btn" data-add="door" type="button">+ Врата</button>
                 <button class="btn" data-add="room" type="button">+ Помещение</button>
+                <button class="btn" data-add="fixture" type="button">+ Обзавеждане</button>
+                <button class="btn" data-add="stairs" type="button">+ Стълби</button>
             </div>
         </div>
     </div>
@@ -217,9 +221,11 @@ function select(o) {
     draw();
 }
 function syncKind() {
-    const isRoom = sel && sel._t === 'shape' && $('f-kind').value === 'room';
-    $('g-room').style.display = isRoom ? '' : 'none';
-    $('l-height').textContent = isRoom ? 'Височина на етаж, м' : 'Височина, м';
+    const kind = $('f-kind').value, isShape = sel && sel._t === 'shape';
+    $('g-room').style.display = isShape && kind === 'room' ? '' : 'none';
+    $('g-floors').style.display = isShape && (kind === 'room' || kind === 'stairs') ? '' : 'none';
+    $('l-floors').textContent = kind === 'stairs' ? 'Брой стъпала' : 'Етажност (брой етажи)';
+    $('l-height').textContent = kind === 'room' ? 'Височина на етаж, м' : kind === 'stairs' ? 'Височина на изкачване, м' : 'Височина, м';
 }
 $('f-kind').onchange = syncKind;
 $('f-ekind').onchange = () => fillRef($('f-ekind').value, null);
@@ -287,6 +293,8 @@ const NEW = {
     panel: eq('panel', '', 0.8, 0.25, 1.2, 1.4),
     wall: { _t: 'shape', id: null, kind: 'wall', name: '', x: 2, z: 2, width: 4, depth: 0.4, height: 5, elevation: 0, floors: 1, room_id: null, label: '' },
     door: { _t: 'shape', id: null, kind: 'door', name: 'Врата', x: 2, z: 2, width: 4, depth: 0.15, height: 4, elevation: 0, floors: 1, room_id: null, label: 'Врата' },
+    fixture: { _t: 'shape', id: null, kind: 'fixture', name: '', x: 2, z: 2, width: 1, depth: 0.6, height: 0.9, elevation: 0, floors: 1, room_id: null, label: '' },
+    stairs: { _t: 'shape', id: null, kind: 'stairs', name: 'Стълби', x: 2, z: 2, width: 4.16, depth: 1.25, height: 2.38, elevation: 0, floors: 14, room_id: null, label: 'Стълби' },
     room: { _t: 'shape', id: null, kind: 'room', name: 'Ново помещение', x: 2, z: 2, width: 8, depth: 6, height: 3, elevation: 0, floors: 1, room_id: null, label: 'Ново помещение' },
 };
 document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => {

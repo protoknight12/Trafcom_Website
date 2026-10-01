@@ -2503,21 +2503,21 @@ HALL_CATEGORIES = {'laser': 'Лазер', 'mill': 'Фрезов център', '
 # Layout traced from the architect's floor plan (metres; X along the hall, Z from the back wall).
 # (no, name, category, x0, x1, z0, z1, height)
 HALL_SEED = [
-    (14, 'CNC лазерна машина Eckert', 'laser', 5.3, 16.7, 1.4, 4.7, 2.0),
-    (15, 'CNC лазерна машина CSF 3015/700', 'laser', 0.7, 3.6, 4.9, 9.1, 2.0),
-    (12, 'CNC абкант Durma', 'press', 5.6, 11.5, 9.2, 11.0, 2.2),
-    (13, 'CNC струг. обр. център Benzinger TNI B6', 'lathe', 13.0, 16.9, 9.2, 10.9, 2.2),
-    (11, 'Винтов компресор', 'util', 27.3, 28.5, 4.3, 6.9, 1.8),
-    (6, 'CNC струг. обр. център Benzinger TNI B8', 'lathe', 40.6, 46.8, 0.8, 2.4, 2.2),
-    (9, 'CNC струг Eguro', 'lathe', 46.8, 48.5, 0.8, 2.2, 2.0),
-    (10, 'CNC струг Eguro', 'lathe', 48.5, 50.2, 0.8, 2.2, 2.0),
-    (1, 'CNC верт. обр. център HURCO', 'mill', 50.2, 54.4, 0.8, 2.4, 2.6),
-    (7, 'CNC струг Star', 'lathe', 52.9, 55.9, 2.5, 4.0, 2.0),
-    (5, 'CNC струг. обр. център Gildemeister Twin 42', 'lathe', 53.4, 55.6, 5.2, 8.3, 2.4),
-    (2, 'CNC верт. обр. център HURCO', 'mill', 52.1, 54.6, 9.0, 10.9, 2.6),
-    (3, 'CNC верт. обр. център DMG DMU 75 monoblok', 'mill', 48.3, 51.3, 9.4, 11.3, 2.6),
-    (4, 'CNC струг. обр. център DMG CTX 510', 'lathe', 40.7, 44.6, 6.4, 7.8, 2.2),
-    (8, 'CNC струг Star', 'lathe', 48.4, 51.5, 6.4, 7.7, 2.0),
+    (14, 'CNC лазерна машина Eckert', 'laser', 5.26, 16.75, 1.4, 4.44, 2.0),
+    (15, 'CNC лазерна машина CSF 3015/700', 'laser', 0.68, 3.63, 5.0, 9.18, 2.0),
+    (12, 'CNC абкант Durma', 'press', 5.6, 11.57, 9.24, 11.0, 2.2),
+    (13, 'CNC струг. обр. център Benzinger TNI B6', 'lathe', 13.0, 16.9, 9.24, 11.0, 2.2),
+    (11, 'Винтов компресор', 'util', 27.69, 28.59, 4.41, 6.88, 1.8),
+    (6, 'CNC струг. обр. център Benzinger TNI B8', 'lathe', 44.06, 46.69, 0.79, 2.04, 2.2),
+    (9, 'CNC струг Eguro', 'lathe', 46.83, 47.94, 0.79, 2.04, 2.0),
+    (10, 'CNC струг Eguro', 'lathe', 48.3, 49.81, 0.79, 2.04, 2.0),
+    (1, 'CNC верт. обр. център HURCO', 'mill', 50.27, 52.64, 0.79, 2.42, 2.6),
+    (7, 'CNC струг Star', 'lathe', 52.91, 54.5, 0.79, 3.64, 2.0),
+    (5, 'CNC струг. обр. център Gildemeister Twin 42', 'lathe', 53.38, 54.97, 5.12, 8.41, 2.4),
+    (2, 'CNC верт. обр. център HURCO', 'mill', 51.96, 53.39, 8.99, 11.32, 2.6),
+    (3, 'CNC верт. обр. център DMG DMU 75 monoblok', 'mill', 48.3, 51.35, 8.99, 11.32, 2.6),
+    (4, 'CNC струг. обр. център DMG CTX 510', 'lathe', 44.06, 47.1, 6.51, 7.76, 2.2),
+    (8, 'CNC струг Star', 'lathe', 48.42, 51.47, 6.51, 7.76, 2.0),
 ]
 
 
@@ -2544,19 +2544,39 @@ class HallMachine(db.Model):
                 'width': self.width, 'depth': self.depth, 'height': self.height, 'elevation': self.elevation, 'card_id': self.card_id}
 
 
-HALL_SHAPE_KINDS = {'wall': 'Стена', 'door': 'Врата', 'room': 'Помещение', 'block': 'Съседна сграда'}
-# (kind, name, x, z, width, depth, height) - walls/doors/rooms/neighbours traced from the same plan
+HALL_SHAPE_KINDS = {'wall': 'Стена', 'door': 'Врата', 'room': 'Помещение', 'fixture': 'Обзавеждане', 'stairs': 'Стълби', 'block': 'Съседна сграда'}
+# (kind, name, x, z, width, depth, height[, elevation[, floors]]) - read from the plan's vector drawing;
+# for 'stairs' floors = number of steps, height = total rise
 HALL_SHAPES_SEED = [
-    ('wall', '', 0, -0.4, 56, 0.4, 5), ('wall', '', -0.4, -0.4, 0.4, 12.8, 5), ('wall', '', 56, -0.4, 0.4, 12.8, 5),
-    ('wall', '', 0, 12, 20, 0.4, 5), ('wall', '', 24, 12, 16, 0.4, 5), ('wall', '', 44, 12, 8, 0.4, 5),
-    ('door', 'Врата', 20, 12, 4, 0.15, 4), ('door', 'Врата', 40, 12, 4, 0.15, 4), ('door', 'Врата', 52, 12, 4, 0.15, 4),
-    ('wall', '', 33.7, 0, 0.4, 3, 5),
-    ('wall', '', 28.9, 4.4, 5.2, 0.25, 3), ('wall', '', 28.9, 4.4, 0.25, 7.6, 3),
-    ('wall', '', 33.85, 4.4, 0.25, 7.6, 3), ('wall', '', 28.9, 11.75, 5.2, 0.25, 3),
-    ('room', 'Битов персонал', 28.9, 4.4, 5.2, 7.6, 3),
-    ('room', 'Производствено помещение - лява част', 0, 0, 28.9, 12, 5),
-    ('room', 'Производствено помещение - дясна част', 34.1, 0, 21.9, 12, 5),
-    ('block', 'Съществуваща сграда', -3.4, 0, 3.3, 12, 5), ('block', 'Съществуваща сграда', 13.8, -3.3, 34.2, 3.2, 5),
+    # exterior walls (0.25 m), sectional gates in the front wall at 24-28 / 40-44 / 52-56 m
+    ('wall', '', -0.07, -0.02, 56.2, 0.26, 5), ('wall', '', -0.07, 0, 0.25, 12.23, 5), ('wall', '', 55.88, 0, 0.25, 12.23, 5),
+    ('wall', '', 0, 11.98, 24, 0.25, 5), ('wall', '', 28, 11.98, 12, 0.25, 5), ('wall', '', 44, 11.98, 8, 0.25, 5),
+    ('door', 'Секционна врата', 24, 11.98, 4, 0.15, 4), ('door', 'Секционна врата', 40, 11.98, 4, 0.15, 4),
+    ('door', 'Секционна врата', 52, 11.98, 4, 0.15, 4),
+    ('wall', '', 33.79, 0.24, 0.25, 2.16, 5),
+    # staff block: outer walls, kitchen partition, WC/bath partitions
+    ('wall', '', 28.9, 4.43, 5.14, 0.25, 3), ('wall', '', 28.9, 4.68, 0.25, 4.46, 3), ('wall', '', 28.9, 10.13, 0.25, 1.85, 3),
+    ('wall', '', 33.79, 3.72, 0.25, 2.74, 3), ('wall', '', 33.79, 8.23, 0.25, 0.79, 3), ('wall', '', 33.79, 10.04, 0.25, 1.94, 3),
+    ('wall', '', 29.15, 8.4, 4.64, 0.12, 2.7),
+    ('wall', '', 30.12, 10.16, 0.58, 0.12, 2.7), ('wall', '', 31.54, 10.16, 1.42, 0.12, 2.7),
+    ('wall', '', 30.4, 10.28, 0.12, 1.7, 2.7), ('wall', '', 31.72, 10.28, 0.12, 1.7, 2.7),
+    ('door', 'Вход', 33.85, 6.46, 0.12, 1.77, 2.05), ('door', '', 33.85, 9.02, 0.12, 1.02, 2.05), ('door', '', 28.97, 9.14, 0.12, 0.99, 2.05),
+    ('door', '', 29.15, 10.16, 0.97, 0.12, 2.05), ('door', '', 30.7, 10.16, 0.84, 0.12, 2.05), ('door', '', 32.96, 10.16, 0.83, 0.12, 2.05),
+    ('room', 'Битов персонал', 29.15, 4.68, 4.64, 3.72, 3), ('room', 'Съблекални', 29.15, 8.52, 4.64, 1.64, 3),
+    ('room', 'WC 1', 29.15, 10.28, 1.25, 1.7, 3), ('room', 'WC 2', 30.52, 10.28, 1.2, 1.7, 3), ('room', 'Баня', 31.84, 10.28, 1.95, 1.7, 3),
+    ('room', 'Производствено помещение - лява част', 0.25, 0.26, 28.65, 11.72, 5),
+    ('room', 'Производствено помещение - дясна част', 34.04, 0.26, 21.84, 11.72, 5),
+    # furniture / sanitary ware (x, z, size, height, elevation)
+    ('fixture', 'Маса', 30.15, 5.38, 1.8, 0.8, 0.75),
+    ('fixture', '', 30.1, 4.85, 0.5, 0.5, 0.45), ('fixture', '', 30.7, 4.85, 0.5, 0.5, 0.45), ('fixture', '', 31.3, 4.85, 0.5, 0.5, 0.45),
+    ('fixture', '', 30.1, 6.22, 0.5, 0.5, 0.45), ('fixture', '', 30.7, 6.22, 0.5, 0.5, 0.45), ('fixture', '', 31.3, 6.22, 0.5, 0.5, 0.45),
+    ('fixture', 'Кухненски плот', 29.15, 7.83, 4.64, 0.57, 0.9), ('fixture', 'Гардероби', 29.2, 8.55, 1.8, 0.6, 1.9),
+    ('fixture', '', 31.57, 8.56, 0.45, 0.38, 0.15, 0.8), ('fixture', '', 32.32, 8.56, 0.45, 0.38, 0.15, 0.8),
+    ('fixture', '', 29.57, 11.3, 0.43, 0.55, 0.4), ('fixture', '', 30.92, 11.3, 0.43, 0.55, 0.4),
+    # stairs: 14 steps 17 x 32 cm (13 treads = 4.16 m, rise 2.38 m), rising toward -X, landing at the top
+    ('stairs', 'Стълби', 35.0, 10.6, 4.16, 1.25, 2.38, 0, 14), ('fixture', 'Площадка', 34.04, 10.6, 0.96, 1.25, 0.17, 2.21),
+    # neighbours
+    ('block', 'Съществуваща сграда', -3.46, 0, 3.39, 12, 5), ('block', 'Съществуваща сграда', 13.9, -3.29, 34.2, 3.18, 5),
     ('block', 'Сграда', 59.2, 12.2, 6.1, 3.6, 3),
 ]
 
@@ -2584,10 +2604,15 @@ class HallShape(db.Model):
                 'label': (f'{self.room.building.name} · {self.room.name}' if self.room else self.name) or ''}
 
 
+def _hall_shape_from_seed(t):
+    kind, name, x, z, w, d, h = t[:7]
+    return HallShape(kind=kind, name=name, x=x, z=z, width=w, depth=d, height=h,
+                     elevation=t[7] if len(t) > 7 else 0.0, floors=t[8] if len(t) > 8 else 1)
+
+
 def _hall_shapes():
     if HallShape.query.count() == 0:
-        for kind, name, x, z, w, d, h in HALL_SHAPES_SEED:
-            db.session.add(HallShape(kind=kind, name=name, x=x, z=z, width=w, depth=d, height=h))
+        db.session.add_all(_hall_shape_from_seed(t) for t in HALL_SHAPES_SEED)
         db.session.commit()
     return HallShape.query.order_by(HallShape.id).all()
 
@@ -5706,7 +5731,7 @@ def admin_hall_shape_save():
         h.depth = max(0.1, min(40.0, float(data['depth'])))
         h.height = max(0.0, min(10.0, float(data['height'])))
         h.elevation = max(0.0, min(20.0, float(data.get('elevation') or 0)))
-        h.floors = max(1, min(10, int(data.get('floors') or 1)))
+        h.floors = max(1, min(40, int(data.get('floors') or 1)))
         h.room_id = int(data['room_id']) if data.get('room_id') and data.get('kind') == 'room' else None
     except (KeyError, ValueError, TypeError):
         return jsonify({'error': 'Невалидни данни.'}), 400
