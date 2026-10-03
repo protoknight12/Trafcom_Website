@@ -70,6 +70,10 @@
         .map-card.dragging {
             z-index: 20;
         }
+        /* real scale: the canvas has the room's proportions, a faint line every metre and a stronger one every 5 m */
+        .room-plan { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        .map-ruler { position: absolute; font-size: 0.65rem; color: var(--text-muted); pointer-events: none; z-index: 1; background: var(--bg-input); padding: 0 2px; border-radius: 2px; }
+        .map-ruler.top { top: 0; transform: translateX(-50%); } .map-ruler.left { left: 0; transform: translateY(-50%); }
         .map-toolbar { display: flex; gap: 10px; align-items: center; margin: 4px 0 14px 0; flex-wrap: wrap; }
         .map-toolbar .text-small { color: var(--text-muted); }
         /* Zoom widens/narrows .map-canvas's own real width% (not a visual
@@ -353,6 +357,7 @@
             <button type="button" id="unlockBtn" class="btn-secondary">🔓 Отключи местоположенията</button>
             <button type="button" id="saveBtn" class="btn-submit" style="display:none;">💾 Запази местоположенията</button>
             <button type="button" id="cancelBtn" class="btn-secondary" style="display:none;">Откажи</button>
+            <span id="mapScale" class="text-small"></span><span id="mapCursor" class="text-small"></span>
             <span id="editHint" class="text-small" style="display:none;">Местоположенията са отключени - влачете картички, после запазете.</span>
             <div class="zoom-controls">
                 <button type="button" id="zoomOutBtn" class="btn-secondary" title="Намали">&minus;</button>
@@ -363,7 +368,12 @@
         </div>
 
         <div class="map-zoom-viewport" id="mapZoomViewport">
-        <div class="map-canvas" id="mapCanvas">
+        {% if plan %}{% set sx = (100 / plan.rect.w)|round(4) %}{% set sy = (100 / plan.rect.d)|round(4) %}{% endif %}
+        <div class="map-canvas" id="mapCanvas"{% if plan %} style="aspect-ratio: {{ plan.rect.w }} / {{ plan.rect.d }}; min-height: 0; max-width: calc(80vh * {{ (plan.rect.w / plan.rect.d)|round(4) }});
+            background-image: linear-gradient(to right, rgba(128,128,128,.5) 1px, transparent 1px), linear-gradient(to bottom, rgba(128,128,128,.5) 1px, transparent 1px),
+                              linear-gradient(to right, var(--border-color) 1px, transparent 1px), linear-gradient(to bottom, var(--border-color) 1px, transparent 1px);
+            background-size: {{ sx * 5 }}% {{ sy * 5 }}%, {{ sx * 5 }}% {{ sy * 5 }}%, {{ sx }}% {{ sy }}%, {{ sx }}% {{ sy }}%;"{% endif %}>
+            {% if plan %}<svg class="room-plan" id="roomPlan" viewBox="0 0 {{ plan.rect.w }} {{ plan.rect.d }}" preserveAspectRatio="none"></svg>{% endif %}
             <svg class="connections-svg" id="connectionsSvg"></svg>
             {% for m in machines %}
             {% set col = loop.index0 % 5 %}
@@ -464,8 +474,34 @@
 
 <script>
 (function () {
+    var ROOM_PLAN = {{ plan|tojson }};      // null when the room has no place on the hall plan - then the map stays in percent as before
     var canvas = document.getElementById('mapCanvas');
     var cards = Array.from(document.querySelectorAll('.map-card'));
+    // --- Real-scale underlay (metres): walls, doors, windows, fixtures and the true footprints of machines / equipment, rulers and a cursor readout ---
+    if (ROOM_PLAN) {
+        var R = ROOM_PLAN.rect, NS = 'http://www.w3.org/2000/svg', plan = document.getElementById('roomPlan');
+        var SHAPE_COL = {wall: '#64748b', door: '#f5b301', window: '#9cc9ee', fixture: '#b08968', stairs: '#c9b48c', block: '#b7bcc4'};
+        var planRect = function (o, attrs) {
+            var e = document.createElementNS(NS, 'rect');
+            e.setAttribute('x', o.x - R.x); e.setAttribute('y', o.z - R.z); e.setAttribute('width', o.w); e.setAttribute('height', o.d);
+            Object.keys(attrs).forEach(function (k) { e.setAttribute(k, attrs[k]); });
+            plan.appendChild(e);
+        };
+        ROOM_PLAN.shapes.forEach(function (o) { planRect(o, {fill: SHAPE_COL[o.kind] || '#94a3b8', 'fill-opacity': o.kind === 'block' ? 0.35 : 0.85}); });
+        ROOM_PLAN.machines.forEach(function (o) { planRect(o, {fill: 'rgba(148,163,184,0.15)', stroke: '#94a3b8', 'stroke-width': 0.05, 'stroke-dasharray': '0.25 0.15'}); });
+        ROOM_PLAN.equipment.forEach(function (o) { planRect(o, {fill: 'rgba(245,158,11,0.25)', stroke: '#f59e0b', 'stroke-width': 0.04}); });
+        var step = Math.max(R.w, R.d) > 30 ? 5 : Math.max(R.w, R.d) > 12 ? 2 : 1;
+        var ruler = function (cls, left, top, text) {
+            var d = document.createElement('div'); d.className = 'map-ruler ' + cls; d.style.left = left + '%'; d.style.top = top + '%'; d.textContent = text; canvas.appendChild(d);
+        };
+        for (var gx = step; gx < R.w - step / 2; gx += step) ruler('top', gx / R.w * 100, 0, gx + ' м');
+        for (var gz = step; gz < R.d - step / 2; gz += step) ruler('left', 0, gz / R.d * 100, gz + ' м');
+        document.getElementById('mapScale').textContent = 'Мащаб: ' + R.w.toFixed(1) + ' × ' + R.d.toFixed(1) + ' м · клетка = 1 м';
+        canvas.addEventListener('mousemove', function (e) {
+            var b = canvas.getBoundingClientRect(), x = (e.clientX - b.left) / b.width * R.w, z = (e.clientY - b.top) / b.height * R.d;
+            document.getElementById('mapCursor').textContent = ' · курсор ' + x.toFixed(2) + ' м, ' + z.toFixed(2) + ' м (в халето: X ' + (R.x + x).toFixed(1) + ', Z ' + (R.z + z).toFixed(1) + ')';
+        });
+    }
     var tsEl = document.getElementById('mapTs');
     var svg = document.getElementById('connectionsSvg');
     var tooltip = document.getElementById('mapTooltip');
@@ -481,6 +517,7 @@
     function setZoom(z) {
         zoomLevel = Math.max(0.5, Math.min(3, z));
         canvas.style.width = (zoomLevel * 100) + '%';
+        if (ROOM_PLAN) canvas.style.maxWidth = 'calc(' + zoomLevel + ' * 80vh * ' + (ROOM_PLAN.rect.w / ROOM_PLAN.rect.d) + ')';
         zoomLevelLabel.textContent = Math.round(zoomLevel * 100) + '%';
     }
     var zoomInBtn = document.getElementById('zoomInBtn');

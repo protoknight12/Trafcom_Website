@@ -520,3 +520,66 @@ def test_sync_creates_rooms_machines_and_panels_on_the_maps(admin_client):
     # running it again adds nothing
     again = admin_client.post('/admin/hall/sync-maps').get_json()
     assert (again['rooms'], again['machines'], again['panels']) == (0, 0, 0) and Machine.query.count() == len(machines)
+
+
+def test_room_map_is_drawn_in_metres(admin_client):
+    import json
+    from app import Building, Room, Machine, ElectricalPanel, HallShape, HallEquipment
+    admin_client.get('/admin/hall')
+    b = Building(name='Хале')
+    db.session.add(b)
+    db.session.flush()
+    room, lone = Room(name='Стая', building_id=b.id), Room(name='Без място', building_id=b.id)
+    db.session.add_all([room, lone])
+    db.session.flush()
+    sh = HallShape.query.filter_by(kind='room').first()
+    sh.room_id, sh.x, sh.z, sh.width, sh.depth = room.id, 10, 2, 8, 6
+    hm = HallMachine.query.filter_by(no=1).one()
+    hm.x, hm.z, hm.width, hm.depth = 12, 3, 2, 1.5
+    hm.machine = Machine(name='M1', room_id=room.id)
+    panel = ElectricalPanel(name='Т1', room_id=room.id)
+    db.session.add(panel)
+    db.session.flush()
+    db.session.add(HallEquipment(kind='panel', ref_id=panel.id, x=11, z=2.2, width=0.8, depth=0.25, height=1.2))
+    db.session.commit()
+
+    page = admin_client.get(f'/admin/factory-map/room/{room.id}').get_data(as_text=True)
+    assert 'aspect-ratio: 8.0 / 6.0' in page or 'aspect-ratio: 8 / 6' in page             # the canvas has the room's proportions
+    plan = json.JSONDecoder().raw_decode(page.split('var ROOM_PLAN = ')[1])[0]
+    assert plan['rect'] == {'x': 10, 'z': 2, 'w': 8, 'd': 6}
+    assert [m['no'] for m in plan['machines']] == [1] and (plan['machines'][0]['w'], plan['machines'][0]['d']) == (2, 1.5)    # true footprint in metres
+    assert [e['kind'] for e in plan['equipment']] == ['panel'] and all(0 <= s['x'] + s['w'] and s['x'] < 18 for s in plan['shapes'])
+    # a room that has no place on the hall plan keeps the old percent map (no plan, page still renders)
+    page = admin_client.get(f'/admin/factory-map/room/{lone.id}').get_data(as_text=True)
+    assert 'var ROOM_PLAN = null' in page and 'aspect-ratio: 8' not in page
+
+
+def test_sync_keep_mode_only_fills_in_what_is_missing(admin_client):
+    from app import ElectricalPanel, Building, Room, HallShape, HallEquipment, _hall_sync_maps, _hall_auto_place
+    admin_client.get('/admin/hall')
+    b = Building(name='Хале')
+    db.session.add(b)
+    db.session.flush()
+    room = Room(name='Стая', building_id=b.id)
+    db.session.add(room)
+    db.session.flush()
+    sh = HallShape.query.filter_by(kind='room').first()
+    sh.room_id, sh.x, sh.z, sh.width, sh.depth = room.id, 10, 2, 8, 6
+    placed = ElectricalPanel(name='Има позиция', room_id=room.id, pos_x=11.0, pos_y=22.0, overview_pos_x=33.0, overview_pos_y=44.0)
+    empty = ElectricalPanel(name='Без позиция', room_id=room.id)
+    db.session.add_all([placed, empty])
+    db.session.flush()
+    db.session.add_all([HallEquipment(kind='panel', ref_id=placed.id, x=15, z=4, width=0.8, depth=0.25, height=1.2),
+                        HallEquipment(kind='panel', ref_id=empty.id, x=12, z=3, width=0.8, depth=0.25, height=1.2)])
+    db.session.commit()
+    _hall_sync_maps(keep=True)
+    _hall_auto_place(keep=True)
+    db.session.commit()
+    db.session.expire_all()
+    p, e = db.session.get(ElectricalPanel, placed.id), db.session.get(ElectricalPanel, empty.id)
+    assert (p.pos_x, p.pos_y, p.overview_pos_x, p.overview_pos_y) == (11.0, 22.0, 33.0, 44.0)       # existing positions are left alone
+    assert e.pos_x is not None and abs(e.pos_x - (12.4 - 10) / 8 * 100) < 0.5 and e.overview_pos_x is not None      # only the empty one is filled in
+    _hall_sync_maps()                                                                                 # the UI button overwrites
+    db.session.commit()
+    db.session.expire_all()
+    assert abs(db.session.get(ElectricalPanel, placed.id).pos_x - (15.4 - 10) / 8 * 100) < 0.5

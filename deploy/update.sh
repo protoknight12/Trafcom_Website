@@ -12,6 +12,9 @@ for f in migration/migrate_*.py; do
     venv/bin/python -m "$mod"
 done
 
+echo "== one-time data steps =="
+venv/bin/python -m migration.run_once
+
 sudo systemctl restart trafcom
 sleep 1
 sudo systemctl status trafcom --no-pager

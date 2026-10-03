@@ -5950,19 +5950,21 @@ def _hall_room_at(cx, cz):
     return None
 
 
-def _hall_push(kind, target, cx, cz):
+def _hall_push(kind, target, cx, cz, keep=False):
     """Hall position (centre, metres) -> the old maps of the same object: its Room and room-map position (percent of that room's area on the
     plan) and, for a panel inside the hall, its place on the distribution scheme (hall plan in percent)."""
     if target is None:
         return
     pct = lambda v, lo=0.0, hi=100.0: max(lo, min(hi, v))
     rect = _hall_room_at(cx, cz)
+    if keep and getattr(target, 'room_id', None) and getattr(target, 'pos_x', None) is not None:
+        rect = None                                                         # already has a room and a place on its map: leave it
     if rect and hasattr(target, 'room_id'):
         rid, rx, rz, rw, rd = rect
         target.room_id = rid
         if hasattr(target, 'pos_x'):
             target.pos_x, target.pos_y = pct((cx - rx) / rw * 100), pct((cz - rz) / rd * 100)
-    if kind == 'panel' and 0 <= cx <= HALL_W and 0 <= cz <= HALL_D:
+    if kind == 'panel' and 0 <= cx <= HALL_W and 0 <= cz <= HALL_D and not (keep and target.overview_pos_x is not None):
         target.overview_pos_x, target.overview_pos_y = pct(cx / HALL_W * 100, 2, 98), pct(cz / HALL_D * 100, 2, 98)
 
 
@@ -6003,7 +6005,7 @@ def _hall_link_rooms():
     return n
 
 
-def _hall_sync_maps():
+def _hall_sync_maps(keep=False):
     """Brings the room maps, the distribution scheme and the machine list in line with the plan: creates the Room of every marked room, the Machine
     of every dossier on the plan and the ElectricalPanel of every panel drawn without one, then copies every position out. Returns counts."""
     out = {'rooms': _hall_link_rooms(), 'machines': 0, 'panels': 0, 'synced': 0}
@@ -6022,10 +6024,10 @@ def _hall_sync_maps():
     db.session.flush()
     for e in HallEquipment.query.filter(HallEquipment.kind.in_(HALL_SYNC_KINDS)):
         if e.target() is not None:
-            _hall_push(e.kind, e.target(), e.x + e.width / 2, e.z + e.depth / 2)
+            _hall_push(e.kind, e.target(), e.x + e.width / 2, e.z + e.depth / 2, keep)
             out['synced'] += 1
     for m in HallMachine.query.filter(HallMachine.machine_id.isnot(None), HallMachine.on_plan.is_(True)):
-        _hall_push('machine', m.machine, m.x + m.width / 2, m.z + m.depth / 2)
+        _hall_push('machine', m.machine, m.x + m.width / 2, m.z + m.depth / 2, keep)
         out['synced'] += 1
     return out
 
@@ -6060,9 +6062,7 @@ def api_hall_sun():
                     'day': [dict(pos(start + timedelta(minutes=m)), m=m) for m in range(0, 1441, 10)]})
 
 
-@app.route('/admin/hall/auto-place', methods=['POST'])
-@role_required('admin')
-def admin_hall_auto_place():
+def _hall_auto_place(keep=False):
     """Puts every panel, convector, sensor, network device, battery stack and Solis inverter that is not on the map yet onto it.
     A device that sits in a room linked to a marked room on the plan lands inside that room - at its old room-map position (pos_x/pos_y are
     percent of that room's canvas, converted to metres) or spread along the room when it has none; the rest go to a service strip behind
@@ -6100,7 +6100,14 @@ def admin_hall_auto_place():
                                          width=w, depth=d, height=h, elevation=elev, rotation=0))
             created += 1
     db.session.flush()
-    _hall_sync_maps()
+    _hall_sync_maps(keep)
+    return created
+
+
+@app.route('/admin/hall/auto-place', methods=['POST'])
+@role_required('admin')
+def admin_hall_auto_place():
+    created = _hall_auto_place()
     db.session.commit()
     if created:
         log_action(f'Хале 3D: автоматично поставени {created} устройства на картата')
@@ -18504,6 +18511,24 @@ def admin_factory_map():
     return render_template('admin_factory_map.html', buildings=buildings, active_page='admin_factory_map')
 
 
+def _room_plan(room):
+    """The room's map in metres: the area of the hall plan it stands for (its marked room, or the whole hall for the general room) with the walls,
+    doors, windows, fixtures and the true footprints of its machines / equipment inside it. None when the room has no place on the hall plan."""
+    rect = _hall_room_rect(room.id)
+    if rect is None:
+        return None
+    rx, rz, rw, rd = rect
+    inside = lambda o: o['x'] < rx + rw and o['x'] + o['width'] > rx and o['z'] < rz + rd and o['z'] + o['depth'] > rz
+    fp = lambda o, **extra: dict({'x': o['x'], 'z': o['z'], 'w': o['width'], 'd': o['depth']}, **extra)
+    shapes = [fp(h, kind=h['kind']) for h in (x.as_dict() for x in _hall_shapes())
+              if h['kind'] in ('wall', 'door', 'window', 'fixture', 'stairs', 'block') and inside(h)]
+    machines = [fp(hm.as_dict(), no=hm.no, name=hm.name) for hm in HallMachine.query.join(Machine, HallMachine.machine_id == Machine.id)
+                .filter(Machine.room_id == room.id, HallMachine.on_plan.is_(True))]
+    equipment = [fp(e.as_dict(), kind=e.kind) for e in HallEquipment.query.filter(HallEquipment.kind.in_(HALL_SYNC_KINDS))
+                 if e.target() is not None and getattr(e.target(), 'room_id', None) == room.id]
+    return {'rect': {'x': rx, 'z': rz, 'w': rw, 'd': rd}, 'shapes': shapes, 'machines': machines, 'equipment': equipment}
+
+
 @app.route('/admin/factory-map/room/<int:room_id>')
 @role_required(['admin', 'worker'])
 def admin_factory_map_room(room_id):
@@ -18514,7 +18539,7 @@ def admin_factory_map_room(room_id):
     battery_stacks = BatteryStack.query.filter_by(room_id=room.id).order_by(BatteryStack.id).all()
     return render_template(
         'admin_factory_map_room.html', room=room, machines=machines, panels=panels, convectors=convectors,
-        battery_stacks=battery_stacks, active_page='admin_factory_map'
+        battery_stacks=battery_stacks, plan=_room_plan(room), active_page='admin_factory_map'
     )
 
 
