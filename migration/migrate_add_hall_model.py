@@ -8,7 +8,7 @@ Safe to run more than once.
 """
 from sqlalchemy import text
 
-from app import app, db, HallMachine, HALL_LOOK_SEED
+from app import app, db, HALL_LOOK_SEED
 
 with app.app_context():
     db.create_all()
@@ -26,12 +26,11 @@ with app.app_context():
     ):
         db.session.execute(text(stmt))
     db.session.commit()
-    for m in HallMachine.query.filter(HallMachine.acc_length > 0, HallMachine.acc_name.is_(None)):
-        m.acc_name = 'Прътоподавател' if m.model == 'bar_lathe' else 'Инвентар'
-    db.session.commit()
-    for m in HallMachine.query.filter(HallMachine.model.is_(None)):
-        if m.no in HALL_LOOK_SEED:
-            m.model, m.rotation = HALL_LOOK_SEED[m.no]
+    # plain SQL on purpose: the HallMachine model already has columns added by later migrations (machine_id, on_plan ...)
+    db.session.execute(text("UPDATE hall_machine SET acc_name = CASE WHEN model = 'bar_lathe' THEN 'Прътоподавател' ELSE 'Инвентар' END "
+                            "WHERE acc_length > 0 AND acc_name IS NULL"))
+    for no, (model, rotation) in HALL_LOOK_SEED.items():
+        db.session.execute(text("UPDATE hall_machine SET model = :m, rotation = :r WHERE no = :n AND model IS NULL"), {'m': model, 'r': rotation, 'n': no})
     db.session.commit()
 
 print("hall model/rotation columns added (or already existed).")
