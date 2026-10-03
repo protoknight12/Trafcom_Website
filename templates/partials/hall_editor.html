@@ -12,8 +12,25 @@
         #hl-svg .s.window { fill: #9cc9ee; fill-opacity: 0.8; stroke: transparent; stroke-width: 0.5; }
         #hl-svg .s.fixture { fill: #b08968; }
         #hl-svg .s.stairs { fill: #c9b48c; stroke: #7c6a45; stroke-width: 0.04; }
+        #hl-svg .s.building { fill: #0ea5e9; fill-opacity: 0.05; stroke: #0ea5e9; stroke-width: 0.2; }
+        #hl-svg.hide-building .s.building, #hl-svg.hide-building .lk-building { display: none; }
+        #hl-svg .s.floor { fill: #d9cdb4; fill-opacity: 0.55; }
+        #hl-svg.hide-floor .s.floor, #hl-svg.hide-floor .lk-floor { display: none; }
         #hl-svg .s.block { fill: #b7bcc4; fill-opacity: 0.6; }
         #hl-svg .s.room { fill-opacity: 0.22; stroke: var(--text-muted); stroke-width: 0.06; stroke-dasharray: 0.3 0.2; }
+        #hl-svg .parcel { fill: #e11d48; fill-opacity: 0.06; stroke: #e11d48; stroke-width: 0.15; pointer-events: none; }
+        #hl-svg.hide-parcel .parcel, #hl-svg.hide-parcel .lk-parcel { display: none; }
+        #hl-tree { font-size: 0.85rem; max-height: 340px; overflow: auto; margin-bottom: 10px; }
+        #hl-tree ul { list-style: none; margin: 0; padding-left: 14px; border-left: 1px dotted var(--border-color); }
+        #hl-tree > ul { padding-left: 0; border: 0; }
+        #hl-tree li > div { padding: 1px 4px; border-radius: 3px; cursor: pointer; }
+        #hl-tree li > div:hover { background: var(--bg-input); }
+        #hl-svg .fdim, #hl-svg .acc.fdim { opacity: 0.12; } #hl-tree .fdim { opacity: 0.35; }
+        #hl-info { font-size: 0.85rem; margin: 0 0 12px; padding: 8px 10px; border: 1px solid var(--border-color); border-radius: 4px; display: none; }
+        #hl-info b { display: block; margin-bottom: 4px; } #hl-info ul { margin: 4px 0 0; padding-left: 18px; } #hl-info .n { color: var(--text-muted); }
+        #hl-tree .caret { cursor: pointer; user-select: none; color: var(--text-muted); }
+        #hl-tree .on { background: var(--accent-primary); color: #000; }
+        #hl-tree .t0 { font-weight: bold; } #hl-tree .t1 { font-weight: 600; } #hl-tree .n { color: var(--text-muted); }
         #hl-svg .m { stroke: var(--text-main); stroke-width: 0.06; fill-opacity: 0.9; }
         #hl-svg .q { stroke: var(--text-main); stroke-width: 0.06; }
         #hl-svg .sel { stroke: var(--accent-primary) !important; stroke-width: 0.2 !important; stroke-dasharray: none !important; }
@@ -56,13 +73,17 @@
                     <select id="snap" style="width:auto"><option value="0.1">10 см</option><option value="0.05">5 см</option><option value="0.01">1 см</option><option value="0.5">50 см</option></select>
                 </label>
             </div>
-            <svg id="hl-svg" viewBox="-5 -5 72 23"></svg>
+            <svg id="hl-svg" viewBox="-5 -3 72 56"></svg>
             <div style="color:var(--text-muted);font-size:0.8rem;margin-top:6px">Колело - увеличение · влачене на празно място - местене на плана · стрелки - преместване на избрания елемент (Shift = ×10)</div>
         </div>
         <div class="hl-panel">
+            <div style="margin-bottom:6px"><button class="btn" data-add="building" type="button" title="Сградата е само запис в списъка - няма контур на картата; помещенията ѝ се задават от „Принадлежи към“">+ Сграда</button></div>
+            <div id="hl-tree"></div>
+            <div id="hl-info"></div>
             <div id="hl-form" style="display:none">
                 <div id="hl-lockstate"></div>
                 <label>Име</label><input id="f-name">
+                <label id="l-parent">Принадлежи към</label><select id="f-parent"></select>
                 <div id="g-machine">
                     <div class="hl-row">
                         <div><label>Номер на плана</label><input id="f-no" type="number" step="1"></div>
@@ -87,7 +108,7 @@
                         {% for c in cards %}<option value="{{ c.id }}">{{ c.title }} ({{ 'начална' if c.page == 'index' else ('само в хале 3D' if c.page == 'hall' else 'услуги') }})</option>{% endfor %}
                     </select>
                     <button class="btn" id="hl-cardsize" type="button" style="margin-top:6px">Габарити от картата</button>
-                    <a class="btn" id="hl-dossier" href="#" target="_blank" style="display:none;margin-top:6px">📁 Досие и файлове</a>
+                    <a class="btn" id="hl-dossier" href="#" data-frame="stay" style="display:none;margin-top:6px">📁 Досие и файлове</a>
                 </div>
                 <div id="g-shape">
                     <label>Вид елемент</label>
@@ -113,7 +134,7 @@
                     <select id="f-ref"></select>
                     <label>Лице към</label><select id="f-erot"><option value="0">напред (+Z)</option><option value="90">надясно (+X)</option><option value="180">назад (−Z)</option><option value="270">наляво (−X)</option></select>
                 </div>
-                <div class="hl-row">
+                <div class="hl-row" id="g-geom">
                     <div><label>X, м</label><input id="f-x" type="number" step="0.1"></div>
                     <div><label>Z, м</label><input id="f-z" type="number" step="0.1"></div>
                     <div><label>Дължина (X), м</label><input id="f-width" type="number" step="0.1" min="0.1"></div>
@@ -123,6 +144,7 @@
                 </div>
                 <div class="hl-btns">
                     <button class="btn" id="hl-unlock" type="button">🔓 Отключи</button>
+                    <button class="btn" id="hl-copy" type="button" title="Прави копие в същото помещение/сграда - после го преместете">⧉ Копирай</button>
                     <button class="btn btn-primary" id="hl-save" type="button">Запази и заключи</button>
                     <button class="btn" id="hl-del" type="button" style="color:#ef4444">Изтрий</button>
                 </div>
@@ -131,6 +153,7 @@
             <div id="hl-msg"></div>
             <div class="hl-add">
                 <button class="btn" data-add="machine" type="button">+ Машина</button>
+                <button class="btn" id="hl-envelopes" type="button" title="Прави стени (12,5 см) и подова настилка за всяко помещение, което още няма стени по контура си">Стени на помещения без стени</button>
                 <button class="btn" id="hl-syncmaps" type="button" title="Подравнява картите на помещенията и схемата на разпределението по плана на халето">Синхронизирай картите</button>
                 <button class="btn" id="hl-autoplace" type="button" title="Поставя на картата всички табла, конвектори, сензори, мрежови устройства, батерии и инвертори, които още не са на нея">Постави всички устройства</button>
                 <button class="btn" id="hl-renumber" type="button" title="Номерата стават 1, 2, 3 ... по текущия им ред">Преномерирай</button>
@@ -174,7 +197,7 @@ const snap = v => Math.round(Math.round(v / step) * step * 1000) / 1000, clamp =
 const pt = e => { const p = svg.createSVGPoint(); p.x = e.clientX; p.y = e.clientY; return p.matrixTransform(svg.getScreenCTM().inverse()); };
 
 // ---- zoom / pan: the viewBox is the camera; the aspect ratio stays fixed ----
-const VB0 = { x: -5, y: -5, w: 72, h: 23 };
+const VB0 = { x: -5, y: -3, w: 72, h: 56 };   // whole site: hall + both cadastral parcels
 let vb = Object.assign({}, VB0);
 function setVB() {
     svg.setAttribute('viewBox', `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
@@ -216,37 +239,154 @@ function accessoryShape(m) {
 }
 function draw() {
     svg.replaceChildren();
+    drawTree();      // also fills FOCUS_FN / OBJ_KEY used for the focus dimming below
+    PARCELS.forEach(p => {      // read-only property boundaries, under everything else
+        svg.appendChild(el('polygon', { class: 'parcel' + (focusKey && focusKey.split('/')[0] !== 'ПИ ' + p.cadnum ? ' fdim' : ''), points: p.points.map(q => q.join(',')).join(' ') }));
+        const t = el('text', { class: 'lbl lk-parcel' + (focusKey && focusKey.split('/')[0] !== 'ПИ ' + p.cadnum ? ' fdim' : ''), x: p.points.reduce((s, q) => s + q[0], 0) / p.points.length, y: p.points.reduce((s, q) => s + q[1], 0) / p.points.length });
+        t.textContent = 'ПИ ' + p.cadnum + ' · ' + Math.round(p.area) + ' м²'; svg.appendChild(t);
+    });
     for (let i = 0; i <= 56; i += 4) svg.appendChild(el('line', { class: 'grid', x1: i, y1: 0, x2: i, y2: 12 }));
     svg.appendChild(el('rect', { class: 'hall', x: 0, y: 0, width: 56, height: 12 }));
-    const order = { room: 0, block: 1, wall: 2, door: 3 };
-    [...SHAPES].sort((a, b) => order[a.kind] - order[b.kind]).forEach(s => {
-        const attrs = { class: 's ' + s.kind + (s === sel ? ' sel' : '') + (s._unlocked ? ' unlocked' : ''), x: s.x, y: s.z, width: s.width, height: s.depth };
+    const order = { building: -1, floor: -0.5, room: 0, block: 1, wall: 2, door: 3 };
+    [...SHAPES].filter(s => s.kind !== 'building').sort((a, b) => order[a.kind] - order[b.kind]).forEach(s => {   // buildings are not drawn: the biggest object on the map is a room
+        const attrs = { class: 's ' + s.kind + FD(s) + (s === sel ? ' sel' : '') + (s._unlocked ? ' unlocked' : ''), x: s.x, y: s.z, width: s.width, height: s.depth };
         if (s.kind === 'room') attrs.fill = ROOM_COLORS[SHAPES.filter(o => o.kind === 'room').indexOf(s) % ROOM_COLORS.length];
         const r = el('rect', attrs);
         r.addEventListener('pointerdown', e => startDrag(e, s));
         svg.appendChild(r);
         if (s.kind !== 'wall' && s.label) {
-            const t = el('text', { class: 'lbl lk-' + s.kind, x: s.x + s.width / 2, y: s.z + (s.kind === 'door' ? -0.8 : s.depth / 2) });
+            const t = el('text', { class: 'lbl lk-' + s.kind + FD(s), x: s.x + s.width / 2, y: s.z + (s.kind === 'door' ? -0.8 : s.depth / 2) });
             t.textContent = s.label + (s.kind === 'room' && s.floors > 1 ? ' (' + s.floors + ' ет.)' : ''); svg.appendChild(t);
         }
     });
     const selKey = sel && sel._t !== 'shape' ? hallKey(sel) : null, selUp = selKey ? upstream(selKey) : null;
     hallLinks().forEach((l, i) => svg.appendChild(el('polyline', { class: 'lnk ' + l.kind + (selKey ? (touches(l, selKey) ? ' hl' : selUp.has(l.src) ? ' hl2' : ' dim') : ''), points: hallRoute(l.A, l.B, 0.3 + (i % 6) * 0.07).map(q => q.join(',')).join(' ') })));   // same wall route as in 3D   // animated connections
     MACHINES.forEach(m => {
-        if (m.acc_length > 0) svg.appendChild(accessoryShape(m));
-        const r = el('rect', { class: 'm' + (m === sel ? ' sel' : '') + (m._unlocked ? ' unlocked' : ''), x: m.x, y: m.z, width: m.width, height: m.depth, fill: COLORS[m.category] || COLORS.util });
+        if (m.acc_length > 0) { const a = accessoryShape(m); if (FD(m)) a.classList.add('fdim'); svg.appendChild(a); }
+        const r = el('rect', { class: 'm' + FD(m) + (m === sel ? ' sel' : '') + (m._unlocked ? ' unlocked' : ''), x: m.x, y: m.z, width: m.width, height: m.depth, fill: COLORS[m.category] || COLORS.util });
         r.addEventListener('pointerdown', e => startDrag(e, m));
         svg.appendChild(r);
-        const t = el('text', { class: 'mt', x: m.x + m.width / 2, y: m.z + m.depth / 2 }); t.textContent = m.no ?? '';
+        const t = el('text', { class: 'mt' + FD(m), x: m.x + m.width / 2, y: m.z + m.depth / 2 }); t.textContent = m.no ?? '';
         svg.appendChild(t);
     });
     EQUIP.forEach(q => {      // small boxes - drawn at least 0.8 m so they stay grabbable
         const w = Math.max(q.width, 0.8), d = Math.max(q.depth, 0.8);
-        const r = el('rect', { class: 'q' + QK(q.kind) + (q === sel ? ' sel' : '') + (q._unlocked ? ' unlocked' : ''), x: q.x, y: q.z, width: w, height: d, fill: EQ_COLORS[q.kind] });
+        const r = el('rect', { class: 'q' + QK(q.kind) + FD(q) + (q === sel ? ' sel' : '') + (q._unlocked ? ' unlocked' : ''), x: q.x, y: q.z, width: w, height: d, fill: EQ_COLORS[q.kind] });
         r.addEventListener('pointerdown', e => startDrag(e, q));
         svg.appendChild(r);
-        const t = el('text', { class: 'qt' + QK(q.kind).replace('q-', 'qt-'), x: q.x + w / 2, y: q.z + d / 2 }); t.style.fill = '#000'; t.textContent = EQ_ABBR[q.kind]; svg.appendChild(t);
+        const t = el('text', { class: 'qt' + QK(q.kind).replace('q-', 'qt-') + FD(q), x: q.x + w / 2, y: q.z + d / 2 }); t.style.fill = '#000'; t.textContent = EQ_ABBR[q.kind]; svg.appendChild(t);
     });
+}
+
+// ---- hierarchy: ПИ -> Сграда -> Помещение -> machines / equipment / fixtures; all derived from positions (no extra links to maintain) ----
+const HALL_RECT = { x: 0, z: 0, width: 56, depth: 12 };
+const HALL_FOOTPRINT = 703.44;      // застроена площ на сграда 72343.500.3036.1 по КАИС, м²
+const m2 = v => Math.round(v * 10) / 10 + ' м²';
+const mid = o => [o.x + o.width / 2, o.z + o.depth / 2];
+const inRect = (r, [x, z]) => x >= r.x && x <= r.x + r.width && z >= r.z && z <= r.z + r.depth;
+const inPoly = (poly, [x, z]) => { let c = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const a = poly[i], b = poly[j]; if ((a[1] > z) !== (b[1] > z) && x < (b[0] - a[0]) * (z - a[1]) / (b[1] - a[1]) + a[0]) c = !c; } return c; };
+const TREE_CLOSED = new Set();
+let focusKey = null;                 // path of the selected level (ПИ / сграда / помещение): it stays lit, the rest is dimmed
+const FOCUS_FN = new Map(), OBJ_KEY = new Map(), INFO = new Map();   // INFO: path -> [title, fact lines..., list items]     // path -> "is this point inside that level"; shape -> path (rebuilt by drawTree)
+const lit = (path, f) => !f || path === f || path.startsWith(f + '/') || f.startsWith(path + '/');
+function FD(o) {                     // class suffix: dim an object that lies outside the focused level
+    const k = OBJ_KEY.get(o), f = focusKey;
+    if (!f || !FOCUS_FN.has(f)) return '';
+    if (k) return lit(k, f) ? '' : ' fdim';
+    return FOCUS_FN.get(f)(mid(o)) ? '' : ' fdim';
+}
+function drawTree() {
+    const rooms = SHAPES.filter(s => s.kind === 'room').sort((a, b) => a.width * a.depth - b.width * b.depth);   // smallest first = the innermost room wins
+    const bshapes = SHAPES.filter(s => s.kind === 'building').sort((a, b) => a.width * a.depth - b.width * b.depth);   // drawn buildings; the innermost one wins
+    const byId = new Map(SHAPES.filter(s => s.id).map(s => [s.id, s]));
+    const bname = b => b.name || 'Сграда';
+    // hierarchy: an explicit parent_id / parcel_id (set in the object's form) wins, otherwise it follows from the position
+    const autoBld = (o, room) => room ? (room.building || 'Хале') : inRect(HALL_RECT, mid(o)) ? 'Хале' : '';      // no explicit building: the main hall, if it lies in it
+    const roomBld = r => { const p = byId.get(r.parent_id); return r.parent_id === 0 ? 'Хале' : p && p.kind === 'building' ? bname(p) : autoBld(r, r); };
+    const roomOf = o => { const p = byId.get(o.parent_id); return p && p.kind === 'room' ? p : (o.parent_id == null || (!p && o.parent_id !== 0)) ? rooms.find(r => inRect(r, mid(o))) : null; };
+    const bldOf = (o, room) => { if (room) return roomBld(room); const p = byId.get(o.parent_id); return o.parent_id === 0 ? 'Хале' : p && p.kind === 'building' ? bname(p) : autoBld(o, null); };
+    const nodes = new Map(PARCELS.map(p => ['ПИ ' + p.cadnum, new Map()]));   // parcel -> building -> { rooms: Map(room -> items), loose: items }; every parcel is listed, even an empty one
+    const parcelKey = p => p ? 'ПИ ' + p.cadnum : 'Извън имотите', posParcel = o => PARCELS.find(q => inPoly(q.points, mid(o)));
+    const bparcel = new Map(bshapes.map(b => {       // explicit parcel, else the one under the middle of its rooms
+        const rr = rooms.filter(r => r.parent_id === b.id);
+        const c = rr.length ? [(Math.min(...rr.map(r => r.x)) + Math.max(...rr.map(r => r.x + r.width))) / 2, (Math.min(...rr.map(r => r.z)) + Math.max(...rr.map(r => r.z + r.depth))) / 2] : null;
+        return [bname(b), parcelKey(PARCELS.find(q => q.id === b.parcel_id) || (c && PARCELS.find(q => inPoly(q.points, c))))];
+    }));
+    bparcel.set('Хале', parcelKey(posParcel(HALL_RECT)));
+    const slot = (o, building) => {
+        const pk = bparcel.get(building) ?? parcelKey(posParcel(o));
+        if (!nodes.has(pk)) nodes.set(pk, new Map());
+        const bm = nodes.get(pk); if (!bm.has(building)) bm.set(building, { rooms: new Map(), loose: [], obj: null });
+        return bm.get(building);
+    };
+    bshapes.forEach(b => { slot(b, bname(b)).obj = b; });   // a drawn building is listed even while it is empty
+    rooms.forEach(r => slot(r, roomBld(r)).rooms.set(r, []));
+    const place = (o, text) => {
+        const room = roomOf(o), b = bldOf(o, room), s = slot(o, b);
+        (room && s.rooms.has(room) ? s.rooms.get(room) : s.loose).push([o, text]);
+    };
+    MACHINES.forEach(o => place(o, (o.no ? o.no + '. ' : '') + o.name));
+    EQUIP.forEach(o => place(o, o.label || o.name || o.kind));
+    SHAPES.filter(s => s.kind === 'fixture' && s.label).forEach(o => place(o, o.label));
+    FOCUS_FN.clear(); OBJ_KEY.clear(); INFO.clear();
+    const li = (text, cls, o, kids, path, contains, info) => {      // `path` = stable id: keeps open/closed state and the focus across redraws
+        const e = document.createElement('li'), d = document.createElement('div'), has = kids && kids.length;
+        if (contains) FOCUS_FN.set(path, contains);
+        if (o) OBJ_KEY.set(o, path);
+        if (info) INFO.set(path, info);
+        d.className = cls + (o && o === sel ? ' on' : '') + (lit(path, focusKey) ? '' : ' fdim');
+        const caret = document.createElement('span'); caret.className = 'caret'; caret.textContent = has ? (TREE_CLOSED.has(path) ? '▸ ' : '▾ ') : '';
+        const label = document.createElement('span'); label.textContent = text;
+        d.append(caret, label);
+        label.onclick = o ? () => select(o) : contains ? () => { focusKey = focusKey === path ? null : path; draw(); } : null;   // a level lights itself up, the rest dims; click again to clear
+        e.append(d);
+        if (has) {
+            const u = document.createElement('ul'); u.append(...kids); u.hidden = TREE_CLOSED.has(path); e.append(u);
+            caret.onclick = () => { u.hidden = !u.hidden; u.hidden ? TREE_CLOSED.add(path) : TREE_CLOSED.delete(path); caret.textContent = u.hidden ? '▸ ' : '▾ '; };
+        }
+        return e;
+    };
+    const roomArea = r => r.width * r.depth * (r.floors || 1);
+    const root = document.createElement('ul');
+    nodes.forEach((bm, pk) => {
+        const parcel = PARCELS.find(q => 'ПИ ' + q.cadnum === pk);
+        root.append(li(pk + (parcel ? ' · ' + m2(parcel.area) : ''), 't0', null, [...bm].map(([bn, s]) => {
+            const bpath = pk + '/' + (bn || '~');
+            const rs = [...s.rooms].map(([r, its]) => {
+                const rpath = bpath + '/' + (r.id ?? r.label);
+                return li((r.label || r.name || 'Помещение') + ' · ' + m2(r.width * r.depth) + (r.floors > 1 ? ' × ' + r.floors + ' ет. = ' + m2(roomArea(r)) : ''), 't2', r,
+                          its.map(([o, t]) => li(t, 'n', o, null, rpath + '/' + t)), rpath, pt => inRect(r, pt),
+                          { title: 'Помещение: ' + (r.label || r.name), facts: [`Размери: ${m2(r.width).replace(' м²', '')} × ${m2(r.depth).replace(' м²', '')} м, височина на етаж ${r.height} м`, `Площ: ${m2(r.width * r.depth)}` + (r.floors > 1 ? ` × ${r.floors} ет. = ${m2(roomArea(r))}` : ''), `Сграда: ${bn || '-'}`], list: its.map(([, t]) => t), listTitle: 'Съдържа' });
+            });
+            const rzp = [...s.rooms.keys()].reduce((a, r) => a + roomArea(r), 0);
+            const rr = [...s.rooms.keys()], x0 = Math.min(...rr.map(r => r.x)), x1 = Math.max(...rr.map(r => r.x + r.width)), z0 = Math.min(...rr.map(r => r.z)), z1 = Math.max(...rr.map(r => r.z + r.depth));
+            const bb = rr.length ? { w: x1 - x0, d: z1 - z0 } : null;   // the building is as big as the outlines of its rooms
+            const zp = bb ? 'ЗП ' + m2(bb.w * bb.d) + ' · ' : bn === 'Хале' ? 'ЗП ' + m2(HALL_FOOTPRINT) + ' (кадастър) · ' : '';
+            const title = bn && 'Сграда: ' + bn + ' · ' + zp + 'помещения ' + m2(rzp);
+            const kids = [...rs, ...s.loose.map(([o, t]) => li(t, 'n', o, null, bpath + '/' + t))];
+            const inside = bn === 'Хале' ? pt => inRect(HALL_RECT, pt) : bb ? pt => inRect({ x: x0, z: z0, width: bb.w, depth: bb.d }, pt) : null;
+            const bi = bn && { title: 'Сграда: ' + bn, facts: [bb ? `Размери по контурите на помещенията: ${m2(bb.w).replace(' м²', '')} × ${m2(bb.d).replace(' м²', '')} м` + '' : 'Още няма помещения - задайте „Сграда“ в настройките на помещение', zp.replace(/ · $/, '') + (bn === 'Хале' ? ` · по кадастър ${m2(HALL_FOOTPRINT)}` : ''), `Имот: ${pk}`, `Сума на помещенията: ${m2(rzp)}`],
+                               list: [...s.rooms.keys()].map(r => (r.label || r.name) + ' · ' + m2(r.width * r.depth) + (r.floors > 1 ? ' × ' + r.floors + ' ет.' : '')), listTitle: `Помещения (${s.rooms.size})` };
+            return bn ? li(title, 't1', s.obj, kids, bpath, inside, bi) : li('Извън сграда', 't1', null, kids, bpath);
+        }), pk, parcel ? pt => inPoly(parcel.points, pt) : null, parcel && { title: pk, facts: [`Площ по кадастър: ${m2(parcel.area)}`], list: [...bm.keys()].filter(Boolean).map(n => 'Сграда: ' + n), listTitle: `Сгради (${[...bm.keys()].filter(Boolean).length})` }));
+    });
+    // buildings / rooms that exist in Сгради и помещения but are not drawn on the plan yet (kept visible so both lists always agree)
+    const placedB = new Set(bshapes.map(b => b.building_id)), placedR = new Set(SHAPES.filter(x => x.kind === 'room').map(x => x.room_id));
+    const loose = DB_BUILDINGS.map(b => ({ b, hall: b.name === 'Хале', placed: placedB.has(b.id) || b.name === 'Хале', rooms: b.rooms.filter(r => !placedR.has(r.id) && r.name !== 'Хале (общо)') }))
+        .filter(x => !x.placed || x.rooms.length);
+    if (loose.length) root.prepend(li('Без позиция на плана', 't0', null, loose.map(x => li((x.placed ? 'Сграда: ' : 'Сграда (не е на плана): ') + x.b.name, 't1', null,
+        x.rooms.map(r => { const n = li(r.name + ' (не е на плана) - клик за поставяне', 'n', null, null, 'u/' + x.b.id + '/' + r.id); n.querySelector('span:last-child').onclick = () => placeRoom(r.id); return n; }), 'u/' + x.b.id)), 'u'));
+    $('hl-tree').replaceChildren(root);
+    const box = $('hl-info'), inf = focusKey && INFO.get(focusKey);       // details of the focused level
+    box.style.display = inf ? 'block' : 'none';
+    if (inf) {
+        const t = document.createElement('b'); t.textContent = inf.title; box.replaceChildren(t);
+        inf.facts.filter(Boolean).forEach(f => { const d = document.createElement('div'); d.textContent = f; box.append(d); });
+        if (inf.list.length) {
+            const h = document.createElement('div'); h.className = 'n'; h.textContent = inf.listTitle + ':'; box.append(h);
+            const u = document.createElement('ul'); inf.list.forEach(x => { const l = document.createElement('li'); l.textContent = x; u.append(l); }); box.append(u);
+        }
+    }
 }
 
 function fillRef(kind, value) {
@@ -263,6 +403,7 @@ function syncLock() {
 }
 function select(o) {
     sel = o;
+    if (!o) focusKey = null; else if (OBJ_KEY.has(o) && (o.kind === 'room' || o.kind === 'building')) focusKey = OBJ_KEY.get(o);
     $('hl-form').style.display = o ? '' : 'none'; $('hl-empty').style.display = o ? 'none' : '';
     if (o) {
         $('g-machine').style.display = o._t === 'machine' ? '' : 'none';
@@ -274,13 +415,27 @@ function select(o) {
         if (o._t === 'machine' && o.id) $('hl-dossier').href = '/admin/hall/' + o.id + '/dossier';
         else if (o._t === 'shape') { $('f-kind').value = o.kind; $('f-room').value = o.room_id ?? ''; $('f-floors').value = o.floors ?? 1; $('f-fmodel').value = o.model ?? ''; $('f-frot').value = o.rotation ?? 0; }
         else { $('f-ekind').value = o.kind; fillRef(o.kind, o.ref_id); $('f-erot').value = o.rotation ?? 0; }
+        fillParent(o);
         syncKind();
     }
     syncLock();
     draw();
 }
+function fillParent(o) {          // "belongs to": a building -> its parcel; a room -> its building; anything else -> a room or building
+    const isB = o._t === 'shape' && o.kind === 'building', isR = o._t === 'shape' && o.kind === 'room';
+    const opt = (v, t) => `<option value="${v}">${String(t).replace(/</g, '&lt;')}</option>`;
+    let h = opt('', isR ? '- не е зададена (основно хале) -' : '- автоматично (по позиция) -');
+    if (isB) h += PARCELS.map(p => opt(p.id, 'ПИ ' + p.cadnum + ' · ' + Math.round(p.area) + ' м²')).join('');
+    else {
+        h += opt(0, 'Хале') + SHAPES.filter(s => s.id && s.kind === 'building' && s !== o).map(s => opt(s.id, 'Сграда: ' + (s.name || s.id))).join('');
+        if (!isR) h += SHAPES.filter(s => s.id && s.kind === 'room' && s !== o).map(s => opt(s.id, 'Помещение: ' + (s.label || s.name || s.id))).join('');
+    }
+    $('l-parent').textContent = isB ? 'Имот' : isR ? 'Сграда' : 'Помещение / сграда';
+    $('f-parent').innerHTML = h; $('f-parent').value = (isB ? o.parcel_id : o.parent_id) ?? '';
+}
 function syncKind() {
     const kind = $('f-kind').value, isShape = sel && sel._t === 'shape';
+    $('g-geom').style.display = isShape && kind === 'building' ? 'none' : '';      // a building has no outline on the map: it is only its name, parcel and rooms
     $('g-room').style.display = isShape && kind === 'room' ? '' : 'none';
     $('g-floors').style.display = isShape && (kind === 'room' || kind === 'stairs') ? '' : 'none';
     $('g-fixture').style.display = isShape && kind === 'fixture' ? '' : 'none';
@@ -290,47 +445,112 @@ function syncKind() {
 $('f-kind').onchange = syncKind;
 $('f-ekind').onchange = () => fillRef($('f-ekind').value, null);
 
+// ---- a door / window sticks to the nearest wall (within 0.6 m): centred in its thickness, turned along it, slid along it ----
+function snapToWall(o, nx, nz) {
+    const cx = nx + o.width / 2, cz = nz + o.depth / 2;
+    let best = null, bd = 0.6;
+    SHAPES.forEach(w => {
+        if (w.kind !== 'wall') return;
+        const d = Math.hypot(Math.max(w.x - cx, 0, cx - (w.x + w.width)), Math.max(w.z - cz, 0, cz - (w.z + w.depth)));
+        if (d <= bd) { bd = d; best = w; }
+    });
+    if (!best) return [nx, nz];
+    const horizontal = best.width >= best.depth;
+    if (horizontal !== (o.width >= o.depth)) [o.width, o.depth] = [o.depth, o.width];       // turn it to run along the wall
+    return horizontal ? [clamp(nx, best.x, Math.max(best.x, best.x + best.width - o.width)), best.z + (best.depth - o.depth) / 2]
+                      : [best.x + (best.width - o.width) / 2, clamp(nz, best.z, Math.max(best.z, best.z + best.depth - o.depth))];
+}
+
+// ---- a room moves as a set: its generated walls + floor, and everything standing in it (by parent or by position) ----
+function roomGroup(room) {
+    const mine = ob => ob.parent_id === room.id || (ob.parent_id == null || !SHAPES.some(r => r.kind === 'room' && r.id === ob.parent_id)) && inRect(room, mid(ob));
+    const e = 0.3, shell = sh => ['wall', 'door', 'window'].includes(sh.kind) && sh.x >= room.x - e && sh.z >= room.z - e && sh.x + sh.width <= room.x + room.width + e && sh.z + sh.depth <= room.z + room.depth + e;
+    const out = [];       // a wall/door/window lying along the room's outline goes with it; a longer one (the hall shell) stays
+    SHAPES.forEach(sh => { if (sh !== room && sh.kind !== 'room' && sh.kind !== 'building' && (sh.model === 'auto' ? sh.parent_id === room.id : sh.id && (mine(sh) || shell(sh)))) out.push(sh); });
+    MACHINES.forEach(m => { if (m.id && mine(m)) out.push(m); });
+    EQUIP.forEach(q => { if (q.id && mine(q)) out.push(q); });
+    return out.map(ob => ({ ob, x0: ob.x, z0: ob.z }));
+}
+function moveGroup(group, dx, dz) {
+    group.forEach(({ ob, x0, z0 }) => {
+        ob.x = x0 + dx;
+        ob.z = z0 + dz;
+    });
+}
+async function saveWithGroup(o, group) {       // the room first (the server may snap it to a neighbour or refuse), then its contents follow that
+    const x0 = o.x, z0 = o.z;
+    if (!await save(o)) { group.forEach(g => { g.ob.x = g.x0; g.ob.z = g.z0; }); draw(); return; }
+    const rx = o.x - x0, rz = o.z - z0;
+    if (rx || rz) group.forEach(g => { g.ob.x += rx; g.ob.z += rz; });
+    for (const { ob } of group) if (ob.model !== 'auto') await save(ob);      // generated walls/floor were already re-fitted by the server
+    draw();
+}
+const isRoom = o => o._t === 'shape' && o.kind === 'room' && o.id;
+
 function startDrag(e, o) {
     e.preventDefault(); e.stopPropagation();
     select(o);
     if (!o._unlocked) return;            // locked: select only
-    const p = pt(e), off = [p.x - o.x, p.y - o.z];
+    const p = pt(e), off = [p.x - o.x, p.y - o.z], ox = o.x, oz = o.z, group = isRoom(o) ? roomGroup(o) : [];
     let moved = false;
     const move = ev => {
         const q = pt(ev), nx = snap(q.x - off[0]), nz = snap(q.y - off[1]);
-        if (o._t === 'machine') { o.x = clamp(nx, 0, 56 - o.width); o.z = clamp(nz, 0, 12 - o.depth); }
-        else { o.x = clamp(nx, -10, 80); o.z = clamp(nz, -10, 30); }
+        if (o._t === 'shape' && (o.kind === 'door' || o.kind === 'window')) [o.x, o.z] = snapToWall(o, nx, nz);
+        else { o.x = clamp(nx, -10, 80); o.z = clamp(nz, -10, 60); }
+        if (group.length) moveGroup(group, o.x - ox, o.z - oz);
         moved = true; $('f-x').value = o.x; $('f-z').value = o.z; draw();
     };
-    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); if (moved) save(o); };
+    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); if (moved) group.length ? saveWithGroup(o, group) : save(o); };
     addEventListener('pointermove', move); addEventListener('pointerup', up);
 }
 
-let nudgeTimer = null;
+let nudgeTimer = null, nudgeGroup = null, nudgeStart = null;
 addEventListener('keydown', e => {
     if (!sel || !sel._unlocked || !e.key.startsWith('Arrow') || /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
     e.preventDefault();
     const d = step * (e.shiftKey ? 10 : 1);
     const nx = sel.x + (e.key === 'ArrowRight' ? d : e.key === 'ArrowLeft' ? -d : 0), nz = sel.z + (e.key === 'ArrowDown' ? d : e.key === 'ArrowUp' ? -d : 0);
-    if (sel._t === 'machine') { sel.x = clamp(snap(nx), 0, 56 - sel.width); sel.z = clamp(snap(nz), 0, 12 - sel.depth); }
-    else { sel.x = clamp(snap(nx), -10, 80); sel.z = clamp(snap(nz), -10, 30); }
+    if (!nudgeTimer && isRoom(sel)) { nudgeGroup = roomGroup(sel); nudgeStart = [sel.x, sel.z]; }       // a nudge burst moves the room's set together
+    { sel.x = clamp(snap(nx), -10, 80); sel.z = clamp(snap(nz), -10, 60); }
+    if (nudgeGroup) moveGroup(nudgeGroup, sel.x - nudgeStart[0], sel.z - nudgeStart[1]);
     $('f-x').value = sel.x; $('f-z').value = sel.z; draw();
-    const o = sel; clearTimeout(nudgeTimer); nudgeTimer = setTimeout(() => { if (o.id || o.name !== undefined) save(o); }, 500);
+    const o = sel; clearTimeout(nudgeTimer);
+    nudgeTimer = setTimeout(() => { nudgeTimer = null; const g = nudgeGroup; nudgeGroup = null; if (g) saveWithGroup(o, g); else if (o.id || o.name !== undefined) save(o); }, 500);
 });
 
 async function post(url, body) {
     const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': window.CSRF_TOKEN }, body: JSON.stringify(body || {}) });
     return [r.ok, await r.json().catch(() => ({}))];
 }
+async function placeRoom(id) {      // a Room that exists in Сгради и помещения but not on the plan -> a marked room beside the hall
+    const [ok, d] = await post('/admin/hall/room/' + id + '/place');
+    if (!ok) return msg(d.error || 'Грешка.', true);
+    d.shapes.forEach(sh => { sh._t = 'shape'; const i = SHAPES.findIndex(o => o.id === sh.id); if (i >= 0) Object.assign(SHAPES[i], sh); else SHAPES.push(sh); persisted(sh); });
+    applyBuildings(d); window.hallDirty = true;
+    const room = SHAPES.find(o => o.kind === 'room' && o.room_id === id);
+    msg('Помещението е поставено до халето - преместете го и задайте размерите му.'); select(room || null);
+}
+function applyBuildings(d) {      // the server re-fits building outlines, and a room's generated walls/floor, after a room/building save or delete
+    (d.buildings || []).forEach(b => { const t = SHAPES.find(s => s.id === b.id); if (t) Object.assign(t, b); });
+    (d.envelope || []).forEach(sh => { const i = SHAPES.findIndex(o => o.id === sh.id); if (i >= 0) Object.assign(SHAPES[i], sh); else { sh._t = 'shape'; SHAPES.push(sh); persisted(sh); } });
+    (d.removed || []).forEach(id => { const i = SHAPES.findIndex(o => o.id === id); if (i >= 0) SHAPES.splice(i, 1); });
+    delete d.buildings; delete d.envelope; delete d.removed;
+}
+const persisted = o => { o._saved = Object.fromEntries(Object.entries(o).filter(([k]) => k[0] !== '_')); };   // last state the server accepted
+[...SHAPES, ...MACHINES, ...EQUIP].forEach(persisted);
 async function save(o, lockAfter = false) {
     const [ok, d] = await post(URLS[o._t][0], o);
-    if (!ok) return msg(d.error || 'Грешка при запис.', true);
-    window.hallDirty = true; Object.assign(o, d); msg(lockAfter ? 'Запазено и заключено.' : 'Запазено.');
+    if (!ok) {
+        msg(d.error || 'Грешка при запис.', true);
+        if (o._saved) { Object.assign(o, o._saved); if (sel === o) select(o); else draw(); }      // refused (e.g. overlapping rooms): back to the last valid state
+        return false;
+    }
+    applyBuildings(d); window.hallDirty = true; Object.assign(o, d); persisted(o); msg(lockAfter ? 'Запазено и заключено.' : 'Запазено.');
     if (lockAfter) { o._unlocked = false; if (sel === o) syncLock(); }
     draw();
+    return true;
 }
-$('hl-save').onclick = () => {
-    if (!sel) return;
+function applyForm() {            // form fields -> the selected object (not saved yet)
     COMMON.forEach(f => sel[f] = f === 'name' ? $('f-name').value : Number($('f-' + f).value));
     if (sel._t === 'machine') {
         sel.no = $('f-no').value === '' ? null : Number($('f-no').value);
@@ -344,13 +564,49 @@ $('hl-save').onclick = () => {
     } else {
         sel.kind = $('f-ekind').value; sel.ref_id = $('f-ref').value ? Number($('f-ref').value) : null; sel.rotation = Number($('f-erot').value);
     }
-    save(sel, true);
-};
+    const pv = $('f-parent').value === '' ? null : Number($('f-parent').value);
+    if (sel._t === 'shape' && sel.kind === 'building') sel.parcel_id = pv; else sel.parent_id = pv;
+    if (sel._t === 'shape' && !sel.room_id) sel.label = sel.name;
+    else if (sel._t === 'equip' && sel.name) sel.label = sel.name;
+}
+$('hl-save').onclick = () => { if (!sel) return; applyForm(); save(sel, true); };
+// live preview: while an object is unlocked every edit in the form redraws the plan, the tree (areas, buildings, rooms) and the info box at once
+// choosing another room under "Принадлежи към" moves the object into that room (centred; left alone if it is already inside it)
+$('f-parent').addEventListener('change', () => {
+    const room = sel && !isRoomOrBuilding(sel) && SHAPES.find(r => r.kind === 'room' && r.id === Number($('f-parent').value) && $('f-parent').value !== '');
+    if (!room || inRect(room, [sel.x + sel.width / 2, sel.z + sel.depth / 2])) return;
+    const w = Number($('f-width').value) || sel.width, d = Number($('f-depth').value) || sel.depth;
+    let x = room.x + Math.max(0, (room.width - w) / 2), z = room.z + Math.max(0, (room.depth - d) / 2);
+    $('f-x').value = Math.round(x * 10) / 10; $('f-z').value = Math.round(z * 10) / 10;
+    if (!Number($('f-elevation').value) && room.elevation) $('f-elevation').value = room.elevation;
+    msg('Обектът е преместен в помещение „' + (room.label || room.name) + '“.');
+});
+const isRoomOrBuilding = o => o._t === 'shape' && (o.kind === 'room' || o.kind === 'building');
+const live = () => { if (sel && sel._unlocked) { applyForm(); draw(); } };
+$('hl-form').addEventListener('input', live); $('hl-form').addEventListener('change', live);
+
 $('hl-cardsize').onclick = async () => {
     if (!sel || sel._t !== 'machine' || !sel.id) return msg('Първо запазете машината.', true);
     const [ok, d] = await post('/admin/hall/' + sel.id + '/apply-card-size');
     if (!ok) return msg(d.error || 'Грешка.', true);
     Object.assign(sel, d); select(sel); msg('Габаритите са взети от картата.');
+};
+$('hl-copy').onclick = () => {      // a copy stays bound to the same parent (room/building/parcel); it is unsaved and unlocked so it can be dragged to its place
+    if (!sel) return;
+    const c = Object.fromEntries(Object.entries(sel).filter(([k]) => k[0] !== '_'));
+    c.id = null; delete c.buildings; delete c.envelope; delete c.removed;
+    c.machine_id = c.machine_id === undefined ? c.machine_id : null;           // a new record, not a second handle on the same real machine / device / Room
+    if (c._t === 'equip' || sel._t === 'equip') c.ref_id = null;
+    if (sel._t === 'shape') { c.room_id = null; c.building_id = null; if (c.model === 'auto') { c.model = null; c.floors = 1; } }
+    if (sel._t === 'machine') c.no = Math.max(0, ...MACHINES.map(m => m.no || 0)) + 1;
+    const base = c.name || (sel._t !== 'machine' ? c.label : '') || '';      // equipment shows its linked device's name when it has none of its own
+    if (base) c.name = base + ' (копие)';
+    if (sel._t !== 'machine') c.label = c.name || c.label;
+    const room = sel._t === 'shape' && sel.kind === 'room';
+    c.x = Math.round((sel.x + (room ? sel.width : 0.5)) * 10) / 10; c.z = Math.round((sel.z + (room ? 0 : 0.5)) * 10) / 10;   // a room goes beside the original, anything else just off it
+    c._t = sel._t; c._unlocked = true;
+    LISTS[c._t].push(c); select(c);
+    msg('Копие - преместете го на мястото му и натиснете „Запази и заключи“.');
 };
 $('hl-unlock').onclick = () => { if (sel) { sel._unlocked = true; syncLock(); draw(); } };
 $('hl-del').onclick = async () => {
@@ -358,6 +614,7 @@ $('hl-del').onclick = async () => {
     if (sel.id) {
         const [ok, d] = await post(URLS[sel._t][1] + sel.id + '/delete');
         if (!ok) return msg(d.error || 'Грешка при изтриване.', true);
+        applyBuildings(d);
     }
     window.hallDirty = true; LISTS[sel._t].splice(LISTS[sel._t].indexOf(sel), 1);
     select(null); msg('Изтрито.');
@@ -376,14 +633,28 @@ const NEW = {
     window: { _t: 'shape', id: null, kind: 'window', name: '', x: 2, z: 2, width: 3, depth: 0.3, height: 1.4, elevation: 3.3, floors: 1, model: null, rotation: 0, room_id: null, label: '' },
     fixture: { _t: 'shape', id: null, kind: 'fixture', name: '', x: 2, z: 2, width: 1, depth: 0.6, height: 0.9, elevation: 0, floors: 1, room_id: null, label: '' },
     stairs: { _t: 'shape', id: null, kind: 'stairs', name: 'Стълби', x: 2, z: 2, width: 4.16, depth: 1.25, height: 2.38, elevation: 0, floors: 14, room_id: null, label: 'Стълби' },
+    building: { _t: 'shape', id: null, kind: 'building', name: 'Нова сграда', x: 2, z: 2, width: 20, depth: 10, height: 5, elevation: 0, floors: 1, room_id: null, label: 'Нова сграда' },
     room: { _t: 'shape', id: null, kind: 'room', name: 'Ново помещение', x: 2, z: 2, width: 8, depth: 6, height: 3, elevation: 0, floors: 1, room_id: null, label: 'Ново помещение' },
 };
 document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => {
     const o = Object.assign({}, NEW[b.dataset.add]);
     if (o._t === 'machine') o.no = Math.max(0, ...MACHINES.map(m => m.no || 0)) + 1;   // next number in sequence, editable in the form
+    const room = sel && sel._t === 'shape' && sel.kind === 'room' ? sel : SHAPES.find(r => r.kind === 'room' && focusKey && OBJ_KEY.get(r) === focusKey);   // a room is selected / in focus: the new object goes inside it, centred
+    if (room && room.id && !['room', 'building'].includes(o.kind)) {
+        o.x = Math.round((room.x + Math.max(0, (room.width - o.width) / 2)) * 10) / 10;
+        o.z = Math.round((room.z + Math.max(0, (room.depth - o.depth) / 2)) * 10) / 10;
+        o.elevation = o.elevation || room.elevation || 0; o.parent_id = room.id;
+    }
     o._unlocked = true;                  // a new object is placed first, then saved (and locked)
     LISTS[o._t].push(o); select(o);   // saved on first "Запази"/drag
 });
+$('hl-envelopes').onclick = async () => {
+    if (!confirm('Да се направят ли стени и подова настилка за помещенията, които нямат стени по контура си?')) return;
+    const [ok, d] = await post('/admin/hall/rooms/envelopes');
+    if (!ok) return msg(d.error || 'Грешка.', true);
+    applyBuildings(d); window.hallDirty = true; draw();
+    msg(d.rooms.length ? 'Стени и под за: ' + d.rooms.join(', ') + '.' : 'Всички помещения вече имат стени.');
+};
 $('hl-syncmaps').onclick = async () => { const [ok, d] = await post('/admin/hall/sync-maps'); msg(ok ? 'Синхронизирани: ' + d.synced + ' обекта · нови помещения ' + d.rooms + ' · нови машини ' + d.machines + ' · нови табла ' + d.panels + '.' : 'Грешка.', !ok); };
 $('hl-autoplace').onclick = async () => {
     if (!confirm('Да се поставят ли на картата всички устройства, които още не са на нея? Подредете ги после с влачене.')) return;

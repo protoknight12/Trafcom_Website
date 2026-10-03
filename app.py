@@ -2563,6 +2563,7 @@ class HallMachine(db.Model):
     year = db.Column(db.Integer, nullable=True)
     notes = db.Column(db.Text, nullable=True)
     card_id = db.Column(db.Integer, db.ForeignKey('service_machine_card.id'), nullable=True)
+    parent_id = db.Column(db.Integer, nullable=True)   # room/building HallShape it belongs to, 0 = main hall, NULL = by position
 
     card = db.relationship('ServiceMachineCard')
 
@@ -2573,10 +2574,10 @@ class HallMachine(db.Model):
                 'machine_id': self.machine_id, 'status': self.machine.status if self.machine else None, 'x': self.x, 'z': self.z,
                 'width': self.width, 'depth': self.depth, 'height': self.height, 'elevation': self.elevation, 'model': self.model, 'rotation': self.rotation,
                 'acc_length': self.acc_length, 'acc_width': self.acc_width, 'acc_height': self.acc_height,
-                'acc_side': self.acc_side, 'acc_name': self.acc_name, 'card_id': self.card_id}
+                'acc_side': self.acc_side, 'acc_name': self.acc_name, 'card_id': self.card_id, 'parent_id': self.parent_id}
 
 
-HALL_SHAPE_KINDS = {'wall': 'Стена', 'door': 'Врата', 'room': 'Помещение', 'fixture': 'Обзавеждане', 'window': 'Прозорец', 'stairs': 'Стълби', 'block': 'Съседна сграда'}
+HALL_SHAPE_KINDS = {'wall': 'Стена', 'door': 'Врата', 'room': 'Помещение', 'fixture': 'Обзавеждане', 'window': 'Прозорец', 'stairs': 'Стълби', 'block': 'Съседна сграда', 'building': 'Сграда', 'floor': 'Подова настилка'}
 # (kind, name, x, z, width, depth, height[, elevation[, floors[, model]]]) - read from the plan's vector drawing;
 # for 'stairs' floors = number of steps, height = total rise
 HALL_SHAPES_SEED = [
@@ -2635,12 +2636,19 @@ class HallShape(db.Model):
     model = db.Column(db.String(30), nullable=True)               # fixtures: key of HALL_FIXTURE_MODELS
     rotation = db.Column(db.Integer, nullable=False, default=0)
     room_id = db.Column(db.Integer, db.ForeignKey('room.id'), nullable=True)
+    # explicit hierarchy (NULL = derived from position). building: parcel_id -> HallParcel; room/fixture/...: parent_id -> a
+    # building/room HallShape, or 0 = the main hall. No FK on purpose - a deleted parent just falls back to the position rule.
+    parcel_id = db.Column(db.Integer, nullable=True)
+    parent_id = db.Column(db.Integer, nullable=True)
+    building_id = db.Column(db.Integer, nullable=True)   # building shape -> the Building row of the factory map it keeps in sync (no FK)
 
     room = db.relationship('Room')
 
     def as_dict(self):
         return {'id': self.id, 'kind': self.kind, 'name': self.name or '', 'x': self.x, 'z': self.z, 'width': self.width,
                 'depth': self.depth, 'height': self.height, 'elevation': self.elevation, 'floors': self.floors, 'model': self.model, 'rotation': self.rotation, 'room_id': self.room_id,
+                'parcel_id': self.parcel_id, 'parent_id': self.parent_id, 'building_id': self.building_id,
+                'building': self.room.building.name if self.room else '',
                 'label': (f'{self.room.building.name} · {self.room.name}' if self.room else self.name) or ''}
 
 
@@ -2656,6 +2664,35 @@ def _hall_shapes():
         db.session.add_all(_hall_shape_from_seed(t) for t in HALL_SHAPES_SEED)
         db.session.commit()
     return HallShape.query.order_by(HallShape.id).all()
+
+
+# Property boundaries from КАИС (kais.cadastre.bg), already in hall metres [x, z]: origin = the hall's south
+# corner, +X along its long side (toward north-west), +Z along the short side (toward the yard / north-east).
+# Source ККС-2005 coordinates were converted with O=(397817.841, 4754814.441), x=(-0.78578, 0.61851), z=(0.61851, 0.78578);
+# the orientation (which end is x=0) is an assumption - check it against the real hall and mirror here if wrong.
+HALL_PARCELS_SEED = [
+    ('72343.500.3036', 1694.05, [[-1.31, 0.2], [-1.29, 0.02], [0.0, 0.0], [14.43, -0.14], [18.53, -0.17], [43.66, 0.04], [47.86, 0.06],
+                                 [56.27, 0.0], [62.47, 0.02], [62.7, 13.6], [62.52, 25.78], [18.82, 27.02], [-1.53, 25.8], [-1.5, 13.89]]),
+    ('72343.500.3037', 964.34, [[18.96, 30.74], [18.82, 27.02], [62.52, 25.78], [62.41, 47.98], [20.16, 49.39], [19.16, 42.81], [19.11, 35.1]]),
+]
+
+
+class HallParcel(db.Model):
+    """A cadastral property (ПИ) shown on the hall plan as a read-only boundary; points_json = [[x, z], ...] in metres."""
+    id = db.Column(db.Integer, primary_key=True)
+    cadnum = db.Column(db.String(30), nullable=False, unique=True)
+    area = db.Column(db.Float, nullable=True)
+    points_json = db.Column(db.Text, nullable=False)
+
+    def as_dict(self):
+        return {'id': self.id, 'cadnum': self.cadnum, 'area': self.area, 'points': json.loads(self.points_json)}
+
+
+def _hall_parcels():
+    if HallParcel.query.count() == 0:
+        db.session.add_all(HallParcel(cadnum=c, area=a, points_json=json.dumps(p)) for c, a, p in HALL_PARCELS_SEED)
+        db.session.commit()
+    return HallParcel.query.order_by(HallParcel.id).all()
 
 
 HALL_EQUIPMENT_KINDS = {'inverter': 'Инвертор', 'battery': 'Батериен блок', 'panel': 'Ел. табло', 'convector': 'Конвектор',
@@ -2677,6 +2714,7 @@ class HallEquipment(db.Model):
     height = db.Column(db.Float, nullable=False, default=1.0)
     elevation = db.Column(db.Float, nullable=False, default=0.0)
     rotation = db.Column(db.Integer, nullable=False, default=0)   # front direction, see HALL_LOOK_SEED
+    parent_id = db.Column(db.Integer, nullable=True)              # room/building HallShape it belongs to, 0 = main hall, NULL = by position
 
     def target(self):
         model = {'inverter': ModbusDevice, 'battery': BatteryStack, 'panel': ElectricalPanel, 'convector': Convector,
@@ -2686,7 +2724,7 @@ class HallEquipment(db.Model):
     def as_dict(self):
         t = self.target()
         return {'id': self.id, 'kind': self.kind, 'ref_id': self.ref_id, 'name': self.name or '', 'x': self.x, 'z': self.z,
-                'width': self.width, 'depth': self.depth, 'height': self.height, 'elevation': self.elevation, 'rotation': self.rotation,
+                'width': self.width, 'depth': self.depth, 'height': self.height, 'elevation': self.elevation, 'rotation': self.rotation, 'parent_id': self.parent_id,
                 'label': self.name or (t.name if t else '') or HALL_EQUIPMENT_KINDS[self.kind]}
 
 
@@ -5842,6 +5880,8 @@ def _hall_page(initial):
         solar['inv'].append({'id': inv.id, 'name': inv.name, 'model': inv.panel_model.name if inv.panel_model else None,
                              'watt': inv.panel_model.rated_power_w if inv.panel_model else None})
     ctx = dict(machines=out, solar=solar, shapes=[h.as_dict() for h in _hall_shapes()],
+               parcels=[p.as_dict() for p in _hall_parcels()],
+               db_buildings=[{'id': b.id, 'name': b.name, 'rooms': [{'id': r.id, 'name': r.name} for r in b.rooms]} for b in Building.query.order_by(Building.name)] if admin else [],
                equipment=[e.as_dict() for e in _hall_equipment()], is_admin=admin, initial=initial, links=_hall_links() if admin else [], active_page='factory3d')
     if admin:
         cards = ServiceMachineCard.query.filter_by(kind='machine').order_by(ServiceMachineCard.title).all()
@@ -5984,8 +6024,7 @@ def _hall_pull(kind, target, source):
         if rect is None or target.pos_x is None:
             return
         cx, cz = rect[0] + target.pos_x / 100 * rect[2], rect[1] + target.pos_y / 100 * rect[3]
-    lo, hi_x, hi_z = (0.0, HALL_W - obj.width, HALL_D - obj.depth) if kind == 'machine' else (-10.0, 80.0, 30.0)
-    obj.x, obj.z = max(lo, min(hi_x, cx - obj.width / 2)), max(lo, min(hi_z, cz - obj.depth / 2))
+    obj.x, obj.z = max(-10.0, min(80.0, cx - obj.width / 2)), max(-10.0, min(60.0, cz - obj.depth / 2))      # same limits for every kind of object
     _hall_push(kind, target, obj.x + obj.width / 2, obj.z + obj.depth / 2)
 
 
@@ -6096,7 +6135,7 @@ def _hall_auto_place(keep=False):
             else:
                 n = strip[kind] = strip.get(kind, 0) + 1
                 x, z = 1 + (n - 1) * 1.3, -1.2 - 0.9 * list(HALL_EQUIPMENT_DEFAULTS).index(kind)
-            db.session.add(HallEquipment(kind=kind, ref_id=obj.id, name='', x=max(-10.0, min(80.0, x)), z=max(-10.0, min(30.0, z)),
+            db.session.add(HallEquipment(kind=kind, ref_id=obj.id, name='', x=max(-10.0, min(80.0, x)), z=max(-10.0, min(60.0, z)),
                                          width=w, depth=d, height=h, elevation=elev, rotation=0))
             created += 1
     db.session.flush()
@@ -6152,15 +6191,28 @@ def admin_hall_convector_toggle(conv_id):
     return jsonify({'is_on': turn_on})
 
 
+def _hall_parent_id(data):
+    """parent_id from JSON: None (by position), 0 (main hall) or the id of a building/room HallShape; ValueError otherwise."""
+    v = data.get('parent_id')
+    if v in (None, ''):
+        return None
+    v = int(v)
+    if v != 0:
+        parent = db.session.get(HallShape, v)
+        if parent is None or parent.kind not in ('building', 'room'):
+            raise ValueError('parent')
+    return v
+
+
 def _hall_apply(m, data):
     """Copies validated JSON fields onto a HallMachine; returns an error string or None."""
     try:
         m.name = str(data.get('name', '')).strip()
         m.no = int(data['no']) if str(data.get('no', '')).strip() else None
-        m.x = max(0.0, min(56.0, float(data['x'])))
-        m.z = max(0.0, min(12.0, float(data['z'])))
+        m.x = max(-10.0, min(80.0, float(data['x'])))      # machines may stand outside the first hall too
+        m.z = max(-10.0, min(60.0, float(data['z'])))
         m.width = max(0.3, min(56.0, float(data['width'])))
-        m.depth = max(0.3, min(12.0, float(data['depth'])))
+        m.depth = max(0.3, min(40.0, float(data['depth'])))
         m.height = max(0.3, min(5.0, float(data['height'])))
         m.elevation = max(0.0, min(20.0, float(data.get('elevation') or 0)))
         m.rotation = int(data.get('rotation') or 0)
@@ -6171,6 +6223,7 @@ def _hall_apply(m, data):
         m.acc_name = str(data.get('acc_name') or '').strip()[:100] or None
         card_id = data.get('card_id')
         m.card_id = int(card_id) if card_id else None
+        m.parent_id = _hall_parent_id(data)
     except (KeyError, ValueError, TypeError):
         return 'Невалидни данни.'
     if not m.name:
@@ -6209,6 +6262,195 @@ def admin_hall_save():
     return jsonify(m.as_dict())
 
 
+def _hall_building_row(b):
+    """The Building row (Устройства и схеми -> Сгради и помещения) of a drawn building shape: created on first save, renamed with it."""
+    row = db.session.get(Building, b.building_id) if b.building_id else None
+    name = (b.name or '').strip() or f'Сграда {b.id}'
+    if row is None:
+        row = Building(name=name)
+        db.session.add(row)
+        db.session.flush()
+        b.building_id = row.id
+    elif row.name != name:
+        row.name = name
+    return row
+
+
+def _hall_sync_hierarchy():
+    """Editor -> factory map: every drawn building has a Building row, every marked room a Room row named like it and standing in the
+    Building its shape belongs to (explicit parent, else the building outline it lies in, else the main hall)."""
+    buildings = HallShape.query.filter_by(kind='building').all()
+    for b in buildings:
+        _hall_building_row(b)
+    for h in HallShape.query.filter_by(kind='room').all():
+        parent = db.session.get(HallShape, h.parent_id) if h.parent_id else None
+        target = _hall_building_row(parent) if parent is not None and parent.kind == 'building' else _hall_building()
+        room = db.session.get(Room, h.room_id) if h.room_id else None
+        name = (h.name or '').strip()
+        if room is None:
+            room = Room(name=name or f'Помещение {h.id}', building_id=target.id)
+            db.session.add(room)
+            db.session.flush()
+            h.room_id = room.id
+        else:
+            room.building_id = target.id
+            if name:
+                room.name = name
+
+
+HALL_WALL_T = 0.125   # m, standard thickness of the walls generated for a new room
+
+
+def _hall_envelope(room, create=False):
+    """The generated walls (4) and floor slab of a marked room, kept equal to its rect/height/elevation. They are ordinary shapes marked
+    model='auto' and parent_id=room.id (a wall's `floors` holds its side 1-4). create=True makes them when missing (a new room); otherwise an
+    existing room without them (drawn by hand) is left alone. Walls sit inside the room's outline. A room lower than 0.2 m (a slab, a yard)
+    only gets the floor - its walls are removed. Returns (shapes written, ids removed)."""
+    auto = HallShape.query.filter(HallShape.parent_id == room.id, HallShape.model == 'auto', HallShape.kind.in_(('wall', 'floor'))).all()
+    if not auto and not create:
+        return [], []
+    have = {(a.kind, a.floors if a.kind == 'wall' else 0): a for a in auto}
+    x, z, w, d, t = room.x, room.z, room.width, room.depth, HALL_WALL_T
+    h = room.height * (room.floors or 1)                      # walls are as tall as the room: floor height x storeys
+    inner = max(0.1, d - 2 * t)
+    spec = {('floor', 0): (x, z, w, d, max(0.02, min(0.1, room.height)), 'Подова настилка'),
+            ('wall', 1): (x, z, w, t, h, 'Стена'), ('wall', 2): (x, z + d - t, w, t, h, 'Стена'),
+            ('wall', 3): (x, z + t, t, inner, h, 'Стена'), ('wall', 4): (x + w - t, z + t, t, inner, h, 'Стена')}
+    out, removed = [], []
+    for (kind, side), (sx, sz, sw, sd, sh, name) in spec.items():
+        if kind == 'wall' and room.height < 0.2:
+            old = have.get((kind, side))
+            if old is not None:
+                removed.append(old.id)
+                db.session.delete(old)
+            continue
+        o = have.get((kind, side)) or HallShape(kind=kind, model='auto', parent_id=room.id, floors=side or 1, name=name if kind == 'floor' else '')
+        o.x, o.z, o.width, o.depth, o.height, o.elevation = sx, sz, max(0.1, sw), max(0.1, sd), sh, room.elevation
+        db.session.add(o)
+        out.append(o)
+    db.session.flush()
+    return out, removed
+
+
+def _hall_room_has_walls(room, walls, edge=0.3):
+    """True when a hand-drawn wall runs along the room's outline (a wall that only crosses the inside - a partition - does not count)."""
+    for w in walls:
+        touches = (w.x < room.x + room.width + edge and room.x - edge < w.x + w.width and w.z < room.z + room.depth + edge and room.z - edge < w.z + w.depth)
+        inside = (w.x >= room.x + edge and w.x + w.width <= room.x + room.width - edge and w.z >= room.z + edge and w.z + w.depth <= room.z + room.depth - edge)
+        if touches and not inside:
+            return True
+    return False
+
+
+@app.route('/admin/hall/rooms/envelopes', methods=['POST'])
+@role_required('admin')
+def admin_hall_rooms_envelopes():
+    """Generates walls + floor for every marked room that has none yet (no generated shapes and no wall along its outline)."""
+    walls = HallShape.query.filter(HallShape.kind == 'wall', HallShape.model.is_(None) | (HallShape.model != 'auto')).all()
+    done, made = [], []
+    for room in HallShape.query.filter_by(kind='room').all():
+        if HallShape.query.filter_by(parent_id=room.id, model='auto').first() or _hall_room_has_walls(room, walls):
+            continue
+        made += _hall_envelope(room, create=True)[0]
+        done.append(room.name or f'Помещение {room.id}')
+    db.session.commit()
+    if done:
+        log_action(f'Хале 3D: генерирани стени и под за {len(done)} помещения')
+    return jsonify({'rooms': done, 'envelope': [m.as_dict() for m in made]})
+
+
+HALL_SNAP = 0.5   # m: walls of two rooms closer than this (or overlapping by less) are pulled together
+
+
+def _hall_room_top(r):
+    return r.elevation + (r.height if r.height > 0 else 3.0) * (r.floors or 1)
+
+
+def _hall_snap_room(h):
+    """Moves a room (never resizes it) so a wall that lies within HALL_SNAP of a facing wall of another room on the same level touches it:
+    a gap of 0.3 m closes, an overlap of 0.3 m is taken back. Only walls that really face each other count (the rooms share a stretch
+    along the other axis). ponytail: one pass per axis, nearest wall wins; no chain/multi-room solving."""
+    with db.session.no_autoflush:
+        others = [o for o in HallShape.query.filter(HallShape.kind == 'room', HallShape.id != (h.id or 0)).all()
+                  if h.elevation < _hall_room_top(o) and o.elevation < _hall_room_top(h)]
+    for a0, a1, b0, b1 in (('x', 'width', 'z', 'depth'), ('z', 'depth', 'x', 'width')):
+        best = None
+        for o in others:
+            if not (getattr(h, b0) < getattr(o, b0) + getattr(o, b1) and getattr(o, b0) < getattr(h, b0) + getattr(h, b1)):
+                continue                                           # not side by side along the other axis
+            for shift in (getattr(o, a0) - (getattr(h, a0) + getattr(h, a1)), getattr(o, a0) + getattr(o, a1) - getattr(h, a0)):
+                if abs(shift) <= HALL_SNAP and (best is None or abs(shift) < abs(best)):
+                    best = shift
+        if best:
+            setattr(h, a0, round(getattr(h, a0) + best, 3))
+
+
+def _hall_room_overlap(h):
+    """Name of another marked room that h shares floor area AND height with, else None. Rooms may overlap on the plan only when they are at
+    different heights: a room occupies [elevation, elevation + floor height x floors] (floor height 0 counts as 3 m)."""
+    top = _hall_room_top
+    with db.session.no_autoflush:
+        others = HallShape.query.filter(HallShape.kind == 'room', HallShape.id != (h.id or 0)).all()
+    e = 0.001
+    for o in others:
+        if (h.x < o.x + o.width - e and o.x < h.x + h.width - e and h.z < o.z + o.depth - e and o.z < h.z + h.depth - e
+                and h.elevation < top(o) - e and o.elevation < top(h) - e):
+            return o.name or f'Помещение {o.id}'
+    return None
+
+
+def _hall_place_room(room):
+    """Puts a Room (made in Сгради и помещения) on the hall plan as an 8 x 6 m marked room on a free spot just beside the hall, belonging
+    to its Building (a building shape is created for it unless it is the main hall). Returns the new shapes; an already placed room -> []."""
+    if HallShape.query.filter_by(kind='room', room_id=room.id).first():
+        return []
+    shapes = []
+    parent = None
+    if room.building.name != HALL_BUILDING:
+        parent = HallShape.query.filter_by(kind='building', building_id=room.building_id).first()
+        if parent is None:
+            parent = HallShape(kind='building', name=room.building.name, building_id=room.building_id, x=0, z=0, width=1, depth=1, height=5)
+            db.session.add(parent)
+            db.session.flush()
+            shapes.append(parent)
+    cand = HallShape(kind='room', name=room.name, room_id=room.id, parent_id=parent.id if parent else None, width=8, depth=6, height=3, floors=1, elevation=0.0)
+    spot = next(((x, z) for z in range(14, 56, 7) for x in range(0, 56, 9) if (setattr(cand, 'x', x), setattr(cand, 'z', z), not _hall_room_overlap(cand))[2]), (0, 14))
+    cand.x, cand.z = spot
+    db.session.add(cand)
+    db.session.flush()
+    shapes.append(cand)
+    shapes += _hall_envelope(cand, create=True)[0]
+    return shapes
+
+
+@app.route('/admin/hall/room/<int:room_id>/place', methods=['POST'])
+@role_required('admin')
+def admin_hall_place_room(room_id):
+    room = Room.query.get_or_404(room_id)
+    shapes = _hall_place_room(room)
+    changed = _hall_fit_buildings()
+    db.session.commit()
+    log_action(f'Хале 3D: помещение "{room.name}" поставено на плана')
+    return jsonify({'shapes': [x.as_dict() for x in shapes], 'buildings': [b.as_dict() for b in changed]})
+
+
+def _hall_fit_buildings():
+    """A building has no outline of its own on the map: its stored rect is kept equal to the bounding box of the rooms that name it as
+    parent_id (a building without rooms is left alone). Returns the changed buildings."""
+    rooms = HallShape.query.filter_by(kind='room').all()
+    changed = []
+    for b in HallShape.query.filter_by(kind='building').all():
+        mem = [r for r in rooms if r.parent_id == b.id]
+        if not mem:
+            continue
+        x0, z0 = min(r.x for r in mem), min(r.z for r in mem)
+        w, d = max(r.x + r.width for r in mem) - x0, max(r.z + r.depth for r in mem) - z0
+        if (b.x, b.z, b.width, b.depth) != (x0, z0, w, d):
+            b.x, b.z, b.width, b.depth = x0, z0, w, d
+            changed.append(b)
+    return changed
+
+
 @app.route('/admin/hall/shape/save', methods=['POST'])
 @role_required('admin')
 def admin_hall_shape_save():
@@ -6217,9 +6459,11 @@ def admin_hall_shape_save():
     h = db.session.get(HallShape, int(data['id'])) if data.get('id') else HallShape()
     if h is None:
         return jsonify({'error': 'Няма такъв елемент.'}), 404
+    prev_room_id = h.room_id
+    is_new = h.id is None
     try:
         h.x = max(-10.0, min(80.0, float(data['x'])))
-        h.z = max(-10.0, min(30.0, float(data['z'])))
+        h.z = max(-10.0, min(60.0, float(data['z'])))
         h.width = max(0.1, min(80.0, float(data['width'])))
         h.depth = max(0.1, min(40.0, float(data['depth'])))
         h.height = max(0.0, min(10.0, float(data['height'])))
@@ -6227,6 +6471,12 @@ def admin_hall_shape_save():
         h.floors = max(1, min(40, int(data.get('floors') or 1)))
         h.rotation = int(data.get('rotation') or 0)
         h.room_id = int(data['room_id']) if data.get('room_id') and data.get('kind') == 'room' else None
+        h.parent_id = _hall_parent_id(data)
+        h.parcel_id = int(data['parcel_id']) if data.get('parcel_id') and data.get('kind') == 'building' else None
+        if h.parent_id and h.parent_id == h.id:
+            raise ValueError('self')
+        if h.parcel_id and not db.session.get(HallParcel, h.parcel_id):
+            raise ValueError('parcel')
     except (KeyError, ValueError, TypeError):
         return jsonify({'error': 'Невалидни данни.'}), 400
     if data.get('kind') not in HALL_SHAPE_KINDS:
@@ -6237,11 +6487,25 @@ def admin_hall_shape_save():
         return jsonify({'error': 'Невалиден модел или посока.'}), 400
     h.model = data.get('model') or None
     h.kind = data['kind']
+    if h.kind == 'room':
+        _hall_snap_room(h)
+    clash = _hall_room_overlap(h) if h.kind == 'room' else None
+    if clash:
+        db.session.rollback()
+        return jsonify({'error': f'Помещението се застъпва с „{clash}“. Помещенията не могат да се застъпват, освен ако са на различна височина '
+                                 '(разстояние от пода / етажност).'}), 400
     h.name = str(data.get('name', '')).strip()[:150]
+    if h.room_id and h.room_id != prev_room_id:           # just linked to an existing Room: it keeps its own name
+        h.name = db.session.get(Room, h.room_id).name
     db.session.add(h)
+    db.session.flush()
+    changed = _hall_fit_buildings() if h.kind in ('room', 'building') else []
+    if h.kind in ('room', 'building'):
+        _hall_sync_hierarchy()
+    envelope, removed = _hall_envelope(h, create=is_new) if h.kind == 'room' else ([], [])
     db.session.commit()
     log_action(f'Хале 3D: запазен елемент "{HALL_SHAPE_KINDS[h.kind]}" {h.name}'.strip())
-    return jsonify(h.as_dict())
+    return jsonify(h.as_dict() | {'buildings': [b.as_dict() for b in changed if b is not h], 'envelope': [e.as_dict() for e in envelope], 'removed': removed})
 
 
 @app.route('/admin/hall/shape/<int:shape_id>/delete', methods=['POST'])
@@ -6249,9 +6513,17 @@ def admin_hall_shape_save():
 def admin_hall_shape_delete(shape_id):
     h = HallShape.query.get_or_404(shape_id)
     log_action(f'Хале 3D: изтрит елемент "{HALL_SHAPE_KINDS[h.kind]}" {h.name or ""}'.strip())
+    was_room = h.kind == 'room'
+    gone = [a for a in HallShape.query.filter(HallShape.parent_id == h.id, HallShape.model == 'auto').all()] if was_room else []
+    removed = [a.id for a in gone]
+    for a in gone:
+        db.session.delete(a)                                  # its generated walls and floor go with it
     db.session.delete(h)
+    db.session.flush()
+    changed = _hall_fit_buildings() if was_room else []
+    _hall_sync_hierarchy()
     db.session.commit()
-    return jsonify({'ok': True})
+    return jsonify({'ok': True, 'buildings': [b.as_dict() for b in changed], 'removed': removed})
 
 
 def _card_dims(card):
@@ -6541,12 +6813,13 @@ def admin_hall_equipment_save():
         e.kind = data['kind']
         e.ref_id = int(data['ref_id']) if data.get('ref_id') else None
         e.x = max(-10.0, min(80.0, float(data['x'])))
-        e.z = max(-10.0, min(30.0, float(data['z'])))
+        e.z = max(-10.0, min(60.0, float(data['z'])))
         e.width = max(0.1, min(20.0, float(data['width'])))
         e.depth = max(0.1, min(20.0, float(data['depth'])))
         e.height = max(0.1, min(10.0, float(data['height'])))
         e.elevation = max(0.0, min(20.0, float(data.get('elevation') or 0)))
         e.rotation = int(data.get('rotation') or 0)
+        e.parent_id = _hall_parent_id(data)
     except (KeyError, ValueError, TypeError):
         return jsonify({'error': 'Невалидни данни.'}), 400
     if e.rotation not in (0, 90, 180, 270):
@@ -14904,6 +15177,7 @@ def admin_rename_building(building_id):
         flash('Името не може да бъде празно.', 'danger')
         return redirect(url_for('admin_buildings'))
     building.name = name
+    HallShape.query.filter_by(kind='building', building_id=building.id).update({'name': name})      # the drawn building follows
     db.session.commit()
     flash('Сградата беше преименувана.', 'success')
     return redirect(url_for('admin_buildings'))
@@ -14917,6 +15191,7 @@ def admin_delete_building(building_id):
         flash('Тази сграда все още има помещения - изтрийте ги първо.', 'danger')
         return redirect(url_for('admin_buildings'))
     name = building.name
+    HallShape.query.filter_by(building_id=building.id).update({'building_id': None})
     db.session.delete(building)
     db.session.commit()
     log_action(f'Изтрита сграда "{name}"')
@@ -14932,7 +15207,11 @@ def admin_add_room(building_id):
     if not name:
         flash('Моля въведете име на помещението.', 'danger')
         return redirect(url_for('admin_buildings'))
-    db.session.add(Room(name=name, building_id=building.id))
+    room = Room(name=name, building_id=building.id)
+    db.session.add(room)
+    db.session.flush()
+    _hall_place_room(room)                 # it shows up on the hall plan at once
+    _hall_fit_buildings()
     db.session.commit()
     log_action(f'Добавено помещение "{name}" в сграда "{building.name}"')
     flash(f'Помещение "{name}" беше добавено.', 'success')
@@ -14948,9 +15227,30 @@ def admin_rename_room(room_id):
         flash('Името не може да бъде празно.', 'danger')
         return redirect(url_for('admin_buildings'))
     room.name = name
+    HallShape.query.filter_by(kind='room', room_id=room.id).update({'name': name})                  # the marked room follows
     db.session.commit()
     flash('Помещението беше преименувано.', 'success')
     return redirect(url_for('admin_buildings'))
+
+
+def _delete_panel_row(panel):
+    """Unlinks everything that points at a panel, then deletes it with its schematic. The wires go first (and are flushed): the
+    component cascade alone tried to NULL panel_wire.to_component_id while the wires were still there -> IntegrityError."""
+    for machine in Machine.query.filter_by(panel_id=panel.id).all():
+        machine.panel_id = None
+    for device in ShellyDevice.query.filter_by(panel_id=panel.id).all():
+        device.panel_id = None
+    for device in ModbusDevice.query.filter_by(panel_id=panel.id).all():
+        device.panel_id = None
+    for child in ElectricalPanel.query.filter_by(parent_panel_id=panel.id).all():
+        child.parent_panel_id = None
+    for comp in PanelComponent.query.filter(PanelComponent.feeds_panel_id == panel.id).all():
+        comp.feeds_panel_id = None
+    for wire in list(panel.wires):
+        db.session.delete(wire)
+    db.session.flush()
+    db.session.delete(panel)
+    db.session.flush()
 
 
 @app.route('/admin/rooms/<int:room_id>/delete', methods=['POST'])
@@ -14968,15 +15268,8 @@ def admin_delete_room(room_id):
     for machine in Machine.query.filter_by(room_id=room.id).all():
         machine.room_id = None
     for panel in ElectricalPanel.query.filter_by(room_id=room.id).all():
-        for machine in Machine.query.filter_by(panel_id=panel.id).all():
-            machine.panel_id = None
-        for device in ShellyDevice.query.filter_by(panel_id=panel.id).all():
-            device.panel_id = None
-        for device in ModbusDevice.query.filter_by(panel_id=panel.id).all():
-            device.panel_id = None
-        for child in ElectricalPanel.query.filter_by(parent_panel_id=panel.id).all():
-            child.parent_panel_id = None
-        db.session.delete(panel)
+        _delete_panel_row(panel)
+    HallShape.query.filter_by(room_id=room.id).update({'room_id': None})
     db.session.delete(room)
     db.session.commit()
     log_action(f'Изтрито помещение "{room_name}"')
@@ -15108,15 +15401,7 @@ def admin_delete_panel(panel_id):
     never having had a parent - it's still a perfectly real panel on its own."""
     panel = ElectricalPanel.query.get_or_404(panel_id)
     name = panel.name
-    for machine in Machine.query.filter_by(panel_id=panel.id).all():
-        machine.panel_id = None
-    for device in ShellyDevice.query.filter_by(panel_id=panel.id).all():
-        device.panel_id = None
-    for device in ModbusDevice.query.filter_by(panel_id=panel.id).all():
-        device.panel_id = None
-    for child in ElectricalPanel.query.filter_by(parent_panel_id=panel.id).all():
-        child.parent_panel_id = None
-    db.session.delete(panel)
+    _delete_panel_row(panel)
     db.session.commit()
     log_action(f'Изтрито ел. табло "{name}"')
     flash(f'Ел. табло "{name}" беше изтрито.', 'success')

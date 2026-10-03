@@ -1,4 +1,16 @@
 {
+ "parcels": [
+  {
+   "cadnum": "72343.500.3036",
+   "area": 1694.05,
+   "points_json": "[[-1.31, 0.2], [-1.29, 0.02], [0.0, 0.0], [14.43, -0.14], [18.53, -0.17], [43.66, 0.04], [47.86, 0.06], [56.27, 0.0], [62.47, 0.02], [62.7, 13.6], [62.52, 25.78], [18.82, 27.02], [-1.53, 25.8], [-1.5, 13.89]]"
+  },
+  {
+   "cadnum": "72343.500.3037",
+   "area": 964.34,
+   "points_json": "[[18.96, 30.74], [18.82, 27.02], [62.52, 25.78], [62.41, 47.98], [20.16, 49.39], [19.16, 42.81], [19.11, 35.1]]"
+  }
+ ],
  "cards": [
   {
    "page": "services",
@@ -305,7 +317,7 @@
    "machine_type": "laser",
    "pos_x": 6.63176265270506,
    "pos_y": 61.43344709897611,
-   "_room": "Хале 2",
+   "_room": "Производствено помещение - лява част",
    "_panel": "Табло-лазер"
   },
   {
@@ -315,7 +327,7 @@
    "machine_type": "laser",
    "pos_x": 22.164048865619545,
    "pos_y": 17.064846416382252,
-   "_room": "Хале 2",
+   "_room": "Производствено помещение - лява част",
    "_panel": "Табло-лазер"
   },
   {
@@ -325,7 +337,7 @@
    "machine_type": "laser",
    "pos_x": 51.28,
    "pos_y": 82.27,
-   "_room": "Хале 2",
+   "_room": "Производствено помещение - лява част",
    "_panel": "Табло-лазер-нов"
   },
   {
@@ -335,7 +347,7 @@
    "machine_type": "Абкант",
    "pos_x": 28.708551483420603,
    "pos_y": 90.87030716723548,
-   "_room": "Хале 2",
+   "_room": "Производствено помещение - лява част",
    "_panel": "Табло Абкант Голям"
   },
   {
@@ -345,7 +357,7 @@
    "machine_type": "Лазер",
    "pos_x": 49.511343804537525,
    "pos_y": 79.69283276450511,
-   "_room": "Хале 2",
+   "_room": "Производствено помещение - лява част",
    "_panel": "Табло-лазер-нов"
   },
   {
@@ -355,7 +367,7 @@
    "machine_type": "Друго",
    "pos_x": 6.806282722513089,
    "pos_y": 93.43003412969281,
-   "_room": "Хале 2",
+   "_room": "Производствено помещение - лява част",
    "_panel": null
   },
   {
@@ -365,7 +377,7 @@
    "machine_type": "Абкант",
    "pos_x": 78.30715532286213,
    "pos_y": 29.97013651877133,
-   "_room": "Хале 2",
+   "_room": "Производствено помещение - лява част",
    "_panel": "Главно табло Цех 1"
   },
   {
@@ -375,7 +387,7 @@
    "machine_type": "Фрезов център",
    "pos_x": 59.523809523809526,
    "pos_y": 82.76450511945391,
-   "_room": "Хале 1",
+   "_room": "Производствено помещение - дясна част",
    "_panel": "Главно табло Цех 1"
   },
   {
@@ -385,7 +397,7 @@
    "machine_type": "Струг",
    "pos_x": 18.406593406593423,
    "pos_y": 58.23378839590444,
-   "_room": "Хале 1",
+   "_room": "Производствено помещение - дясна част",
    "_panel": "Главно табло Цех 1"
   },
   {
@@ -395,7 +407,7 @@
    "machine_type": "Фрезов център",
    "pos_x": 45.78754578754579,
    "pos_y": 58.87372013651877,
-   "_room": "Хале 1",
+   "_room": "Производствено помещение - дясна част",
    "_panel": null
   },
   {
@@ -405,7 +417,7 @@
    "machine_type": "Друго",
    "pos_x": 78.01047120418849,
    "pos_y": 46.50170648464164,
-   "_room": "Хале 2",
+   "_room": "Производствено помещение - лява част",
    "_panel": null
   },
   {
@@ -415,7 +427,7 @@
    "machine_type": "Струг",
    "pos_x": 30.21978021978023,
    "pos_y": 15.571672354948804,
-   "_room": "Хале 1",
+   "_room": "Производствено помещение - дясна част",
    "_panel": "Главно табло Цех 1"
   },
   {
@@ -425,7 +437,7 @@
    "machine_type": "Струг",
    "pos_x": 89.74358974358975,
    "pos_y": 69.11262798634812,
-   "_room": "Хале 1",
+   "_room": "Производствено помещение - дясна част",
    "_panel": "Табло Gildemeister"
   },
   {
@@ -435,7 +447,7 @@
    "machine_type": "Струг",
    "pos_x": 78.29670329670331,
    "pos_y": 36.68941979522184,
-   "_room": "Хале 1",
+   "_room": "Производствено помещение - дясна част",
    "_panel": "Табло Gildemeister"
   },
   {
@@ -445,7 +457,7 @@
    "machine_type": "Струг",
    "pos_x": 66.39194139194139,
    "pos_y": 15.784982935153582,
-   "_room": "Хале 1",
+   "_room": "Производствено помещение - дясна част",
    "_panel": null
   },
   {
@@ -455,7 +467,7 @@
    "machine_type": "Друго",
    "pos_x": 74.69458987783597,
    "pos_y": 82.76450511945391,
-   "_room": "Хале 2",
+   "_room": "Производствено помещение - лява част",
    "_panel": null
   },
   {
@@ -465,7 +477,7 @@
    "machine_type": "Друго",
    "pos_x": 75.74171029668412,
    "pos_y": 11.092150170648464,
-   "_room": "Хале 2",
+   "_room": "Производствено помещение - лява част",
    "_panel": null
   }
  ],
@@ -475,28 +487,24 @@
    "_building": "Котелно"
   },
   {
-   "name": "Хале 1",
-   "_building": "Цех основен"
+   "name": "Производствено помещение - дясна част",
+   "_building": "Хале"
   },
   {
-   "name": "Хале 2",
-   "_building": "Цех основен"
+   "name": "Производствено помещение - лява част",
+   "_building": "Хале"
   },
   {
    "name": "Офис",
-   "_building": "Цех основен"
+   "_building": "Хале"
   },
   {
    "name": "Кухня",
-   "_building": "Цех основен"
+   "_building": "Хале"
   },
   {
    "name": "Външна площадка",
-   "_building": "Цех основен"
-  },
-  {
-   "name": "Битов персонал",
-   "_building": "Хале"
+   "_building": "Външна площадка"
   },
   {
    "name": "Съблекални",
@@ -515,16 +523,24 @@
    "_building": "Хале"
   },
   {
-   "name": "Ново помещение",
-   "_building": "Хале"
+   "name": "Ракрой и шлайф",
+   "_building": "Навес"
+  },
+  {
+   "name": "Бояджийно и гараж",
+   "_building": "Гараж"
+  },
+  {
+   "name": "Ново хале",
+   "_building": "Ново хале"
   }
  ],
  "panels": [
   {
    "name": "Табло-котел",
    "notes": null,
-   "pos_x": 12.959999999999988,
-   "pos_y": 31.239999999999984,
+   "pos_x": 50.819672131147456,
+   "pos_y": 59.02777777777778,
    "overview_pos_x": 9.95,
    "overview_pos_y": 10.9,
    "schematic_bg_filename": null,
@@ -547,14 +563,14 @@
    "schematic_bg_pos_x": 42.08,
    "schematic_bg_pos_y": 42.0,
    "schematic_bg_opacity": 0.6,
-   "_room": "Хале 1",
+   "_room": "Производствено помещение - дясна част",
    "_parent": "Главно разпределително табло"
   },
   {
    "name": "Главно разпределително табло",
    "notes": "Основно захранване от мрежата, 100 kW. Фидира Главно табло Цех 1 и двата Solis инвертора.",
-   "pos_x": 2.5000000000000355,
-   "pos_y": 4.166666666666666,
+   "pos_x": 7.187500000000013,
+   "pos_y": 2.4999999999999996,
    "overview_pos_x": 58.03,
    "overview_pos_y": 35.29,
    "schematic_bg_filename": "7b98e817347949eebd86c1f082f9f663_viber__2026-09-08_10-03-33-527.jpg",
@@ -562,14 +578,14 @@
    "schematic_bg_pos_x": 50.0,
    "schematic_bg_pos_y": 50.0,
    "schematic_bg_opacity": 0.65,
-   "_room": "Ново помещение",
+   "_room": "Външна площадка",
    "_parent": null
   },
   {
    "name": "Инвертор 1 - Solis S6 50kW",
    "notes": "Успоредно с Инвертор 2. 22 батерии (2 DC порта x 11 бр.). Бекъп изходът захранва главното табло при прекъсване на мрежата.",
-   "pos_x": 4.999999999999982,
-   "pos_y": 26.875,
+   "pos_x": 10.312499999999947,
+   "pos_y": 25.208333333333332,
    "overview_pos_x": 82.85,
    "overview_pos_y": 22.5,
    "schematic_bg_filename": null,
@@ -577,14 +593,14 @@
    "schematic_bg_pos_x": 50.0,
    "schematic_bg_pos_y": 50.0,
    "schematic_bg_opacity": 0.85,
-   "_room": "Ново помещение",
+   "_room": "Външна площадка",
    "_parent": "Главно разпределително табло"
   },
   {
    "name": "Инвертор 2 - Solis S6 50kW",
    "notes": "Успоредно с Инвертор 1. 22 батерии (2 DC порта x 11 бр.). Бекъп изходът захранва главното табло при прекъсване на мрежата.",
-   "pos_x": 4.999999999999982,
-   "pos_y": 41.87499999999999,
+   "pos_x": 10.312499999999947,
+   "pos_y": 40.20833333333333,
    "overview_pos_x": 80.2,
    "overview_pos_y": 69.15,
    "schematic_bg_filename": null,
@@ -592,7 +608,7 @@
    "schematic_bg_pos_x": 50.0,
    "schematic_bg_pos_y": 50.0,
    "schematic_bg_opacity": 0.85,
-   "_room": "Ново помещение",
+   "_room": "Външна площадка",
    "_parent": "Главно разпределително табло"
   },
   {
@@ -607,7 +623,7 @@
    "schematic_bg_pos_x": 50.0,
    "schematic_bg_pos_y": 50.0,
    "schematic_bg_opacity": 0.85,
-   "_room": "Хале 2",
+   "_room": "Производствено помещение - лява част",
    "_parent": "Табло-лазер"
   },
   {
@@ -622,7 +638,7 @@
    "schematic_bg_pos_x": 50.0,
    "schematic_bg_pos_y": 50.0,
    "schematic_bg_opacity": 0.85,
-   "_room": "Хале 2",
+   "_room": "Производствено помещение - лява част",
    "_parent": "Главно табло Цех 1"
   },
   {
@@ -637,7 +653,7 @@
    "schematic_bg_pos_x": 50.0,
    "schematic_bg_pos_y": 50.0,
    "schematic_bg_opacity": 0.85,
-   "_room": "Хале 1",
+   "_room": "Производствено помещение - дясна част",
    "_parent": "Главно табло Цех 1"
   },
   {
@@ -652,7 +668,7 @@
    "schematic_bg_pos_x": 50.0,
    "schematic_bg_pos_y": 50.0,
    "schematic_bg_opacity": 0.85,
-   "_room": "Хале 2",
+   "_room": "Производствено помещение - лява част",
    "_parent": "Табло Абкант Голям"
   },
   {
@@ -667,7 +683,7 @@
    "schematic_bg_pos_x": 50.0,
    "schematic_bg_pos_y": 50.0,
    "schematic_bg_opacity": 0.85,
-   "_room": "Хале 2",
+   "_room": "Производствено помещение - лява част",
    "_parent": "Главно табло Цех 1"
   },
   {
@@ -682,7 +698,7 @@
    "schematic_bg_pos_x": 50.0,
    "schematic_bg_pos_y": 50.0,
    "schematic_bg_opacity": 0.85,
-   "_room": "Хале 2",
+   "_room": "Производствено помещение - лява част",
    "_parent": "Главно табло Цех 1"
   },
   {
@@ -697,7 +713,7 @@
    "schematic_bg_pos_x": 50.0,
    "schematic_bg_pos_y": 50.0,
    "schematic_bg_opacity": 0.85,
-   "_room": "Хале 2",
+   "_room": "Производствено помещение - лява част",
    "_parent": "Табло-лазер"
   }
  ],
@@ -714,7 +730,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "wall",
@@ -728,7 +747,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "wall",
@@ -742,7 +764,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "wall",
@@ -756,7 +781,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "wall",
@@ -770,7 +798,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "wall",
@@ -784,7 +815,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "door",
@@ -798,7 +832,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "door",
@@ -812,7 +849,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "door",
@@ -826,7 +866,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "wall",
@@ -840,7 +883,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "wall",
@@ -854,7 +900,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "wall",
@@ -868,7 +917,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "wall",
@@ -882,7 +934,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "wall",
@@ -896,7 +951,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "wall",
@@ -910,7 +968,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "wall",
@@ -924,7 +985,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "wall",
@@ -938,7 +1002,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "wall",
@@ -952,7 +1019,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "wall",
@@ -966,7 +1036,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "wall",
@@ -980,7 +1053,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "wall",
@@ -994,7 +1070,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "door",
@@ -1008,7 +1087,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "door",
@@ -1022,7 +1104,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "door",
@@ -1036,7 +1121,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "door",
@@ -1050,7 +1138,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "door",
@@ -1064,7 +1155,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "door",
@@ -1078,21 +1172,27 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "room",
-   "name": "Битов персонал",
+   "name": "Кухня",
    "x": 29.15,
    "z": 4.68,
    "width": 4.64,
    "depth": 3.72,
-   "height": 3.0,
+   "height": 2.5,
    "elevation": 0.0,
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": "Битов персонал"
+   "_room": "Кухня",
+   "_parent": 64,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "room",
@@ -1101,12 +1201,15 @@
    "z": 8.52,
    "width": 4.64,
    "depth": 1.64,
-   "height": 3.0,
+   "height": 2.5,
    "elevation": 0.0,
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": "Съблекални"
+   "_room": "Съблекални",
+   "_parent": 64,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "room",
@@ -1115,12 +1218,15 @@
    "z": 10.28,
    "width": 1.25,
    "depth": 1.7,
-   "height": 3.0,
+   "height": 2.5,
    "elevation": 0.0,
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": "WC 1"
+   "_room": "WC 1",
+   "_parent": 64,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "room",
@@ -1129,12 +1235,15 @@
    "z": 10.28,
    "width": 1.2,
    "depth": 1.7,
-   "height": 3.0,
+   "height": 2.5,
    "elevation": 0.0,
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": "WC 2"
+   "_room": "WC 2",
+   "_parent": 64,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "room",
@@ -1143,12 +1252,15 @@
    "z": 10.28,
    "width": 1.95,
    "depth": 1.7,
-   "height": 3.0,
+   "height": 2.5,
    "elevation": 0.0,
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": "Баня"
+   "_room": "Баня",
+   "_parent": 64,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "room",
@@ -1162,7 +1274,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": "Хале 2"
+   "_room": "Производствено помещение - лява част",
+   "_parent": 64,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "room",
@@ -1176,7 +1291,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": "Хале 1"
+   "_room": "Производствено помещение - дясна част",
+   "_parent": 64,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "window",
@@ -1190,7 +1308,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "window",
@@ -1204,7 +1325,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "fixture",
@@ -1218,7 +1342,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "fixture",
@@ -1232,7 +1359,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "fixture",
@@ -1246,7 +1376,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "fixture",
@@ -1260,7 +1393,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "fixture",
@@ -1274,7 +1410,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "fixture",
@@ -1288,7 +1427,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "fixture",
@@ -1302,7 +1444,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "fixture",
@@ -1316,7 +1461,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "fixture",
@@ -1330,7 +1478,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "fixture",
@@ -1344,7 +1495,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "fixture",
@@ -1358,7 +1512,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "fixture",
@@ -1372,7 +1529,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "fixture",
@@ -1386,7 +1546,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "stairs",
@@ -1400,7 +1563,10 @@
    "floors": 14,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "fixture",
@@ -1414,7 +1580,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "block",
@@ -1428,7 +1597,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "block",
@@ -1442,13 +1614,16 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "room",
    "name": "Котелно",
-   "x": 59.2,
-   "z": 12.2,
+   "x": 56.6,
+   "z": 12.4,
    "width": 6.1,
    "depth": 3.6,
    "height": 3.0,
@@ -1456,7 +1631,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": "Котелно"
+   "_room": "Котелно",
+   "_parent": 66,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "fixture",
@@ -1470,7 +1648,10 @@
    "floors": 1,
    "model": "tv",
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "fixture",
@@ -1484,7 +1665,10 @@
    "floors": 1,
    "model": "armchair",
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "fixture",
@@ -1498,7 +1682,10 @@
    "floors": 1,
    "model": "armchair",
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "fixture",
@@ -1512,7 +1699,10 @@
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "fixture",
@@ -1526,21 +1716,503 @@
    "floors": 1,
    "model": "drill_press",
    "rotation": 0,
-   "_room": null
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
   },
   {
    "kind": "room",
-   "name": "Ново помещение",
-   "x": 56.1,
-   "z": 0.2,
-   "width": 8.0,
+   "name": "Външна площадка",
+   "x": 55.84,
+   "z": 0.4,
+   "width": 6.4,
    "depth": 12.0,
    "height": 3.0,
    "elevation": 0.0,
    "floors": 1,
    "model": null,
    "rotation": 0,
-   "_room": "Ново помещение"
+   "_room": "Външна площадка",
+   "_parent": 67,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "room",
+   "name": "Ракрой и шлайф",
+   "x": -1.3,
+   "z": 12.02,
+   "width": 8.0,
+   "depth": 4.6,
+   "height": 3.0,
+   "elevation": 0.0,
+   "floors": 1,
+   "model": null,
+   "rotation": 0,
+   "_room": "Ракрой и шлайф",
+   "_parent": 62,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "room",
+   "name": "Бояджийно и гараж",
+   "x": -1.4,
+   "z": 16.62,
+   "width": 8.0,
+   "depth": 9.7,
+   "height": 4.0,
+   "elevation": 0.0,
+   "floors": 1,
+   "model": null,
+   "rotation": 0,
+   "_room": "Бояджийно и гараж",
+   "_parent": 63,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "building",
+   "name": "Навес",
+   "x": -1.3,
+   "z": 12.02,
+   "width": 8.0,
+   "depth": 4.599999999999998,
+   "height": 5.0,
+   "elevation": 0.0,
+   "floors": 1,
+   "model": null,
+   "rotation": 0,
+   "_room": null,
+   "_parent": null,
+   "_parcel": "72343.500.3036",
+   "_building": "Навес"
+  },
+  {
+   "kind": "building",
+   "name": "Гараж",
+   "x": -1.4,
+   "z": 16.62,
+   "width": 8.0,
+   "depth": 9.7,
+   "height": 5.0,
+   "elevation": 0.0,
+   "floors": 1,
+   "model": null,
+   "rotation": 0,
+   "_room": null,
+   "_parent": null,
+   "_parcel": "72343.500.3036",
+   "_building": "Гараж"
+  },
+  {
+   "kind": "building",
+   "name": "Хале",
+   "x": 0.2,
+   "z": 0.3,
+   "width": 55.64,
+   "depth": 11.72,
+   "height": 5.0,
+   "elevation": 0.0,
+   "floors": 1,
+   "model": null,
+   "rotation": 0,
+   "_room": null,
+   "_parent": null,
+   "_parcel": "72343.500.3036",
+   "_building": "Хале"
+  },
+  {
+   "kind": "building",
+   "name": "Ново хале",
+   "x": 25.2,
+   "z": 33.6,
+   "width": 23.000000000000004,
+   "depth": 10.100000000000001,
+   "height": 5.0,
+   "elevation": 0.0,
+   "floors": 1,
+   "model": null,
+   "rotation": 0,
+   "_room": null,
+   "_parent": null,
+   "_parcel": "72343.500.3037",
+   "_building": "Ново хале"
+  },
+  {
+   "kind": "building",
+   "name": "Котелно",
+   "x": 56.6,
+   "z": 12.4,
+   "width": 6.100000000000001,
+   "depth": 3.5999999999999996,
+   "height": 5.0,
+   "elevation": 0.0,
+   "floors": 1,
+   "model": null,
+   "rotation": 0,
+   "_room": null,
+   "_parent": null,
+   "_parcel": "72343.500.3036",
+   "_building": "Котелно"
+  },
+  {
+   "kind": "building",
+   "name": "Външна площадка",
+   "x": 55.84,
+   "z": 0.4,
+   "width": 6.399999999999999,
+   "depth": 12.0,
+   "height": 0.1,
+   "elevation": 0.0,
+   "floors": 1,
+   "model": null,
+   "rotation": 0,
+   "_room": null,
+   "_parent": null,
+   "_parcel": "72343.500.3036",
+   "_building": "Външна площадка"
+  },
+  {
+   "kind": "room",
+   "name": "Офис",
+   "x": 29.1,
+   "z": 4.6,
+   "width": 4.8,
+   "depth": 7.4,
+   "height": 2.5,
+   "elevation": 2.5,
+   "floors": 1,
+   "model": null,
+   "rotation": 0,
+   "_room": "Офис",
+   "_parent": 64,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "room",
+   "name": "Ново хале",
+   "x": 25.2,
+   "z": 33.6,
+   "width": 23.0,
+   "depth": 10.1,
+   "height": 3.0,
+   "elevation": 0.0,
+   "floors": 1,
+   "model": null,
+   "rotation": 0,
+   "_room": "Ново хале",
+   "_parent": 65,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "floor",
+   "name": "Подова настилка",
+   "x": 25.2,
+   "z": 33.6,
+   "width": 23.0,
+   "depth": 10.1,
+   "height": 0.1,
+   "elevation": 0.0,
+   "floors": 1,
+   "model": "auto",
+   "rotation": 0,
+   "_room": null,
+   "_parent": 69,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "wall",
+   "name": "",
+   "x": 25.2,
+   "z": 33.6,
+   "width": 23.0,
+   "depth": 0.125,
+   "height": 3.0,
+   "elevation": 0.0,
+   "floors": 1,
+   "model": "auto",
+   "rotation": 0,
+   "_room": null,
+   "_parent": 69,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "wall",
+   "name": "",
+   "x": 25.2,
+   "z": 43.575,
+   "width": 23.0,
+   "depth": 0.125,
+   "height": 3.0,
+   "elevation": 0.0,
+   "floors": 2,
+   "model": "auto",
+   "rotation": 0,
+   "_room": null,
+   "_parent": 69,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "wall",
+   "name": "",
+   "x": 25.2,
+   "z": 33.725,
+   "width": 0.125,
+   "depth": 9.85,
+   "height": 3.0,
+   "elevation": 0.0,
+   "floors": 3,
+   "model": "auto",
+   "rotation": 0,
+   "_room": null,
+   "_parent": 69,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "wall",
+   "name": "",
+   "x": 48.075,
+   "z": 33.725,
+   "width": 0.125,
+   "depth": 9.85,
+   "height": 3.0,
+   "elevation": 0.0,
+   "floors": 4,
+   "model": "auto",
+   "rotation": 0,
+   "_room": null,
+   "_parent": 69,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "floor",
+   "name": "Подова настилка",
+   "x": -1.4,
+   "z": 16.62,
+   "width": 8.0,
+   "depth": 9.7,
+   "height": 0.1,
+   "elevation": 0.0,
+   "floors": 1,
+   "model": "auto",
+   "rotation": 0,
+   "_room": null,
+   "_parent": 61,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "wall",
+   "name": "",
+   "x": -1.4,
+   "z": 16.62,
+   "width": 8.0,
+   "depth": 0.125,
+   "height": 4.0,
+   "elevation": 0.0,
+   "floors": 1,
+   "model": "auto",
+   "rotation": 0,
+   "_room": null,
+   "_parent": 61,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "wall",
+   "name": "",
+   "x": -1.4,
+   "z": 26.195,
+   "width": 8.0,
+   "depth": 0.125,
+   "height": 4.0,
+   "elevation": 0.0,
+   "floors": 2,
+   "model": "auto",
+   "rotation": 0,
+   "_room": null,
+   "_parent": 61,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "wall",
+   "name": "",
+   "x": -1.4,
+   "z": 16.745,
+   "width": 0.125,
+   "depth": 9.45,
+   "height": 4.0,
+   "elevation": 0.0,
+   "floors": 3,
+   "model": "auto",
+   "rotation": 0,
+   "_room": null,
+   "_parent": 61,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "wall",
+   "name": "",
+   "x": 6.475,
+   "z": 16.745,
+   "width": 0.125,
+   "depth": 9.45,
+   "height": 4.0,
+   "elevation": 0.0,
+   "floors": 4,
+   "model": "auto",
+   "rotation": 0,
+   "_room": null,
+   "_parent": 61,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "floor",
+   "name": "Подова настилка",
+   "x": 56.6,
+   "z": 12.4,
+   "width": 6.1,
+   "depth": 3.6,
+   "height": 0.1,
+   "elevation": 0.0,
+   "floors": 1,
+   "model": "auto",
+   "rotation": 0,
+   "_room": null,
+   "_parent": 53,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "wall",
+   "name": "",
+   "x": 56.6,
+   "z": 12.4,
+   "width": 6.1,
+   "depth": 0.125,
+   "height": 3.0,
+   "elevation": 0.0,
+   "floors": 1,
+   "model": "auto",
+   "rotation": 0,
+   "_room": null,
+   "_parent": 53,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "wall",
+   "name": "",
+   "x": 56.6,
+   "z": 15.875,
+   "width": 6.1,
+   "depth": 0.125,
+   "height": 3.0,
+   "elevation": 0.0,
+   "floors": 2,
+   "model": "auto",
+   "rotation": 0,
+   "_room": null,
+   "_parent": 53,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "wall",
+   "name": "",
+   "x": 56.6,
+   "z": 12.525,
+   "width": 0.125,
+   "depth": 3.35,
+   "height": 3.0,
+   "elevation": 0.0,
+   "floors": 3,
+   "model": "auto",
+   "rotation": 0,
+   "_room": null,
+   "_parent": 53,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "wall",
+   "name": "",
+   "x": 62.575,
+   "z": 12.525,
+   "width": 0.125,
+   "depth": 3.35,
+   "height": 3.0,
+   "elevation": 0.0,
+   "floors": 4,
+   "model": "auto",
+   "rotation": 0,
+   "_room": null,
+   "_parent": 53,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "door",
+   "name": "Врата",
+   "x": 39.1,
+   "z": 33.4,
+   "width": 3.5,
+   "depth": 0.15,
+   "height": 3.0,
+   "elevation": 0.0,
+   "floors": 1,
+   "model": null,
+   "rotation": 0,
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "window",
+   "name": "",
+   "x": 35.2,
+   "z": 33.5,
+   "width": 3.0,
+   "depth": 0.3,
+   "height": 1.4,
+   "elevation": 3.3,
+   "floors": 1,
+   "model": null,
+   "rotation": 0,
+   "_room": null,
+   "_parent": null,
+   "_parcel": null,
+   "_building": null
+  },
+  {
+   "kind": "window",
+   "name": "",
+   "x": 31.599999999999998,
+   "z": 33.6,
+   "width": 3.0,
+   "depth": 0.3,
+   "height": 1.4,
+   "elevation": 3.3,
+   "floors": 1,
+   "model": null,
+   "rotation": 0,
+   "_room": null,
+   "_parent": 69,
+   "_parcel": null,
+   "_building": null
   }
  ],
  "equipment": [
@@ -1555,6 +2227,7 @@
    "height": 1.8,
    "elevation": 0.0,
    "rotation": 0,
+   "_parent": null,
    "_ref": "STACK 1"
   },
   {
@@ -1568,6 +2241,7 @@
    "height": 0.7,
    "elevation": 2.8,
    "rotation": 90,
+   "_parent": null,
    "_ref": "Инвертор 1 - Solis S6"
   },
   {
@@ -1581,6 +2255,7 @@
    "height": 0.7,
    "elevation": 2.8,
    "rotation": 90,
+   "_parent": null,
    "_ref": "Инвертор 2 - Solis S6"
   },
   {
@@ -1594,6 +2269,7 @@
    "height": 1.2,
    "elevation": 0.4,
    "rotation": 90,
+   "_parent": null,
    "_ref": "Главно разпределително табло"
   },
   {
@@ -1607,6 +2283,7 @@
    "height": 2.0,
    "elevation": 0.0,
    "rotation": 0,
+   "_parent": null,
    "_ref": "Главно табло Цех 1"
   },
   {
@@ -1620,6 +2297,7 @@
    "height": 1.8,
    "elevation": 0.0,
    "rotation": 0,
+   "_parent": null,
    "_ref": "STACK 2"
   },
   {
@@ -1633,6 +2311,7 @@
    "height": 1.8,
    "elevation": 0.0,
    "rotation": 0,
+   "_parent": null,
    "_ref": "STACK 3"
   },
   {
@@ -1646,6 +2325,7 @@
    "height": 1.8,
    "elevation": 0.0,
    "rotation": 0,
+   "_parent": null,
    "_ref": "STACK 4"
   },
   {
@@ -1659,6 +2339,7 @@
    "height": 1.2,
    "elevation": 1.4,
    "rotation": 0,
+   "_parent": null,
    "_ref": "Табло-лазер"
   },
   {
@@ -1672,19 +2353,21 @@
    "height": 0.4,
    "elevation": 1.5,
    "rotation": 0,
+   "_parent": null,
    "_ref": "Табло-лазер-нов"
   },
   {
    "kind": "panel",
    "ref_id": 2,
    "name": "",
-   "x": 59.59056,
-   "z": 13.199639999999999,
+   "x": 59.3,
+   "z": 14.4,
    "width": 0.8,
    "depth": 0.25,
    "height": 1.2,
    "elevation": 1.4,
    "rotation": 0,
+   "_parent": null,
    "_ref": "Табло-котел"
   },
   {
@@ -1698,6 +2381,7 @@
    "height": 1.2,
    "elevation": 1.4,
    "rotation": 0,
+   "_parent": null,
    "_ref": "Инвертор 1 - Solis S6 50kW"
   },
   {
@@ -1711,6 +2395,7 @@
    "height": 1.2,
    "elevation": 1.4,
    "rotation": 0,
+   "_parent": null,
    "_ref": "Инвертор 2 - Solis S6 50kW"
   },
   {
@@ -1724,6 +2409,7 @@
    "height": 1.2,
    "elevation": 1.4,
    "rotation": 0,
+   "_parent": null,
    "_ref": "Табло Gildemeister"
   },
   {
@@ -1737,6 +2423,7 @@
    "height": 1.2,
    "elevation": 1.4,
    "rotation": 0,
+   "_parent": null,
    "_ref": "Табло Врата ляво"
   },
   {
@@ -1750,6 +2437,7 @@
    "height": 1.2,
    "elevation": 1.4,
    "rotation": 0,
+   "_parent": null,
    "_ref": "Табло Врата дясно"
   },
   {
@@ -1763,6 +2451,7 @@
    "height": 1.2,
    "elevation": 1.4,
    "rotation": 0,
+   "_parent": null,
    "_ref": "Табло Вентилация"
   },
   {
@@ -1776,6 +2465,7 @@
    "height": 1.2,
    "elevation": 1.4,
    "rotation": 0,
+   "_parent": null,
    "_ref": "Табло Абкант Голям"
   },
   {
@@ -1789,6 +2479,7 @@
    "height": 0.45,
    "elevation": 0.2,
    "rotation": 0,
+   "_parent": null,
    "_ref": "Офис Конвектор"
   },
   {
@@ -1802,6 +2493,7 @@
    "height": 0.1,
    "elevation": 1.6,
    "rotation": 0,
+   "_parent": null,
    "_ref": "Температура офис"
   },
   {
@@ -1815,6 +2507,7 @@
    "height": 0.1,
    "elevation": 1.6,
    "rotation": 0,
+   "_parent": null,
    "_ref": "Температура Хале1"
   },
   {
@@ -1828,6 +2521,7 @@
    "height": 0.08,
    "elevation": 1.6,
    "rotation": 0,
+   "_parent": null,
    "_ref": "Температура Хале2"
   },
   {
@@ -1841,6 +2535,7 @@
    "height": 0.1,
    "elevation": 2.0,
    "rotation": 0,
+   "_parent": null,
    "_ref": "Mikrotik(trafcom)"
   },
   {
@@ -1854,6 +2549,7 @@
    "height": 0.1,
    "elevation": 2.0,
    "rotation": 0,
+   "_parent": null,
    "_ref": "Mikrotik(trafcom-hale)"
   },
   {
@@ -1867,6 +2563,7 @@
    "height": 0.1,
    "elevation": 2.0,
    "rotation": 0,
+   "_parent": null,
    "_ref": "MikroTik (TRAFCOM-NEW, 192.168.18.43)"
   },
   {
@@ -1880,6 +2577,7 @@
    "height": 0.1,
    "elevation": 2.0,
    "rotation": 0,
+   "_parent": null,
    "_ref": "MikroTik \"hale\" AP (192.168.18.86)"
   },
   {
@@ -1893,6 +2591,7 @@
    "height": 0.1,
    "elevation": 2.0,
    "rotation": 0,
+   "_parent": null,
    "_ref": "Ubiquiti PtP (192.168.18.40)"
   },
   {
@@ -1906,6 +2605,7 @@
    "height": 0.1,
    "elevation": 2.0,
    "rotation": 0,
+   "_parent": null,
    "_ref": "Ubiquiti PtP (192.168.18.41)"
   },
   {
@@ -1919,6 +2619,7 @@
    "height": 0.1,
    "elevation": 2.0,
    "rotation": 0,
+   "_parent": null,
    "_ref": "Switch (192.168.18.76)"
   },
   {
@@ -1932,6 +2633,7 @@
    "height": 0.1,
    "elevation": 2.0,
    "rotation": 0,
+   "_parent": null,
    "_ref": "HALE-VOLOVII"
   },
   {
@@ -1945,6 +2647,7 @@
    "height": 0.1,
    "elevation": 2.0,
    "rotation": 0,
+   "_parent": null,
    "_ref": "sw.teteven.net"
   }
  ],
@@ -1961,7 +2664,7 @@
    "pos_y": 7.526881720430113,
    "created_at": "2026-09-04T14:31:57.447589",
    "_model": "Convector",
-   "_room": "Битов персонал"
+   "_room": "Кухня"
   },
   {
    "name": "Температура Хале1",
@@ -1970,7 +2673,7 @@
    "location_label": null,
    "created_at": "2026-09-04T13:35:24.390392",
    "_model": "TemperatureSensor",
-   "_room": "Хале 1"
+   "_room": "Производствено помещение - дясна част"
   },
   {
    "name": "Температура Хале2",
@@ -1979,7 +2682,7 @@
    "location_label": null,
    "created_at": "2026-09-04T13:36:33.757755",
    "_model": "TemperatureSensor",
-   "_room": "Хале 2"
+   "_room": "Производствено помещение - лява част"
   },
   {
    "name": "Температура офис",
@@ -1988,7 +2691,7 @@
    "location_label": null,
    "created_at": "2026-09-04T13:32:06.554152",
    "_model": "TemperatureSensor",
-   "_room": "Битов персонал"
+   "_room": "Кухня"
   },
   {
    "name": "STACK 1",
@@ -2003,7 +2706,7 @@
    "pos_y": 10.238907849829351,
    "created_at": "2026-09-05T08:26:57.968845",
    "_model": "BatteryStack",
-   "_room": "Хале 1"
+   "_room": "Производствено помещение - дясна част"
   },
   {
    "name": "STACK 3",
@@ -2018,7 +2721,7 @@
    "pos_y": 27.303754266211605,
    "created_at": "2026-09-05T11:34:03.122959",
    "_model": "BatteryStack",
-   "_room": "Хале 1"
+   "_room": "Производствено помещение - дясна част"
   },
   {
    "name": "STACK 2",
@@ -2033,7 +2736,7 @@
    "pos_y": 18.77133105802048,
    "created_at": "2026-09-05T08:28:54.937277",
    "_model": "BatteryStack",
-   "_room": "Хале 1"
+   "_room": "Производствено помещение - дясна част"
   },
   {
    "name": "STACK 4",
@@ -2048,7 +2751,7 @@
    "pos_y": 35.83617747440273,
    "created_at": "2026-09-05T11:38:39.484431",
    "_model": "BatteryStack",
-   "_room": "Хале 1"
+   "_room": "Производствено помещение - дясна част"
   }
  ],
  "network_pos": [
@@ -2121,6 +2824,7 @@
    "serial_number": null,
    "year": null,
    "notes": null,
+   "_parent": null,
    "_machine": "CNC струг. обр. център Benzinger TNI B8",
    "_card": {
     "page": "services",
@@ -2151,6 +2855,7 @@
    "serial_number": null,
    "year": null,
    "notes": null,
+   "_parent": null,
    "_machine": "CNC струг. обр. център Gildemeister Twin 42",
    "_card": {
     "page": "index",
@@ -2181,6 +2886,7 @@
    "serial_number": null,
    "year": null,
    "notes": null,
+   "_parent": null,
    "_machine": "CNC верт. обр. център DMG DMU 75 monoblok",
    "_card": {
     "page": "index",
@@ -2211,6 +2917,7 @@
    "serial_number": null,
    "year": null,
    "notes": null,
+   "_parent": null,
    "_machine": "CNC струг. обр. център DMG CTX 510",
    "_card": {
     "page": "services",
@@ -2241,6 +2948,7 @@
    "serial_number": null,
    "year": null,
    "notes": null,
+   "_parent": null,
    "_machine": "CNC струг. обр. център Gildemeister Twin 42 №2",
    "_card": {
     "page": "index",
@@ -2271,6 +2979,7 @@
    "serial_number": null,
    "year": null,
    "notes": null,
+   "_parent": null,
    "_machine": "CNC струг Star KJR (с прътоподавател)",
    "_card": {
     "page": "services",
@@ -2301,6 +3010,7 @@
    "serial_number": null,
    "year": null,
    "notes": null,
+   "_parent": null,
    "_machine": "CNC фреза Fanuc Robodrill (4 оси)",
    "_card": null,
    "_connections": []
@@ -2327,6 +3037,7 @@
    "serial_number": null,
    "year": null,
    "notes": null,
+   "_parent": null,
    "_machine": "Лазер ECKERT 4kW",
    "_card": {
     "page": "services",
@@ -2357,6 +3068,7 @@
    "serial_number": null,
    "year": null,
    "notes": null,
+   "_parent": null,
    "_machine": "Лазер 700W",
    "_card": {
     "page": "index",
@@ -2387,6 +3099,7 @@
    "serial_number": null,
    "year": null,
    "notes": null,
+   "_parent": null,
    "_machine": "Абкант DURMA AD-R 40175",
    "_card": {
     "page": "services",
@@ -2417,6 +3130,7 @@
    "serial_number": null,
    "year": null,
    "notes": null,
+   "_parent": null,
    "_machine": "Компресор за сгъстен въздух EM15H",
    "_card": {
     "page": "hall",
@@ -2447,6 +3161,7 @@
    "serial_number": null,
    "year": null,
    "notes": null,
+   "_parent": null,
    "_machine": "Aore Laser PG3015",
    "_card": {
     "page": "hall",
@@ -2477,6 +3192,7 @@
    "serial_number": null,
    "year": null,
    "notes": null,
+   "_parent": null,
    "_machine": "Абкант DURMA AD-ES 2040",
    "_card": {
     "page": "hall",
@@ -2507,6 +3223,7 @@
    "serial_number": null,
    "year": null,
    "notes": null,
+   "_parent": null,
    "_machine": "Вентилация",
    "_card": null,
    "_connections": []
@@ -2533,6 +3250,7 @@
    "serial_number": null,
    "year": null,
    "notes": null,
+   "_parent": null,
    "_machine": "Робот манипулатор LT1500-C-6",
    "_card": {
     "page": "hall",
@@ -2563,11 +3281,74 @@
    "serial_number": null,
    "year": null,
    "notes": null,
+   "_parent": null,
    "_machine": "Вакуумен подемник LS3015 (300 кг)",
    "_card": {
     "page": "hall",
     "kind": "machine",
     "title": "LS3015 вакуумен подемник за листове (300 кг)"
+   },
+   "_connections": []
+  },
+  {
+   "no": 17,
+   "name": "3 осен обработващ център HURCO BMC 4020",
+   "category": "util",
+   "x": 41.1,
+   "z": 36.4,
+   "width": 2.0,
+   "depth": 2.0,
+   "height": 2.0,
+   "elevation": 0.0,
+   "model": "vmc",
+   "rotation": 0,
+   "acc_length": 0.0,
+   "acc_width": 0.7,
+   "acc_height": 0.8,
+   "acc_side": "left",
+   "acc_name": null,
+   "on_plan": true,
+   "manufacturer": null,
+   "serial_number": null,
+   "year": null,
+   "notes": null,
+   "_parent": 69,
+   "_machine": null,
+   "_card": {
+    "page": "services",
+    "kind": "machine",
+    "title": "HURCO BMC 4020 HT"
+   },
+   "_connections": []
+  },
+  {
+   "no": 18,
+   "name": "3 осен обработващ център HURCO BMC 4020 (копие)",
+   "category": "util",
+   "x": 37.1,
+   "z": 36.5,
+   "width": 2.0,
+   "depth": 2.0,
+   "height": 2.0,
+   "elevation": 0.0,
+   "model": "vmc",
+   "rotation": 0,
+   "acc_length": 0.0,
+   "acc_width": 0.7,
+   "acc_height": 0.8,
+   "acc_side": "left",
+   "acc_name": null,
+   "on_plan": true,
+   "manufacturer": null,
+   "serial_number": null,
+   "year": null,
+   "notes": null,
+   "_parent": 69,
+   "_machine": null,
+   "_card": {
+    "page": "services",
+    "kind": "machine",
+    "title": "HURCO BMC 4020 HT"
    },
    "_connections": []
   }

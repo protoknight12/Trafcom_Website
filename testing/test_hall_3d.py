@@ -70,9 +70,10 @@ def test_validation_and_delete(admin_client):
     assert admin_client.post('/admin/hall/save', json=bad).status_code == 400
     bad = m.as_dict() | {'category': 'nope'}
     assert admin_client.post('/admin/hall/save', json=bad).status_code == 400
-    # out-of-hall position is clamped, not rejected
+    # an absurd position is clamped, not rejected; a machine may stand outside the first hall (a second hall)
     r = admin_client.post('/admin/hall/save', json=m.as_dict() | {'x': 999})
-    assert r.get_json()['x'] == 56.0
+    assert r.get_json()['x'] == 80.0
+    assert admin_client.post('/admin/hall/save', json=m.as_dict() | {'x': 60, 'z': 40}).get_json()['z'] == 40.0
     assert admin_client.post(f'/admin/hall/{m.id}/delete').status_code == 200
     assert HallMachine.query.count() == len(HALL_SEED) - 1
 
@@ -583,3 +584,211 @@ def test_sync_keep_mode_only_fills_in_what_is_missing(admin_client):
     db.session.commit()
     db.session.expire_all()
     assert abs(db.session.get(ElectricalPanel, placed.id).pos_x - (15.4 - 10) / 8 * 100) < 0.5
+
+
+def test_building_shape_can_be_created_beyond_the_hall(admin_client):
+    admin_client.get('/admin/hall')
+    body = {'kind': 'building', 'name': 'Склад', 'x': 20, 'z': 40, 'width': 20, 'depth': 10, 'height': 5}
+    r = admin_client.post('/admin/hall/shape/save', json=body)
+    assert r.status_code == 200 and r.get_json()['kind'] == 'building' and r.get_json()['z'] == 40
+    assert 'Склад' in admin_client.get('/factory3d').get_data(as_text=True)
+
+
+def test_explicit_hierarchy_parent_and_parcel(admin_client):
+    from app import HallShape, HallParcel
+    admin_client.get('/factory3d')
+    parcel = HallParcel.query.first()
+    b = admin_client.post('/admin/hall/shape/save', json={'kind': 'building', 'name': 'Склад', 'x': 20, 'z': 40, 'width': 10, 'depth': 10,
+                                                          'height': 5, 'parcel_id': parcel.id}).get_json()
+    assert b['parcel_id'] == parcel.id
+    room = HallShape.query.filter_by(kind='room').first()
+    r = admin_client.post('/admin/hall/shape/save', json=room.as_dict() | {'parent_id': b['id']})
+    assert r.get_json()['parent_id'] == b['id']
+    assert admin_client.post('/admin/hall/shape/save', json=room.as_dict() | {'parent_id': 99999}).status_code == 400   # no such parent
+    assert admin_client.post('/admin/hall/shape/save', json=room.as_dict() | {'parcel_id': 99999, 'kind': 'building'}).status_code == 400
+    m = HallMachine.query.first()
+    ok = admin_client.post('/admin/hall/save', json=m.as_dict() | {'parent_id': room.id}).get_json()
+    assert ok['parent_id'] == room.id
+    assert admin_client.post('/admin/hall/save', json=m.as_dict() | {'parent_id': ''}).get_json()['parent_id'] is None
+
+
+def test_building_outline_fits_its_rooms(admin_client):
+    from app import HallShape
+    admin_client.get('/factory3d')
+    b = admin_client.post('/admin/hall/shape/save', json={'kind': 'building', 'name': 'Склад', 'x': 0, 'z': 30, 'width': 5, 'depth': 5, 'height': 5}).get_json()
+    assert (b['width'], b['depth']) == (5, 5)                      # no rooms yet: keeps its drawn size
+    room = {'kind': 'room', 'name': 'Цех', 'x': 10, 'z': 32, 'width': 8, 'depth': 6, 'height': 3, 'parent_id': b['id']}
+    r = admin_client.post('/admin/hall/shape/save', json=room).get_json()
+    fit = r['buildings'][0]
+    assert (fit['x'], fit['z'], fit['width'], fit['depth']) == (10, 32, 8, 6)
+    r2 = admin_client.post('/admin/hall/shape/save', json=room | {'name': 'Цех 2', 'x': 20, 'z': 40, 'id': None}).get_json()
+    fit = r2['buildings'][0]
+    assert (fit['x'], fit['z'], fit['width'], fit['depth']) == (10, 32, 18, 14)   # spans both rooms
+    d = admin_client.post(f"/admin/hall/shape/{r2['id']}/delete").get_json()
+    assert d['buildings'][0]['width'] == 8                          # shrinks back after a room is deleted
+
+
+def test_editor_and_factory_map_stay_in_sync(admin_client):
+    from app import Building, Room, HallShape
+    admin_client.get('/factory3d')
+    b = admin_client.post('/admin/hall/shape/save', json={'kind': 'building', 'name': 'Склад', 'x': 0, 'z': 40, 'width': 9, 'depth': 9, 'height': 5}).get_json()
+    assert Building.query.get(b['building_id']).name == 'Склад'
+    r = admin_client.post('/admin/hall/shape/save', json={'kind': 'room', 'name': 'Цех А', 'x': 1, 'z': 41, 'width': 4, 'depth': 4, 'height': 3, 'parent_id': b['id']}).get_json()
+    room = Room.query.get(r['room_id'])
+    assert room.name == 'Цех А' and room.building_id == b['building_id']          # editor -> factory map
+    admin_client.post(f"/admin/buildings/{b['building_id']}/rename", data={'name': 'Склад 2'})
+    admin_client.post(f"/admin/rooms/{room.id}/rename", data={'name': 'Цех Б'})
+    assert HallShape.query.get(b['id']).name == 'Склад 2' and HallShape.query.get(r['id']).name == 'Цех Б'   # factory map -> editor
+    admin_client.post(f"/admin/rooms/{room.id}/delete")
+    assert HallShape.query.get(r['id']).room_id is None                          # no dangling link
+    page = admin_client.get('/factory3d').get_data(as_text=True)
+    assert 'DB_BUILDINGS' in page
+
+
+def test_deleting_a_room_with_a_wired_panel_does_not_crash(admin_client):
+    from app import Building, Room, ElectricalPanel, PanelComponent, PanelWire
+    b = Building(name='Хале'); db.session.add(b); db.session.flush()
+    room = Room(name='Табла', building_id=b.id); db.session.add(room); db.session.flush()
+    panel = ElectricalPanel(name='Т1', room_id=room.id); db.session.add(panel); db.session.flush()
+    c1, c2 = (PanelComponent(panel_id=panel.id, name=n) for n in ('A', 'B'))
+    db.session.add_all([c1, c2]); db.session.flush()
+    db.session.add(PanelWire(panel_id=panel.id, from_component_id=c1.id, to_component_id=c2.id)); db.session.commit()
+    r = admin_client.post(f'/admin/rooms/{room.id}/delete')
+    assert r.status_code == 302 and ElectricalPanel.query.count() == 0 and PanelWire.query.count() == 0
+
+
+def test_rooms_cannot_overlap_unless_at_different_heights(admin_client):
+    admin_client.get('/factory3d')
+    room = {'kind': 'room', 'name': 'А', 'x': 100 - 90, 'z': 40, 'width': 10, 'depth': 10, 'height': 3, 'floors': 1}
+    a = admin_client.post('/admin/hall/shape/save', json=room)
+    assert a.status_code == 200
+    # same floor area, same height -> refused
+    assert admin_client.post('/admin/hall/shape/save', json=room | {'name': 'Б', 'x': 15}).status_code == 400
+    # only touching edges is fine
+    assert admin_client.post('/admin/hall/shape/save', json=room | {'name': 'В', 'x': 20}).status_code == 200
+    # overlapping in plan but standing on top of the first (above 3 m) -> allowed
+    up = admin_client.post('/admin/hall/shape/save', json=room | {'name': 'Г', 'elevation': 3})
+    assert up.status_code == 200
+    # a 2-storey room from the floor covers that level -> refused again
+    assert admin_client.post('/admin/hall/shape/save', json=room | {'name': 'Д', 'elevation': 0, 'floors': 2, 'x': 12}).status_code == 400
+    # editing a room never clashes with itself
+    assert admin_client.post('/admin/hall/shape/save', json=a.get_json() | {'name': 'А2'}).status_code == 200
+
+
+def test_room_made_in_buildings_and_rooms_lands_on_the_plan(admin_client):
+    from app import Building, Room, HallShape
+    admin_client.get('/factory3d')
+    b = Building(name='Ново хале'); db.session.add(b); db.session.commit()
+    admin_client.post(f'/admin/buildings/{b.id}/rooms/create', data={'name': 'Цех 1'})      # created there -> placed on the plan at once
+    room = Room.query.filter_by(name='Цех 1').one()
+    shape = HallShape.query.filter_by(kind='room', room_id=room.id).one()
+    bshape = HallShape.query.filter_by(kind='building', building_id=b.id).one()
+    assert shape.parent_id == bshape.id and shape.width == 8 and not (0 <= shape.x < 56 and 0 <= shape.z < 12)   # beside the hall, not on it
+    # a room that was made before: placed on request, and only once
+    old = Room(name='Стар', building_id=b.id); db.session.add(old); db.session.commit()
+    d = admin_client.post(f'/admin/hall/room/{old.id}/place').get_json()
+    assert [x['name'] for x in d['shapes'] if x['kind'] == 'room'] == ['Стар']
+    assert admin_client.post(f'/admin/hall/room/{old.id}/place').get_json()['shapes'] == []
+    assert HallShape.query.filter_by(kind='room', name='Стар').count() == 1
+    # the new room does not sit on top of the first one
+    new = HallShape.query.filter_by(room_id=old.id).one()
+    assert (new.x, new.z) != (shape.x, shape.z)
+
+
+def test_room_walls_snap_together_within_half_a_metre(admin_client):
+    admin_client.get('/factory3d')
+    base = {'kind': 'room', 'name': 'А', 'x': 10, 'z': 40, 'width': 10, 'depth': 10, 'height': 3, 'floors': 1}
+    assert admin_client.post('/admin/hall/shape/save', json=base).status_code == 200            # x 10..20, z 40..50
+    b = admin_client.post('/admin/hall/shape/save', json=base | {'name': 'Б', 'x': 40}).get_json()    # far away; moved around below
+    save = lambda **kw: admin_client.post('/admin/hall/shape/save', json=base | {'name': 'Б', 'id': b['id']} | kw).get_json()
+    assert save(x=20.3)['x'] == 20                    # gap 0.3 -> touches
+    assert save(x=19.7)['x'] == 20                    # overlap 0.3 -> taken back
+    assert save(x=21)['x'] == 21                      # gap 1 m stays
+    assert save(x=10, z=50.4)['z'] == 50              # also along Z
+    assert save(x=20.3, z=50.3)['x'] == 20.3          # diagonal neighbour: no facing walls, nothing to snap
+    assert save(x=20.3, z=40, elevation=3)['x'] == 20.3   # a room on another level is not a neighbour
+
+
+def test_new_room_gets_walls_and_floor_that_follow_it(admin_client):
+    from app import HallShape
+    admin_client.get('/factory3d')
+    room = {'kind': 'room', 'name': 'Офис', 'x': 10, 'z': 40, 'width': 8, 'depth': 6, 'height': 3, 'floors': 1}
+    r = admin_client.post('/admin/hall/shape/save', json=room).get_json()
+    env = r['envelope']
+    assert sorted(e['kind'] for e in env) == ['floor', 'wall', 'wall', 'wall', 'wall']
+    floor = next(e for e in env if e['kind'] == 'floor')
+    assert (floor['x'], floor['z'], floor['width'], floor['depth']) == (10, 40, 8, 6)
+    top = next(e for e in env if e['kind'] == 'wall' and e['floors'] == 1)
+    assert (top['width'], top['height'], top['depth']) == (8, 3, 0.125)      # standard 12.5 cm wall, as tall as the room
+    # moving / resizing the room moves the same shapes (no duplicates)
+    moved = admin_client.post('/admin/hall/shape/save', json=r | {'x': 30, 'width': 10, 'floors': 2}).get_json()
+    assert len(moved['envelope']) == 5 and {e['id'] for e in moved['envelope']} == {e['id'] for e in env}
+    assert next(e for e in moved['envelope'] if e['kind'] == 'floor')['x'] == 30
+    assert next(e for e in moved['envelope'] if e['kind'] == 'wall' and e['floors'] == 1)['height'] == 6   # two storeys
+    # a room that already existed (drawn by hand) is not given walls on edit
+    old = HallShape.query.filter_by(kind='room').filter(HallShape.id != r['id']).first()
+    assert admin_client.post('/admin/hall/shape/save', json=old.as_dict() | {'name': 'Преименувано'}).get_json()['envelope'] == []
+    # deleting the room takes its generated shapes with it
+    d = admin_client.post(f"/admin/hall/shape/{r['id']}/delete").get_json()
+    assert sorted(d['removed']) == sorted(e['id'] for e in env)
+    assert HallShape.query.filter_by(model='auto').count() == 0
+
+
+def test_low_room_gets_only_a_floor(admin_client):
+    admin_client.get('/factory3d')
+    room = {'kind': 'room', 'name': 'Плоча', 'x': 10, 'z': 40, 'width': 8, 'depth': 6, 'height': 0.1, 'floors': 1}
+    r = admin_client.post('/admin/hall/shape/save', json=room).get_json()
+    assert [e['kind'] for e in r['envelope']] == ['floor']                      # lower than 0.2 m: no walls
+    up = admin_client.post('/admin/hall/shape/save', json=r | {'height': 3}).get_json()
+    assert sorted(e['kind'] for e in up['envelope']) == ['floor', 'wall', 'wall', 'wall', 'wall']   # grows -> walls appear
+    down = admin_client.post('/admin/hall/shape/save', json=up | {'height': 0.15}).get_json()
+    assert [e['kind'] for e in down['envelope']] == ['floor'] and len(down['removed']) == 4     # shrinks -> walls go
+
+
+def test_envelopes_for_rooms_without_walls(admin_client):
+    from app import HallShape
+    admin_client.get('/factory3d')
+    seeded = HallShape.query.filter_by(kind='room').count()
+    # a room drawn by hand with nothing around it, and one with a hand-drawn wall along its edge
+    bare = HallShape(kind='room', name='Гол', x=10, z=40, width=8, depth=6, height=3)
+    walled = HallShape(kind='room', name='Със стена', x=30, z=40, width=8, depth=6, height=3)
+    wall = HallShape(kind='wall', name='', x=30, z=40, width=8, depth=0.125, height=3)
+    inner = HallShape(kind='wall', name='', x=13, z=42, width=0.125, depth=2, height=3)       # a partition inside the bare room: not a wall of it
+    db.session.add_all([bare, walled, wall, inner]); db.session.commit()
+    d = admin_client.post('/admin/hall/rooms/envelopes').get_json()
+    assert 'Гол' in d['rooms'] and 'Със стена' not in d['rooms']
+    assert sorted(e['kind'] for e in d['envelope'] if e['parent_id'] == bare.id) == ['floor', 'wall', 'wall', 'wall', 'wall']
+    assert admin_client.post('/admin/hall/rooms/envelopes').get_json()['rooms'] == []          # second run: nothing left to do
+    assert HallShape.query.filter_by(kind='room').count() == seeded + 2
+
+
+def test_machine_data_sync_carries_the_hierarchy(admin_client, tmp_path, monkeypatch):
+    """export -> (ids shift, like on another database) -> import: parents, parcels and buildings are matched by key, not by id."""
+    from app import HallShape, HallParcel, HallMachine, Building
+    from migration import machine_data_sync as sync
+    monkeypatch.setattr(sync, 'PATH', str(tmp_path / 'm.json'))
+    admin_client.get('/factory3d')
+    parcel = HallParcel.query.filter_by(cadnum='72343.500.3037').one()
+    b = admin_client.post('/admin/hall/shape/save', json={'kind': 'building', 'name': 'Ново хале', 'x': 0, 'z': 30, 'width': 1, 'depth': 1,
+                                                          'height': 5, 'parcel_id': parcel.id}).get_json()
+    r = admin_client.post('/admin/hall/shape/save', json={'kind': 'room', 'name': 'Цех 7', 'x': 20, 'z': 30, 'width': 8, 'depth': 6, 'height': 3, 'parent_id': b['id']}).get_json()
+    m = HallMachine.query.first()
+    admin_client.post('/admin/hall/save', json=m.as_dict() | {'name': 'Машина 17', 'id': None, 'no': 17, 'parent_id': r['id']})
+    sync.export()
+    import json                                                    # another database: one more shape in front -> every id is shifted by one
+    data = json.load(open(sync.PATH, encoding='utf-8'))
+    data['shapes'].insert(0, dict(data['shapes'][0]))
+    for row in data['shapes'] + data['equipment'] + data['hall']:
+        if isinstance(row.get('_parent'), int):
+            row['_parent'] += 1
+    json.dump(data, open(sync.PATH, 'w', encoding='utf-8'), ensure_ascii=False)
+    HallShape.query.delete()
+    HallParcel.query.delete()
+    db.session.commit()
+    sync.import_()
+    nb = HallShape.query.filter_by(name='Ново хале').one()
+    nr = HallShape.query.filter_by(name='Цех 7').one()
+    assert nr.parent_id == nb.id and nr.parent_id != b['id']
+    assert db.session.get(HallParcel, nb.parcel_id).cadnum == '72343.500.3037'
+    assert db.session.get(Building, nb.building_id).name == 'Ново хале'
+    assert HallMachine.query.filter_by(name='Машина 17').one().parent_id == nr.id

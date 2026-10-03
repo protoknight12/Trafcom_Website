@@ -2,7 +2,9 @@
 Carries the machine/card data edited locally over to production (ids differ between databases, so rows are matched by name):
 ServiceMachineCard (page+kind+title), Machine (name; its room/panel by name), HallMachine (name; linked Machine/card by name),
 MachineConnection (per hall machine, label; its NetworkHost by MAC and switch by name when they exist on production), Room (name; building by name), ElectricalPanel (name; room/parent by name, map positions),
-HallShape + HallEquipment (the hall plan: production's rows are REPLACED by the local ones), and the room/map position of existing
+HallShape + HallEquipment (the hall plan: production's rows are REPLACED by the local ones), HallParcel (КАИС boundaries, by cadastral number)
+and the hierarchy ПИ -> Сграда -> Помещение -> objects (parent_id / parcel_id / building_id are ids, so they travel as a position in the shape list,
+a cadastral number and a Building name), and the room/map position of existing
 Convector / TemperatureSensor / BatteryStack / NetworkDevice rows (matched by name, never created).
 
     python -m migration.machine_data_sync export     # on the local PC  -> migration/machine_data.json
@@ -18,10 +20,10 @@ import sys
 from datetime import datetime
 
 from app import (app, db, Machine, ServiceMachineCard, HallMachine, MachineConnection, Building, Room, ElectricalPanel, HallShape,
-                 HallEquipment, NetworkHost, Convector, TemperatureSensor, BatteryStack, NetworkDevice, ModbusDevice)
+                 HallEquipment, HallParcel, NetworkHost, Convector, TemperatureSensor, BatteryStack, NetworkDevice, ModbusDevice, _hall_parcels)
 
 PATH = os.path.join(os.path.dirname(__file__), 'machine_data.json')
-SKIP = {'id'}
+SKIP = {'id', 'parent_id', 'parcel_id', 'building_id'}     # ids that differ between databases - exported as stable keys instead (see parent_key)
 
 
 def cols(model):
@@ -64,14 +66,31 @@ def by_name(model, name):
     return model.query.filter_by(name=name).first() if name else None
 
 
+def parent_key(pid, idx):
+    """HallShape.parent_id -> None (by position) / 'hall' (0 = main hall) / the shape's position in the exported list."""
+    return None if pid is None else 'hall' if pid == 0 else idx.get(pid)
+
+
+def parent_id(key, new_ids):
+    return None if key is None else 0 if key == 'hall' else new_ids[key]
+
+
 def export():
+    _hall_parcels()                                          # makes sure the КАИС boundaries exist locally
+    db.session.commit()
+    idx = {s.id: i for i, s in enumerate(HallShape.query.order_by(HallShape.id))}
     data = {
+        'parcels': [{'cadnum': p.cadnum, 'area': p.area, 'points_json': p.points_json} for p in HallParcel.query.order_by(HallParcel.id)],
         'cards': [dump(c, ServiceMachineCard) for c in ServiceMachineCard.query.order_by(ServiceMachineCard.id)],
         'machines': [dict(dump(m, Machine), _room=name_of(m.room), _panel=name_of(m.panel)) for m in Machine.query.order_by(Machine.id)],
         'rooms': [dict(dump(r, Room), _building=name_of(Building.query.get(r.building_id))) for r in Room.query.order_by(Room.id)],
         'panels': [dict(dump(p, ElectricalPanel), _room=name_of(p.room), _parent=name_of(p.parent_panel)) for p in ElectricalPanel.query.order_by(ElectricalPanel.id)],
-        'shapes': [dict(dump(s, HallShape), _room=name_of(Room.query.get(s.room_id))) for s in HallShape.query.order_by(HallShape.id)],
-        'equipment': [dict(dump(e, HallEquipment), _ref=name_of(EQUIP[e.kind].query.get(e.ref_id)) if e.kind in EQUIP and e.ref_id else None)
+        'shapes': [dict(dump(s, HallShape), _room=name_of(Room.query.get(s.room_id)), _parent=parent_key(s.parent_id, idx),
+                        _parcel=getattr(db.session.get(HallParcel, s.parcel_id), 'cadnum', None) if s.parcel_id else None,
+                        _building=name_of(db.session.get(Building, s.building_id)) if s.building_id else None)
+                   for s in HallShape.query.order_by(HallShape.id)],
+        'equipment': [dict(dump(e, HallEquipment), _parent=parent_key(e.parent_id, idx),
+                           _ref=name_of(EQUIP[e.kind].query.get(e.ref_id)) if e.kind in EQUIP and e.ref_id else None)
                       for e in HallEquipment.query.order_by(HallEquipment.id)],
         'placed': [dict(dump(o, M), _model=M.__name__, _room=name_of(o.room)) for M in PLACED for o in M.query],
         'network_pos': [{'name': d.name, 'pos_x': d.pos_x, 'pos_y': d.pos_y} for d in NetworkDevice.query],
@@ -79,6 +98,7 @@ def export():
     }
     for h in HallMachine.query.order_by(HallMachine.id):
         d = dump(h, HallMachine)
+        d['_parent'] = parent_key(h.parent_id, idx)
         d['_machine'] = h.machine.name if h.machine_id and h.machine else None
         d['_card'] = card_key(h.card) if h.card_id and h.card else None
         d['_connections'] = [dict(dump(c, MachineConnection), _host=c.network_host.mac_address if c.network_host else None,
@@ -101,6 +121,8 @@ def upsert(model, row, **keys):
 def import_():
     with open(PATH, encoding='utf-8') as f:
         data = json.load(f)
+    for r in data.get('parcels', []):
+        upsert(HallParcel, r, cadnum=r['cadnum'])
     for r in data['cards']:
         upsert(ServiceMachineCard, r, page=r['page'], kind=r['kind'], title=r['title'])
     for r in data['rooms']:
@@ -134,19 +156,34 @@ def import_():
     HallShape.query.delete()
     HallEquipment.query.delete()
     db.session.flush()
+    made = []
     for r in data['shapes']:
         s = HallShape()
         load(s, HallShape, r)
         s.room_id = getattr(by_name(Room, r['_room']), 'id', None)
         db.session.add(s)
+        made.append((s, r))
+    db.session.flush()
+    new_ids = [s.id for s, _ in made]                            # position in the list -> id on this database
+    for s, r in made:
+        s.parent_id = parent_id(r.get('_parent'), new_ids)
+        parcel = HallParcel.query.filter_by(cadnum=r['_parcel']).first() if r.get('_parcel') else None
+        s.parcel_id = parcel.id if parcel else None
+        if r.get('_building'):                                    # a drawn building keeps its Building row (created when missing)
+            b = by_name(Building, r['_building']) or Building(name=r['_building'])
+            db.session.add(b)
+            db.session.flush()
+            s.building_id = b.id
     for r in data['equipment']:
         e = HallEquipment()
         load(e, HallEquipment, r)
+        e.parent_id = parent_id(r.get('_parent'), new_ids)
         e.ref_id = getattr(by_name(EQUIP[r['kind']], r['_ref']), 'id', None) if r['kind'] in EQUIP else None
         db.session.add(e)
     db.session.flush()
     for r in data['hall']:
         h = upsert(HallMachine, r, name=r['name'])
+        h.parent_id = parent_id(r.get('_parent'), new_ids)
         db.session.flush()
         m = Machine.query.filter_by(name=r['_machine']).first() if r['_machine'] else None
         if m and (not m.hall_record or m.hall_record is h):     # machine_id is unique: never steal another record's machine

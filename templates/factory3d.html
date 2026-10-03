@@ -53,6 +53,8 @@ const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
 const MACHINES = {{ machines|tojson }};   // HallMachine rows (+ linked machine card; admins also get .admin = panel/meters/connections), edited on the "План" tab
 const EQUIP = {{ equipment|tojson }};   // HallEquipment: inverter / battery / panel, elevation = bottom above the floor
 const SHAPES = {{ shapes|tojson }};   // HallShape rows: wall / door / room / block ...
+const DB_BUILDINGS = {{ db_buildings|tojson }};   // Building/Room rows of Устройства и схеми -> Сгради и помещения (admins); the ones not on the plan are listed in the editor tree
+const PARCELS = {{ parcels|tojson }};   // HallParcel: cadastral property boundaries (КАИС), polygons in hall metres
 const SOLAR = {{ solar|tojson }};
 const LINKS = {{ links|tojson }};   // animated connections (admins): power = panels/inverters/batteries/machines, data = network
 const METERS = {{ (meters if is_admin else [])|tojson }};   // every Shelly/Modbus meter that can be attached to a machine
@@ -78,6 +80,8 @@ const touches = (l, k) => !!k && [l.a, l.b].some(r => r[0] === k[0] && r[1] === 
 // Cable route between two placed objects: from A to the nearest wall, along the walls (the shorter way round the hall, inset `ins` m so parallel runs
 // do not overlap) and from the wall to B. Returns [[x, z], ...]; 3D lifts it to ceiling height, the plan draws it flat.
 function hallRoute(A, B, ins = 0.3) {
+    const out = p => p.x < 0 || p.x > HALL_W || p.z < 0 || p.z > HALL_D;
+    if (out(A) || out(B)) return [[A.x, A.z], [B.x, A.z], [B.x, B.z]];      // not both in the first hall: the walls above do not apply, plain right-angle run
     const Wd = HALL_W - 2 * ins, Dd = HALL_D - 2 * ins, Lp = 2 * (Wd + Dd), cl = (v, a, b) => Math.max(a, Math.min(b, v));
     const near = p => {                                     // nearest wall point and its position t along the perimeter (clockwise from the back-left corner)
         const dl = p.x - ins, dr = HALL_W - ins - p.x, dt = p.z - ins, db = HALL_D - ins - p.z, m = Math.min(dl, dr, dt, db), x = cl(p.x, ins, HALL_W - ins), z = cl(p.z, ins, HALL_D - ins);
@@ -91,7 +95,7 @@ function hallRoute(A, B, ins = 0.3) {
 }
 const hallLinks = () => LINKS.map(l => Object.assign({ A: hallEnd(l.a), B: hallEnd(l.b), src: l }, l)).filter(l => l.A && l.B);
 </script>
-<main class="dashboard-container" style="margin-top: 20px; max-width: 1400px;">
+<main class="dashboard-container" style="margin-top: 20px; max-width: 98vw;">
     <h1 style="margin-top:0">{{ _('Фабрика 3D') }}</h1>
     <div class="f3-bar" id="f3-tabs">
         {% if is_admin %}
@@ -186,7 +190,7 @@ const sun = new THREE.DirectionalLight(0xffffff, 1.2);
 sun.position.set(48, 50, 36);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
-Object.assign(sun.shadow.camera, { left: -48, right: 48, top: 30, bottom: -30, near: 1, far: 260 });
+Object.assign(sun.shadow.camera, { left: -75, right: 75, top: 55, bottom: -55, near: 1, far: 260 });   // wide enough for objects outside the first hall too
 sun.target.position.set(28, 0, 6);
 scene.add(sun, sun.target);
 
@@ -241,10 +245,12 @@ function wallMaterial(len) {              // every wall gets its own copy so the
 const glassMat = new THREE.MeshStandardMaterial({ color: 0x9cc9ee, roughness: 0.1, metalness: 0.3, transparent: true, opacity: 0.45, depthWrite: false });
 const doorMat = new THREE.MeshStandardMaterial({ color: 0xf5b301, transparent: true, opacity: 0.55 });
 const fixtureMat = new THREE.MeshStandardMaterial({ color: dark ? 0x8a6f57 : 0xb08968 });
+const floorMat = new THREE.MeshStandardMaterial({ color: dark ? 0x6b6358 : 0xd9cdb4, roughness: 0.9 });
 const stairMat = new THREE.MeshStandardMaterial({ color: dark ? 0x9aa4b2 : 0xc9b48c });
 const ROOM_COLORS = [0x60a5fa, 0x34d399, 0xf472b6, 0xfbbf24, 0xa78bfa];
 let roomNo = 0;
 SHAPES.forEach(s => {
+    if (s.kind === 'building') return;      // a building is only a list entry (name, parcel, rooms) - nothing is drawn for it
     tgt = layer(s.kind);
     const x1 = s.x + s.width, z1 = s.z + s.depth, cx = s.x + s.width / 2, cz = s.z + s.depth / 2;
     const y0 = s.elevation || 0, y1 = y0 + s.height;
@@ -256,6 +262,7 @@ SHAPES.forEach(s => {
         else box(s.x, x1, s.z, z1, y0, y1, fixtureMat);
         if (s.label) label(s.label, cx, y1 + 0.4, cz, 0.6);
     }
+    else if (s.kind === 'floor') box(s.x, x1, s.z, z1, y0, y1, floorMat);          // generated floor slab of a room
     else if (s.kind === 'stairs') {            // `floors` = number of steps, `height` = total rise; lowest step at the +X end, rising toward -X
         const n = Math.max(2, s.floors || 14), rise = s.height / n, run = s.width / (n - 1);
         for (let i = 0; i < n - 1; i++) box(x1 - (i + 1) * run, x1 - i * run, s.z, z1, y0, y0 + (i + 1) * rise, stairMat);
@@ -272,6 +279,13 @@ SHAPES.forEach(s => {
         }
         if (s.label) label(s.label + (n > 1 ? ' (' + n + ' ' + "{{ _('етажа') }}" + ')' : ''), cx, y0 + 0.6, cz, Math.max(0.6, Math.min(1.1, Math.min(s.width, s.depth) * 0.4)));
     }
+});
+tgt = layer('parcel');                       // property boundaries: a ground outline per cadastral number
+PARCELS.forEach(p => {
+    const pts = p.points.map(([x, z]) => new THREE.Vector3(x, 0.03, z));
+    tgt.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0xe11d48 })));
+    const cx = p.points.reduce((s, q) => s + q[0], 0) / p.points.length, cz = p.points.reduce((s, q) => s + q[1], 0) / p.points.length;
+    label('ПИ ' + p.cadnum, cx, 0.5, cz, 1.6, tgt);
 });
 tgt = scene;
 
@@ -556,7 +570,8 @@ setInterval(pollSolar, 5000);
 // ---- layers: one checkbox per kind of object; the same keys hide the matching shapes in the plan editor ----
 const LAYER_DEFS = [
     ["{{ _('Сграда') }}", [['wall', "{{ _('Стени') }}"], ['window', "{{ _('Прозорци') }}"], ['door', "{{ _('Врати') }}"], ['stairs', "{{ _('Стълби') }}"],
-                           ['block', "{{ _('Съседни сгради') }}"], ['room', "{{ _('Помещения') }}"], ['fixture', "{{ _('Обзавеждане') }}"]]],
+                           ['block', "{{ _('Съседни сгради') }}"], ['floor', "{{ _('Подова настилка') }}"], ['room', "{{ _('Помещения') }}"], ['fixture', "{{ _('Обзавеждане') }}"]]],
+    ["{{ _('Имоти') }}", [['parcel', "{{ _('Граници на имотите (кадастър)') }}"]]],
     ["{{ _('Оборудване') }}", [['machine', "{{ _('Машини и инвентар') }}"], ['equip', "{{ _('Инвертори, батерии, табла') }}"],
                               ['network', "{{ _('Мрежови устройства (суичове, рутери)') }}"], ['iot', "{{ _('IoT: сензори, конвектори, измерватели') }}"]]],
     ...(IS_ADMIN ? [["{{ _('Връзки (анимирани)') }}", [['links_power', "{{ _('Ел. връзки: табла, инвертори, батерии, машини') }}"], ['links_data', "{{ _('Мрежови връзки и комуникации') }}"],
@@ -787,7 +802,7 @@ function meterBox(m) {                                      // attached meters (
 }
 function actions(m, type, dossier, row) {
     row = row || document.createElement('div'); row.className = 'act';
-    if (dossier) { const l = document.createElement('a'); l.className = 'btn'; l.href = dossier; l.target = '_blank'; l.textContent = "📁 {{ _('Досие') }}"; row.append(l); }
+    if (dossier) { const l = document.createElement('a'); l.className = 'btn'; l.href = dossier; l.dataset.frame = 'stay'; l.textContent = "📁 {{ _('Досие') }}"; row.append(l); }
     const b = document.createElement('button'); b.className = 'btn'; b.type = 'button'; b.textContent = "✏️ {{ _('Редактирай') }}";
     b.onclick = () => { setMode('plan'); if (window.hallEdit) window.hallEdit.pick(type, m.id); };
     row.append(b); if (!row.parentNode) info.append(row);
