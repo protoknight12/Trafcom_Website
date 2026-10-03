@@ -211,6 +211,11 @@ os.makedirs(app.config['PANEL_BACKGROUND_FOLDER'], exist_ok=True)
 # reads from it.
 app.config['DETAIL_DXF_FOLDER'] = os.path.join(os.getcwd(), 'detail_dxf_files')
 os.makedirs(app.config['DETAIL_DXF_FOLDER'], exist_ok=True)
+# Private storage for the files of a hall machine's dossier (manuals, backups, drawings ...): never served by the static route,
+# only admin_hall_file_download() reads from it. Backups can be big, so the upload route raises the request size limit.
+app.config['MACHINE_FILES_FOLDER'] = os.path.join(os.getcwd(), 'machine_files')
+os.makedirs(app.config['MACHINE_FILES_FOLDER'], exist_ok=True)
+MACHINE_FILE_MAX_BYTES = 1024 * 1024 * 1024
 # Reference PDFs (drawings/specs) attached to a detail line while building an
 # order - see OrderItemAttachment and the detail+operations picker on
 # order_create.html. Same private/permanent storage convention as
@@ -2503,29 +2508,28 @@ HALL_CATEGORIES = {'laser': 'Лазер', 'mill': 'Фрезов център', '
 # Layout traced from the architect's floor plan (metres; X along the hall, Z from the back wall).
 # (no, name, category, x0, x1, z0, z1, height)
 HALL_SEED = [
-    (3, 'CNC верт. обр. център DMG DMU 75 monoblok', 'mill', 45.5, 48.55, 9.2, 11.53, 3.2),
-    (4, 'CNC струг. обр. център DMG CTX 510', 'lathe', 36.6, 39.64, 6.0, 7.25, 2.2),
-    (5, 'CNC струг. обр. център Gildemeister Twin 42 №1', 'lathe', 53.4, 54.99, 8.8, 11.2, 2.4),
-    (6, 'CNC струг. обр. център Benzinger TNI B8', 'lathe', 41.97, 44.37, 1.3, 2.55, 2.2),
-    (17, 'CNC струг. обр. център Gildemeister Twin 42 №2', 'lathe', 50.3, 51.9, 0.8, 3.2, 2.4),
-    (18, 'CNC струг Star KJR (с прътоподавател)', 'lathe', 47.45, 49.85, 1.2, 2.7, 1.9),
-    (19, 'CNC фреза Fanuc Robodrill (4 оси)', 'mill', 43.4, 45.4, 7.0, 9.0, 2.6),
+    (1, 'CNC верт. обр. център DMG DMU 75 monoblok', 'mill', 45.5, 48.55, 9.2, 11.53, 3.2),
+    (2, 'CNC струг. обр. център DMG CTX 510', 'lathe', 36.6, 39.64, 6.0, 7.25, 2.2),
+    (3, 'CNC струг. обр. център Gildemeister Twin 42 №1', 'lathe', 53.4, 54.99, 8.8, 11.2, 2.4),
+    (4, 'CNC струг. обр. център Benzinger TNI B8', 'lathe', 41.97, 44.37, 1.3, 2.55, 2.2),
+    (5, 'CNC струг. обр. център Gildemeister Twin 42 №2', 'lathe', 50.3, 51.9, 0.8, 3.2, 2.4),
+    (6, 'CNC струг Star KJR (с прътоподавател)', 'lathe', 47.45, 49.85, 1.2, 2.7, 1.9),
+    (7, 'CNC фреза Fanuc Robodrill (4 оси)', 'mill', 43.4, 45.4, 7.0, 9.0, 2.6),
 ]
-# machines that were on the architect's plan but are gone from this hall (or moved to hall 2) - see migration/reset_hall_from_plan.py
 # accessory ("инвентар") of a machine, sized separately: (length, width, height) in m. It sticks out of the machine's
 # back-left side (local -X, see hall_models.js) - for a bar lathe this is the 3.5 m bar feeder.
-HALL_ACC_SEED = {5: (3.5, 0.7, 0.8), 6: (3.5, 0.7, 0.8), 17: (3.5, 0.7, 0.8), 18: (3.5, 0.7, 0.8)}
-HALL_SEED_REMOVED = {1, 2, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+HALL_ACC_SIDES = {'left': 'Отляво (−X)', 'right': 'Отдясно (+X)', 'front': 'Отпред (+Z)', 'back': 'Отзад (−Z)'}   # in the machine's own frame, viewed from its front
+HALL_ACC_SEED = {n: (3.5, 0.7, 0.8, 'left', 'Прътоподавател') for n in (3, 4, 5, 6)}   # (length, width, height, side, name)
 
 
 # 3D look of a hall machine (static/js/hall_models.js): model key + which way its front faces
 # (degrees: 0 = +Z toward the front wall, 90 = +X, 180 = -Z, 270 = -X)
 HALL_MODELS = {'vmc': 'Вертикален обработващ център', 'lathe': 'Струг / обработващ център', 'bar_lathe': 'Струг с прътоподавател',
-               'dmu': 'DMG DMU 75 (с тъмен шкаф и стружкоотвод)', 'laser': 'Лазер за ламарина', 'press': 'Абкант', 'compressor': 'Компресор', 'dark_box': 'Голяма тъмна машина', 'box': 'Кутия'}
+               'dmu': 'DMG DMU 75 (с тъмен шкаф и стружкоотвод)', 'laser': 'Лазер за ламарина', 'laser_cabin': 'Лазер със затворена кабина', 'robot': 'Робот манипулатор', 'robot_green': 'Робот манипулатор (зелен)', 'sheet_lift': 'Вакуумен подемник LS3015 за листове, Г-образен (300 кг)', 'press': 'Абкант', 'compressor': 'Компресор', 'dark_box': 'Голяма тъмна машина', 'box': 'Кутия'}
 HALL_FIXTURE_MODELS = {'extinguishers': 'Пожарогасители', 'hose_reel': 'Барабан за въздух', 'tool_cart': 'Работна количка',
                        'armchair': 'Фотьойл', 'drill_press': 'Колонна бормашина', 'tv': 'Телевизор', 'locker': 'Метален шкаф', 'shelf': 'Стелаж'}
-HALL_LOOK_SEED = {3: ('dmu', 0), 4: ('lathe', 0), 5: ('bar_lathe', 270), 6: ('bar_lathe', 0), 17: ('bar_lathe', 90),
-                  18: ('bar_lathe', 0), 19: ('vmc', 0)}
+HALL_LOOK_SEED = {1: ('dmu', 0), 2: ('lathe', 0), 3: ('bar_lathe', 270), 4: ('bar_lathe', 0), 5: ('bar_lathe', 90),
+                  6: ('bar_lathe', 0), 7: ('vmc', 0)}
 
 
 class HallMachine(db.Model):
@@ -2547,14 +2551,29 @@ class HallMachine(db.Model):
     acc_length = db.Column(db.Float, nullable=False, default=0.0)  # accessory (e.g. bar feeder) sized separately; 0 = none
     acc_width = db.Column(db.Float, nullable=False, default=0.7)
     acc_height = db.Column(db.Float, nullable=False, default=0.8)
+    acc_side = db.Column(db.String(10), nullable=False, default='left')   # key of HALL_ACC_SIDES
+    acc_name = db.Column(db.String(100), nullable=True)
+    # dossier (досие): identification + free notes; files live in HallMachineFile
+    # one record per real machine: the dossier/3D side (this row) is linked 1:1 to the Machine used by orders, meters, services and
+    # panels, so a change made in either place shows up in both (name is kept in sync by the listeners below, status lives on Machine).
+    machine_id = db.Column(db.Integer, db.ForeignKey('machine.id'), nullable=True, unique=True)
+    on_plan = db.Column(db.Boolean, nullable=False, default=True)     # False = dossier only, not drawn in the 3D hall
+    manufacturer = db.Column(db.String(150), nullable=True)
+    serial_number = db.Column(db.String(100), nullable=True)
+    year = db.Column(db.Integer, nullable=True)
+    notes = db.Column(db.Text, nullable=True)
     card_id = db.Column(db.Integer, db.ForeignKey('service_machine_card.id'), nullable=True)
 
     card = db.relationship('ServiceMachineCard')
 
+    machine = db.relationship('Machine', backref=db.backref('hall_record', uselist=False))
+
     def as_dict(self):
-        return {'id': self.id, 'no': self.no, 'name': self.name, 'category': self.category, 'x': self.x, 'z': self.z,
+        return {'id': self.id, 'no': self.no, 'name': self.name, 'category': self.category,
+                'machine_id': self.machine_id, 'status': self.machine.status if self.machine else None, 'x': self.x, 'z': self.z,
                 'width': self.width, 'depth': self.depth, 'height': self.height, 'elevation': self.elevation, 'model': self.model, 'rotation': self.rotation,
-                'acc_length': self.acc_length, 'acc_width': self.acc_width, 'acc_height': self.acc_height, 'card_id': self.card_id}
+                'acc_length': self.acc_length, 'acc_width': self.acc_width, 'acc_height': self.acc_height,
+                'acc_side': self.acc_side, 'acc_name': self.acc_name, 'card_id': self.card_id}
 
 
 HALL_SHAPE_KINDS = {'wall': 'Стена', 'door': 'Врата', 'room': 'Помещение', 'fixture': 'Обзавеждане', 'window': 'Прозорец', 'stairs': 'Стълби', 'block': 'Съседна сграда'}
@@ -2639,7 +2658,8 @@ def _hall_shapes():
     return HallShape.query.order_by(HallShape.id).all()
 
 
-HALL_EQUIPMENT_KINDS = {'inverter': 'Инвертор', 'battery': 'Батериен блок', 'panel': 'Ел. табло'}
+HALL_EQUIPMENT_KINDS = {'inverter': 'Инвертор', 'battery': 'Батериен блок', 'panel': 'Ел. табло', 'convector': 'Конвектор',
+                        'sensor': 'Температурен сензор', 'network': 'Мрежово устройство'}
 
 
 class HallEquipment(db.Model):
@@ -2659,7 +2679,8 @@ class HallEquipment(db.Model):
     rotation = db.Column(db.Integer, nullable=False, default=0)   # front direction, see HALL_LOOK_SEED
 
     def target(self):
-        model = {'inverter': ModbusDevice, 'battery': BatteryStack, 'panel': ElectricalPanel}[self.kind]
+        model = {'inverter': ModbusDevice, 'battery': BatteryStack, 'panel': ElectricalPanel, 'convector': Convector,
+                 'sensor': TemperatureSensor, 'network': NetworkDevice}[self.kind]
         return db.session.get(model, self.ref_id) if self.ref_id else None
 
     def as_dict(self):
@@ -2688,20 +2709,103 @@ def _hall_equipment_choices():
         'battery': [{'id': b.id, 'label': b.name} for b in BatteryStack.query.order_by(BatteryStack.name)],
         'panel': [{'id': p.id, 'label': f'{p.room.building.name} · {p.room.name} · {p.name}'}
                   for p in ElectricalPanel.query.join(Room).join(Building).order_by(Building.name, Room.name, ElectricalPanel.name)],
+        'convector': [{'id': c.id, 'label': c.name} for c in Convector.query.order_by(Convector.name)],
+        'sensor': [{'id': t.id, 'label': t.name} for t in TemperatureSensor.query.order_by(TemperatureSensor.name)],
+        'network': [{'id': n.id, 'label': n.name} for n in NetworkDevice.query.order_by(NetworkDevice.name)],
     }
 
 
-def _hall_machines():
+HALL_FILE_CATEGORIES = {'manual': 'Ръководство', 'backup': 'Бекъп (програми / параметри)', 'drawing': 'Чертеж / схема',
+                        'service': 'Сервиз / поддръжка', 'photo': 'Снимка', 'other': 'Друго'}
+
+
+class HallMachineFile(db.Model):
+    """A file in a hall machine's dossier. The bytes sit in MACHINE_FILES_FOLDER/<machine_id>/<stored_name>."""
+    id = db.Column(db.Integer, primary_key=True)
+    machine_id = db.Column(db.Integer, db.ForeignKey('hall_machine.id'), nullable=False)
+    category = db.Column(db.String(20), nullable=False, default='other')
+    original_name = db.Column(db.String(255), nullable=False)
+    stored_name = db.Column(db.String(80), nullable=False)
+    size = db.Column(db.BigInteger, nullable=False, default=0)
+    uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
+    uploaded_by = db.Column(db.String(80), nullable=True)
+    note = db.Column(db.String(255), nullable=True)
+
+    machine = db.relationship('HallMachine', backref=db.backref('files', lazy=True, order_by='HallMachineFile.uploaded_at.desc()'))
+
+    @property
+    def size_text(self):
+        size = float(self.size or 0)
+        for unit in ('Б', 'КБ', 'МБ', 'ГБ'):
+            if size < 1024 or unit == 'ГБ':
+                return f'{size:.0f} {unit}' if unit == 'Б' else f'{size:.1f} {unit}'
+            size /= 1024
+
+
+HALL_CONN_KINDS = {'ethernet': 'Ethernet (LAN)', 'wifi': 'Wi-Fi', 'profinet': 'Profinet', 'modbus_tcp': 'Modbus TCP',
+                   'modbus_rtu': 'Modbus RTU / RS-485', 'serial': 'Сериен порт (RS-232)', 'usb': 'USB', 'opcua': 'OPC UA / MTConnect',
+                   'other': 'Друго'}
+
+
+class MachineConnection(db.Model):
+    """A communication connection of a machine (data for the future communications map): what kind, its address/port, and - when it is
+    part of the LAN inventory - the NetworkHost it is and the NetworkDevice (switch) port it is patched into."""
+    id = db.Column(db.Integer, primary_key=True)
+    hall_machine_id = db.Column(db.Integer, db.ForeignKey('hall_machine.id'), nullable=False)
+    kind = db.Column(db.String(20), nullable=False, default='ethernet')
+    label = db.Column(db.String(150), nullable=True)              # e.g. "Siemens 840D X130"
+    address = db.Column(db.String(100), nullable=True)            # IP / MAC / COM port
+    port = db.Column(db.String(30), nullable=True)                # TCP port, baud rate ...
+    network_host_id = db.Column(db.Integer, db.ForeignKey('network_host.id'), nullable=True)
+    switch_device_id = db.Column(db.Integer, db.ForeignKey('network_device.id'), nullable=True)
+    switch_port = db.Column(db.String(50), nullable=True)
+    notes = db.Column(db.String(255), nullable=True)
+
+    hall_machine = db.relationship('HallMachine', backref=db.backref('connections', cascade='all, delete-orphan', order_by='MachineConnection.id'))
+    network_host = db.relationship('NetworkHost')
+    switch_device = db.relationship('NetworkDevice')
+
+
+_name_sync = threading.local()          # guard: copying the name to the other side must not trigger the mirror listener again
+
+
+def _sync_name(other, value):
+    if getattr(_name_sync, 'busy', False) or other is None or other.name == value:
+        return
+    _name_sync.busy = True
+    try:
+        other.name = value
+    finally:
+        _name_sync.busy = False
+
+
+@db.event.listens_for(HallMachine.name, 'set')
+def _hall_name_to_machine(target, value, oldvalue, initiator):
+    _sync_name(target.machine, value)
+
+
+@db.event.listens_for(Machine.name, 'set')
+def _machine_name_to_hall(target, value, oldvalue, initiator):
+    _sync_name(target.__dict__.get('hall_record') if target.id is None else target.hall_record, value)
+
+
+def _next_hall_no():
+    """Next sequential machine number (max + 1)."""
+    return (db.session.query(db.func.max(HallMachine.no)).scalar() or 0) + 1
+
+
+def _hall_machines(plan_only=False):
     """All hall machines, seeding the plan's layout the first time (table exists after db.create_all)."""
     if HallMachine.query.count() == 0:
         for no, name, cat, x0, x1, z0, z1, h in HALL_SEED:
             model, rot = HALL_LOOK_SEED.get(no, (None, 0))
-            al, aw, ah = HALL_ACC_SEED.get(no, (0.0, 0.7, 0.8))
+            al, aw, ah, aside, aname = HALL_ACC_SEED.get(no, (0.0, 0.7, 0.8, 'left', None))
             db.session.add(HallMachine(no=no, name=name, category=cat, x=x0, z=z0, width=round(x1 - x0, 2),
                                        depth=round(z1 - z0, 2), height=h, model=model, rotation=rot,
-                                       acc_length=al, acc_width=aw, acc_height=ah))
+                                       acc_length=al, acc_width=aw, acc_height=ah, acc_side=aside, acc_name=aname))
         db.session.commit()
-    return HallMachine.query.order_by(HallMachine.no, HallMachine.id).all()
+    q = HallMachine.query.order_by(HallMachine.no, HallMachine.id)
+    return (q.filter(HallMachine.on_plan.is_(True)) if plan_only else q).all()
 
 
 class EditableText(db.Model):
@@ -5676,40 +5780,369 @@ def flashing():
     return render_template('flashing.html', materials=materials, services=services, active_page='flashing')
 
 
-@app.route('/factory3d')
-@login_required
-@app_access_required('factory3d')
-def factory3d():
-    """Client-facing 3D model of the hall (layout in HallMachine, edited on /admin/hall). A machine
-    linked to a ServiceMachineCard shows that card on click."""
+def _hall_admin_info(m):
+    """Everything an admin sees on a machine in the 3D map: electrical panel, meters, services, communications, dossier."""
+    mc = m.machine
+    return {
+        'dossier': url_for('admin_hall_dossier', machine_id=m.id), 'files': len(m.files),
+        'ident': ' · '.join(v for v in (m.manufacturer, f'С/Н {m.serial_number}' if m.serial_number else None, f'{m.year} г.' if m.year else None) if v),
+        'panel': mc.panel.name if mc and mc.panel else None,
+        'meters': ([{'kind': 'shelly', 'id': x.id, 'name': x.name} for x in mc.shelly_devices] +
+                   [{'kind': 'modbus', 'id': x.id, 'name': x.name} for x in mc.modbus_devices]) if mc else [],
+        'services': [x.name for x in mc.services] if mc else [],
+        'maintenance': mc.last_maintenance.strftime('%d.%m.%Y') if mc and mc.last_maintenance else None,
+        'conns': [{'kind': HALL_CONN_KINDS.get(c.kind, c.kind), 'label': c.label, 'address': c.address, 'port': c.port,
+                   'host': (c.network_host.hostname or c.network_host.mac_address) if c.network_host else None,
+                   'switch': ' / '.join(v for v in (c.switch_device.name if c.switch_device else None, c.switch_port) if v)}
+                  for c in m.connections],
+    }
+
+
+def _hall_links():
+    """Every connection the map can animate, as {a: [kind, id], b: [kind, id], kind: power|data, label}. Endpoints are a HallMachine id
+    ('machine') or the ref_id of a placed HallEquipment ('panel' / 'inverter' / 'network'); the page drops links whose ends are not on the map."""
     out = []
-    for m in _hall_machines():
+    for p in ElectricalPanel.query.filter(ElectricalPanel.parent_panel_id.isnot(None)):
+        out.append({'a': ['panel', p.parent_panel_id], 'b': ['panel', p.id], 'kind': 'power', 'label': f'{p.parent_panel.name} → {p.name}'})
+    for hm in HallMachine.query.filter(HallMachine.machine_id.isnot(None)):
+        if hm.machine.panel_id:
+            out.append({'a': ['panel', hm.machine.panel_id], 'b': ['machine', hm.id], 'kind': 'power', 'label': f'{hm.machine.panel.name} → {hm.name}'})
+    for d in ModbusDevice.query.filter(ModbusDevice.device_type == 'solis_s6', ModbusDevice.panel_id.isnot(None)):
+        out.append({'a': ['inverter', d.id], 'b': ['panel', d.panel_id], 'kind': 'power', 'label': f'{d.name} → {d.panel.name}'})
+    for st in BatteryStack.query.filter(BatteryStack.inverter_device_id.isnot(None)):
+        out.append({'a': ['inverter', st.inverter_device_id], 'b': ['battery', st.id], 'kind': 'power', 'label': f'{st.inverter.name} → {st.name}' if getattr(st, 'inverter', None) else st.name})
+    for l in NetworkLink.query:
+        out.append({'a': ['network', l.device_a_id], 'b': ['network', l.device_b_id], 'kind': 'data',
+                    'label': f'{l.type_label}{f" VLAN{l.vlan}" if l.vlan else ""}: {l.device_a.name} ↔ {l.device_b.name}'})
+    for c in MachineConnection.query.filter(MachineConnection.switch_device_id.isnot(None)):
+        out.append({'a': ['network', c.switch_device_id], 'b': ['machine', c.hall_machine_id], 'kind': 'data',
+                    'label': f'{HALL_CONN_KINDS.get(c.kind, c.kind)} {c.label or ""}: {c.switch_device.name} ↔ {c.hall_machine.name}'.replace('  ', ' ')})
+    return out
+
+
+def _hall_page(initial):
+    """The one interactive hall map: 3D view for everyone; for admins also the top-down editor and the roof/solar tab."""
+    admin = current_user.is_admin
+    out = []
+    for m in _hall_machines(plan_only=True):
         d = m.as_dict()
         c = m.card
         d['card'] = {'title': c.title, 'specs': c.specs, 'description': c.description,
                      'image': url_for('static', filename='img/machines/' + c.image_filename) if c.image_filename else None} if c else None
+        if admin:
+            d['admin'] = _hall_admin_info(m)
         out.append(d)
-    solar = {'l': 2.278, 'w': 1.134, 'slopes': []}            # module size in m (default = TWMND-72HD), then one list per inverter
+    solar = {'l': 2.278, 'w': 1.134, 'slopes': [], 'strings': [], 'inv': []}   # module size in m (default = TWMND-72HD), then one list per inverter
     for inv in ModbusDevice.query.filter_by(device_type='solis_s6').order_by(ModbusDevice.id).all():
         if inv.panel_model:
             solar['l'], solar['w'] = inv.panel_model.length_mm / 1000, inv.panel_model.width_mm / 1000
-        solar['slopes'].append([[p.row, p.col] for p in SolarPanel.query.filter_by(inverter_device_id=inv.id)])
-    return render_template('factory3d.html', machines=out, solar=solar, shapes=[h.as_dict() for h in _hall_shapes()],
-                           equipment=[e.as_dict() for e in _hall_equipment()], active_page='factory3d')
+        panels = SolarPanel.query.filter_by(inverter_device_id=inv.id).order_by(SolarPanel.row, SolarPanel.col).all()
+        solar['slopes'].append([[p.row, p.col] for p in panels])
+        solar['strings'].append([p.string_number if admin else None for p in panels])           # string wiring is admin information
+        solar['inv'].append({'id': inv.id, 'name': inv.name, 'model': inv.panel_model.name if inv.panel_model else None,
+                             'watt': inv.panel_model.rated_power_w if inv.panel_model else None})
+    ctx = dict(machines=out, solar=solar, shapes=[h.as_dict() for h in _hall_shapes()],
+               equipment=[e.as_dict() for e in _hall_equipment()], is_admin=admin, initial=initial, links=_hall_links() if admin else [], active_page='factory3d')
+    if admin:
+        cards = ServiceMachineCard.query.filter_by(kind='machine').order_by(ServiceMachineCard.title).all()
+        ctx.update(meters=[{'kind': 'shelly', 'id': x.id, 'name': x.name} for x in ShellyDevice.query.order_by(ShellyDevice.name)] +
+                          [{'kind': 'modbus', 'id': x.id, 'name': x.name} for x in ModbusDevice.query.order_by(ModbusDevice.name)],
+                   shape_kinds=HALL_SHAPE_KINDS,
+                   rooms=[{'id': r.id, 'label': f'{r.building.name} · {r.name}'} for r in Room.query.join(Building).order_by(Building.name, Room.name).all()],
+                   cards=[{'id': c.id, 'title': c.title, 'page': c.page} for c in cards],
+                   equipment_kinds=HALL_EQUIPMENT_KINDS, equipment_choices=_hall_equipment_choices(),
+                   acc_sides=HALL_ACC_SIDES, machine_models=HALL_MODELS, fixture_models=HALL_FIXTURE_MODELS, categories=HALL_CATEGORIES)
+    return render_template('factory3d.html', **ctx)
+
+
+@app.route('/factory3d')
+@login_required
+@app_access_required('factory3d')
+def factory3d():
+    """Client-facing 3D model of the hall (layout in HallMachine). A machine linked to a ServiceMachineCard shows that card on click;
+    admins get the editor and roof tabs and the full machine information on the same page."""
+    return _hall_page('3d')
 
 
 @app.route('/admin/hall')
 @role_required('admin')
 def admin_hall():
-    cards = ServiceMachineCard.query.filter_by(kind='machine').order_by(ServiceMachineCard.title).all()
-    return render_template('admin_hall.html', machines=[m.as_dict() for m in _hall_machines()],
-                           shapes=[h.as_dict() for h in _hall_shapes()], shape_kinds=HALL_SHAPE_KINDS,
-                           rooms=[{'id': r.id, 'label': f'{r.building.name} · {r.name}'} for r in Room.query.join(Building).order_by(Building.name, Room.name).all()],
-                           cards=[{'id': c.id, 'title': c.title, 'page': c.page} for c in cards],
-                           equipment=[e.as_dict() for e in _hall_equipment()],
-                           equipment_kinds=HALL_EQUIPMENT_KINDS, equipment_choices=_hall_equipment_choices(),
-                           machine_models=HALL_MODELS, fixture_models=HALL_FIXTURE_MODELS,
-                           categories=HALL_CATEGORIES, active_page='admin_hall')
+    return _hall_page('plan')
+
+
+@app.route('/admin/hall/live')
+@role_required('admin')
+@limiter.exempt
+def admin_hall_live():
+    """Live values for the 3D map: power per hall machine (via its Machine's meters) and per electrical panel, state of the placed convectors."""
+    by_machine, by_panel = _collect_power_aggregates(lambda m: True, lambda p: True)
+    machines = {}
+    for hm in HallMachine.query.filter(HallMachine.machine_id.isnot(None)):
+        e = by_machine.get(hm.machine_id)
+        if e:
+            machines[hm.id] = {'power': round(e['total_power']), 'online': e['online']}
+    convectors = {}
+    for eq in HallEquipment.query.filter_by(kind='convector'):
+        conv = eq.target()
+        if conv:
+            st = _shelly_convector_status(conv)
+            convectors[conv.id] = {'online': st['online'], 'is_on': st.get('is_on'), 'power': st.get('power_w')}
+    batteries = {}
+    stacks = [eq.target() for eq in HallEquipment.query.filter_by(kind='battery')]
+    stacks = [x for x in stacks if x]
+    for sid, live in (_battery_stack_snapshots(stacks) if stacks else {}).items():
+        if live:
+            batteries[sid] = {k: live.get(k) for k in ('soc', 'power', 'voltage', 'current', 'direction')}
+    sensors = {}
+    for eq in HallEquipment.query.filter_by(kind='sensor'):
+        sn = eq.target()
+        if sn:
+            snap = _mqtt_temp_snapshot(sn)
+            sensors[sn.id] = {'temperature': snap.get('temperature'), 'humidity': snap.get('humidity'), 'online': snap.get('online')}
+    return jsonify({'machines': machines, 'convectors': convectors, 'batteries': batteries, 'sensors': sensors,
+                    'panels': {pid: {'power': round(e['total_power']), 'online': e['online']} for pid, e in by_panel.items()}})
+
+
+HALL_W, HALL_D = 56.0, 12.0
+HALL_SYNC_KINDS = ('panel', 'convector', 'battery', 'sensor')
+HALL_BUILDING, HALL_ROOM_NAME = 'Хале', 'Хале (общо)'
+
+
+def _hall_building():
+    b = Building.query.filter_by(name=HALL_BUILDING).first()
+    if b is None:
+        b = Building(name=HALL_BUILDING)
+        db.session.add(b)
+        db.session.flush()
+    return b
+
+
+def _hall_general_room():
+    """The Room that stands for the whole hall: whatever is on the plan but outside every marked room lands on its map."""
+    b = _hall_building()
+    r = Room.query.filter_by(building_id=b.id, name=HALL_ROOM_NAME).first()
+    if r is None:
+        r = Room(name=HALL_ROOM_NAME, building_id=b.id)
+        db.session.add(r)
+        db.session.flush()
+    return r
+
+
+def _hall_room_rect(room_id):
+    """(x, z, w, d) of the hall area a Room's map stands for: its marked shape, or the whole hall for the general room; None if unknown."""
+    sh = HallShape.query.filter(HallShape.kind == 'room', HallShape.room_id == room_id).first() if room_id else None
+    if sh:
+        return sh.x, sh.z, sh.width, sh.depth
+    room = db.session.get(Room, room_id) if room_id else None
+    return (0.0, 0.0, HALL_W, HALL_D) if room and room.name == HALL_ROOM_NAME else None
+
+
+def _hall_room_at(cx, cz):
+    """(room_id, x, z, w, d) of the smallest marked room containing the point, else of the general hall room while the point is inside the hall."""
+    best = None
+    for sh in HallShape.query.filter(HallShape.kind == 'room', HallShape.room_id.isnot(None)):
+        if sh.x <= cx <= sh.x + sh.width and sh.z <= cz <= sh.z + sh.depth and (best is None or sh.width * sh.depth < best.width * best.depth):
+            best = sh
+    if best:
+        return best.room_id, best.x, best.z, best.width, best.depth
+    if 0 <= cx <= HALL_W and 0 <= cz <= HALL_D:
+        return _hall_general_room().id, 0.0, 0.0, HALL_W, HALL_D
+    return None
+
+
+def _hall_push(kind, target, cx, cz):
+    """Hall position (centre, metres) -> the old maps of the same object: its Room and room-map position (percent of that room's area on the
+    plan) and, for a panel inside the hall, its place on the distribution scheme (hall plan in percent)."""
+    if target is None:
+        return
+    pct = lambda v, lo=0.0, hi=100.0: max(lo, min(hi, v))
+    rect = _hall_room_at(cx, cz)
+    if rect and hasattr(target, 'room_id'):
+        rid, rx, rz, rw, rd = rect
+        target.room_id = rid
+        if hasattr(target, 'pos_x'):
+            target.pos_x, target.pos_y = pct((cx - rx) / rw * 100), pct((cz - rz) / rd * 100)
+    if kind == 'panel' and 0 <= cx <= HALL_W and 0 <= cz <= HALL_D:
+        target.overview_pos_x, target.overview_pos_y = pct(cx / HALL_W * 100, 2, 98), pct(cz / HALL_D * 100, 2, 98)
+
+
+def _hall_pull(kind, target, source):
+    """A position changed on the room map ('room': pos_x/pos_y inside its Room's area) or on the distribution scheme ('overview')
+    -> the same object on the hall plan, then back out to the other maps so all of them agree."""
+    obj = (HallMachine.query.filter_by(machine_id=target.id).first() if kind == 'machine'
+           else HallEquipment.query.filter_by(kind=kind, ref_id=target.id).first())
+    if obj is None:
+        return
+    if source == 'overview':
+        if target.overview_pos_x is None:
+            return
+        cx, cz = target.overview_pos_x / 100 * HALL_W, target.overview_pos_y / 100 * HALL_D
+    else:
+        rect = _hall_room_rect(target.room_id)
+        if rect is None or target.pos_x is None:
+            return
+        cx, cz = rect[0] + target.pos_x / 100 * rect[2], rect[1] + target.pos_y / 100 * rect[3]
+    lo, hi_x, hi_z = (0.0, HALL_W - obj.width, HALL_D - obj.depth) if kind == 'machine' else (-10.0, 80.0, 30.0)
+    obj.x, obj.z = max(lo, min(hi_x, cx - obj.width / 2)), max(lo, min(hi_z, cz - obj.depth / 2))
+    _hall_push(kind, target, obj.x + obj.width / 2, obj.z + obj.depth / 2)
+
+
+def _hall_link_rooms():
+    """Every marked room on the plan that is not linked to a Room gets one (building "Хале", named like the shape), so it has a room map."""
+    n = 0
+    for sh in HallShape.query.filter(HallShape.kind == 'room', HallShape.room_id.is_(None)):
+        b = _hall_building()
+        name = (sh.name or '').strip() or f'Помещение {sh.id}'
+        room = Room.query.filter_by(building_id=b.id, name=name).first()
+        if room is None:
+            room = Room(name=name, building_id=b.id)
+            db.session.add(room)
+            db.session.flush()
+        sh.room_id = room.id
+        n += 1
+    return n
+
+
+def _hall_sync_maps():
+    """Brings the room maps, the distribution scheme and the machine list in line with the plan: creates the Room of every marked room, the Machine
+    of every dossier on the plan and the ElectricalPanel of every panel drawn without one, then copies every position out. Returns counts."""
+    out = {'rooms': _hall_link_rooms(), 'machines': 0, 'panels': 0, 'synced': 0}
+    for hm in HallMachine.query.filter(HallMachine.machine_id.is_(None), HallMachine.on_plan.is_(True)):
+        if hm.name.strip() != 'Нова машина':
+            hm.machine = Machine(name=hm.name, machine_type=HALL_CATEGORIES.get(hm.category))
+            out['machines'] += 1
+    for e in HallEquipment.query.filter_by(kind='panel', ref_id=None):
+        rect = _hall_room_at(e.x + e.width / 2, e.z + e.depth / 2)
+        if rect:
+            p = ElectricalPanel(name=e.name or f'Табло {e.id}', room_id=rect[0])
+            db.session.add(p)
+            db.session.flush()
+            e.ref_id = p.id
+            out['panels'] += 1
+    db.session.flush()
+    for e in HallEquipment.query.filter(HallEquipment.kind.in_(HALL_SYNC_KINDS)):
+        if e.target() is not None:
+            _hall_push(e.kind, e.target(), e.x + e.width / 2, e.z + e.depth / 2)
+            out['synced'] += 1
+    for m in HallMachine.query.filter(HallMachine.machine_id.isnot(None), HallMachine.on_plan.is_(True)):
+        _hall_push('machine', m.machine, m.x + m.width / 2, m.z + m.depth / 2)
+        out['synced'] += 1
+    return out
+
+
+@app.route('/admin/hall/sync-maps', methods=['POST'])
+@role_required('admin')
+def admin_hall_sync_maps():
+    out = _hall_sync_maps()
+    db.session.commit()
+    log_action(f'Хале 3D: синхронизирани картите на помещенията и схемата ({out["synced"]} обекта, {out["rooms"]} помещения, {out["machines"]} машини, {out["panels"]} табла)')
+    return jsonify(out)
+
+
+# size (w, d, h) and elevation of each equipment kind when it is placed automatically
+HALL_EQUIPMENT_DEFAULTS = {'panel': (0.8, 0.25, 1.2, 1.4), 'convector': (1.0, 0.12, 0.45, 0.2), 'sensor': (0.08, 0.03, 0.08, 1.6),
+                           'network': (0.45, 0.25, 0.1, 2.0), 'battery': (0.6, 0.6, 1.8, 0.0), 'inverter': (0.6, 0.3, 0.7, 1.2)}
+
+
+@app.route('/api/hall/sun')
+@login_required
+@limiter.exempt
+def api_hall_sun():
+    """Sun position (compass azimuth, altitude in degrees) now and every 10 minutes of today (local time) for the 3D map's sun lighting."""
+    now = datetime.now()
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def pos(local):
+        p = _sun_position(datetime.utcfromtimestamp(local.timestamp()))
+        return {'az': round(p['azimuth'], 1), 'alt': round(p['altitude'], 1)}
+
+    return jsonify({'now': dict(pos(now), m=now.hour * 60 + now.minute),
+                    'day': [dict(pos(start + timedelta(minutes=m)), m=m) for m in range(0, 1441, 10)]})
+
+
+@app.route('/admin/hall/auto-place', methods=['POST'])
+@role_required('admin')
+def admin_hall_auto_place():
+    """Puts every panel, convector, sensor, network device, battery stack and Solis inverter that is not on the map yet onto it.
+    A device that sits in a room linked to a marked room on the plan lands inside that room - at its old room-map position (pos_x/pos_y are
+    percent of that room's canvas, converted to metres) or spread along the room when it has none; the rest go to a service strip behind
+    the back wall (z < 0) where they can be dragged to their real place."""
+    rooms = {}
+    for sh in HallShape.query.filter(HallShape.kind == 'room', HallShape.room_id.isnot(None)):
+        rooms.setdefault(sh.room_id, sh)
+    placed = {(e.kind, e.ref_id) for e in HallEquipment.query}
+    sources = [('panel', ElectricalPanel.query.order_by(ElectricalPanel.id), lambda o: o.room_id),
+               ('battery', BatteryStack.query.order_by(BatteryStack.id), lambda o: o.room_id),
+               ('convector', Convector.query.order_by(Convector.id), lambda o: o.room_id),
+               ('sensor', TemperatureSensor.query.order_by(TemperatureSensor.id), lambda o: o.room_id),
+               ('inverter', ModbusDevice.query.filter_by(device_type='solis_s6').order_by(ModbusDevice.id),
+                lambda o: o.panel.room_id if o.panel_id else None),
+               ('network', NetworkDevice.query.order_by(NetworkDevice.id), lambda o: None)]
+    in_room, strip = {}, {}
+    created = 0
+    for kind, query, room_of in sources:
+        w, d, h, elev = HALL_EQUIPMENT_DEFAULTS[kind]
+        for obj in query:
+            if (kind, obj.id) in placed:
+                continue
+            sh = rooms.get(room_of(obj))
+            if sh:
+                n = in_room[sh.id] = in_room.get(sh.id, 0) + 1
+                px, py = getattr(obj, 'pos_x', None), getattr(obj, 'pos_y', None)
+                fx = px / 100 if px is not None and kind != 'network' else (n % 6 + 0.5) / 6
+                fy = py / 100 if py is not None and kind != 'network' else 0.15
+                x, z = sh.x + fx * sh.width - w / 2, sh.z + fy * sh.depth - d / 2
+                elev = max(elev, sh.elevation or 0)
+            else:
+                n = strip[kind] = strip.get(kind, 0) + 1
+                x, z = 1 + (n - 1) * 1.3, -1.2 - 0.9 * list(HALL_EQUIPMENT_DEFAULTS).index(kind)
+            db.session.add(HallEquipment(kind=kind, ref_id=obj.id, name='', x=max(-10.0, min(80.0, x)), z=max(-10.0, min(30.0, z)),
+                                         width=w, depth=d, height=h, elevation=elev, rotation=0))
+            created += 1
+    db.session.flush()
+    _hall_sync_maps()
+    db.session.commit()
+    if created:
+        log_action(f'Хале 3D: автоматично поставени {created} устройства на картата')
+    return jsonify({'created': created})
+
+
+@app.route('/admin/hall/<int:machine_id>/meters', methods=['POST'])
+@role_required('admin')
+def admin_hall_meters(machine_id):
+    """Attaches / detaches one meter (IoT device) to the machine's record from the map: {kind: shelly|modbus, id, attach: bool}."""
+    hm = HallMachine.query.get_or_404(machine_id)
+    mc = hm.machine
+    data = request.get_json(silent=True) or {}
+    model = {'shelly': ShellyDevice, 'modbus': ModbusDevice}.get(data.get('kind'))
+    dev = db.session.get(model, int(data['id'])) if model and str(data.get('id', '')).isdigit() else None
+    if mc is None or dev is None:
+        return jsonify({'error': 'Машината не е свързана със системата или устройството не съществува.'}), 400
+    lst = mc.shelly_devices if data['kind'] == 'shelly' else mc.modbus_devices
+    if data.get('attach') and dev not in lst:
+        lst.append(dev)
+    elif not data.get('attach') and dev in lst:
+        lst.remove(dev)
+    db.session.commit()
+    log_action(f'Хале 3D: {"прикачен" if data.get("attach") else "откачен"} измерватель "{dev.name}" към "{hm.name}"')
+    return jsonify(_hall_admin_info(hm)['meters'])
+
+
+@app.route('/admin/hall/convector/<int:conv_id>/toggle', methods=['POST'])
+@role_required('admin')
+def admin_hall_convector_toggle(conv_id):
+    """Switches a convector from the map (same action as admin_convector_toggle, JSON instead of a redirect)."""
+    conv = Convector.query.get_or_404(conv_id)
+    status = _shelly_convector_status(conv)
+    if not status['online']:
+        return jsonify({'error': f'Конвектор "{conv.name}" не отговаря.'}), 409
+    turn_on = not status['is_on']
+    try:
+        _shelly_convector_set(conv, turn_on)
+    except Exception:
+        return jsonify({'error': 'Устройството не отговори на командата.'}), 502
+    log_action(f'{"Включен" if turn_on else "Изключен"} конвектор "{conv.name}" (карта на халето)')
+    return jsonify({'is_on': turn_on})
 
 
 def _hall_apply(m, data):
@@ -5727,6 +6160,8 @@ def _hall_apply(m, data):
         m.acc_length = max(0.0, min(20.0, float(data.get('acc_length') or 0)))
         m.acc_width = max(0.1, min(5.0, float(data.get('acc_width') or 0.7)))
         m.acc_height = max(0.1, min(5.0, float(data.get('acc_height') or 0.8)))
+        m.acc_side = data.get('acc_side') or 'left'
+        m.acc_name = str(data.get('acc_name') or '').strip()[:100] or None
         card_id = data.get('card_id')
         m.card_id = int(card_id) if card_id else None
     except (KeyError, ValueError, TypeError):
@@ -5736,6 +6171,8 @@ def _hall_apply(m, data):
     if data.get('category') not in HALL_CATEGORIES:
         return 'Невалиден вид.'
     m.category = data['category']
+    if m.acc_side not in HALL_ACC_SIDES:
+        return 'Невалидна страна на инвентара.'
     if m.rotation not in (0, 90, 180, 270) or (data.get('model') and data['model'] not in HALL_MODELS):
         return 'Невалиден модел или посока.'
     m.model = data.get('model') or None
@@ -5756,7 +6193,10 @@ def admin_hall_save():
     if err:
         db.session.rollback()
         return jsonify({'error': err}), 400
+    if m.no is None:                                   # blank number -> next in sequence (still editable afterwards)
+        m.no = _next_hall_no()
     db.session.add(m)
+    _hall_push('machine', m.machine, m.x + m.width / 2, m.z + m.depth / 2)
     db.session.commit()
     log_action(f'Хале 3D: запазена машина "{m.name}"')
     return jsonify(m.as_dict())
@@ -5807,6 +6247,279 @@ def admin_hall_shape_delete(shape_id):
     return jsonify({'ok': True})
 
 
+def _card_dims(card):
+    """(length, width, height) in metres from a card's "Габарити ...: L x W x H мм" line, else None."""
+    for line in (card.specs_text or '').splitlines():
+        label, _, value = line.partition(':')
+        if label.strip().lower().startswith('габарити'):
+            nums = re.findall(r'\d+(?:[.,]\d+)?', value.replace(' ', ''))
+            if len(nums) >= 3:
+                return tuple(round(float(n.replace(',', '.')) / 1000, 3) for n in nums[:3])
+    return None
+
+
+@app.route('/admin/hall/<int:machine_id>/apply-card-size', methods=['POST'])
+@role_required('admin')
+def admin_hall_apply_card_size(machine_id):
+    """Sets the machine's footprint/height from the overall size on its linked card, keeping its centre; the
+    length goes along the world X axis unless the machine is turned 90/270 degrees."""
+    m = HallMachine.query.get_or_404(machine_id)
+    dims = _card_dims(m.card) if m.card else None
+    if not dims:
+        return jsonify({'error': 'Картата няма ред „Габарити (Д x Ш x В)".'}), 400
+    length, width, height = dims
+    cx, cz = m.x + m.width / 2, m.z + m.depth / 2
+    m.width, m.depth = (width, length) if m.rotation % 180 else (length, width)
+    m.height = height
+    m.x, m.z = round(cx - m.width / 2, 3), round(cz - m.depth / 2, 3)
+    db.session.commit()
+    log_action(f'Хале 3D: габарити на "{m.name}" от картата')
+    return jsonify(m.as_dict())
+
+
+def _dossier_back(machine_id, msg=None, kind='success'):
+    if msg:
+        flash(msg, kind)
+    return redirect(url_for('admin_hall_dossier', machine_id=machine_id))
+
+
+@app.route('/admin/machines-dossiers')
+@role_required('admin')
+def admin_machines_dossiers():
+    return redirect(url_for('list_machines'))
+
+
+def _machines_overview_rows():
+    """One row per real machine: every dossier (HallMachine, linked or not to a Machine) plus Machines that have no dossier yet."""
+    rows = []
+    for m in _hall_machines():
+        total = sum(f.size or 0 for f in m.files)
+        rows.append({'hm': m, 'machine': m.machine, 'card': m.card, 'files': len(m.files),
+                     'size_text': HallMachineFile(size=total).size_text if m.files else ''})
+    linked = {r['machine'].id for r in rows if r['machine']}
+    for mc in Machine.query.order_by(Machine.name):
+        if mc.id not in linked:
+            rows.append({'hm': None, 'machine': mc, 'card': None, 'files': 0, 'size_text': ''})
+    return rows
+
+
+@app.route('/admin/machines/create-dossier/<int:machine_id>', methods=['POST'])
+@role_required('admin')
+def admin_machine_create_dossier(machine_id):
+    """A Machine without a dossier gets one (dossier only - not drawn in the 3D hall until "На плана" is ticked)."""
+    mc = Machine.query.get_or_404(machine_id)
+    if mc.hall_record:
+        return redirect(url_for('admin_hall_dossier', machine_id=mc.hall_record.id))
+    hm = HallMachine(name=mc.name, category='util', x=2, z=2, width=2, depth=2, height=2, on_plan=False, no=_next_hall_no())
+    hm.machine = mc
+    db.session.add(hm)
+    db.session.commit()
+    log_action(f'Създадено досие за машина "{mc.name}"')
+    return redirect(url_for('admin_hall_dossier', machine_id=hm.id))
+
+
+@app.route('/admin/machines/create-missing', methods=['POST'])
+@role_required('admin')
+def admin_machines_create_missing():
+    """Creates a Machine record for every dossier that has none yet (placeholders named "Нова машина" are skipped)."""
+    created = 0
+    for hm in HallMachine.query.filter(HallMachine.machine_id.is_(None)):
+        if hm.name.strip() == 'Нова машина':
+            continue
+        hm.machine = Machine(name=hm.name, machine_type=HALL_CATEGORIES.get(hm.category))
+        created += 1
+    db.session.commit()
+    if created:
+        log_action(f'Създадени {created} машини от досиета')
+    flash(f'Създадени машини: {created}.', 'success')
+    return redirect(url_for('list_machines'))
+
+
+@app.route('/admin/hall/<int:machine_id>/dossier')
+@role_required('admin')
+def admin_hall_dossier(machine_id):
+    """The machine's dossier: all its data (hall record, linked card, identification, notes) and attached files."""
+    m = HallMachine.query.get_or_404(machine_id)
+    return render_template('admin_hall_dossier.html', m=m, card=m.card, files=m.files, categories=HALL_FILE_CATEGORIES,
+                           models=HALL_MODELS, acc_sides=HALL_ACC_SIDES, active_page='machines',
+                           conn_kinds=HALL_CONN_KINDS, net_hosts=NetworkHost.query.order_by(NetworkHost.hostname, NetworkHost.ip_address).all(),
+                           net_devices=NetworkDevice.query.order_by(NetworkDevice.name).all(),
+                           machine=m.machine, panels=ElectricalPanel.query.join(Room).order_by(Room.name, ElectricalPanel.name).all(),
+                           shelly=ShellyDevice.query.order_by(ShellyDevice.name).all(), modbus=ModbusDevice.query.order_by(ModbusDevice.name).all(),
+                           services=Service.query.order_by(Service.name).all(), known_machine_types=_known_machine_types(),
+                           free_machines=[x for x in Machine.query.order_by(Machine.name) if x.hall_record is None])
+
+
+@app.route('/admin/hall/<int:machine_id>/dossier/save', methods=['POST'])
+@role_required('admin')
+def admin_hall_dossier_save(machine_id):
+    m = HallMachine.query.get_or_404(machine_id)
+    year = (request.form.get('year') or '').strip()
+    if year and not (year.isdigit() and 1900 <= int(year) <= 2100):
+        return _dossier_back(machine_id, 'Невалидна година.', 'danger')
+    m.manufacturer = (request.form.get('manufacturer') or '').strip()[:150] or None
+    m.serial_number = (request.form.get('serial_number') or '').strip()[:100] or None
+    m.year = int(year) if year else None
+    m.notes = (request.form.get('notes') or '').strip() or None
+    db.session.commit()
+    log_action(f'Хале 3D: досие на "{m.name}" - данни')
+    return _dossier_back(machine_id, 'Запазено.')
+
+
+@app.route('/admin/hall/<int:machine_id>/link-machine', methods=['POST'])
+@role_required('admin')
+def admin_hall_link_machine(machine_id):
+    """Links the dossier to an existing Machine (form field machine_id) or creates a new Machine from it (field new=1)."""
+    hm = HallMachine.query.get_or_404(machine_id)
+    if request.form.get('new') == '1':
+        hm.machine = Machine(name=hm.name, machine_type=HALL_CATEGORIES.get(hm.category))
+    else:
+        raw = request.form.get('machine_id', '')
+        target = db.session.get(Machine, int(raw)) if raw.isdigit() else None
+        if target is None or target.hall_record not in (None, hm):
+            return _dossier_back(hm.id, 'Изберете свободна машина.', 'danger')
+        hm.machine = target
+        hm.name = target.name                                  # the existing Machine keeps its name (orders refer to it); the dossier follows
+    db.session.commit()
+    log_action(f'Хале 3D: досие "{hm.name}" свързано с машина #{hm.machine_id}')
+    return _dossier_back(hm.id, 'Свързано.')
+
+
+@app.route('/admin/hall/<int:machine_id>/dossier/system', methods=['POST'])
+@role_required('admin')
+def admin_hall_dossier_system(machine_id):
+    """Everything that belongs to the Machine side: status, type, last maintenance, electrical panel, meters, services, 3D visibility."""
+    hm = HallMachine.query.get_or_404(machine_id)
+    hm.on_plan = request.form.get('on_plan') == '1'
+    mc = hm.machine
+    if mc is None:
+        db.session.commit()
+        return _dossier_back(hm.id, 'Запазено (машината не е свързана със системата).')
+    status = request.form.get('status', mc.status)
+    if status not in ('idle', 'running', 'maintenance'):
+        return _dossier_back(hm.id, 'Невалиден статус.', 'danger')
+    mc.status = status
+    mc.machine_type = (request.form.get('machine_type') or '').strip()[:50] or None
+    maint = (request.form.get('last_maintenance') or '').strip()
+    if maint:
+        try:
+            mc.last_maintenance = datetime.strptime(maint, '%Y-%m-%d')
+        except ValueError:
+            return _dossier_back(hm.id, 'Невалидна дата на поддръжка.', 'danger')
+    panel_raw = request.form.get('panel_id', '')
+    mc.panel_id = int(panel_raw) if panel_raw.isdigit() and db.session.get(ElectricalPanel, int(panel_raw)) else None
+
+    def picked(name, model):
+        ids = {int(v) for v in request.form.getlist(name) if v.isdigit()}
+        return [x for x in model.query.filter(model.id.in_(ids))] if ids else []
+
+    mc.shelly_devices = picked('shelly_ids', ShellyDevice)
+    mc.modbus_devices = picked('modbus_ids', ModbusDevice)
+    mc.services = picked('service_ids', Service)
+    db.session.commit()
+    log_action(f'Хале 3D: досие на "{hm.name}" - система (статус, ел. връзки, услуги)')
+    return _dossier_back(hm.id, 'Запазено.')
+
+
+@app.route('/admin/hall/<int:machine_id>/connections', methods=['POST'])
+@role_required('admin')
+def admin_hall_connection_add(machine_id):
+    hm = HallMachine.query.get_or_404(machine_id)
+    kind = request.form.get('kind') if request.form.get('kind') in HALL_CONN_KINDS else 'other'
+
+    def fk(name, model):
+        raw = request.form.get(name, '')
+        return int(raw) if raw.isdigit() and db.session.get(model, int(raw)) else None
+
+    conn = MachineConnection(hall_machine_id=hm.id, kind=kind, label=(request.form.get('label') or '').strip()[:150] or None,
+                             address=(request.form.get('address') or '').strip()[:100] or None,
+                             port=(request.form.get('port') or '').strip()[:30] or None,
+                             network_host_id=fk('network_host_id', NetworkHost), switch_device_id=fk('switch_device_id', NetworkDevice),
+                             switch_port=(request.form.get('switch_port') or '').strip()[:50] or None,
+                             notes=(request.form.get('notes') or '').strip()[:255] or None)
+    db.session.add(conn)
+    db.session.commit()
+    log_action(f'Хале 3D: досие на "{hm.name}" - комуникация {HALL_CONN_KINDS[kind]}')
+    return _dossier_back(hm.id, 'Връзката е добавена.')
+
+
+@app.route('/admin/hall/connections/<int:conn_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_hall_connection_delete(conn_id):
+    conn = MachineConnection.query.get_or_404(conn_id)
+    machine_id = conn.hall_machine_id
+    db.session.delete(conn)
+    db.session.commit()
+    return _dossier_back(machine_id, 'Връзката е изтрита.')
+
+
+@app.route('/admin/hall/<int:machine_id>/files', methods=['POST'])
+@role_required('admin')
+def admin_hall_file_upload(machine_id):
+    m = HallMachine.query.get_or_404(machine_id)
+    try:
+        request.max_content_length = MACHINE_FILE_MAX_BYTES          # backups are big; the global 16 MB cap stays for everything else
+    except AttributeError:
+        pass
+    category = request.form.get('category') if request.form.get('category') in HALL_FILE_CATEGORIES else 'other'
+    note = (request.form.get('note') or '').strip()[:255] or None
+    folder = os.path.join(app.config['MACHINE_FILES_FOLDER'], str(m.id))
+    os.makedirs(folder, exist_ok=True)
+    saved = 0
+    for f in request.files.getlist('files'):
+        if not f or not f.filename:
+            continue
+        original = os.path.basename(f.filename.replace(chr(92), '/')).strip()[:255] or 'file'
+        ext = os.path.splitext(original)[1].lower()
+        ext = ext if len(ext) <= 9 and ext[1:].isalnum() else ''
+        stored = uuid.uuid4().hex + ext
+        path = os.path.join(folder, stored)
+        f.save(path)
+        db.session.add(HallMachineFile(machine_id=m.id, category=category, original_name=original, stored_name=stored,
+                                       size=os.path.getsize(path), uploaded_by=current_user.username, note=note))
+        saved += 1
+    if not saved:
+        return _dossier_back(m.id, 'Не е избран файл.', 'danger')
+    db.session.commit()
+    log_action(f'Хале 3D: досие на "{m.name}" - качени {saved} файла')
+    return _dossier_back(m.id, f'Качени файлове: {saved}.')
+
+
+@app.route('/admin/hall/files/<int:file_id>/download')
+@role_required('admin')
+def admin_hall_file_download(file_id):
+    f = HallMachineFile.query.get_or_404(file_id)
+    return send_from_directory(os.path.join(app.config['MACHINE_FILES_FOLDER'], str(f.machine_id)), f.stored_name,
+                               as_attachment=True, download_name=f.original_name)
+
+
+@app.route('/admin/hall/files/<int:file_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_hall_file_delete(file_id):
+    f = HallMachineFile.query.get_or_404(file_id)
+    machine_id, name = f.machine_id, f.original_name
+    try:
+        os.remove(os.path.join(app.config['MACHINE_FILES_FOLDER'], str(machine_id), f.stored_name))
+    except OSError:
+        pass                                                         # already gone from disk - still drop the row
+    db.session.delete(f)
+    db.session.commit()
+    log_action(f'Хале 3D: изтрит файл "{name}" от досие')
+    return _dossier_back(machine_id, 'Файлът е изтрит.')
+
+
+@app.route('/admin/hall/renumber', methods=['POST'])
+@role_required('admin')
+def admin_hall_renumber():
+    """Renumbers every hall machine 1..N in its current number order (unnumbered last); returns {id: no}."""
+    machines = HallMachine.query.order_by(HallMachine.no.is_(None), HallMachine.no, HallMachine.id).all()
+    for i, m in enumerate(machines, 1):
+        m.no = i
+    db.session.commit()
+    log_action(f'Хале 3D: преномерирани {len(machines)} машини')
+    return jsonify({str(m.id): m.no for m in machines})
+
+
 @app.route('/admin/hall/equipment/save', methods=['POST'])
 @role_required('admin')
 def admin_hall_equipment_save():
@@ -5835,6 +6548,8 @@ def admin_hall_equipment_save():
     if e.ref_id and e.target() is None:
         return jsonify({'error': 'Свързаният елемент не съществува.'}), 400
     db.session.add(e)
+    if e.kind in HALL_SYNC_KINDS:
+        _hall_push(e.kind, e.target(), e.x + e.width / 2, e.z + e.depth / 2)
     db.session.commit()
     log_action(f'Хале 3D: запазен "{HALL_EQUIPMENT_KINDS[e.kind]}" {e.name}'.strip())
     return jsonify(e.as_dict())
@@ -5854,6 +6569,8 @@ def admin_hall_equipment_delete(equipment_id):
 @role_required('admin')
 def admin_hall_delete(machine_id):
     m = HallMachine.query.get_or_404(machine_id)
+    if m.files:
+        return jsonify({'error': f'Досието на машината има {len(m.files)} файла - първо ги изтрийте.'}), 400
     log_action(f'Хале 3D: изтрита машина "{m.name}"')
     db.session.delete(m)
     db.session.commit()
@@ -8666,6 +9383,9 @@ def list_machines():
     if not (current_user.is_staff or current_user.can_edit_content):
         flash('Нямате достъп до тази страница.', 'danger')
         return redirect(url_for('dashboard'))
+    if current_user.is_admin:
+        return render_template('admin_machines_dossiers.html', rows=_machines_overview_rows(), categories=HALL_CATEGORIES, models=HALL_MODELS,
+                               known_machine_types=_known_machine_types(), active_page='machines')
     machines = Machine.query.all()
     return render_template('machines.html', machines=machines, known_machine_types=_known_machine_types(), active_page='machines')
 
@@ -12593,6 +13313,7 @@ def delete_machine(id):
     """
     machine = Machine.query.get_or_404(id)
     try:
+        HallMachine.query.filter_by(machine_id=machine.id).update({'machine_id': None})      # the dossier stays, just unlinked
         Order.query.filter_by(machine_id=machine.id).update({'machine_id': None})
         DxfFile.query.filter_by(machine_id=machine.id).update({'machine_id': None})
         db.session.execute(
@@ -15075,6 +15796,7 @@ def admin_update_stack_position(stack_id):
         return jsonify({'error': 'Невалидна позиция.'}), 400
     stack.pos_x = max(0.0, min(100.0, pos_x))
     stack.pos_y = max(0.0, min(100.0, pos_y))
+    _hall_pull('battery', stack, 'room')
     db.session.commit()
     return jsonify({'pos_x': stack.pos_x, 'pos_y': stack.pos_y})
 
@@ -17809,6 +18531,7 @@ def admin_update_convector_position(conv_id):
 
     conv.pos_x = max(0.0, min(100.0, pos_x))
     conv.pos_y = max(0.0, min(100.0, pos_y))
+    _hall_pull('convector', conv, 'room')
     db.session.commit()
     return jsonify({'pos_x': conv.pos_x, 'pos_y': conv.pos_y})
 
@@ -17887,6 +18610,7 @@ def admin_update_panel_overview_position(panel_id):
 
     panel.overview_pos_x = max(0.0, min(100.0, pos_x))
     panel.overview_pos_y = max(0.0, min(100.0, pos_y))
+    _hall_pull('panel', panel, 'overview')
     db.session.commit()
     return jsonify({'pos_x': panel.overview_pos_x, 'pos_y': panel.overview_pos_y})
 
@@ -17905,6 +18629,7 @@ def admin_update_machine_position(machine_id):
 
     machine.pos_x = max(0.0, min(100.0, pos_x))
     machine.pos_y = max(0.0, min(100.0, pos_y))
+    _hall_pull('machine', machine, 'room')
     db.session.commit()
     return jsonify({'pos_x': machine.pos_x, 'pos_y': machine.pos_y})
 
@@ -17922,6 +18647,7 @@ def admin_update_panel_position(panel_id):
 
     panel.pos_x = max(0.0, min(100.0, pos_x))
     panel.pos_y = max(0.0, min(100.0, pos_y))
+    _hall_pull('panel', panel, 'room')
     db.session.commit()
     return jsonify({'pos_x': panel.pos_x, 'pos_y': panel.pos_y})
 

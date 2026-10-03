@@ -28,6 +28,10 @@
             height: 100%;
             pointer-events: none;
         }
+        .connection-line.hl { stroke: #ff3df2 !important; stroke-width: 4px !important; opacity: 1 !important; }
+        .connection-line.hl2 { stroke: #2cff9a !important; stroke-width: 4px !important; opacity: 1 !important; }
+        .connection-line.dim { opacity: 0.12 !important; }
+        .map-card.link-end, .panel-card.link-end { outline: 3px solid #ff3df2; outline-offset: 2px; }
         .connection-line {
             stroke: var(--border-color);
             stroke-width: 2;
@@ -897,6 +901,44 @@
         });
     }
 
+    // Pointing at a panel lights its own connections in magenta and the whole way up to the energy source (parent panels, the pole, PV strings) in green;
+    // everything else is dimmed and the panels at the other ends of the first connections are outlined.
+    function highlightLinks(panelId) {
+        var active = panelId != null, recs = [];
+        connections.forEach(function (c) { recs.push({line: c.line, from: c.parentId, to: c.childId}); });
+        Object.keys(poleNodes).forEach(function (k) { recs.push({line: poleNodes[k].line, from: null, to: k}); });
+        Object.keys(batteryNodes).forEach(function (k) { recs.push({line: batteryNodes[k].line, from: null, to: k}); });
+        Object.keys(pvNodes).forEach(function (k) { recs.push({line: pvNodes[k].line, from: null, to: k.slice(0, k.lastIndexOf('-'))}); });
+        PORT_PANEL_LINKS.forEach(function (l) { recs.push({line: l.line, from: null, to: null, ends: [l.panelId, l.targetPanelId]}); });
+        var up = [], seen = {}, frontier = [String(panelId)];
+        while (active && frontier.length) {
+            var next = [];
+            frontier.forEach(function (k) {
+                recs.forEach(function (r) {
+                    if (r.to != null && String(r.to) === k && up.indexOf(r) < 0) {
+                        up.push(r);
+                        if (r.from != null && !seen[r.from]) { seen[r.from] = 1; next.push(String(r.from)); }
+                    }
+                });
+            });
+            frontier = next;
+        }
+        document.querySelectorAll('.panel-card.link-end').forEach(function (c) { c.classList.remove('link-end'); });
+        recs.forEach(function (r) {
+            if (!r.line) return;
+            var ends = r.ends || [r.from, r.to];
+            var hit = active && ends.some(function (e) { return e != null && String(e) === String(panelId); });
+            var far = active && !hit && up.indexOf(r) >= 0;
+            r.line.classList.toggle('hl', hit);
+            r.line.classList.toggle('hl2', far);
+            r.line.classList.toggle('dim', active && !hit && !far);
+            if (hit) ends.forEach(function (id) {
+                var card = id != null && document.querySelector('.panel-card[data-id="' + id + '"]');
+                if (card && String(id) !== String(panelId)) card.classList.add('link-end');
+            });
+        });
+    }
+
     function redrawConnections() {
         connections.forEach(function (conn) {
             var from = cardCenter(conn.childId);
@@ -1070,9 +1112,9 @@
             window.location.href = '{{ url_for("admin_power") }}' + (host ? '?host=' + encodeURIComponent(host) : '');
         });
 
-        card.addEventListener('mouseenter', function (e) { showTooltip(card, 'panel', id, e); });
+        card.addEventListener('mouseenter', function (e) { showTooltip(card, 'panel', id, e); highlightLinks(id); });
         card.addEventListener('mousemove', function (e) { positionTooltip(e); });
-        card.addEventListener('mouseleave', hideTooltip);
+        card.addEventListener('mouseleave', function () { hideTooltip(); highlightLinks(null); });
 
         // Port badges (see PORT_DEFS/updatePortBadges above) - own tooltip
         // and click target, stopPropagation so hovering/clicking one

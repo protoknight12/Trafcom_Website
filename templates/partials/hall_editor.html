@@ -1,18 +1,12 @@
-<!DOCTYPE html>
-<html lang="{{ get_locale() }}">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    {% include 'partials/favicon.html' %}
-    <title>Хале 3D - редактор - Trafcom</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <style>
+{# The top-down hall editor, shown as the "План" tab of factory3d.html (admins only). Lists MACHINES/SHAPES/EQUIP come from that page. #}
+<style>
         .hl-layout { display: grid; grid-template-columns: 1fr 320px; gap: 20px; align-items: start; }
         .hl-panel { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 16px; }
         #hl-svg { width: 100%; background: var(--bg-input); border: 1px solid var(--border-color); border-radius: 4px; touch-action: none; display: block; }
         #hl-svg .grid { stroke: var(--border-color); stroke-width: 0.03; }
         #hl-svg .hall { fill: none; stroke: var(--text-muted); stroke-width: 0.1; stroke-dasharray: 0.4 0.3; }
-        #hl-svg .s { cursor: move; }
+        #hl-svg .s, #hl-svg .m, #hl-svg .q { cursor: pointer; }
+        #hl-svg .unlocked { cursor: move !important; stroke: #f59e0b !important; stroke-width: 0.18 !important; stroke-dasharray: 0.3 0.2 !important; }
         #hl-svg .s.wall { fill: #64748b; stroke: transparent; stroke-width: 0.6; }
         #hl-svg .s.door { fill: #f5b301; stroke: transparent; stroke-width: 0.6; }
         #hl-svg .s.window { fill: #9cc9ee; fill-opacity: 0.8; stroke: transparent; stroke-width: 0.5; }
@@ -20,8 +14,8 @@
         #hl-svg .s.stairs { fill: #c9b48c; stroke: #7c6a45; stroke-width: 0.04; }
         #hl-svg .s.block { fill: #b7bcc4; fill-opacity: 0.6; }
         #hl-svg .s.room { fill-opacity: 0.22; stroke: var(--text-muted); stroke-width: 0.06; stroke-dasharray: 0.3 0.2; }
-        #hl-svg .m { cursor: move; stroke: var(--text-main); stroke-width: 0.06; fill-opacity: 0.9; }
-        #hl-svg .q { cursor: move; stroke: var(--text-main); stroke-width: 0.06; }
+        #hl-svg .m { stroke: var(--text-main); stroke-width: 0.06; fill-opacity: 0.9; }
+        #hl-svg .q { stroke: var(--text-main); stroke-width: 0.06; }
         #hl-svg .sel { stroke: var(--accent-primary) !important; stroke-width: 0.2 !important; stroke-dasharray: none !important; }
         #hl-svg text { font-size: 0.9px; text-anchor: middle; dominant-baseline: middle; pointer-events: none; fill: #fff; font-weight: bold; }
         #hl-svg text.lbl { fill: var(--text-muted); font-weight: normal; font-size: 0.8px; }
@@ -30,18 +24,24 @@
             color: var(--text-main); padding: 6px 8px; border-radius: 4px; box-sizing: border-box; }
         .hl-tools { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
         #hl-svg .acc { fill: #ffffff; fill-opacity: 0.55; stroke: var(--text-muted); stroke-width: 0.05; stroke-dasharray: 0.2 0.15; pointer-events: none; }
+        #hl-lockstate { font-size: 0.85rem; margin-bottom: 4px; }
         .hl-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
         .hl-btns { display: flex; gap: 8px; margin-top: 14px; }
         .hl-add { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
         #hl-msg { min-height: 1.2em; margin-top: 8px; font-size: 0.85rem; }
         @media (max-width: 900px) { .hl-layout { grid-template-columns: 1fr; } }
-    </style>
-</head>
-<body>
-{% include 'partials/navbar.html' %}
-<main class="dashboard-container" style="margin-top: 20px; max-width: 1500px;">
-    <h1 style="margin-top:0">Хале 3D - редактор (изглед отгоре)</h1>
-    <p style="color: var(--text-muted)">Влачете машина, оборудване, стена, врата или помещение, за да ги преместите; размерите и връзките се задават вдясно.
+        #hl-svg.hide-wall .s.wall, #hl-svg.hide-wall .lk-wall, #hl-svg.hide-door .s.door, #hl-svg.hide-door .lk-door,
+        #hl-svg.hide-window .s.window, #hl-svg.hide-window .lk-window, #hl-svg.hide-room .s.room, #hl-svg.hide-room .lk-room,
+        #hl-svg.hide-fixture .s.fixture, #hl-svg.hide-fixture .lk-fixture, #hl-svg.hide-stairs .s.stairs, #hl-svg.hide-stairs .lk-stairs,
+        #hl-svg.hide-block .s.block, #hl-svg.hide-block .lk-block, #hl-svg.hide-machine .m, #hl-svg.hide-machine .acc, #hl-svg.hide-machine .mt,
+        #hl-svg .lnk { fill: none; stroke-width: 0.12; stroke-dasharray: 0.5 0.4; animation: lnkflow 1s linear infinite; pointer-events: none; }
+        #hl-svg .lnk.power { stroke: #ff9d2e; } #hl-svg .lnk.data { stroke: #38bdf8; }
+        #hl-svg .lnk.hl { stroke: #ff3df2 !important; stroke-width: 0.22; } #hl-svg .lnk.hl2 { stroke: #2cff9a !important; stroke-width: 0.22; } #hl-svg .lnk.dim { opacity: 0.12; }
+        @keyframes lnkflow { to { stroke-dashoffset: -0.9; } }
+        #hl-svg.hide-links_power .lnk.power, #hl-svg.hide-links_data .lnk.data { display: none; }
+        #hl-svg.hide-equip .q:not(.q-iot):not(.q-net), #hl-svg.hide-equip .qt:not(.qt-iot):not(.qt-net), #hl-svg.hide-iot .q-iot, #hl-svg.hide-iot .qt-iot, #hl-svg.hide-network .q-net, #hl-svg.hide-network .qt-net, #hl-svg.hide-mlabels .mt, #hl-svg.hide-labels .lbl { display: none; }
+</style>
+    <p style="color: var(--text-muted)">Всеки елемент е <b>заключен</b>, докато не натиснете „Отключи“; тогава се мести (влачене, стрелки, полетата) и „Запази и заключи“ го заключва отново. Влачете машина, оборудване, стена, врата или помещение, за да ги преместите; размерите и връзките се задават вдясно.
         <b>Разстояние от пода</b> е височината на долната им страна. <b>Помещение</b> е маркирана зона с височина на етаж и брой етажи;
         вързва се към помещение от „Карта на фабриката". <b>Инвертор / батериен блок / табло</b> се вързват към вече въведените такива.
         Показва се на клиентите в <a href="{{ url_for('factory3d') }}">Фабрика 3D</a>.</p>
@@ -61,6 +61,7 @@
         </div>
         <div class="hl-panel">
             <div id="hl-form" style="display:none">
+                <div id="hl-lockstate"></div>
                 <label>Име</label><input id="f-name">
                 <div id="g-machine">
                     <div class="hl-row">
@@ -71,7 +72,11 @@
                         <div><label>3D модел</label><select id="f-model"><option value="">- по вид -</option>{% for k, v in machine_models.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></div>
                         <div><label>Лице към</label><select id="f-rotation"><option value="0">напред (+Z)</option><option value="90">надясно (+X)</option><option value="180">назад (−Z)</option><option value="270">наляво (−X)</option></select></div>
                     </div>
-                    <label>Инвентар към машината (напр. прътоподавател), м</label>
+                    <label>Инвентар към машината (напр. прътоподавател)</label>
+                    <div class="hl-row">
+                        <div><label>Име</label><input id="f-acc_name" maxlength="100" placeholder="напр. Прътоподавател"></div>
+                        <div><label>Прикачен отстрани</label><select id="f-acc_side">{% for k, v in acc_sides.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></div>
+                    </div>
                     <div class="hl-row">
                         <div><label>Дължина</label><input id="f-acc_length" type="number" step="0.1" min="0" max="20"></div>
                         <div><label>Ширина</label><input id="f-acc_width" type="number" step="0.1" min="0.1" max="5"></div>
@@ -79,8 +84,10 @@
                     </div>
                     <label>Карта на машината</label>
                     <select id="f-card"><option value="">- без карта -</option>
-                        {% for c in cards %}<option value="{{ c.id }}">{{ c.title }} ({{ 'начална' if c.page == 'index' else 'услуги' }})</option>{% endfor %}
+                        {% for c in cards %}<option value="{{ c.id }}">{{ c.title }} ({{ 'начална' if c.page == 'index' else ('само в хале 3D' if c.page == 'hall' else 'услуги') }})</option>{% endfor %}
                     </select>
+                    <button class="btn" id="hl-cardsize" type="button" style="margin-top:6px">Габарити от картата</button>
+                    <a class="btn" id="hl-dossier" href="#" target="_blank" style="display:none;margin-top:6px">📁 Досие и файлове</a>
                 </div>
                 <div id="g-shape">
                     <label>Вид елемент</label>
@@ -115,7 +122,8 @@
                     <div><label>Разстояние от пода, м</label><input id="f-elevation" type="number" step="0.1" min="0" max="20"></div>
                 </div>
                 <div class="hl-btns">
-                    <button class="btn btn-primary" id="hl-save" type="button">Запази</button>
+                    <button class="btn" id="hl-unlock" type="button">🔓 Отключи</button>
+                    <button class="btn btn-primary" id="hl-save" type="button">Запази и заключи</button>
                     <button class="btn" id="hl-del" type="button" style="color:#ef4444">Изтрий</button>
                 </div>
             </div>
@@ -123,9 +131,15 @@
             <div id="hl-msg"></div>
             <div class="hl-add">
                 <button class="btn" data-add="machine" type="button">+ Машина</button>
+                <button class="btn" id="hl-syncmaps" type="button" title="Подравнява картите на помещенията и схемата на разпределението по плана на халето">Синхронизирай картите</button>
+                <button class="btn" id="hl-autoplace" type="button" title="Поставя на картата всички табла, конвектори, сензори, мрежови устройства, батерии и инвертори, които още не са на нея">Постави всички устройства</button>
+                <button class="btn" id="hl-renumber" type="button" title="Номерата стават 1, 2, 3 ... по текущия им ред">Преномерирай</button>
                 <button class="btn" data-add="inverter" type="button">+ Инвертор</button>
                 <button class="btn" data-add="battery" type="button">+ Батериен блок</button>
                 <button class="btn" data-add="panel" type="button">+ Ел. табло</button>
+                <button class="btn" data-add="convector" type="button">+ Конвектор</button>
+                <button class="btn" data-add="sensor" type="button">+ Сензор</button>
+                <button class="btn" data-add="network" type="button">+ Мрежово устройство</button>
                 <button class="btn" data-add="wall" type="button">+ Стена</button>
                 <button class="btn" data-add="door" type="button">+ Врата</button>
                 <button class="btn" data-add="room" type="button">+ Помещение</button>
@@ -135,16 +149,15 @@
             </div>
         </div>
     </div>
-</main>
-
 <script>
-const MACHINES = {{ machines|tojson }}.map(o => Object.assign(o, { _t: 'machine' }));
-const SHAPES = {{ shapes|tojson }}.map(o => Object.assign(o, { _t: 'shape' }));
-const EQUIP = {{ equipment|tojson }}.map(o => Object.assign(o, { _t: 'equip' }));
 const CHOICES = {{ equipment_choices|tojson }};
+MACHINES.forEach(o => o._t = 'machine');   // the lists themselves come from the page's data script
+SHAPES.forEach(o => o._t = 'shape');
+EQUIP.forEach(o => o._t = 'equip');
 const COLORS = { laser: '#e07a2f', mill: '#3b82f6', lathe: '#14b8a6', press: '#a855f7', util: '#94a3b8' };
-const EQ_COLORS = { inverter: '#facc15', battery: '#22c55e', panel: '#ef4444' };
-const EQ_ABBR = { inverter: 'И', battery: 'Б', panel: 'Т' };
+const EQ_COLORS = { inverter: '#facc15', battery: '#22c55e', panel: '#ef4444', convector: '#fb923c', sensor: '#2dd4bf', network: '#38bdf8' };
+const QK = k => k === 'convector' || k === 'sensor' ? ' q-iot' : k === 'network' ? ' q-net' : '';   // layer class: IoT / network devices hide separately
+const EQ_ABBR = { inverter: 'И', battery: 'Б', panel: 'Т', convector: 'К', sensor: 'С', network: 'М' };
 const ROOM_COLORS = ['#60a5fa', '#34d399', '#f472b6', '#fbbf24', '#a78bfa'];
 const svg = document.getElementById('hl-svg'), NS = 'http://www.w3.org/2000/svg';
 const $ = id => document.getElementById(id);
@@ -189,10 +202,14 @@ svg.addEventListener('pointerdown', e => {        // only reached from empty spa
 });
 $('snap').onchange = () => { step = Number($('snap').value); };
 
-// the accessory sticks out of the machine's local -X end, rear-flush; the machine is turned by `rotation` about its centre
+// the accessory is attached to one side of the machine (left/right rear-flush, front/back centred); the machine is turned by `rotation` about its centre
 function accessoryShape(m) {
     const th = (m.rotation || 0) * Math.PI / 180, [lw, ld] = (m.rotation || 0) % 180 ? [m.depth, m.width] : [m.width, m.depth];
-    const cx = m.x + m.width / 2, cz = m.z + m.depth / 2, ax0 = -lw / 2 - m.acc_length, ax1 = -lw / 2, az0 = -ld / 2, az1 = -ld / 2 + m.acc_width;
+    const cx = m.x + m.width / 2, cz = m.z + m.depth / 2, L = m.acc_length, A = m.acc_width;
+    const [ax0, ax1, az0, az1] = {
+        left: [-lw / 2 - L, -lw / 2, -ld / 2, -ld / 2 + A], right: [lw / 2, lw / 2 + L, -ld / 2, -ld / 2 + A],
+        back: [-A / 2, A / 2, -ld / 2 - L, -ld / 2], front: [-A / 2, A / 2, ld / 2, ld / 2 + L],
+    }[m.acc_side || 'left'];
     const world = ([lx, lz]) => [cx + lx * Math.cos(th) + lz * Math.sin(th), cz - lx * Math.sin(th) + lz * Math.cos(th)];
     const pts = [[ax0, az0], [ax1, az0], [ax1, az1], [ax0, az1]].map(world).map(p => p.join(',')).join(' ');
     return el('polygon', { class: 'acc', points: pts });
@@ -203,36 +220,46 @@ function draw() {
     svg.appendChild(el('rect', { class: 'hall', x: 0, y: 0, width: 56, height: 12 }));
     const order = { room: 0, block: 1, wall: 2, door: 3 };
     [...SHAPES].sort((a, b) => order[a.kind] - order[b.kind]).forEach(s => {
-        const attrs = { class: 's ' + s.kind + (s === sel ? ' sel' : ''), x: s.x, y: s.z, width: s.width, height: s.depth };
+        const attrs = { class: 's ' + s.kind + (s === sel ? ' sel' : '') + (s._unlocked ? ' unlocked' : ''), x: s.x, y: s.z, width: s.width, height: s.depth };
         if (s.kind === 'room') attrs.fill = ROOM_COLORS[SHAPES.filter(o => o.kind === 'room').indexOf(s) % ROOM_COLORS.length];
         const r = el('rect', attrs);
         r.addEventListener('pointerdown', e => startDrag(e, s));
         svg.appendChild(r);
         if (s.kind !== 'wall' && s.label) {
-            const t = el('text', { class: 'lbl', x: s.x + s.width / 2, y: s.z + (s.kind === 'door' ? -0.8 : s.depth / 2) });
+            const t = el('text', { class: 'lbl lk-' + s.kind, x: s.x + s.width / 2, y: s.z + (s.kind === 'door' ? -0.8 : s.depth / 2) });
             t.textContent = s.label + (s.kind === 'room' && s.floors > 1 ? ' (' + s.floors + ' ет.)' : ''); svg.appendChild(t);
         }
     });
+    const selKey = sel && sel._t !== 'shape' ? hallKey(sel) : null, selUp = selKey ? upstream(selKey) : null;
+    hallLinks().forEach((l, i) => svg.appendChild(el('polyline', { class: 'lnk ' + l.kind + (selKey ? (touches(l, selKey) ? ' hl' : selUp.has(l.src) ? ' hl2' : ' dim') : ''), points: hallRoute(l.A, l.B, 0.3 + (i % 6) * 0.07).map(q => q.join(',')).join(' ') })));   // same wall route as in 3D   // animated connections
     MACHINES.forEach(m => {
         if (m.acc_length > 0) svg.appendChild(accessoryShape(m));
-        const r = el('rect', { class: 'm' + (m === sel ? ' sel' : ''), x: m.x, y: m.z, width: m.width, height: m.depth, fill: COLORS[m.category] || COLORS.util });
+        const r = el('rect', { class: 'm' + (m === sel ? ' sel' : '') + (m._unlocked ? ' unlocked' : ''), x: m.x, y: m.z, width: m.width, height: m.depth, fill: COLORS[m.category] || COLORS.util });
         r.addEventListener('pointerdown', e => startDrag(e, m));
         svg.appendChild(r);
-        const t = el('text', { x: m.x + m.width / 2, y: m.z + m.depth / 2 }); t.textContent = m.no ?? '';
+        const t = el('text', { class: 'mt', x: m.x + m.width / 2, y: m.z + m.depth / 2 }); t.textContent = m.no ?? '';
         svg.appendChild(t);
     });
     EQUIP.forEach(q => {      // small boxes - drawn at least 0.8 m so they stay grabbable
         const w = Math.max(q.width, 0.8), d = Math.max(q.depth, 0.8);
-        const r = el('rect', { class: 'q' + (q === sel ? ' sel' : ''), x: q.x, y: q.z, width: w, height: d, fill: EQ_COLORS[q.kind] });
+        const r = el('rect', { class: 'q' + QK(q.kind) + (q === sel ? ' sel' : '') + (q._unlocked ? ' unlocked' : ''), x: q.x, y: q.z, width: w, height: d, fill: EQ_COLORS[q.kind] });
         r.addEventListener('pointerdown', e => startDrag(e, q));
         svg.appendChild(r);
-        const t = el('text', { x: q.x + w / 2, y: q.z + d / 2 }); t.style.fill = '#000'; t.textContent = EQ_ABBR[q.kind]; svg.appendChild(t);
+        const t = el('text', { class: 'qt' + QK(q.kind).replace('q-', 'qt-'), x: q.x + w / 2, y: q.z + d / 2 }); t.style.fill = '#000'; t.textContent = EQ_ABBR[q.kind]; svg.appendChild(t);
     });
 }
 
 function fillRef(kind, value) {
     $('f-ref').innerHTML = '<option value="">- без връзка -</option>' + (CHOICES[kind] || []).map(c => `<option value="${c.id}">${c.label.replace(/</g, '&lt;')}</option>`).join('');
     $('f-ref').value = value ?? '';
+}
+// every object is locked until "Отключи"; a locked object can't be dragged, nudged or edited. "Запази и заключи" locks it again.
+function syncLock() {
+    const locked = !!sel && !sel._unlocked;
+    document.querySelectorAll('#hl-form input, #hl-form select').forEach(e => e.disabled = locked);
+    $('hl-save').style.display = locked ? 'none' : '';
+    $('hl-unlock').style.display = locked ? '' : 'none';
+    $('hl-lockstate').textContent = locked ? '🔒 Заключен' : '🔓 Отключен - може да се мести';
 }
 function select(o) {
     sel = o;
@@ -242,11 +269,14 @@ function select(o) {
         $('g-shape').style.display = o._t === 'shape' ? '' : 'none';
         $('g-equip').style.display = o._t === 'equip' ? '' : 'none';
         COMMON.forEach(f => $('f-' + f).value = o[f] ?? '');
-        if (o._t === 'machine') { $('f-no').value = o.no ?? ''; $('f-category').value = o.category; $('f-card').value = o.card_id ?? ''; $('f-model').value = o.model ?? ''; $('f-rotation').value = o.rotation ?? 0; ['acc_length', 'acc_width', 'acc_height'].forEach(k => $('f-' + k).value = o[k] ?? ''); }
+        if (o._t === 'machine') { $('f-no').value = o.no ?? ''; $('f-category').value = o.category; $('f-card').value = o.card_id ?? ''; $('f-model').value = o.model ?? ''; $('f-rotation').value = o.rotation ?? 0; ['acc_length', 'acc_width', 'acc_height'].forEach(k => $('f-' + k).value = o[k] ?? ''); $('f-acc_name').value = o.acc_name ?? ''; $('f-acc_side').value = o.acc_side ?? 'left'; }
+        $('hl-dossier').style.display = o._t === 'machine' && o.id ? '' : 'none';
+        if (o._t === 'machine' && o.id) $('hl-dossier').href = '/admin/hall/' + o.id + '/dossier';
         else if (o._t === 'shape') { $('f-kind').value = o.kind; $('f-room').value = o.room_id ?? ''; $('f-floors').value = o.floors ?? 1; $('f-fmodel').value = o.model ?? ''; $('f-frot').value = o.rotation ?? 0; }
         else { $('f-ekind').value = o.kind; fillRef(o.kind, o.ref_id); $('f-erot').value = o.rotation ?? 0; }
         syncKind();
     }
+    syncLock();
     draw();
 }
 function syncKind() {
@@ -263,6 +293,7 @@ $('f-ekind').onchange = () => fillRef($('f-ekind').value, null);
 function startDrag(e, o) {
     e.preventDefault(); e.stopPropagation();
     select(o);
+    if (!o._unlocked) return;            // locked: select only
     const p = pt(e), off = [p.x - o.x, p.y - o.z];
     let moved = false;
     const move = ev => {
@@ -277,7 +308,7 @@ function startDrag(e, o) {
 
 let nudgeTimer = null;
 addEventListener('keydown', e => {
-    if (!sel || !e.key.startsWith('Arrow') || /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    if (!sel || !sel._unlocked || !e.key.startsWith('Arrow') || /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
     e.preventDefault();
     const d = step * (e.shiftKey ? 10 : 1);
     const nx = sel.x + (e.key === 'ArrowRight' ? d : e.key === 'ArrowLeft' ? -d : 0), nz = sel.z + (e.key === 'ArrowDown' ? d : e.key === 'ArrowUp' ? -d : 0);
@@ -291,10 +322,12 @@ async function post(url, body) {
     const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': window.CSRF_TOKEN }, body: JSON.stringify(body || {}) });
     return [r.ok, await r.json().catch(() => ({}))];
 }
-async function save(o) {
+async function save(o, lockAfter = false) {
     const [ok, d] = await post(URLS[o._t][0], o);
     if (!ok) return msg(d.error || 'Грешка при запис.', true);
-    Object.assign(o, d); msg('Запазено.'); draw();
+    window.hallDirty = true; Object.assign(o, d); msg(lockAfter ? 'Запазено и заключено.' : 'Запазено.');
+    if (lockAfter) { o._unlocked = false; if (sel === o) syncLock(); }
+    draw();
 }
 $('hl-save').onclick = () => {
     if (!sel) return;
@@ -304,18 +337,29 @@ $('hl-save').onclick = () => {
         sel.category = $('f-category').value; sel.card_id = $('f-card').value ? Number($('f-card').value) : null;
         sel.model = $('f-model').value || null; sel.rotation = Number($('f-rotation').value);
         ['acc_length', 'acc_width', 'acc_height'].forEach(k => sel[k] = Number($('f-' + k).value) || 0);
+        sel.acc_name = $('f-acc_name').value.trim() || null; sel.acc_side = $('f-acc_side').value;
     } else if (sel._t === 'shape') {
         sel.kind = $('f-kind').value; sel.room_id = $('f-room').value ? Number($('f-room').value) : null; sel.floors = Number($('f-floors').value) || 1;
         sel.model = $('f-fmodel').value || null; sel.rotation = Number($('f-frot').value);
     } else {
         sel.kind = $('f-ekind').value; sel.ref_id = $('f-ref').value ? Number($('f-ref').value) : null; sel.rotation = Number($('f-erot').value);
     }
-    save(sel);
+    save(sel, true);
 };
+$('hl-cardsize').onclick = async () => {
+    if (!sel || sel._t !== 'machine' || !sel.id) return msg('Първо запазете машината.', true);
+    const [ok, d] = await post('/admin/hall/' + sel.id + '/apply-card-size');
+    if (!ok) return msg(d.error || 'Грешка.', true);
+    Object.assign(sel, d); select(sel); msg('Габаритите са взети от картата.');
+};
+$('hl-unlock').onclick = () => { if (sel) { sel._unlocked = true; syncLock(); draw(); } };
 $('hl-del').onclick = async () => {
     if (!sel || !confirm('Да се изтрие ли избраният елемент?')) return;
-    if (sel.id) await post(URLS[sel._t][1] + sel.id + '/delete');
-    LISTS[sel._t].splice(LISTS[sel._t].indexOf(sel), 1);
+    if (sel.id) {
+        const [ok, d] = await post(URLS[sel._t][1] + sel.id + '/delete');
+        if (!ok) return msg(d.error || 'Грешка при изтриване.', true);
+    }
+    window.hallDirty = true; LISTS[sel._t].splice(LISTS[sel._t].indexOf(sel), 1);
     select(null); msg('Изтрито.');
 };
 const eq = (kind, name, w, d, h, elev) => ({ _t: 'equip', id: null, kind, ref_id: null, name, x: 2, z: 2, width: w, depth: d, height: h, elevation: elev, label: name });
@@ -324,6 +368,9 @@ const NEW = {
     inverter: eq('inverter', '', 0.6, 0.3, 0.7, 1.2),
     battery: eq('battery', '', 0.6, 0.6, 1.8, 0),
     panel: eq('panel', '', 0.8, 0.25, 1.2, 1.4),
+    convector: eq('convector', '', 1.0, 0.12, 0.45, 0.2),
+    sensor: eq('sensor', '', 0.08, 0.03, 0.08, 1.6),
+    network: eq('network', '', 0.45, 0.25, 0.1, 2.0),
     wall: { _t: 'shape', id: null, kind: 'wall', name: '', x: 2, z: 2, width: 4, depth: 0.4, height: 5, elevation: 0, floors: 1, room_id: null, label: '' },
     door: { _t: 'shape', id: null, kind: 'door', name: 'Врата', x: 2, z: 2, width: 4, depth: 0.15, height: 4, elevation: 0, floors: 1, room_id: null, label: 'Врата' },
     window: { _t: 'shape', id: null, kind: 'window', name: '', x: 2, z: 2, width: 3, depth: 0.3, height: 1.4, elevation: 3.3, floors: 1, model: null, rotation: 0, room_id: null, label: '' },
@@ -333,9 +380,25 @@ const NEW = {
 };
 document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => {
     const o = Object.assign({}, NEW[b.dataset.add]);
+    if (o._t === 'machine') o.no = Math.max(0, ...MACHINES.map(m => m.no || 0)) + 1;   // next number in sequence, editable in the form
+    o._unlocked = true;                  // a new object is placed first, then saved (and locked)
     LISTS[o._t].push(o); select(o);   // saved on first "Запази"/drag
 });
+$('hl-syncmaps').onclick = async () => { const [ok, d] = await post('/admin/hall/sync-maps'); msg(ok ? 'Синхронизирани: ' + d.synced + ' обекта · нови помещения ' + d.rooms + ' · нови машини ' + d.machines + ' · нови табла ' + d.panels + '.' : 'Грешка.', !ok); };
+$('hl-autoplace').onclick = async () => {
+    if (!confirm('Да се поставят ли на картата всички устройства, които още не са на нея? Подредете ги после с влачене.')) return;
+    const [ok, d] = await post('/admin/hall/auto-place');
+    if (!ok) return msg('Грешка.', true);
+    window.hallDirty = true; msg('Поставени: ' + d.created + '. Презареждане...'); setTimeout(() => { history.replaceState(null, '', '#plan'); location.reload(); }, 600);
+};
+$('hl-renumber').onclick = async () => {
+    if (!confirm('Да се преномерират ли всички машини 1, 2, 3 ... по текущия им ред?')) return;
+    const [ok, map] = await post('{{ url_for("admin_hall_renumber") }}');
+    if (!ok) return msg('Грешка при преномериране.', true);
+    window.hallDirty = true; MACHINES.forEach(m => { if (m.id && map[m.id] != null) m.no = map[m.id]; });
+    if (sel && sel._t === 'machine') $('f-no').value = sel.no ?? '';
+    msg('Преномерирани.'); draw();
+};
+window.hallEdit = { pick(t, id) { const o = LISTS[t].find(x => x.id === id); if (o) select(o); } };   // used by the 3D info panel's "Редактирай"
 draw();
 </script>
-</body>
-</html>

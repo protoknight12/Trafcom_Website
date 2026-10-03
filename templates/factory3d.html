@@ -22,6 +22,23 @@
         #f3-hint { position: absolute; right: 12px; bottom: 10px; font-size: 0.75rem; color: var(--text-muted); }
         .f3-legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; font-size: 0.85rem; color: var(--text-muted); }
         .f3-legend i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+        [hidden] { display: none !important; }
+        .f3-layers { position: relative; }
+        .f3-layers summary { list-style: none; display: inline-block; }
+        #f3-layers { position: absolute; z-index: 20; top: 38px; left: 0; width: 640px; max-width: 92vw; background: var(--bg-surface); border: 1px solid var(--border-color);
+                     border-radius: 6px; padding: 12px 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px 18px; }
+        #f3-layers h4 { margin: 0 0 4px; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); }
+        #f3-layers label { display: block; font-size: 0.9rem; cursor: pointer; padding: 1px 0; }
+        #f3-layers .presets { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; }
+        #f3-roofframe { width: 100%; height: 86vh; border: 1px solid var(--border-color); border-radius: var(--border-radius-md); background: var(--bg-surface); }
+        #f3-sunbar { position: absolute; left: 12px; top: 12px; z-index: 5; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 6px;
+                     padding: 8px 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 0.85rem; max-width: 70%; }
+        #f3-solar { position: absolute; right: 12px; top: 12px; z-index: 5; width: 300px; max-width: 46%; max-height: 80%; overflow-y: auto; background: var(--bg-surface);
+                    border: 1px solid var(--border-color); border-radius: 6px; padding: 10px 14px; font-size: 0.85rem; }
+        #f3-solar h4 { margin: 0 0 6px; } #f3-solar .sl { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border-color); }
+        #f3-solar i { display: inline-block; width: 10px; height: 10px; margin-right: 4px; border-radius: 2px; }
+        #f3-info .act { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+        #f3-info hr { border: 0; border-top: 1px solid var(--border-color); margin: 8px 0; }
     </style>
     <script type="importmap">
     { "imports": {
@@ -31,8 +48,63 @@
 </head>
 <body>
 {% include 'partials/navbar.html' %}
+<script>
+const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
+const MACHINES = {{ machines|tojson }};   // HallMachine rows (+ linked machine card; admins also get .admin = panel/meters/connections), edited on the "План" tab
+const EQUIP = {{ equipment|tojson }};   // HallEquipment: inverter / battery / panel, elevation = bottom above the floor
+const SHAPES = {{ shapes|tojson }};   // HallShape rows: wall / door / room / block ...
+const SOLAR = {{ solar|tojson }};
+const LINKS = {{ links|tojson }};   // animated connections (admins): power = panels/inverters/batteries/machines, data = network
+const METERS = {{ (meters if is_admin else [])|tojson }};   // every Shelly/Modbus meter that can be attached to a machine
+function hallEnd(r) {               // map end of a link -> centre of the placed machine / equipment, or null when it is not on the map
+    const o = r[0] === 'machine' ? MACHINES.find(m => m.id === r[1]) : EQUIP.find(e => e.kind === r[0] && e.ref_id === r[1]);
+    return o && { x: o.x + o.width / 2, z: o.z + o.depth / 2, top: (o.elevation || 0) + o.height };
+}
+const HALL_W = 56, HALL_D = 12;
+const hallKey = o => o.equip || o._t === 'equip' ? [o.kind, o.ref_id] : ['machine', o.id];     // link end key of a machine / placed equipment
+// energy chain: from an object up through the links that supply it (power links run supplier a -> consumer b) to the source;
+// first = links touching the object, rest = everything further up (grid / inverter / parent panels)
+function upstream(key) {
+    const rest = new Set(), seen = new Set([key.join(':')]);
+    let frontier = [key];
+    while (frontier.length) {
+        const next = [];
+        frontier.forEach(k => LINKS.forEach(l => { if (l.kind === 'power' && l.b[0] === k[0] && l.b[1] === k[1]) { rest.add(l); const s = l.a.join(':'); if (!seen.has(s)) { seen.add(s); next.push(l.a); } } }));
+        frontier = next;
+    }
+    return rest;
+}
+const touches = (l, k) => !!k && [l.a, l.b].some(r => r[0] === k[0] && r[1] === k[1]);
+// Cable route between two placed objects: from A to the nearest wall, along the walls (the shorter way round the hall, inset `ins` m so parallel runs
+// do not overlap) and from the wall to B. Returns [[x, z], ...]; 3D lifts it to ceiling height, the plan draws it flat.
+function hallRoute(A, B, ins = 0.3) {
+    const Wd = HALL_W - 2 * ins, Dd = HALL_D - 2 * ins, Lp = 2 * (Wd + Dd), cl = (v, a, b) => Math.max(a, Math.min(b, v));
+    const near = p => {                                     // nearest wall point and its position t along the perimeter (clockwise from the back-left corner)
+        const dl = p.x - ins, dr = HALL_W - ins - p.x, dt = p.z - ins, db = HALL_D - ins - p.z, m = Math.min(dl, dr, dt, db), x = cl(p.x, ins, HALL_W - ins), z = cl(p.z, ins, HALL_D - ins);
+        return m === dt ? { pt: [x, ins], t: x - ins } : m === dr ? { pt: [HALL_W - ins, z], t: Wd + z - ins }
+             : m === db ? { pt: [x, HALL_D - ins], t: Wd + Dd + HALL_W - ins - x } : { pt: [ins, z], t: 2 * Wd + Dd + HALL_D - ins - z };
+    };
+    const at = t => { t = (t % Lp + Lp) % Lp; return t < Wd ? [ins + t, ins] : t < Wd + Dd ? [HALL_W - ins, ins + t - Wd] : t < 2 * Wd + Dd ? [HALL_W - ins - (t - Wd - Dd), HALL_D - ins] : [ins, HALL_D - ins - (t - 2 * Wd - Dd)]; };
+    const a = near(A), b = near(B), f = (b.t - a.t + Lp) % Lp, fwd = f <= Lp / 2, len = fwd ? f : Lp - f;
+    const mid = [0, Wd, Wd + Dd, 2 * Wd + Dd].map(c => ({ c, d: fwd ? (c - a.t + Lp) % Lp : (a.t - c + Lp) % Lp })).filter(o => o.d > 0 && o.d < len).sort((p, q) => p.d - q.d).map(o => at(o.c));
+    return [[A.x, A.z], a.pt, ...mid, b.pt, [B.x, B.z]];
+}
+const hallLinks = () => LINKS.map(l => Object.assign({ A: hallEnd(l.a), B: hallEnd(l.b), src: l }, l)).filter(l => l.A && l.B);
+</script>
 <main class="dashboard-container" style="margin-top: 20px; max-width: 1400px;">
     <h1 style="margin-top:0">{{ _('Фабрика 3D') }}</h1>
+    <div class="f3-bar" id="f3-tabs">
+        {% if is_admin %}
+        <div class="grp">
+            <button class="f3-btn active" data-m="3d">{{ _('3D карта') }}</button>
+            <button class="f3-btn" data-m="plan">{{ _('План (редакция)') }}</button>
+            <button class="f3-btn" data-m="roof">{{ _('Покрив и панели') }}</button>
+            <button class="f3-btn" data-m="devices">{{ _('Устройства и схеми') }}</button>
+        </div>
+        {% endif %}
+        <details class="f3-layers" id="f3-layerwrap"><summary class="f3-btn">{{ _('Слоеве: какво да се вижда') }}</summary><div id="f3-layers"></div></details>
+    </div>
+    <div id="mode-3d">
     <div class="f3-bar">
         <span class="sep" style="margin-left:0">{{ _('Изглед') }}</span>
         <div class="grp" id="f3-views">
@@ -43,18 +115,15 @@
         </div>
         <span class="sep">{{ _('Зона') }}</span>
         <div class="grp" id="f3-rooms"></div>
-        <span class="sep">{{ _('Стени') }}</span>
-        <div class="grp"><button class="f3-btn active" id="f3-walls">{{ _('Прозрачни') }}</button></div>
-        <span class="sep">{{ _('Покрив') }}</span>
-        <div class="grp"><button class="f3-btn" id="f3-roof">{{ _('Скрит') }}</button></div>
-        <span class="sep">{{ _('Машини: номера и имена') }}</span>
-        <div class="grp"><button class="f3-btn active" id="f3-mlabels">{{ _('Показани') }}</button></div>
-        <span class="sep">{{ _('Други надписи') }}</span>
-        <div class="grp"><button class="f3-btn active" id="f3-labels">{{ _('Показани') }}</button></div>
-        <span class="sep">{{ _('Соларни панели') }}</span>
-        <div class="grp"><button class="f3-btn" id="f3-solar">{{ _('Скрити') }}</button></div>
     </div>
     <div id="f3-wrap">
+        <div id="f3-sunbar" hidden>
+            <b>☀ {{ _('Слънце') }}</b>
+            <input type="range" id="f3-sunmin" min="0" max="1439" step="5" style="width:220px">
+            <span id="f3-suntime"></span><span id="f3-sunpos" style="color:var(--text-muted)"></span>
+            <button class="f3-btn" id="f3-sunnow" type="button">{{ _('Сега') }}</button>
+        </div>
+        <div id="f3-solar" hidden></div>
         <div id="f3-info"></div>
         <div id="f3-hint">{{ _('Влачене - въртене · колело - мащаб · десен бутон - местене · клик върху машина - детайли') }}</div>
     </div>
@@ -68,6 +137,22 @@
         <span><i style="background:#22c55e"></i>{{ _('Батериен блок') }}</span>
         <span><i style="background:#ef4444"></i>{{ _('Ел. табло') }}</span>
     </div>
+    </div>
+    {% if is_admin %}
+    <div id="mode-plan" hidden>{% include 'partials/hall_editor.html' %}</div>
+    <div id="mode-devices" hidden>
+        <div class="f3-bar" id="f3-devnav">
+            {% for label, url in [(_('Схема на разпределението'), url_for('admin_factory_map_overview')), (_('Карти на помещенията'), url_for('admin_factory_map')),
+                                  (_('Сгради и помещения'), url_for('admin_buildings')), (_('Ел. табла'), url_for('admin_panels')), (_('Конвектори'), url_for('admin_convectors')),
+                                  (_('Температурни сензори'), url_for('admin_temperature_sensors')), (_('Измерватели и консумация'), url_for('admin_power')),
+                                  (_('Мрежа'), url_for('admin_network')), (_('Батерийно стопанство'), url_for('admin_battery_cabinets')), (_('Машини и досиета'), url_for('list_machines'))] %}
+            <button class="f3-btn" data-url="{{ url }}">{{ label }}</button>
+            {% endfor %}
+        </div>
+        <iframe id="f3-devframe" style="width:100%;height:80vh;border:1px solid var(--border-color);border-radius:var(--border-radius-md);background:var(--bg-surface)" title="{{ _('Устройства и схеми') }}"></iframe>
+    </div>
+    <div id="mode-roof" hidden><iframe id="f3-roofframe" data-src="{{ url_for('admin_solar_roof') }}" title="{{ _('Покрив и соларни панели') }}"></iframe></div>
+    {% endif %}
 </main>
 
 <script type="module">
@@ -75,16 +160,12 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { buildMachine, buildAccessory, buildEquipment, buildFixture, makeTextures } from "{{ url_for('static', filename='js/hall_models.js') }}";
 
-const MACHINES = {{ machines|tojson }};
-const EQUIP = {{ equipment|tojson }};   // HallEquipment: inverter / battery / panel, elevation = bottom above the floor
-const SOLAR = {{ solar|tojson }};   // {l, w (m), slopes: [[[row, col], ...], ...]} from SolarPanel   // HallMachine rows (+ linked machine card), edited on /admin/hall
 const CAT = { laser: [0xe07a2f, "{{ _('Лазер') }}"], mill: [0x3b82f6, "{{ _('Фрезов център') }}"], lathe: [0x14b8a6, "{{ _('Струг') }}"],
               press: [0xa855f7, "{{ _('Абкант') }}"], util: [0x94a3b8, "{{ _('Друго') }}"] };
 
 // ---- floor plan, metres: X along the hall (axis 1 -> 15), Z from the back wall (axis Б) to the front (axis А) ----
 // Traced from Hale_Teteven технология-Model.pdf; the red dashed (non-existent) items are left out.
 const W = 56, D = 12, H = 5;
-const SHAPES = {{ shapes|tojson }};   // HallShape rows: wall / door / room / block, edited on /admin/hall
 
 const dark = matchMedia('(prefers-color-scheme: dark)').matches;
 const wrap = document.getElementById('f3-wrap');
@@ -99,24 +180,29 @@ wrap.prepend(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.maxPolarAngle = Math.PI / 2 - 0.02;
-scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.1));
+const hemi = new THREE.HemisphereLight(0xffffff, 0x445566, 1.1);
+scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffffff, 1.2);
 sun.position.set(48, 50, 36);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
-Object.assign(sun.shadow.camera, { left: -40, right: 40, top: 22, bottom: -22, near: 1, far: 160 });
+Object.assign(sun.shadow.camera, { left: -48, right: 48, top: 30, bottom: -30, near: 1, far: 260 });
 sun.target.position.set(28, 0, 6);
 scene.add(sun, sun.target);
 
+let tgt = scene;                           // layer group the next objects go into
+const LAYER = {};                          // key -> THREE.Group, toggled from the "Слоеве" panel (and the plan's SVG classes)
+function layer(k) { if (!LAYER[k]) { LAYER[k] = new THREE.Group(); scene.add(LAYER[k]); } return LAYER[k]; }
 function box(x0, x1, z0, z1, y0, y1, mat) {
     const m = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0), mat);
     m.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
-    scene.add(m);
+    tgt.add(m);
     return m;
 }
 const labels = new THREE.Group();          // rooms / doors / props / equipment captions
 const machineLabels = new THREE.Group();   // machine numbers + names, hidden separately
 scene.add(labels, machineLabels);
+LAYER.labels = labels; LAYER.mlabels = machineLabels;
 function label(text, x, y, z, size, target = labels) {
     const c = document.createElement('canvas'); c.width = 768; c.height = 96;
     const g = c.getContext('2d');
@@ -130,12 +216,12 @@ function label(text, x, y, z, size, target = labels) {
 
 // footprint helpers: a model is built for its local (w, d) and turned about Y so the world footprint stays (width, depth)
 const dims = (w, d, rot) => ((rot || 0) % 180 ? [d, w] : [w, d]);
-const pickables = [];
+const pickables = [], OBJ = {};            // OBJ: 'machine:<id>' / '<kind>:<ref_id>' -> its THREE group
 function place(group, item, pickItem) {
     group.position.set(item.x + item.width / 2, item.elevation || 0, item.z + item.depth / 2);
     group.rotation.y = (item.rotation || 0) * Math.PI / 180;
     group.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; if (pickItem) { o.userData.item = pickItem; o.userData.group = group; pickables.push(o); } } });
-    scene.add(group);
+    tgt.add(group);
     return group;
 }
 
@@ -159,10 +245,11 @@ const stairMat = new THREE.MeshStandardMaterial({ color: dark ? 0x9aa4b2 : 0xc9b
 const ROOM_COLORS = [0x60a5fa, 0x34d399, 0xf472b6, 0xfbbf24, 0xa78bfa];
 let roomNo = 0;
 SHAPES.forEach(s => {
+    tgt = layer(s.kind);
     const x1 = s.x + s.width, z1 = s.z + s.depth, cx = s.x + s.width / 2, cz = s.z + s.depth / 2;
     const y0 = s.elevation || 0, y1 = y0 + s.height;
     if (s.kind === 'wall') box(s.x, x1, s.z, z1, y0, y1, wallMaterial(Math.max(s.width, s.depth)));
-    else if (s.kind === 'window') { const m = box(s.x, x1, s.z, z1, y0, y1, glassMat); const e = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry), new THREE.LineBasicMaterial({ color: 0x5a6470 })); e.position.copy(m.position); scene.add(e); }
+    else if (s.kind === 'window') { const m = box(s.x, x1, s.z, z1, y0, y1, glassMat); const e = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry), new THREE.LineBasicMaterial({ color: 0x5a6470 })); e.position.copy(m.position); tgt.add(e); }
     else if (s.kind === 'door') { box(s.x, x1, s.z, z1, y0, y1, doorMat); if (s.label) label(s.label, cx, y1 + 0.7, z1 + 0.5, 1.1); }
     else if (s.kind === 'fixture') {
         if (s.model) { const [lw, ld] = dims(s.width, s.depth, s.rotation); place(buildFixture(s.model, lw, ld, s.height), s, null); }
@@ -181,11 +268,12 @@ SHAPES.forEach(s => {
         for (let i = 0; i < n; i++) box(s.x, x1, s.z, z1, y0 + i * fh, y0 + i * fh + 0.05, mat);
         if (n > 1 || y0 > 0) {
             const edges = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(s.width, n * fh, s.depth)), new THREE.LineBasicMaterial({ color: col }));
-            edges.position.set(cx, y0 + n * fh / 2, cz); scene.add(edges);
+            edges.position.set(cx, y0 + n * fh / 2, cz); tgt.add(edges);
         }
         if (s.label) label(s.label + (n > 1 ? ' (' + n + ' ' + "{{ _('етажа') }}" + ')' : ''), cx, y0 + 0.6, cz, Math.max(0.6, Math.min(1.1, Math.min(s.width, s.depth) * 0.4)));
     }
 });
+tgt = scene;
 
 // roof: gable of sandwich panels running down the slope (ridge along X at mid-depth, eaves at wall height H)
 const roof = new THREE.Group();
@@ -221,14 +309,17 @@ const RISE = 1.2, half = D / 2, run = Math.hypot(half, RISE), tilt = Math.atan2(
     const cTex = TEX.ceiling.clone(); cTex.repeat.set((W - 0.6) / 2.4, (D - 0.6) / 2.4); cTex.needsUpdate = true;
     const ceil = new THREE.Mesh(new THREE.PlaneGeometry(W - 0.6, D - 0.6), new THREE.MeshBasicMaterial({ map: cTex }));
     ceil.rotation.x = Math.PI / 2; ceil.position.set(W / 2, 4.6, D / 2);
-    roof.add(ceil);
+    layer('ceiling').add(ceil);
 }
+tgt = layer('ceiling');
 box(0.3, W - 0.3, 0.3, 0.45, 4.1, 4.3, new THREE.MeshStandardMaterial({ color: 0x15171b }));
-scene.add(roof);
+tgt = scene;
+LAYER.roof = roof; scene.add(roof);
 
 // solar modules (SolarPanel rows from /admin/solar-roof): one slope per Solis inverter, row 1 nearest the ridge.
 // Which inverter sits on which slope is not stored anywhere - first inverter = back slope, second = front.
 const solar = new THREE.Group();
+const SOLARMESH = [];
 {
     const L = SOLAR.l, PWID = SOLAR.w, G = 0.03;
     const geo = new THREE.BoxGeometry(L - G, 0.06, PWID - G);
@@ -238,41 +329,112 @@ const solar = new THREE.Group();
         const back = i === 0, slope = new THREE.Group();
         slope.position.set(W / 2, H + RISE / 2 + 0.05, half + (back ? -1 : 1) * half / 2);
         slope.rotation.x = (back ? -1 : 1) * tilt;
-        panels.forEach(([row, col]) => {
+        panels.forEach(([row, col], pi) => {
             const d = 0.3 + (row - 0.5) * PWID;                       // distance from the ridge along the slope
             const m = new THREE.Mesh(geo, cells);
             m.position.set(1.0 + (col - 0.5) * L - W / 2, 0.16, back ? run / 2 - d : -run / 2 + d);
             const f = new THREE.Mesh(new THREE.BoxGeometry(L, 0.04, PWID), frame);
             f.position.set(m.position.x, 0.13, m.position.z);
+            m.castShadow = f.castShadow = true;
+            m.userData.item = { solarPanel: true, slope: i, row, col, string: ((SOLAR.strings || [])[i] || [])[pi] ?? null }; m.userData.group = m;
+            SOLARMESH.push(m); pickables.push(m);
             slope.add(f, m);
         });
         solar.add(slope);
     });
 }
-scene.add(solar);
-roof.visible = false;     // hidden by default so the machines inside are visible; buttons below toggle them
-solar.visible = false;
+LAYER.solar = solar; scene.add(solar);
 
 // machines and equipment (both sit `elevation` metres above the floor)
 const DEFAULT_MODEL = { laser: 'laser', mill: 'vmc', lathe: 'lathe', press: 'press', util: 'box' };
+tgt = layer('machine');
 MACHINES.forEach(m => {
     const [lw, ld] = dims(m.width, m.depth, m.rotation);
     const model = m.model || DEFAULT_MODEL[m.category] || 'box';
     const g = place(buildMachine(model, lw, ld, m.height), m, m);
+    OBJ['machine:' + m.id] = g;
     if (m.acc_length > 0) {                 // separately sized accessory (bar feeder ...), part of the same group
-        const acc = buildAccessory(model, lw, ld, m.acc_length, m.acc_width, m.acc_height);
+        const acc = buildAccessory(model, lw, ld, m.acc_length, m.acc_width, m.acc_height, m.acc_side || 'left');
         acc.traverse(o => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; o.userData.item = m; o.userData.group = g; pickables.push(o); } });
         g.add(acc);
+        if (m.acc_name) {                   // caption of the accessory, hidden together with the machine captions
+            g.updateMatrixWorld(true);
+            const c = g.localToWorld(new THREE.Vector3(...acc.userData.center));
+            label(m.acc_name, c.x, c.y + m.acc_height + 0.5, c.z, 0.6, machineLabels);
+        }
     }
     const cap = [m.no, m.name.replace(/^CNC\s+/, '')].filter(v => v != null && v !== '').join(' · ');   // "3 · верт. обр. център DMG DMU 75 monoblok"
     if (cap) label(cap, g.position.x, (m.elevation || 0) + m.height + 1.2, g.position.z, 0.9, machineLabels);
 });
-const EQ = { inverter: "{{ _('Инвертор') }}", battery: "{{ _('Батериен блок') }}", panel: "{{ _('Ел. табло') }}" };
+const EQ = { inverter: "{{ _('Инвертор') }}", battery: "{{ _('Батериен блок') }}", panel: "{{ _('Ел. табло') }}", convector: "{{ _('Конвектор') }}", sensor: "{{ _('Температурен сензор') }}", network: "{{ _('Мрежово устройство') }}" };
 EQUIP.forEach(e => {
+    tgt = layer(e.kind === 'network' ? 'network' : e.kind === 'convector' || e.kind === 'sensor' ? 'iot' : 'equip');
     const [lw, ld] = dims(e.width, e.depth, e.rotation);
     const g = place(buildEquipment(e.kind, lw, ld, e.height), e, Object.assign({ equip: true }, e));
+    if (e.ref_id) OBJ[e.kind + ':' + e.ref_id] = g;
     label(e.label, g.position.x, (e.elevation || 0) + e.height + 0.8, g.position.z, 1.3);
 });
+
+tgt = scene;
+
+// animated connections: cable-tray style routes (up, across at tray height, down); dashes move from end A to end B
+const FLOW = [];
+if (IS_ADMIN) {
+    const TRAY = { power: 4.25, data: 4.5 }, COL = { power: 0xff9d2e, data: 0x38bdf8 };
+    hallLinks().forEach((l, i) => {
+        const y = TRAY[l.kind] + (i % 5) * 0.05,         // rises to the ceiling, runs to the nearest wall, along the walls, and down to the other end
+            pts = [[l.A.x, l.A.top, l.A.z], ...hallRoute(l.A, l.B, 0.3 + (i % 6) * 0.07).map(([x, z]) => [x, y, z]), [l.B.x, l.B.top, l.B.z]].map(p => new THREE.Vector3(...p));
+        const geo = new THREE.BufferGeometry().setFromPoints(pts), grp = layer('links_' + l.kind);
+        const base = new THREE.LineBasicMaterial({ color: COL[l.kind], transparent: true, opacity: 0.25 });
+        grp.add(new THREE.Line(geo, base));
+        const mat = new THREE.LineDashedMaterial({ color: COL[l.kind], dashSize: 0.35, gapSize: 0.3, transparent: true });
+        const line = new THREE.Line(geo, mat); line.computeLineDistances(); line.userData.label = l.label; grp.add(line);
+        FLOW.push({ mat, base, l, color: COL[l.kind] });
+    });
+}
+// IoT: one small cyan marker over a machine per meter attached to it (pulses while the meter answers)
+const IOT = [];
+tgt = layer('iot');
+MACHINES.forEach(m => (m.admin ? m.admin.meters : []).forEach((mt, i) => {
+    const s = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 8), new THREE.MeshBasicMaterial({ color: 0x22d3ee }));
+    s.position.set(m.x + m.width / 2 + (i - 0.5) * 0.4, (m.elevation || 0) + m.height + 0.3, m.z + m.depth / 2);
+    tgt.add(s); IOT.push({ s, m });
+}));
+// DC cabling of the solar strings (admins): panels of one string chained in series, up to the ridge, along the ridge to the inverter's x, down into the hall;
+// one cable colour per string, offset a little from its neighbours so parallel runs stay visible, dashes flow panels -> inverter
+const DCFLOW = [];
+if (IS_ADMIN && SOLARMESH.length) {
+    scene.updateMatrixWorld(true);
+    const DCCOL = [0xef4444, 0xf59e0b, 0xeab308, 0x22c55e, 0x14b8a6, 0x3b82f6, 0x8b5cf6, 0xec4899], ridgeY = H + RISE + 0.35, grp = layer('links_dc');
+    SOLAR.slopes.slice(0, 2).forEach((_, i) => {
+        const inv = (SOLAR.inv || [])[i] || {}, eq = EQUIP.find(e => e.kind === 'inverter' && e.ref_id === inv.id), byStr = {};
+        SOLARMESH.filter(m => m.userData.item.slope === i && m.userData.item.string).forEach(m => (byStr[m.userData.item.string] ||= []).push(m));
+        Object.entries(byStr).forEach(([key, ms]) => {
+            const n = Number(key);
+            ms.sort((a, b) => a.userData.item.col - b.userData.item.col || (a.userData.item.col % 2 ? 1 : -1) * (a.userData.item.row - b.userData.item.row));   // serpentine chain
+            const pts = ms.map(m => { const v = new THREE.Vector3(); m.getWorldPosition(v); v.y += 0.12; return v; });
+            const zr = half + (i === 0 ? -1 : 1) * (0.12 + n * 0.07), last = pts[pts.length - 1];
+            const xe = last.x < W / 2 ? 0.3 : W - 0.3;      // along the ridge to the nearer gable wall, down it, then along the walls at ceiling height to the inverter
+            pts.push(new THREE.Vector3(last.x, ridgeY, zr), new THREE.Vector3(xe, ridgeY, zr));
+            if (eq) { const ix = eq.x + eq.width / 2, iz = eq.z + eq.depth / 2, top = (eq.elevation || 0) + eq.height;
+                hallRoute({ x: xe, z: zr }, { x: ix, z: iz }, 0.3).forEach(([x, z]) => pts.push(new THREE.Vector3(x, 4.0 + n * 0.03, z))); pts.push(new THREE.Vector3(ix, top, iz)); }
+            const path = new THREE.CurvePath(); for (let k = 1; k < pts.length; k++) path.add(new THREE.LineCurve3(pts[k - 1], pts[k]));
+            const tubeMat = new THREE.MeshStandardMaterial({ color: DCCOL[(n - 1) % 8], roughness: 0.6, transparent: true, opacity: 0.75, depthWrite: false });
+            const tube = new THREE.Mesh(new THREE.TubeGeometry(path, pts.length * 6, 0.03, 6, false), tubeMat);
+            tube.userData.label = (inv.name || '') + ' · ' + n; grp.add(tube);
+            const mat = new THREE.LineDashedMaterial({ color: 0xffffff, dashSize: 0.25, gapSize: 0.35 }), line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat);
+            line.computeLineDistances(); grp.add(line); DCFLOW.push({ mat, id: inv.id, n, tube: tubeMat, color: DCCOL[(n - 1) % 8], rated: ms.length * (inv.watt || 575) });
+        });
+    });
+}
+const TEMPS = [];                                             // live temperature labels over placed sensors (IoT layer)
+EQUIP.filter(e => e.kind === 'sensor' && e.ref_id).forEach(e => {
+    const c = document.createElement('canvas'); c.width = 256; c.height = 64;
+    const tex = new THREE.CanvasTexture(c), spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+    spr.scale.set(1.2, 0.3, 1); spr.position.set(e.x + e.width / 2, (e.elevation || 0) + e.height + 0.3, e.z + e.depth / 2); spr.renderOrder = 10;
+    layer('iot').add(spr); TEMPS.push({ spr, ctx: c.getContext('2d'), tex, e });
+});
+tgt = scene;
 
 // ---- camera views + zones ----
 const DIRS = { iso: [-1, 1.1, 1.3], top: [0, 2.4, 0.001], front: [0, 0.55, 1.6], side: [1.6, 0.55, 0] };
@@ -295,33 +457,231 @@ ZONES.forEach(([name, cx, sp], i) => {
     b.onclick = () => { tx = cx; span = sp; zbar.querySelectorAll('.f3-btn').forEach(o => o.classList.toggle('active', o === b)); goView(); };
     zbar.appendChild(b);
 });
-const roofBtn = document.getElementById('f3-roof');
-roofBtn.onclick = () => {
-    roof.visible = roofBtn.classList.toggle('active');
-    roofBtn.textContent = roof.visible ? "{{ _('Показан') }}" : "{{ _('Скрит') }}";
-};
-const mlabelsBtn = document.getElementById('f3-mlabels');
-mlabelsBtn.onclick = () => {
-    machineLabels.visible = mlabelsBtn.classList.toggle('active');
-    mlabelsBtn.textContent = machineLabels.visible ? "{{ _('Показани') }}" : "{{ _('Скрити') }}";
-};
-const labelsBtn = document.getElementById('f3-labels');
-labelsBtn.onclick = () => {
-    labels.visible = labelsBtn.classList.toggle('active');
-    labelsBtn.textContent = labels.visible ? "{{ _('Показани') }}" : "{{ _('Скрити') }}";
-};
-const solarBtn = document.getElementById('f3-solar');
-solarBtn.onclick = () => {
-    solar.visible = solarBtn.classList.toggle('active');
-    solarBtn.textContent = solar.visible ? "{{ _('Показани') }}" : "{{ _('Скрити') }}";
-};
-const wallBtn = document.getElementById('f3-walls');
-wallBtn.onclick = () => {
-    const solid = !wallBtn.classList.toggle('active');
-    wallOpacity = solid ? 1 : 0.35;
-    wallMats.forEach(m => { m.opacity = wallOpacity; m.depthWrite = solid; m.needsUpdate = true; });
-    wallBtn.textContent = solid ? "{{ _('Плътни') }}" : "{{ _('Прозрачни') }}";
-};
+// ---- sun: real position for the chosen time of day -> light direction, shadows, and the irradiance on each roof slope ----
+// +X = north, +Z = east: the back/front roof slopes face west/east (as on the roof map). ponytail: add an offset here if the hall is rotated.
+const NORTH_OFFSET = 0, TILT_DEG = Math.atan2(RISE, half) * 180 / Math.PI;
+const sunMarker = new THREE.Mesh(new THREE.SphereGeometry(2.5, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffd34d }));
+scene.add(sunMarker); LAYER.sun = sunMarker;
+// animated rays: a grid of dashed lines from the sun to each roof slope; the dashes run toward the roof, brightness follows the slope's irradiance
+const RAYS = [], RAYMAT = [0, 1].map(() => new THREE.LineDashedMaterial({ color: 0xffd34d, dashSize: 1.2, gapSize: 2.4, transparent: true, opacity: 0.6, depthWrite: false }));
+{
+    const g = new THREE.Group(); scene.add(g); LAYER.rays = g;
+    [0, 1].forEach(i => { for (let xi = 0; xi < 8; xi++) for (let ui = 0; ui < 3; ui++) {
+        const u = 0.2 + ui * 0.3, tgt = [4 + xi * (W - 8) / 7, H + RISE * u + 0.35, i === 0 ? u * half : D - u * half];
+        const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(tgt[0], tgt[1] + 60, tgt[2]), new THREE.Vector3(...tgt)]);
+        const line = new THREE.Line(geo, RAYMAT[i]); line.computeLineDistances(); line.frustumCulled = false; g.add(line);
+        RAYS.push({ geo, line, i, tgt });
+    } });
+}
+[roof, solar].forEach(g => g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } }));
+const DFLT = { pos: sun.position.clone(), sun: sun.intensity, hemi: hemi.intensity, bg: scene.background.clone() };
+let SUN = null, DAY = [], nowMode = true, SOLAR_LIVE = null;
+function irradiance(az, alt, panelAz, tilt) {              // same formula as the roof map
+    if (alt <= 0) return { f: 0, inc: 90 };
+    const r = Math.PI / 180, c = Math.max(-1, Math.min(1, Math.cos(tilt * r) * Math.sin(alt * r) + Math.sin(tilt * r) * Math.cos(alt * r) * Math.cos((az - panelAz) * r)));
+    return { f: Math.max(0, c), inc: Math.acos(c) * 180 / Math.PI };
+}
+function applySun() {
+    const on = layerOn('sun') && SUN;
+    sunMarker.visible = !!on;
+    document.getElementById('f3-sunbar').hidden = !layerOn('sun');
+    if (!on) { sun.position.copy(DFLT.pos); sun.intensity = DFLT.sun; hemi.intensity = DFLT.hemi; scene.background.copy(DFLT.bg); }
+    else {
+        const a = (SUN.az + NORTH_OFFSET) * Math.PI / 180, h = SUN.alt * Math.PI / 180, up = SUN.alt > 0, k = Math.max(0, Math.sin(h));
+        const v = new THREE.Vector3(Math.cos(a) * Math.cos(h), Math.sin(h), Math.sin(a) * Math.cos(h));
+        sun.position.copy(sun.target.position).addScaledVector(v, 90); sunMarker.position.copy(sun.position);
+        sun.intensity = up ? Math.min(2.2, 0.15 + 2.2 * k) : 0; hemi.intensity = up ? 0.3 + 0.8 * k : 0.12;
+        scene.background.setHex(dark ? 0x12161c : 0xe9eef4).multiplyScalar(up ? 0.35 + 0.65 * Math.min(1, k * 3) : 0.3);
+        sunMarker.visible = up;
+        const f = [0, 1].map(i => irradiance(SUN.az, SUN.alt, i === 0 ? 270 : 90, TILT_DEG).f);
+        RAYMAT.forEach((m, i) => m.opacity = 0.15 + 0.75 * f[i]);
+        RAYS.forEach(r => { const p = r.geo.attributes.position; p.setXYZ(0, r.tgt[0] + v.x * 60, r.tgt[1] + v.y * 60, r.tgt[2] + v.z * 60); p.needsUpdate = true; r.line.visible = f[r.i] > 0.02; });
+    }
+    LAYER.rays.visible = !!on && SUN.alt > 0 && layerOn('rays');
+    document.getElementById('f3-sunpos').textContent = SUN ? ' ' + "{{ _('азимут') }}" + ' ' + Math.round(SUN.az) + '° · ' + "{{ _('височина') }}" + ' ' + Math.round(SUN.alt) + '°' : '';
+    updateSolarCard();
+}
+function setSunMinute(m, exact) {
+    const i = Math.min(Math.floor(m / 10), DAY.length - 2), a = DAY[i], b = DAY[i + 1], f = (m - a.m) / 10;
+    SUN = exact || { az: a.az + (b.az - a.az) * f, alt: a.alt + (b.alt - a.alt) * f };
+    document.getElementById('f3-sunmin').value = m;
+    document.getElementById('f3-suntime').textContent = String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(Math.round(m % 60)).padStart(2, '0');
+    applySun();
+}
+function loadSun() {
+    fetch("{{ url_for('api_hall_sun') }}").then(r => r.json()).then(d => { DAY = d.day; if (nowMode) setSunMinute(d.now.m, d.now); else setSunMinute(Number(document.getElementById('f3-sunmin').value)); }).catch(() => { });
+}
+document.getElementById('f3-sunmin').oninput = e => { nowMode = false; if (DAY.length) setSunMinute(Number(e.target.value)); };
+document.getElementById('f3-sunnow').onclick = () => { nowMode = true; loadSun(); };
+loadSun(); setInterval(() => { if (nowMode && layerOn('sun')) loadSun(); }, 60000);
+
+// ---- solar details card (visible together with the solar layer); admins also get strings and live production ----
+const STR_COL = [0xef4444, 0xf59e0b, 0xeab308, 0x22c55e, 0x14b8a6, 0x3b82f6, 0x8b5cf6, 0xec4899];
+const strMat = {}, greyMat = new THREE.MeshStandardMaterial({ color: 0x5b6573, metalness: 0.2, roughness: 0.5 });
+STR_COL.forEach((c, i) => strMat[i + 1] = new THREE.MeshStandardMaterial({ color: c, metalness: 0.2, roughness: 0.45 }));
+const origCells = SOLARMESH.length ? SOLARMESH[0].material : null;
+let byString = false;
+function updateSolarCard() {
+    const box = document.getElementById('f3-solar'), vis = layerOn('solar') && SOLAR.slopes.length;
+    box.hidden = !vis; if (!vis) return;
+    SOLARMESH.forEach(m => m.material = byString && IS_ADMIN ? (strMat[m.userData.item.string] || greyMat) : origCells);
+    const add = (p, text, css) => { const d = document.createElement('div'); d.textContent = text; if (css) d.style.cssText = css; p.append(d); return d; };
+    box.replaceChildren(); add(box, "☀ {{ _('Соларни панели') }}", 'font-weight:bold;margin-bottom:4px');
+    SOLAR.slopes.slice(0, 2).forEach((panels, i) => {
+        const inv = (SOLAR.inv || [])[i] || {}, sl = document.createElement('div'); sl.className = 'sl'; box.append(sl);
+        add(sl, (inv.name || "{{ _('Скат') }} " + (i + 1)) + ' · ' + (i === 0 ? "{{ _('запад') }}" : "{{ _('изток') }}"), 'font-weight:bold');
+        add(sl, panels.length + ' ' + "{{ _('модула') }}" + (inv.model ? ' ' + inv.model : '') + (inv.watt ? ' · ' + (panels.length * inv.watt / 1000).toFixed(1) + ' kWp' : '') + ' · ' + (panels.length * SOLAR.l * SOLAR.w).toFixed(0) + ' м²');
+        if (SUN) { const r = irradiance(SUN.az, SUN.alt, i === 0 ? 270 : 90, TILT_DEG);
+            add(sl, SUN.alt <= 0 ? "{{ _('Няма пряка светлина (нощ)') }}" : "{{ _('Огряване') }}: " + Math.round(r.f * 100) + '% · ' + "{{ _('ъгъл на падане') }}" + ' ' + Math.round(r.inc) + '°'); }
+        const live = SOLAR_LIVE && SOLAR_LIVE.inverters && SOLAR_LIVE.inverters[inv.id];
+        if (IS_ADMIN && live) add(sl, live.online ? "{{ _('Мощност сега') }}: " + live.power + ' W · ' + "{{ _('днес') }}" + ' ' + live.today_kwh + ' kWh · ' + "{{ _('месец') }}" + ' ' + live.month_kwh + ' kWh' : "{{ _('Инверторът не отговаря') }}", 'font-weight:bold');
+        if (IS_ADMIN) {                                  // strings of this slope with panel count and live power
+            const counts = {}; ((SOLAR.strings || [])[i] || []).forEach(n => counts[n] = (counts[n] || 0) + 1);
+            Object.keys(counts).sort().forEach(n => { const l = SOLAR_LIVE && SOLAR_LIVE.strings && SOLAR_LIVE.strings[inv.id + '-' + n], row = add(sl, '', 'padding-left:4px');
+                const sw = document.createElement('i'); sw.style.background = n === 'null' ? '#5b6573' : '#' + STR_COL[(Number(n) - 1) % 8].toString(16).padStart(6, '0'); row.append(sw);
+                row.append((n === 'null' ? "{{ _('без стринг') }}" : "{{ _('Стринг') }} " + n) + ': ' + counts[n] + ' ' + "{{ _('модула') }}" + (l ? ' · ' + l.power + ' W (MPPT ' + l.mppt + ')' : '')); });
+        }
+    });
+    if (IS_ADMIN) {
+        const l = document.createElement('label'), c = document.createElement('input'); c.type = 'checkbox'; c.checked = byString; c.onchange = () => { byString = c.checked; updateSolarCard(); };
+        l.className = 'sl'; l.style.display = 'block'; l.append(c, " {{ _('Оцвети панелите по стринг') }}"); box.append(l);
+    }
+}
+function pollSolar() {                                   // live string / inverter production (admin); runs while the solar layer or the DC cables are shown
+    if (!IS_ADMIN || !(layerOn('solar') || layerOn('links_dc')) || document.hidden) return;
+    fetch("{{ url_for('admin_solar_roof_data') }}").then(r => r.json()).then(d => { SOLAR_LIVE = d; updateSolarCard(); }).catch(() => { });
+}
+setInterval(pollSolar, 5000);
+
+// ---- layers: one checkbox per kind of object; the same keys hide the matching shapes in the plan editor ----
+const LAYER_DEFS = [
+    ["{{ _('Сграда') }}", [['wall', "{{ _('Стени') }}"], ['window', "{{ _('Прозорци') }}"], ['door', "{{ _('Врати') }}"], ['stairs', "{{ _('Стълби') }}"],
+                           ['block', "{{ _('Съседни сгради') }}"], ['room', "{{ _('Помещения') }}"], ['fixture', "{{ _('Обзавеждане') }}"]]],
+    ["{{ _('Оборудване') }}", [['machine', "{{ _('Машини и инвентар') }}"], ['equip', "{{ _('Инвертори, батерии, табла') }}"],
+                              ['network', "{{ _('Мрежови устройства (суичове, рутери)') }}"], ['iot', "{{ _('IoT: сензори, конвектори, измерватели') }}"]]],
+    ...(IS_ADMIN ? [["{{ _('Връзки (анимирани)') }}", [['links_power', "{{ _('Ел. връзки: табла, инвертори, батерии, машини') }}"], ['links_data', "{{ _('Мрежови връзки и комуникации') }}"],
+                                                    ['links_dc', "{{ _('DC кабели на панелите (стринг -> инвертор, по билото)') }}"]]]] : []),
+    ["{{ _('Надписи') }}", [['mlabels', "{{ _('Машини: номера и имена') }}"], ['labels', "{{ _('Други надписи') }}"]]],
+    ["{{ _('Покрив') }}", [['ceiling', "{{ _('Таван и осветление') }}"], ['roof', "{{ _('Покривни панели') }}"], ['solar', "{{ _('Соларни панели (подробности)') }}"],
+                           ['sun', "{{ _('Слънце: огряване и сенки (по час)') }}"],
+                           ['rays', "{{ _('Лъчи от слънцето (анимация)') }}"]]],
+];
+const KEYS = LAYER_DEFS.flatMap(g => g[1].map(l => l[0])), OFF_BY_DEFAULT = ['ceiling', 'roof', 'solar', 'sun', 'links_dc'];
+let layerState = {};
+try { layerState = JSON.parse(localStorage.getItem('hall.layers')) || {}; } catch (e) { }
+const layerOn = k => k in layerState ? layerState[k] : !OFF_BY_DEFAULT.includes(k);
+function applyLayer(k) {
+    const v = layerOn(k);
+    if (LAYER[k]) LAYER[k].visible = v;
+    document.getElementById('hl-svg')?.classList.toggle('hide-' + k, !v);
+    const cb = document.querySelector('#f3-layers input[data-k="' + k + '"]'); if (cb) cb.checked = v;
+    if ((k === 'solar' || k === 'links_dc') && v && !SOLAR_LIVE) pollSolar();      // first values right away
+    if (k === 'sun' || k === 'rays') applySun(); else if (k === 'solar') updateSolarCard();
+}
+function setLayers(map) {                 // map: key -> bool (keys left out are unchanged)
+    Object.assign(layerState, map);
+    try { localStorage.setItem('hall.layers', JSON.stringify(layerState)); } catch (e) { }
+    KEYS.forEach(applyLayer);
+}
+{
+    const box = document.getElementById('f3-layers');
+    LAYER_DEFS.forEach(([title, items]) => {
+        const g = document.createElement('div'), h = document.createElement('h4'); h.textContent = title; g.append(h);
+        items.forEach(([k, name]) => {
+            const l = document.createElement('label'), c = document.createElement('input');
+            c.type = 'checkbox'; c.dataset.k = k; c.onchange = () => setLayers({ [k]: c.checked });
+            l.append(c, ' ' + name); g.append(l);
+        });
+        box.append(g);
+    });
+    const g = document.createElement('div'), l = document.createElement('label'), c = document.createElement('input');
+    c.type = 'checkbox'; c.id = 'f3-wallsolid';
+    c.onchange = () => { wallOpacity = c.checked ? 1 : 0.35; wallMats.forEach(m => { m.opacity = wallOpacity; m.depthWrite = c.checked; m.needsUpdate = true; }); };
+    l.append(c, " {{ _('Плътни стени (не прозрачни)') }}"); g.append(l); box.append(g);
+    const pre = document.createElement('div'); pre.className = 'presets';
+    const none = Object.fromEntries(KEYS.map(k => [k, false]));
+    [["{{ _('Всичко') }}", Object.fromEntries(KEYS.map(k => [k, true]))],
+     ["{{ _('По подразбиране') }}", Object.fromEntries(KEYS.map(k => [k, !OFF_BY_DEFAULT.includes(k)]))],
+     ["{{ _('Само машини') }}", { ...none, machine: true, mlabels: true, wall: true }],
+     ["{{ _('Само покрив и панели') }}", { ...none, wall: true, roof: true, solar: true, equip: true, links_dc: true }]].forEach(([name, map]) => {
+        const b = document.createElement('button'); b.type = 'button'; b.className = 'f3-btn'; b.textContent = name; b.onclick = () => setLayers(map); pre.append(b);
+    });
+    box.append(pre);
+}
+KEYS.forEach(applyLayer);
+const shown = o => { for (; o; o = o.parent) if (!o.visible) return false; return true; };
+
+// ---- modes: 3D map / plan editor / roof (admins); everything shares the layers above ----
+const MODES = ['3d', 'plan', 'roof', 'devices'];
+function resizeNow() { if (typeof resize === 'function') resize(); }
+function setMode(m) {
+    if (!IS_ADMIN || !MODES.includes(m)) m = '3d';
+    if (m === '3d' && window.hallDirty) { window.hallDirty = false; history.replaceState(null, '', '#3d'); location.reload(); return; }   // edits made in the plan -> rebuild the scene
+    MODES.forEach(x => { const e = document.getElementById('mode-' + x); if (e) e.hidden = x !== m; });
+    document.querySelectorAll('#f3-tabs [data-m]').forEach(b => b.classList.toggle('active', b.dataset.m === m));
+    document.getElementById('f3-layerwrap').hidden = m === 'roof';
+    if (m === 'roof') {
+        const fr = document.getElementById('f3-roofframe');
+        if (!fr.src) { fr.src = fr.dataset.src; fr.onload = () => { try { fr.contentDocument.getElementById('backLink')?.remove(); } catch (e) { } }; }
+    }
+    if (m === 'devices' && !document.getElementById('f3-devframe').src) openDevice(document.querySelector('#f3-devnav [data-url]').dataset.url);
+    if (IS_ADMIN && location.hash.slice(1) !== m) history.replaceState(null, '', '#' + m);
+    if (m === '3d') resizeNow();
+}
+function openDevice(url) {               // any device / panel / room map page is managed inside this page
+    const fr = document.getElementById('f3-devframe');
+    fr.src = url; setMode('devices');
+    document.querySelectorAll('#f3-devnav [data-url]').forEach(b => b.classList.toggle('active', url.startsWith(b.dataset.url)));
+}
+document.querySelectorAll('#f3-devnav [data-url]').forEach(b => b.onclick = () => openDevice(b.dataset.url));
+document.querySelectorAll('#f3-tabs [data-m]').forEach(b => b.onclick = () => setMode(b.dataset.m));
+addEventListener('hashchange', () => setMode(location.hash.slice(1)));
+
+// ---- admin: live consumption of the picked machine ----
+let pickedItem = null, LIVE = {};
+function showLive() {
+    const e = document.getElementById('f3-live'); if (!e || !pickedItem) return;
+    const k = pickedItem.kind, id = pickedItem.equip ? pickedItem.ref_id : pickedItem.id;
+    if (k === 'convector') {
+        const c = (LIVE.convectors || {})[id];
+        e.textContent = c ? (c.online ? (c.is_on ? "{{ _('включен') }}" : "{{ _('изключен') }}") + (c.power != null ? ' · ' + c.power + ' W' : '') : "{{ _('не отговаря') }}") : '-';
+        const b = document.getElementById('f3-toggle'); if (b && c) b.textContent = c.is_on ? "{{ _('Изключи') }}" : "{{ _('Включи') }}";
+        return;
+    }
+    if (k === 'sensor') {
+        const z = (LIVE.sensors || {})[id];
+        e.textContent = z && z.temperature != null ? z.temperature + ' °C' + (z.humidity != null ? ' · ' + z.humidity + ' %' : '') + (z.online ? '' : " ({{ _('няма връзка') }})") : '-';
+        return;
+    }
+    if (k === 'battery') { const b = (LIVE.batteries || {})[id]; e.textContent = b ? (b.soc != null ? b.soc + ' %' : '') + (b.power != null ? ' · ' + b.power + ' W' : '') : '-'; return; }
+    const l = ((k === 'panel' ? LIVE.panels : LIVE.machines) || {})[id];
+    e.textContent = l ? (l.online ? l.power + ' W' : "{{ _('измервателят не отговаря') }}") : "{{ _('няма измерватели') }}";
+}
+if (IS_ADMIN) {
+    const poll = () => { if (document.hidden || !document.getElementById('mode-3d') || document.getElementById('mode-3d').hidden) return;
+        fetch("{{ url_for('admin_hall_live') }}").then(r => r.json()).then(d => { LIVE = d; showLive(); }).catch(() => { }); };
+    setInterval(poll, 5000); poll();
+}
+
+// ---- selecting an object lights all of its connections (magenta), dims the rest and boxes the objects at the other ends ----
+const HL = 0xff3df2, HL2 = 0x2cff9a, linkedBoxes = [];     // magenta = the object's own links, green = the rest of the way up to the energy source
+function highlight(item) {
+    linkedBoxes.forEach(b => scene.remove(b)); linkedBoxes.length = 0;
+    const key = item && !item.solarPanel ? hallKey(item) : null;
+    const dc = !item ? null : item.solarPanel ? { id: ((SOLAR.inv || [])[item.slope] || {}).id, n: item.string } : item.kind === 'inverter' ? { id: item.ref_id } : null;
+    const active = !!(key || dc), up = key ? upstream(key) : new Set();
+    FLOW.forEach(f => {
+        const hit = touches(f.l, key), far = !hit && up.has(f.l.src), on = hit || far, col = hit ? HL : far ? HL2 : f.color;
+        f.mat.color.setHex(col); f.base.color.setHex(col);
+        f.base.opacity = on ? 0.9 : active ? 0.05 : 0.25; f.mat.opacity = active && !on ? 0.12 : 1;
+        if (hit) [f.l.a, f.l.b].filter(r => r[0] !== key[0] || r[1] !== key[1]).forEach(r => {
+            const g = OBJ[r.join(':')]; if (g) { const b = new THREE.BoxHelper(g, HL); scene.add(b); linkedBoxes.push(b); } });
+    });
+    DCFLOW.forEach(d => {
+        const hit = !!dc && d.id === dc.id && (dc.n == null || d.n === dc.n);
+        d.tube.color.setHex(hit ? HL : d.color); d.tube.opacity = hit ? 1 : dc ? 0.1 : 0.75; d.mat.color.setHex(hit ? HL : 0xffffff); d.mat.opacity = dc && !hit ? 0.1 : 1;
+    });
+}
 
 // ---- click a machine ----
 const info = document.getElementById('f3-info'), ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
@@ -332,17 +692,30 @@ renderer.domElement.addEventListener('pointerup', e => {
     const r = renderer.domElement.getBoundingClientRect();
     mouse.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
     ray.setFromCamera(mouse, camera);
-    const hit = ray.intersectObjects(pickables, false)[0];
+    const hit = ray.intersectObjects(pickables.filter(shown), false)[0];
     if (picked) { scene.remove(picked); picked = null; }
-    if (!hit) { info.style.display = 'none'; return; }
+    if (!hit) { info.style.display = 'none'; pickedItem = null; highlight(null); return; }
     picked = new THREE.BoxHelper(hit.object.userData.group, 0xffcc00);
     scene.add(picked);
     const m = hit.object.userData.item;
+    pickedItem = m;
+    highlight(m);
     info.replaceChildren();
     const add = (tag, text, style) => { const e = document.createElement(tag); e.textContent = text; if (style) e.style.cssText = style; info.append(e); return e; };
+    if (m.solarPanel) {                              // one solar module
+        const inv = (SOLAR.inv || [])[m.slope] || {}, r = SUN && irradiance(SUN.az, SUN.alt, m.slope === 0 ? 270 : 90, TILT_DEG);
+        add('b', "{{ _('Соларен панел') }}"); add('div', (inv.name || '') + ' · ' + "{{ _('ред') }}" + ' ' + m.row + ', ' + "{{ _('колона') }}" + ' ' + m.col, 'font-size:0.85rem');
+        if (inv.model) add('div', inv.model + (inv.watt ? ' · ' + inv.watt + ' W' : '') + ' · ' + (SOLAR.l * 1000).toFixed(0) + '×' + (SOLAR.w * 1000).toFixed(0) + ' mm', 'font-size:0.85rem');
+        if (IS_ADMIN) { const l = SOLAR_LIVE && SOLAR_LIVE.strings && SOLAR_LIVE.strings[inv.id + '-' + m.string];
+            add('div', m.string ? "{{ _('Стринг') }} " + m.string + (l ? ' · ' + l.power + ' W · ' + l.voltage + ' V · ' + l.current + ' A' : '') : "{{ _('Без стринг') }}", 'font-size:0.85rem'); }
+        if (r) add('div', "{{ _('Огряване') }}: " + Math.round(r.f * 100) + '%', 'font-size:0.85rem');
+        info.style.display = 'block';
+        return;
+    }
     if (m.equip) {
         add('b', m.label); add('div', EQ[m.kind]);
         add('div', "{{ _('На') }} " + (m.elevation || 0) + " {{ _('м от пода') }}", 'font-size:0.85rem');
+        if (IS_ADMIN) equipAdmin(m);
         info.style.display = 'block';
         return;
     }
@@ -350,22 +723,87 @@ renderer.domElement.addEventListener('pointerup', e => {
     if (c && c.image) { const i = document.createElement('img'); i.src = c.image; i.alt = ''; i.style.cssText = 'max-width:100%;max-height:120px;display:block;margin-bottom:6px;border-radius:4px'; info.append(i); }
     add('b', (m.no != null ? '№ ' + m.no + ' · ' : '') + (c ? c.title : m.name));
     add('div', (CAT[m.category] || CAT.util)[1]);
+    if (m.status) add('div', "{{ _('Статус') }}: " + ({ running: "{{ _('Работи') }}", idle: "{{ _('Свободна') }}", maintenance: "{{ _('Поддръжка') }}" }[m.status] || m.status), 'font-size:0.85rem');
+    if (m.acc_length > 0) add('div', "{{ _('Инвентар') }}: " + (m.acc_name || "{{ _('без име') }}") + ' (' + m.acc_length + ' м)', 'font-size:0.85rem');
     if (m.elevation) add('div', "{{ _('На') }} " + m.elevation + " {{ _('м от пода') }}", 'font-size:0.85rem');
     if (c) {
         c.specs.forEach(([l, v]) => add('div', l + ': ' + v, 'font-size:0.85rem'));
         if (c.description) add('div', c.description, 'font-size:0.85rem;margin-top:6px;color:var(--text-muted)');
     }
+    if (IS_ADMIN && m.admin) {                       // everything about the machine: identification, power, electrical, communications
+        const a = m.admin;
+        info.append(document.createElement('hr'));
+        if (a.ident) add('div', a.ident, 'font-size:0.85rem');
+        add('div', "{{ _('Консумация') }}: ", 'font-size:0.85rem').append(Object.assign(document.createElement('b'), { id: 'f3-live', textContent: '...' }));
+        add('div', "⚡ {{ _('Табло') }}: " + (a.panel || '-'), 'font-size:0.85rem');
+        meterBox(m);
+        add('div', "{{ _('Услуги') }}: " + (a.services.join(', ') || '-'), 'font-size:0.85rem');
+        if (a.maintenance) add('div', "{{ _('Последна поддръжка') }}: " + a.maintenance, 'font-size:0.85rem');
+        add('div', "{{ _('Комуникации') }}" + ' (' + a.conns.length + ')' + (a.conns.length ? ':' : ': -'), 'font-size:0.85rem');
+        a.conns.forEach(c => add('div', '🔌 ' + [c.kind, c.label, c.address && (c.address + (c.port ? ':' + c.port : '')), c.host && ('→ ' + c.host), c.switch].filter(Boolean).join(' · '), 'font-size:0.8rem;padding-left:8px'));
+        add('div', "{{ _('Файлове') }}: " + a.files, 'font-size:0.85rem');
+        relatedLinks(m);
+        actions(m, 'machine', a.dossier);
+        showLive();
+    }
     info.style.display = 'block';
 });
+const DEV_URL = { panel: id => '/admin/panels/' + id + '/schematic', convector: id => '/admin/convectors/' + id + '/edit', sensor: id => '/admin/temperature-sensors/' + id + '/edit',
+                  network: () => "{{ url_for('admin_network') }}", inverter: () => "{{ url_for('admin_power') }}", battery: () => "{{ url_for('admin_battery_cabinets') }}" };
+function relatedLinks(m) {                                  // every animated connection that touches the picked object
+    const mine = hallLinks().filter(l => [l.a, l.b].some(r => (m.equip ? r[0] === m.kind && r[1] === m.ref_id : r[0] === 'machine' && r[1] === m.id)));
+    if (!mine.length) return;
+    const d = document.createElement('div'); d.style.cssText = 'font-size:0.8rem;margin-top:4px'; d.textContent = "{{ _('Връзки') }}:"; info.append(d);
+    mine.forEach(l => { const r = document.createElement('div'); r.style.cssText = 'font-size:0.8rem;padding-left:8px'; r.textContent = (l.kind === 'power' ? '⚡ ' : '🌐 ') + l.label; info.append(r); });
+}
+function equipAdmin(m) {                                    // info panel of a placed panel / inverter / battery / convector / sensor / network device
+    info.append(document.createElement('hr'));
+    const live = document.createElement('div'); live.style.fontSize = '0.85rem'; live.append("{{ _('Състояние') }}: ", Object.assign(document.createElement('b'), { id: 'f3-live', textContent: '...' })); info.append(live);
+    relatedLinks(m);
+    const row = document.createElement('div'); row.className = 'act';
+    if (m.kind === 'convector' && m.ref_id) {
+        const t = document.createElement('button'); t.className = 'btn'; t.id = 'f3-toggle'; t.type = 'button'; t.textContent = "{{ _('Превключи') }}";
+        t.onclick = async () => { const r = await fetch('/admin/hall/convector/' + m.ref_id + '/toggle', { method: 'POST', headers: { 'X-CSRFToken': window.CSRF_TOKEN } });
+            const d = await r.json().catch(() => ({})); if (!r.ok) alert(d.error || 'Грешка'); else { (LIVE.convectors = LIVE.convectors || {})[m.ref_id] = Object.assign(LIVE.convectors[m.ref_id] || { online: true }, { is_on: d.is_on }); showLive(); } };
+        row.append(t);
+    }
+    if (m.ref_id && DEV_URL[m.kind]) { const o = document.createElement('button'); o.className = 'btn'; o.type = 'button'; o.textContent = "⚙ {{ _('Управление') }}"; o.onclick = () => openDevice(DEV_URL[m.kind](m.ref_id)); row.append(o); }
+    info.append(row); actions(m, 'equip', null, row);
+}
+function meterBox(m) {                                      // attached meters (IoT) + attach / detach from the map
+    const a = m.admin, box = document.createElement('div'); box.style.cssText = 'font-size:0.85rem'; info.append(box);
+    const draw = () => {
+        box.replaceChildren("{{ _('Измерватели') }}: " + (a.meters.map(x => x.name).join(', ') || '-') + ' ');
+        const free = METERS.filter(x => !a.meters.some(y => y.kind === x.kind && y.id === x.id));
+        const sel = document.createElement('select'); sel.style.cssText = 'max-width:150px;font-size:0.8rem'; sel.append(new Option("+ {{ _('прикачи') }}", ''));
+        free.forEach(x => sel.append(new Option(x.name, x.kind + ':' + x.id)));
+        const go = async (kind, id, attach) => { const r = await fetch('/admin/hall/' + m.id + '/meters', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': window.CSRF_TOKEN }, body: JSON.stringify({ kind, id, attach }) });
+            const d = await r.json().catch(() => ({})); if (!r.ok) return alert(d.error || 'Грешка'); a.meters = d; draw(); };
+        sel.onchange = () => { if (sel.value) { const [k, i] = sel.value.split(':'); go(k, Number(i), true); } };
+        box.append(sel);
+        a.meters.forEach(x => { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn'; b.style.cssText = 'padding:0 6px;margin-left:4px;font-size:0.75rem'; b.title = "{{ _('Откачи') }} " + x.name; b.textContent = '✕ ' + x.name; b.onclick = () => go(x.kind, x.id, false); box.append(b); });
+    };
+    draw();
+}
+function actions(m, type, dossier, row) {
+    row = row || document.createElement('div'); row.className = 'act';
+    if (dossier) { const l = document.createElement('a'); l.className = 'btn'; l.href = dossier; l.target = '_blank'; l.textContent = "📁 {{ _('Досие') }}"; row.append(l); }
+    const b = document.createElement('button'); b.className = 'btn'; b.type = 'button'; b.textContent = "✏️ {{ _('Редактирай') }}";
+    b.onclick = () => { setMode('plan'); if (window.hallEdit) window.hallEdit.pick(type, m.id); };
+    row.append(b); if (!row.parentNode) info.append(row);
+}
 
 function resize() {
     const w = wrap.clientWidth, h = wrap.clientHeight;
+    if (!w || !h) return;
     renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
 }
 new ResizeObserver(resize).observe(wrap);
 resize();
 goView();
 camera.position.copy(anim.toP); controls.target.copy(anim.toT); anim = null;
+
+setMode(location.hash.slice(1) || '{{ initial }}');
 
 (function loop() {
     requestAnimationFrame(loop);
@@ -376,6 +814,25 @@ camera.position.copy(anim.toP); controls.target.copy(anim.toT); anim = null;
         controls.target.lerpVectors(anim.fromT, anim.toT, k);
         if (anim.t === 1) anim = null;
     }
+    const now = performance.now() / 1000;
+    if (LAYER.rays.visible) RAYMAT.forEach(m => m.dashOffset = -(now * 5) % 3.6);       // dashes travel from the sun toward the roof
+    FLOW.forEach(({ mat, l }) => {                      // flow speed follows live power at the receiving end; idle (0 W) links crawl
+        const e = l.b[0] === 'panel' ? (LIVE.panels || {})[l.b[1]] : l.b[0] === 'machine' ? (LIVE.machines || {})[l.b[1]] : null;
+        const speed = l.kind === 'data' ? 1.2 : e && e.online ? (e.power > 0 ? Math.min(4, 1 + e.power / 4000) : 0.15) : 1;
+        mat.dashOffset = -(now * speed) % 0.65;
+    });
+    DCFLOW.forEach(({ mat, id, n, rated }) => {         // dash speed is proportional to the string's production (share of its rated power); 0 W = standing still
+        const l = SOLAR_LIVE && SOLAR_LIVE.strings && SOLAR_LIVE.strings[id + '-' + n], speed = l ? 4 * Math.min(1.25, l.power / rated) : 0.3;
+        mat.dashOffset = (mat.dashOffset - speed * 0.016 * 3) % 0.6;
+    });
+    TEMPS.forEach(({ spr, ctx, tex, e }) => {            // floating temperature above each sensor, redrawn only when it changes
+        const z = (LIVE.sensors || {})[e.ref_id], text = z && z.temperature != null ? z.temperature + '°' : '';
+        if (spr.userData.text === text) return;
+        spr.userData.text = text; ctx.clearRect(0, 0, 256, 64);
+        if (text) { ctx.font = 'bold 40px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineWidth = 7; ctx.strokeStyle = dark ? '#12161c' : '#e9eef4'; ctx.strokeText(text, 128, 32); ctx.fillStyle = '#2dd4bf'; ctx.fillText(text, 128, 32); }
+        tex.needsUpdate = true;
+    });
+    IOT.forEach(({ s, m }) => { const e = (LIVE.machines || {})[m.id]; s.material.color.setHex(e ? (e.online ? 0x22d3ee : 0xef4444) : 0x64748b); s.scale.setScalar(1 + 0.25 * Math.sin(now * 4)); });
     controls.update();
     renderer.render(scene, camera);
 })();

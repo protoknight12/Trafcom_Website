@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="{{ get_locale() }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Машини - Trafcom</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .md-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+        .md-bar input, .md-bar select { background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-main);
+            padding: 7px 10px; border-radius: 4px; font: inherit; }
+        .md-table { width: 100%; border-collapse: collapse; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); }
+        .md-table th, .md-table td { border-bottom: 1px solid var(--border-color); padding: 8px 10px; text-align: left; vertical-align: middle; }
+        .md-table th { color: var(--text-muted); font-weight: normal; font-size: 0.85rem; }
+        .md-thumb { width: 84px; height: 56px; object-fit: cover; border-radius: 4px; background: var(--bg-input); display: block; }
+        .md-no { font-weight: bold; font-size: 1.1rem; }
+        .md-muted { color: var(--text-muted); font-size: 0.85rem; }
+        .md-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.8rem; background: rgba(var(--accent-rgb), 0.18); }
+        .md-badge.zero { background: var(--bg-input); color: var(--text-muted); }
+        .md-st-running { background: rgba(34, 197, 94, 0.25); } .md-st-maintenance { background: rgba(245, 158, 11, 0.3); }
+        tr.md-hidden { display: none; }
+        .md-new { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+<main class="dashboard-container" style="margin-top: 20px; max-width: 1500px;">
+    <h1 style="margin-top:0">Машини <span class="md-muted">({{ rows|length }})</span></h1>
+    {% with msgs = get_flashed_messages(with_categories=true) %}
+        {% for cat, msg in msgs %}<div class="flash-{{ cat }}" style="margin-bottom:10px">{{ msg }}</div>{% endfor %}
+    {% endwith %}
+    <p class="md-muted">Една машина - едно досие: данни, файлове, спецификации, статус, ел. връзки и услуги. Промяна от което и да е място (досие, редактор на халето, 3D, стари страници) се вижда навсякъде.</p>
+
+    <div class="md-bar">
+        <input id="md-q" type="search" placeholder="Търсене по име, номер, производител, сериен номер ..." style="min-width:320px">
+        <select id="md-cat">
+            <option value="">Всички видове</option>
+            {% for k, v in categories.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}
+        </select>
+        <select id="md-status">
+            <option value="">Всички статуси</option><option value="running">Работи</option><option value="idle">Свободна</option><option value="maintenance">Поддръжка</option>
+        </select>
+        <label class="md-muted"><input id="md-nocard" type="checkbox"> само без карта</label>
+        <span style="margin-left:auto" class="md-new">
+            <form method="post" action="{{ url_for('admin_machines_create_missing') }}" onsubmit="return confirm('Да се създаде ли машина за всяко досие, което още няма (без „Нова машина")?')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn" type="submit" title="Създава запис в системата (за поръчки, услуги, ел. връзки) за досиетата, които още нямат такъв">Създай липсващите машини</button>
+            </form>
+            <a class="btn" href="{{ url_for('admin_hall') }}">Редактор на халето</a>
+        </span>
+    </div>
+
+    <table class="md-table">
+        <thead><tr><th>№</th><th></th><th>Машина</th><th>Вид / модел</th><th>Статус</th><th>Ел. връзки, услуги, комуникации</th><th>Идентификация</th><th>Файлове</th><th></th></tr></thead>
+        <tbody>
+        {% for r in rows %}
+            {% set hm = r.hm %}{% set mc = r.machine %}{% set card = r.card %}
+            <tr data-cat="{{ hm.category if hm else '' }}" data-card="{{ 1 if card else 0 }}" data-status="{{ mc.status if mc else '' }}"
+                data-q="{{ ([(hm.no|string if hm and hm.no is not none else ''), (hm.name if hm else mc.name), (hm.manufacturer or '') if hm else '', (hm.serial_number or '') if hm else '', (card.title if card else '')] | join(' ')) | lower }}">
+                <td class="md-no">{{ hm.no if hm and hm.no is not none else '-' }}</td>
+                <td>{% if card and card.image_filename %}<img class="md-thumb" src="{{ url_for('static', filename='img/machines/' ~ card.image_filename) }}" alt="" loading="lazy">{% else %}<div class="md-thumb"></div>{% endif %}</td>
+                <td>{% if hm %}<a href="{{ url_for('admin_hall_dossier', machine_id=hm.id) }}"><strong>{{ hm.name }}</strong></a>{% else %}<strong>{{ mc.name }}</strong>{% endif %}
+                    {% if card %}<div class="md-muted">Карта: {{ card.title }}</div>{% else %}<div class="md-muted">без карта</div>{% endif %}
+                    {% if hm and not hm.on_plan %}<div class="md-muted">не е в 3D халето</div>{% endif %}</td>
+                <td>{% if hm %}{{ categories.get(hm.category, hm.category) }}<div class="md-muted">{{ models.get(hm.model, hm.model or '-') }}</div>
+                    {% else %}{{ mc.machine_type or '-' }}{% endif %}</td>
+                <td>{% if mc %}<span class="md-badge md-st-{{ mc.status }}">{{ {'idle': 'Свободна', 'running': 'Работи', 'maintenance': 'Поддръжка'}.get(mc.status, mc.status) }}</span>
+                    {% else %}<span class="md-muted">без машина в системата</span>{% endif %}</td>
+                <td class="md-muted">{% if mc %}
+                    {% if mc.panel %}⚡ {{ mc.panel.name }}{% else %}⚡ -{% endif %}
+                    · измерватели {{ mc.shelly_devices|length + mc.modbus_devices|length }} · услуги {{ mc.services|length }}
+                    {% else %}-{% endif %}{% if hm %} · комуникации {{ hm.connections|length }}{% endif %}</td>
+                <td>{% if hm and (hm.manufacturer or hm.serial_number or hm.year) %}
+                        {{ hm.manufacturer or '' }}{% if hm.serial_number %}<div class="md-muted">С/Н {{ hm.serial_number }}</div>{% endif %}{% if hm.year %}<div class="md-muted">{{ hm.year }} г.</div>{% endif %}
+                    {% else %}<span class="md-muted">-</span>{% endif %}</td>
+                <td><span class="md-badge {{ '' if r.files else 'zero' }}">{{ r.files }} файла</span>{% if r.files %}<div class="md-muted">{{ r.size_text }}</div>{% endif %}</td>
+                <td>{% if hm %}<a class="btn" href="{{ url_for('admin_hall_dossier', machine_id=hm.id) }}">📁 Досие</a>
+                    {% else %}<form method="post" action="{{ url_for('admin_machine_create_dossier', machine_id=mc.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn" type="submit">Създай досие</button></form>{% endif %}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% if not rows %}<p class="md-muted">Още няма машини. Добавете ги от редактора на халето.</p>{% endif %}
+</main>
+<script>
+const rowsEl = [...document.querySelectorAll('.md-table tbody tr')];
+function filter() {
+    const q = document.getElementById('md-q').value.trim().toLowerCase(), cat = document.getElementById('md-cat').value,
+          st = document.getElementById('md-status').value, noCard = document.getElementById('md-nocard').checked;
+    rowsEl.forEach(r => r.classList.toggle('md-hidden',
+        (q && !r.dataset.q.includes(q)) || (cat && r.dataset.cat !== cat) || (st && r.dataset.status !== st) || (noCard && r.dataset.card === '1')));
+}
+['md-q', 'md-cat', 'md-status', 'md-nocard'].forEach(id => document.getElementById(id).addEventListener('input', filter));
+</script>
+</body>
+</html>

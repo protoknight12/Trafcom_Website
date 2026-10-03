@@ -254,6 +254,10 @@
             height: 100%;
             pointer-events: none;
         }
+        .connection-line.hl { stroke: #ff3df2 !important; stroke-width: 4px !important; opacity: 1 !important; }
+        .connection-line.hl2 { stroke: #2cff9a !important; stroke-width: 4px !important; opacity: 1 !important; }
+        .connection-line.dim { opacity: 0.12 !important; }
+        .map-card.link-end, .panel-card.link-end { outline: 3px solid #ff3df2; outline-offset: 2px; }
         .connection-line {
             stroke: var(--border-color);
             stroke-width: 2;
@@ -754,6 +758,46 @@
         });
     }
 
+    // Pointing at an object lights its own connections in magenta and the whole way up to the energy source (wired panel, parent panels, links to other
+    // rooms) in green; everything else is dimmed and the objects at the other ends of the first connections are outlined.
+    function highlightLinks(kind, id) {
+        var active = kind != null, recs = [];
+        connections.forEach(function (c) { recs.push({line: c.line, from: ['panel', c.panelId], to: ['machine', c.machineId]}); });
+        panelConnections.forEach(function (c) { recs.push({line: c.line, from: ['panel', c.parentId], to: ['panel', c.childId]}); });
+        stackConnections.forEach(function (c) { recs.push({line: c.line, from: ['panel', c.panelId], to: ['stack', c.stackId]}); });
+        remoteLinkNodes.forEach(function (n) {
+            var local = [n.link.kind, n.link.id];
+            recs.push(n.link.role === 'child' ? {line: n.line, from: null, to: local} : {line: n.line, from: local, to: null});
+        });
+        var same = function (a, b) { return a && b && a[0] === b[0] && String(a[1]) === String(b[1]); };
+        var up = [], seen = {}, frontier = [[kind, id]];
+        while (active && frontier.length) {
+            var next = [];
+            frontier.forEach(function (k) {
+                recs.forEach(function (r) {
+                    if (same(r.to, k) && up.indexOf(r) < 0) {
+                        up.push(r);
+                        if (r.from && !seen[r.from.join(':')]) { seen[r.from.join(':')] = 1; next.push(r.from); }
+                    }
+                });
+            });
+            frontier = next;
+        }
+        document.querySelectorAll('.map-card.link-end').forEach(function (c) { c.classList.remove('link-end'); });
+        recs.forEach(function (r) {
+            if (!r.line) return;
+            var hit = active && (same(r.from, [kind, id]) || same(r.to, [kind, id]));
+            var far = active && !hit && up.indexOf(r) >= 0;
+            r.line.classList.toggle('hl', hit);
+            r.line.classList.toggle('hl2', far);
+            r.line.classList.toggle('dim', active && !hit && !far);
+            if (hit) [r.from, r.to].forEach(function (e) {
+                var card = e && !same(e, [kind, id]) && document.querySelector('.map-card[data-kind="' + e[0] + '"][data-id="' + e[1] + '"]');
+                if (card) card.classList.add('link-end');
+            });
+        });
+    }
+
     function redrawConnections() {
         connections.forEach(function (conn) {
             var from = cardCenter('machine', conn.machineId);
@@ -923,9 +967,9 @@
             window.location.href = '{{ url_for("admin_power") }}' + (host ? '?host=' + encodeURIComponent(host) : '');
         });
 
-        card.addEventListener('mouseenter', function (e) { showTooltip(card, kind, id, e); });
+        card.addEventListener('mouseenter', function (e) { showTooltip(card, kind, id, e); highlightLinks(kind, id); });
         card.addEventListener('mousemove', function (e) { if (!dragging) positionTooltip(e); });
-        card.addEventListener('mouseleave', hideTooltip);
+        card.addEventListener('mouseleave', function () { hideTooltip(); highlightLinks(null); });
     });
 
     // --- Hover tooltip - same detail as the live cards on /admin/power

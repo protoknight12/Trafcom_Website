@@ -119,7 +119,7 @@
                                     <div class="dropdown-sub">
                                         <span class="dropdown-trigger dropdown-sub-trigger">Съоръжения и енергия <span class="dropdown-arrow">▾</span></span>
                                         <div class="dropdown-content dropdown-content-sub">
-                                            <a href="{{ url_for('admin_factory_map') }}">Карта на фабриката</a>
+                                            <a href="{{ (url_for('factory3d') ~ '#devices') if current_user.is_admin else url_for('admin_factory_map') }}">Карта на фабриката</a>
                                             <a href="{{ url_for('admin_hall') }}">Хале 3D (редактор)</a>
                                             <a href="{{ url_for('admin_buildings') }}">Сгради и помещения</a>
                                             <a href="{{ url_for('admin_panels') }}">Ел. табла</a>
@@ -127,7 +127,7 @@
                                             <a href="{{ url_for('admin_convectors') }}">Конвектори</a>
                                             {% if current_user.is_admin %}
                                                 <a href="{{ url_for('admin_power') }}">Консумация</a>
-                                                <a href="{{ url_for('admin_solar_roof') }}">Покрив (соларни панели)</a>
+                                                <a href="{{ url_for('factory3d') }}#roof">Покрив (соларни панели)</a>
                                                 <a href="{{ url_for('admin_battery_cabinets') }}">Батерийно стопанство</a>
                                             {% endif %}
                                         </div>

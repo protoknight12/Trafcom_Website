@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="{{ get_locale() }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Досие - {{ m.name }} - Trafcom</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .dz-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+        .dz-panel { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 16px; margin-bottom: 20px; }
+        .dz-panel h2 { margin: 0 0 12px; font-size: 1.05rem; }
+        .dz-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        .dz-table th, .dz-table td { border-bottom: 1px solid var(--border-color); padding: 6px 8px; text-align: left; vertical-align: top; }
+        .dz-table th { color: var(--text-muted); font-weight: normal; width: 42%; }
+        .dz-files th { width: auto; }
+        .dz-form label { display: block; font-size: 0.8rem; color: var(--text-muted); margin: 10px 0 2px; }
+        .dz-form input, .dz-form select, .dz-form textarea { width: 100%; background: var(--bg-input); border: 1px solid var(--border-color);
+            color: var(--text-main); padding: 6px 8px; border-radius: 4px; box-sizing: border-box; font: inherit; }
+        .dz-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .dz-muted { color: var(--text-muted); font-size: 0.85rem; }
+        .dz-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; margin-top: 4px; }
+        .dz-checks label, label.dz-inline { display: flex; gap: 6px; align-items: center; color: var(--text-main); font-size: 0.9rem; margin: 2px 0; }
+        .dz-checks input, label.dz-inline input { width: auto; }
+        label.dz-inline { margin-top: 12px; }
+        .dz-img { max-width: 100%; max-height: 220px; border-radius: 6px; display: block; margin-bottom: 10px; }
+        .dz-del { background: none; border: none; color: #ef4444; cursor: pointer; padding: 0; font: inherit; }
+        @media (max-width: 900px) { .dz-grid { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+<main class="dashboard-container" style="margin-top: 20px; max-width: 1300px;">
+    <p><a href="{{ url_for('admin_hall') }}">← Към редактора на халето</a></p>
+    <h1 style="margin-top:0">Досие: {% if m.no is not none %}№ {{ m.no }} · {% endif %}{{ m.name }}</h1>
+    {% with msgs = get_flashed_messages(with_categories=true) %}
+        {% for cat, msg in msgs %}<div class="flash-{{ cat }}" style="margin-bottom:10px">{{ msg }}</div>{% endfor %}
+    {% endwith %}
+
+    <div class="dz-grid">
+        <div>
+            <div class="dz-panel">
+                <h2>Идентификация и бележки</h2>
+                <form class="dz-form" method="post" action="{{ url_for('admin_hall_dossier_save', machine_id=m.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="dz-row">
+                        <div><label>Производител</label><input name="manufacturer" value="{{ m.manufacturer or '' }}" maxlength="150"></div>
+                        <div><label>Сериен номер</label><input name="serial_number" value="{{ m.serial_number or '' }}" maxlength="100"></div>
+                    </div>
+                    <label>Година на производство</label><input name="year" value="{{ m.year or '' }}" inputmode="numeric" maxlength="4" style="max-width:140px">
+                    <label>Бележки (състояние, настройки, история на ремонти ...)</label>
+                    <textarea name="notes" rows="6">{{ m.notes or '' }}</textarea>
+                    <button class="btn btn-primary" type="submit" style="margin-top:12px">Запази</button>
+                </form>
+            </div>
+
+            <div class="dz-panel">
+                <h2>Система: статус, ел. връзки и услуги</h2>
+                {% if machine %}
+                <form class="dz-form" method="post" action="{{ url_for('admin_hall_dossier_system', machine_id=m.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="dz-row">
+                        <div><label>Статус</label>
+                            <select name="status">{% for k, v in {'idle': 'Свободна', 'running': 'Работи', 'maintenance': 'Поддръжка'}.items() %}<option value="{{ k }}" {{ 'selected' if machine.status == k }}>{{ v }}</option>{% endfor %}</select></div>
+                        <div><label>Последна поддръжка</label><input type="date" name="last_maintenance" value="{{ machine.last_maintenance.strftime('%Y-%m-%d') if machine.last_maintenance }}"></div>
+                    </div>
+                    <label>Тип машина (за услугите и поръчките)</label>
+                    <input name="machine_type" list="dz-types" value="{{ machine.machine_type or '' }}" maxlength="50">
+                    <datalist id="dz-types">{% for t in known_machine_types %}<option value="{{ t }}">{% endfor %}</datalist>
+                    <label>Електрическо табло</label>
+                    <select name="panel_id"><option value="">- няма -</option>
+                        {% for p in panels %}<option value="{{ p.id }}" {{ 'selected' if machine.panel_id == p.id }}>{{ p.room.name }} / {{ p.name }}</option>{% endfor %}</select>
+                    <label>Измерватели (Shelly / Modbus)</label>
+                    <div class="dz-checks">
+                        {% for d in shelly %}<label><input type="checkbox" name="shelly_ids" value="{{ d.id }}" {{ 'checked' if d in machine.shelly_devices }}> {{ d.name }} <span class="dz-muted">{{ d.host }}</span></label>{% endfor %}
+                        {% for d in modbus %}<label><input type="checkbox" name="modbus_ids" value="{{ d.id }}" {{ 'checked' if d in machine.modbus_devices }}> {{ d.name }} <span class="dz-muted">{{ d.device_type }}</span></label>{% endfor %}
+                        {% if not shelly and not modbus %}<span class="dz-muted">Няма въведени измерватели.</span>{% endif %}
+                    </div>
+                    <label>Услуги, които се изпълняват на машината</label>
+                    <div class="dz-checks">
+                        {% for sv in services %}<label><input type="checkbox" name="service_ids" value="{{ sv.id }}" {{ 'checked' if sv in machine.services }}> {{ sv.name }} <span class="dz-muted">{{ sv.price_per_hour_eur }} €/ч</span></label>{% endfor %}
+                        {% if not services %}<span class="dz-muted">Няма въведени услуги.</span>{% endif %}
+                    </div>
+                    <label class="dz-inline"><input type="checkbox" name="on_plan" value="1" {{ 'checked' if m.on_plan }}> Показва се в 3D халето</label>
+                    <button class="btn btn-primary" type="submit" style="margin-top:12px">Запази</button>
+                </form>
+                {% else %}
+                <p class="dz-muted">Досието още не е свързано с машина в системата (поръчки, ел. връзки, услуги).</p>
+                <form method="post" action="{{ url_for('admin_hall_link_machine', machine_id=m.id) }}" class="dz-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="btn btn-primary" name="new" value="1" type="submit">Създай машина от това досие</button>
+                </form>
+                {% if free_machines %}
+                <form method="post" action="{{ url_for('admin_hall_link_machine', machine_id=m.id) }}" class="dz-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <label>или свържи със съществуваща машина (запазва нейното име)</label>
+                    <select name="machine_id">{% for x in free_machines %}<option value="{{ x.id }}">{{ x.name }}</option>{% endfor %}</select>
+                    <button class="btn" type="submit" style="margin-top:8px">Свържи</button>
+                </form>
+                {% endif %}
+                {% endif %}
+            </div>
+
+            <div class="dz-panel">
+                <h2>Данни в халето</h2>
+                <table class="dz-table">
+                    <tr><th>Номер на плана</th><td>{{ m.no if m.no is not none else '-' }}</td></tr>
+                    <tr><th>Име</th><td>{{ m.name }}</td></tr>
+                    <tr><th>Вид / 3D модел</th><td>{{ m.category }} / {{ models.get(m.model, m.model or '-') }}</td></tr>
+                    <tr><th>Размери (Д × Ш × В)</th><td>{{ m.width }} × {{ m.depth }} × {{ m.height }} м</td></tr>
+                    <tr><th>Позиция (X, Z)</th><td>{{ m.x }} ; {{ m.z }} м, от пода {{ m.elevation }} м</td></tr>
+                    <tr><th>Лице към</th><td>{{ m.rotation }}°</td></tr>
+                    {% if m.acc_length and m.acc_length > 0 %}
+                    <tr><th>Инвентар</th><td>{{ m.acc_name or 'без име' }} - {{ m.acc_length }} × {{ m.acc_width }} × {{ m.acc_height }} м, {{ acc_sides.get(m.acc_side, m.acc_side) }}</td></tr>
+                    {% endif %}
+                </table>
+            </div>
+        </div>
+
+        <div>
+            <div class="dz-panel">
+                <h2>Карта и спецификации</h2>
+                {% if card %}
+                    {% if card.image_filename %}<img class="dz-img" src="{{ url_for('static', filename='img/machines/' ~ card.image_filename) }}" alt="">{% endif %}
+                    <strong>{{ card.title }}</strong>{% if card.series_label %} <span class="dz-muted">· {{ card.series_label }}</span>{% endif %}
+                    {% if card.description %}<p class="dz-muted">{{ card.description }}</p>{% endif %}
+                    <table class="dz-table">
+                        {% for label, value in card.specs %}<tr><th>{{ label }}</th><td>{{ value }}</td></tr>{% endfor %}
+                    </table>
+                {% else %}
+                    <p class="dz-muted">Машината не е свързана с карта. Изберете карта в редактора на халето.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="dz-panel">
+        <h2>Комуникации ({{ m.connections|length }})</h2>
+        <p class="dz-muted" style="margin-top:0">Как е свързана машината (мрежа, шини, сериен порт ...). Данните ще се ползват за картата на комуникационните връзки.</p>
+        {% if m.connections %}
+        <table class="dz-table dz-files">
+            <thead><tr><th>Вид</th><th>Означение</th><th>Адрес / порт</th><th>Хост от мрежата</th><th>Суич / порт</th><th>Бележка</th><th></th></tr></thead>
+            <tbody>
+            {% for c in m.connections %}
+                <tr>
+                    <td>{{ conn_kinds.get(c.kind, c.kind) }}</td>
+                    <td>{{ c.label or '' }}</td>
+                    <td>{{ c.address or '' }}{% if c.port %} : {{ c.port }}{% endif %}</td>
+                    <td>{% if c.network_host %}{{ c.network_host.hostname or c.network_host.mac_address }} <span class="dz-muted">{{ c.network_host.ip_address or '' }}</span>{% endif %}</td>
+                    <td>{% if c.switch_device %}{{ c.switch_device.name }}{% endif %}{% if c.switch_port %} / {{ c.switch_port }}{% endif %}</td>
+                    <td>{{ c.notes or '' }}</td>
+                    <td><form method="post" action="{{ url_for('admin_hall_connection_delete', conn_id=c.id) }}" onsubmit="return confirm('Да се изтрие ли връзката?')">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="dz-del" type="submit">Изтрий</button></form></td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        <form class="dz-form" method="post" action="{{ url_for('admin_hall_connection_add', machine_id=m.id) }}" style="margin-top:12px">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="dz-row">
+                <div><label>Вид</label><select name="kind">{% for k, v in conn_kinds.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></div>
+                <div><label>Означение</label><input name="label" maxlength="150" placeholder="напр. Siemens 840D X130"></div>
+            </div>
+            <div class="dz-row">
+                <div><label>Адрес (IP / MAC / COM)</label><input name="address" maxlength="100"></div>
+                <div><label>Порт / скорост</label><input name="port" maxlength="30"></div>
+            </div>
+            <div class="dz-row">
+                <div><label>Хост от мрежовия опис</label>
+                    <select name="network_host_id"><option value="">- няма -</option>{% for h in net_hosts %}<option value="{{ h.id }}">{{ h.hostname or h.mac_address }}{% if h.ip_address %} ({{ h.ip_address }}){% endif %}</option>{% endfor %}</select></div>
+                <div><label>Суич / устройство</label>
+                    <select name="switch_device_id"><option value="">- няма -</option>{% for d in net_devices %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select></div>
+            </div>
+            <div class="dz-row">
+                <div><label>Порт на суича</label><input name="switch_port" maxlength="50" placeholder="напр. ether7"></div>
+                <div><label>Бележка</label><input name="notes" maxlength="255"></div>
+            </div>
+            <button class="btn btn-primary" type="submit" style="margin-top:12px">Добави връзка</button>
+        </form>
+    </div>
+
+    <div class="dz-panel">
+        <h2>Файлове ({{ files|length }})</h2>
+        {% if files %}
+        <table class="dz-table dz-files">
+            <thead><tr><th>Файл</th><th>Вид</th><th>Размер</th><th>Качен</th><th>Бележка</th><th></th></tr></thead>
+            <tbody>
+            {% for f in files %}
+                <tr>
+                    <td><a href="{{ url_for('admin_hall_file_download', file_id=f.id) }}">{{ f.original_name }}</a></td>
+                    <td>{{ categories.get(f.category, f.category) }}</td>
+                    <td>{{ f.size_text }}</td>
+                    <td>{{ f.uploaded_at.strftime('%d.%m.%Y %H:%M') if f.uploaded_at else '' }}{% if f.uploaded_by %} · {{ f.uploaded_by }}{% endif %}</td>
+                    <td>{{ f.note or '' }}</td>
+                    <td>
+                        <form method="post" action="{{ url_for('admin_hall_file_delete', file_id=f.id) }}" onsubmit="return confirm('Да се изтрие ли файлът?')">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button class="dz-del" type="submit">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+            <p class="dz-muted">Още няма файлове.</p>
+        {% endif %}
+
+        <form class="dz-form" method="post" action="{{ url_for('admin_hall_file_upload', machine_id=m.id) }}" enctype="multipart/form-data" style="margin-top:16px">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="dz-row">
+                <div><label>Файлове (ръководства, бекъпи, чертежи ...)</label><input type="file" name="files" multiple required></div>
+                <div><label>Вид</label>
+                    <select name="category">{% for k, v in categories.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+                </div>
+            </div>
+            <label>Бележка към файловете (по избор)</label><input name="note" maxlength="255">
+            <button class="btn btn-primary" type="submit" style="margin-top:12px">Качи</button>
+            <p class="dz-muted" style="margin-bottom:0">Файловете се пазят на сървъра извън публичните папки и се свалят само от администратор. Можете да качвате големи файлове (до 1 ГБ), напр. бекъпи.
+                Автоматичен бекъп на машините ще се добави по-нататък и ще пише в това досие.</p>
+        </form>
+    </div>
+</main>
+</body>
+</html>
