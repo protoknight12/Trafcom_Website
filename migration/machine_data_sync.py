@@ -124,7 +124,9 @@ def import_():
         for r in (x for x in data['placed'] if x['_model'] == M.__name__):
             o = by_name(M, r['name'])
             if o:
-                o.pos_x, o.pos_y, o.room_id = r['pos_x'], r['pos_y'], getattr(by_name(Room, r['_room']), 'id', None)
+                o.room_id = getattr(by_name(Room, r['_room']), 'id', None)
+                if 'pos_x' in r:                                            # sensors have a room but no map position
+                    o.pos_x, o.pos_y = r['pos_x'], r['pos_y']
     for r in data['network_pos']:
         d = by_name(NetworkDevice, r['name'])
         if d:
