@@ -18,6 +18,7 @@ from app import app, db
 ONCE = (
     'seed_hall_machine_specs',        # cards (page='hall') with the researched specs, hall machines linked to them
     'data_hall_initial_sync',         # machines / rooms / panels for the unified hall map, device placement, empty map positions
+    'data_hall_place_rooms',          # every Room without a place on the hall plan gets one
 )
 
 with app.app_context():
