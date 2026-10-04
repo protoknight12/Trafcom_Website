@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import os
+import shutil
 import json
 import math
 import re
@@ -6583,6 +6584,85 @@ def _machines_overview_rows():
         if mc.id not in linked:
             rows.append({'hm': None, 'machine': mc, 'card': None, 'files': 0, 'size_text': ''})
     return rows
+
+
+def _machine_row(key):
+    """'hm:<id>' (a dossier, with its Machine if linked) or 'm:<id>' (a Machine without a dossier) -> (HallMachine|None, Machine|None)."""
+    kind, _, raw = (key or '').partition(':')
+    if not raw.isdigit():
+        return None, None
+    if kind == 'hm':
+        hm = db.session.get(HallMachine, int(raw))
+        return (hm, hm.machine) if hm else (None, None)
+    mc = db.session.get(Machine, int(raw)) if kind == 'm' else None
+    return (mc.hall_record, mc) if mc else (None, None)
+
+
+@app.route('/admin/machines/merge', methods=['POST'])
+@role_required('admin')
+def admin_machines_merge():
+    """Merges two rows of /machines into one: `drop` disappears, `keep` stays (its name wins) and takes over everything of the other -
+    orders, uploads, services, meters, panel/room (only where keep has none), dossier files, communications and identification
+    (only where keep has none; notes are appended). ponytail: no undo - ask first in the UI."""
+    keepH, keepM = _machine_row(request.form.get('keep'))
+    dropH, dropM = _machine_row(request.form.get('drop'))
+    if not (keepH or keepM) or not (dropH or dropM) or (keepH and keepH is dropH) or (keepM and keepM is dropM):
+        flash('Изберете две различни машини за сливане.', 'danger')
+        return redirect(url_for('list_machines'))
+    name = keepH.name if keepH else keepM.name
+    drop_name = dropH.name if dropH else dropM.name
+    try:
+        if dropH and keepH:
+            for f in list(dropH.files):                                   # bytes live in machine_files/<hall machine id>/
+                src, dst = (os.path.join(app.config['MACHINE_FILES_FOLDER'], str(i)) for i in (dropH.id, keepH.id))
+                os.makedirs(dst, exist_ok=True)
+                if os.path.exists(os.path.join(src, f.stored_name)):
+                    shutil.move(os.path.join(src, f.stored_name), os.path.join(dst, f.stored_name))
+                f.machine_id = keepH.id
+            for c in list(dropH.connections):
+                c.hall_machine_id = keepH.id
+            for attr in ('manufacturer', 'serial_number', 'year', 'card_id'):
+                if getattr(keepH, attr) in (None, ''):
+                    setattr(keepH, attr, getattr(dropH, attr))
+            if dropH.notes and dropH.notes != keepH.notes:
+                keepH.notes = f'{keepH.notes}\n\n{dropH.notes}' if keepH.notes else dropH.notes
+            db.session.flush()
+            db.session.expire(dropH, ['files', 'connections'])        # moved rows must not be nulled by dropH's delete cascade
+        if dropM and keepM:
+            Order.query.filter_by(machine_id=dropM.id).update({'machine_id': keepM.id})
+            DxfFile.query.filter_by(machine_id=dropM.id).update({'machine_id': keepM.id})
+            PanelComponent.query.filter_by(feeds_machine_id=dropM.id).update({'feeds_machine_id': keepM.id})
+            for rel in ('services', 'shelly_devices', 'modbus_devices'):
+                have = getattr(keepM, rel)
+                for x in list(getattr(dropM, rel)):
+                    if x not in have:
+                        have.append(x)
+                    getattr(dropM, rel).remove(x)
+            for attr in ('room_id', 'panel_id', 'machine_type', 'pos_x', 'pos_y'):
+                if getattr(keepM, attr) is None:
+                    setattr(keepM, attr, getattr(dropM, attr))
+        if dropH:
+            dropH.machine_id = None
+        db.session.flush()
+        if dropM and keepM:
+            db.session.delete(dropM)
+        if dropH and keepH:
+            db.session.delete(dropH)
+        db.session.flush()
+        H, M = keepH or dropH, keepM or dropM
+        if H and M:
+            H.machine = M
+        if H:
+            H.name = name
+        if M:
+            M.name = name
+        db.session.commit()
+        log_action(f'Слети машини: "{drop_name}" -> "{name}"')
+        flash(f'"{drop_name}" беше слята в "{name}".', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Грешка при сливане: {e}', 'danger')
+    return redirect(url_for('list_machines'))
 
 
 @app.route('/admin/machines/create-dossier/<int:machine_id>', methods=['POST'])
