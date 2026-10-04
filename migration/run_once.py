@@ -22,6 +22,7 @@ ONCE = (
     'data_hall_drop_unplaced_rooms',  # ...and Rooms whose plan shape was deleted are dropped (a room card needs its place)
     'data_import_panels',             # panels + schematics + machine/meter links + communications from the development DB (by name, nothing overwritten)
     'data_hall_follow_rooms',         # plan objects follow the room set on their form; explicit parents naming deleted rooms are cleared
+    'data_hall_place_devices',        # devices without a plan object (e.g. the imported panels) get one, so they show in the editor and 3D
 )
 
 with app.app_context():
