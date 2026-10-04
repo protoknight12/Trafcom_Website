@@ -15249,7 +15249,12 @@ def _delete_panel_row(panel):
         child.parent_panel_id = None
     for comp in PanelComponent.query.filter(PanelComponent.feeds_panel_id == panel.id).all():
         comp.feeds_panel_id = None
-    for wire in list(panel.wires):
+    comp_ids = [c.id for c in panel.components]
+    wires = {w.id: w for w in panel.wires}
+    if comp_ids:                                              # also wires of other panels that end on one of its components
+        for w in PanelWire.query.filter(PanelWire.from_component_id.in_(comp_ids) | PanelWire.to_component_id.in_(comp_ids)):
+            wires[w.id] = w
+    for wire in wires.values():
         db.session.delete(wire)
     db.session.flush()
     db.session.delete(panel)
