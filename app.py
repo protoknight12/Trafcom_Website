@@ -6518,7 +6518,10 @@ def admin_hall_shape_delete(shape_id):
     removed = [a.id for a in gone]
     for a in gone:
         db.session.delete(a)                                  # its generated walls and floor go with it
+    room = db.session.get(Room, h.room_id) if was_room and h.room_id else None
     db.session.delete(h)
+    if room is not None:
+        _remove_room(room)                                    # a room card cannot outlive its place on the plan
     db.session.flush()
     changed = _hall_fit_buildings() if was_room else []
     _hall_sync_hierarchy()
@@ -15253,6 +15256,17 @@ def _delete_panel_row(panel):
     db.session.flush()
 
 
+def _remove_room(room):
+    """Drops a Room (its map card): machines / convectors / sensors / battery stacks in it are un-placed (they are real equipment),
+    its panels are deleted, shapes pointing at it are un-linked. Does not commit."""
+    for model in (Machine, Convector, TemperatureSensor, BatteryStack):
+        model.query.filter_by(room_id=room.id).update({'room_id': None})
+    for panel in ElectricalPanel.query.filter_by(room_id=room.id).all():
+        _delete_panel_row(panel)
+    HallShape.query.filter_by(room_id=room.id).update({'room_id': None})
+    db.session.delete(room)
+
+
 @app.route('/admin/rooms/<int:room_id>/delete', methods=['POST'])
 @role_required(['admin', 'worker'])
 def admin_delete_room(room_id):
@@ -15265,12 +15279,7 @@ def admin_delete_room(room_id):
     """
     room = Room.query.get_or_404(room_id)
     room_name = room.name
-    for machine in Machine.query.filter_by(room_id=room.id).all():
-        machine.room_id = None
-    for panel in ElectricalPanel.query.filter_by(room_id=room.id).all():
-        _delete_panel_row(panel)
-    HallShape.query.filter_by(room_id=room.id).update({'room_id': None})
-    db.session.delete(room)
+    _remove_room(room)
     db.session.commit()
     log_action(f'Изтрито помещение "{room_name}"')
     flash(f'Помещение "{room_name}" беше изтрито.', 'success')

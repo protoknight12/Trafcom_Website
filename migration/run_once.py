@@ -19,6 +19,7 @@ ONCE = (
     'seed_hall_machine_specs',        # cards (page='hall') with the researched specs, hall machines linked to them
     'data_hall_initial_sync',         # machines / rooms / panels for the unified hall map, device placement, empty map positions
     'data_hall_place_rooms',          # every Room without a place on the hall plan gets one
+    'data_hall_drop_unplaced_rooms',  # ...and Rooms whose plan shape was deleted are dropped (a room card needs its place)
 )
 
 with app.app_context():
