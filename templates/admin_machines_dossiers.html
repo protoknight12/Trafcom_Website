@@ -25,7 +25,7 @@
 </head>
 <body>
 {% include 'partials/navbar.html' %}
-<main class="dashboard-container" style="margin-top: 20px; max-width: 1500px;">
+<main class="dashboard-container" style="margin-top: 20px; max-width: 98vw;">
     <h1 style="margin-top:0">Машини <span class="md-muted">({{ rows|length }})</span></h1>
     {% with msgs = get_flashed_messages(with_categories=true) %}
         {% for cat, msg in msgs %}<div class="flash-{{ cat }}" style="margin-bottom:10px">{{ msg }}</div>{% endfor %}
@@ -60,7 +60,7 @@
                 data-q="{{ ([(hm.no|string if hm and hm.no is not none else ''), (hm.name if hm else mc.name), (hm.manufacturer or '') if hm else '', (hm.serial_number or '') if hm else '', (card.title if card else '')] | join(' ')) | lower }}">
                 <td class="md-no">{{ hm.no if hm and hm.no is not none else '-' }}</td>
                 <td>{% if card and card.image_filename %}<img class="md-thumb" src="{{ url_for('static', filename='img/machines/' ~ card.image_filename) }}" alt="" loading="lazy">{% else %}<div class="md-thumb"></div>{% endif %}</td>
-                <td>{% if hm %}<a href="{{ url_for('admin_hall_dossier', machine_id=hm.id) }}"><strong>{{ hm.name }}</strong></a>{% else %}<strong>{{ mc.name }}</strong>{% endif %}
+                <td>{% if hm %}<a data-frame="stay" href="{{ url_for('admin_hall_dossier', machine_id=hm.id) }}"><strong>{{ hm.name }}</strong></a>{% else %}<strong>{{ mc.name }}</strong>{% endif %}
                     {% if card %}<div class="md-muted">Карта: {{ card.title }}</div>{% else %}<div class="md-muted">без карта</div>{% endif %}
                     {% if hm and not hm.on_plan %}<div class="md-muted">не е в 3D халето</div>{% endif %}</td>
                 <td>{% if hm %}{{ categories.get(hm.category, hm.category) }}<div class="md-muted">{{ models.get(hm.model, hm.model or '-') }}</div>
@@ -75,7 +75,7 @@
                         {{ hm.manufacturer or '' }}{% if hm.serial_number %}<div class="md-muted">С/Н {{ hm.serial_number }}</div>{% endif %}{% if hm.year %}<div class="md-muted">{{ hm.year }} г.</div>{% endif %}
                     {% else %}<span class="md-muted">-</span>{% endif %}</td>
                 <td><span class="md-badge {{ '' if r.files else 'zero' }}">{{ r.files }} файла</span>{% if r.files %}<div class="md-muted">{{ r.size_text }}</div>{% endif %}</td>
-                <td>{% if hm %}<a class="btn" href="{{ url_for('admin_hall_dossier', machine_id=hm.id) }}">📁 Досие</a>
+                <td>{% if hm %}<a class="btn" data-frame="stay" href="{{ url_for('admin_hall_dossier', machine_id=hm.id) }}">📁 Досие</a>
                     {% else %}<form method="post" action="{{ url_for('admin_machine_create_dossier', machine_id=mc.id) }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn" type="submit">Създай досие</button></form>{% endif %}</td>
             </tr>

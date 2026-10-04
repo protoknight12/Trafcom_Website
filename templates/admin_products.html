@@ -93,7 +93,7 @@
                     <td class="text-small text-muted">{{ product.erp_number or '-' }} / {{ product.code_number or '-' }}</td>
                     <td class="text-small text-muted">{{ product.owner_client.name if product.owner_client else 'Публичен' }}</td>
                     <td class="text-right">
-                        <a href="{{ url_for('admin_product_edit', product_id=product.id) }}" class="btn-secondary" style="padding: 8px 14px; border-radius: var(--border-radius-sm); font-size: 0.85rem; text-decoration: none;">Редактирай</a>
+                        <a href="{{ url_for('admin_product_edit', product_id=product.id) }}" data-frame="stay" class="btn-secondary" style="padding: 8px 14px; border-radius: var(--border-radius-sm); font-size: 0.85rem; text-decoration: none;">Редактирай</a>
                         <a href="{{ url_for('admin_product_offer', product_id=product.id) }}" class="btn-secondary" style="padding: 8px 14px; border-radius: var(--border-radius-sm); font-size: 0.85rem; text-decoration: none;">Оферта</a>
                         <form action="{{ url_for('print_label', target_type='product', target_id=product.id) }}" method="GET" style="display:inline-flex; gap:4px; align-items:center;">
                             <input type="number" name="quantity" min="1" value="1" class="material-price-input" style="width: 50px; padding: 6px;">
@@ -122,5 +122,17 @@
 
 <script src="{{ url_for('static', filename='js/table_search.js') }}"></script>
 <script>initTableSearch('adminProductsSearchInput', 'adminProductsTableBody');</script>
+<script>
+// New product: save via fetch, then open its editor as a layer (the POST redirects to it).
+document.querySelector('form[action="{{ url_for('admin_add_product') }}"]').addEventListener('submit', function (e) {
+    e.preventDefault();
+    const f = this;
+    fetch(f.action, { method: 'POST', body: new FormData(f), credentials: 'same-origin' }).then(function (r) {
+        if (!/\/edit$/.test(r.url)) { window.location.reload(); return; }
+        const d = f.closest('dialog'); if (d) d.close();
+        openFrameDialog(r.url, true);
+    });
+});
+</script>
 </body>
 </html>

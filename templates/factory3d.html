@@ -242,19 +242,43 @@ function wallMaterial(len) {              // every wall gets its own copy so the
     wallMats.push(m);
     return m;
 }
-const glassMat = new THREE.MeshStandardMaterial({ color: 0x9cc9ee, roughness: 0.1, metalness: 0.3, transparent: true, opacity: 0.45, depthWrite: false });
-const doorMat = new THREE.MeshStandardMaterial({ color: 0xf5b301, transparent: true, opacity: 0.55 });
+const glassMat = new THREE.MeshStandardMaterial({ color: 0x7fb4e0, roughness: 0.1, metalness: 0.3, transparent: true, opacity: 0.25, depthWrite: false });
+const doorMat = new THREE.MeshStandardMaterial({ color: 0xf5b301 });
 const fixtureMat = new THREE.MeshStandardMaterial({ color: dark ? 0x8a6f57 : 0xb08968 });
 const floorMat = new THREE.MeshStandardMaterial({ color: dark ? 0x6b6358 : 0xd9cdb4, roughness: 0.9 });
 const stairMat = new THREE.MeshStandardMaterial({ color: dark ? 0x9aa4b2 : 0xc9b48c });
 const ROOM_COLORS = [0x60a5fa, 0x34d399, 0xf472b6, 0xfbbf24, 0xa78bfa];
 let roomNo = 0;
+// doors/windows are cut out of the walls they sit in: a wall box minus each opening's (long-axis x height) hole through the full wall thickness
+const OPENINGS = SHAPES.filter(o => o.kind === 'door' || o.kind === 'window');
+function wallPieces(s) {
+    const lx = s.width >= s.depth, y0 = s.elevation || 0;
+    let pcs = [[s.x, s.x + s.width, y0, y0 + s.height, s.z, s.z + s.depth]];
+    OPENINGS.forEach(o => {
+        const ox0 = o.x, ox1 = o.x + o.width, oz0 = o.z, oz1 = o.z + o.depth, oy0 = o.elevation || 0, oy1 = oy0 + o.height;
+        if (lx ? !(oz1 > s.z && oz0 < s.z + s.depth) : !(ox1 > s.x && ox0 < s.x + s.width)) return;   // not in this wall's thickness
+        const c = lx ? [ox0, ox1, oy0, oy1, s.z, s.z + s.depth] : [s.x, s.x + s.width, oy0, oy1, oz0, oz1];
+        const out = [];
+        pcs.forEach(p => {
+            if (c[0] >= p[1] || c[1] <= p[0] || c[2] >= p[3] || c[3] <= p[2] || c[4] >= p[5] || c[5] <= p[4]) { out.push(p); return; }
+            let [a0, a1, b0, b1, d0, d1] = p;
+            if (c[0] > a0) out.push([a0, c[0], b0, b1, d0, d1]); a0 = Math.max(a0, c[0]);
+            if (c[1] < a1) out.push([c[1], a1, b0, b1, d0, d1]); a1 = Math.min(a1, c[1]);
+            if (c[2] > b0) out.push([a0, a1, b0, c[2], d0, d1]); b0 = Math.max(b0, c[2]);
+            if (c[3] < b1) out.push([a0, a1, c[3], b1, d0, d1]); b1 = Math.min(b1, c[3]);
+            if (c[4] > d0) out.push([a0, a1, b0, b1, d0, c[4]]);
+            if (c[5] < d1) out.push([a0, a1, b0, b1, c[5], d1]);
+        });
+        pcs = out;
+    });
+    return pcs;
+}
 SHAPES.forEach(s => {
     if (s.kind === 'building') return;      // a building is only a list entry (name, parcel, rooms) - nothing is drawn for it
     tgt = layer(s.kind);
     const x1 = s.x + s.width, z1 = s.z + s.depth, cx = s.x + s.width / 2, cz = s.z + s.depth / 2;
     const y0 = s.elevation || 0, y1 = y0 + s.height;
-    if (s.kind === 'wall') box(s.x, x1, s.z, z1, y0, y1, wallMaterial(Math.max(s.width, s.depth)));
+    if (s.kind === 'wall') wallPieces(s).forEach(p => box(p[0], p[1], p[4], p[5], p[2], p[3], wallMaterial(Math.max(p[1] - p[0], p[5] - p[4]))));
     else if (s.kind === 'window') { const m = box(s.x, x1, s.z, z1, y0, y1, glassMat); const e = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry), new THREE.LineBasicMaterial({ color: 0x5a6470 })); e.position.copy(m.position); tgt.add(e); }
     else if (s.kind === 'door') { box(s.x, x1, s.z, z1, y0, y1, doorMat); if (s.label) label(s.label, cx, y1 + 0.7, z1 + 0.5, 1.1); }
     else if (s.kind === 'fixture') {

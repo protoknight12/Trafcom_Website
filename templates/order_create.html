@@ -52,7 +52,7 @@
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <label for="cart_product_id" style="margin-bottom: 0;">{{ _('Продукт *') }}</label>
                     {% if current_user.is_admin %}
-                    <button type="button" onclick="openQuickProductModal()" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
+                    <button type="button" onclick="openQuickProductModal()" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: var(--accent-contrast); border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
                     {% endif %}
                 </div>
                 <select id="cart_product_id">
@@ -69,7 +69,7 @@
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <label for="cart_detail_id" style="margin-bottom: 0;">{{ _('Детайл *') }}</label>
                     {% if current_user.is_admin %}
-                    <button type="button" onclick="openQuickDetailModal()" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
+                    <button type="button" onclick="openQuickDetailModal()" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: var(--accent-contrast); border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
                     {% endif %}
                 </div>
                 <select id="cart_detail_id">
@@ -167,7 +167,7 @@
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <label for="client_id" style="margin-bottom: 0;">{{ _('Клиент / Фирма *') }}</label>
                     {% if current_user.is_staff or not current_user.client %}
-                    <button type="button" onclick="openQuickClientModal()" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ {{ _('Бързо създаване') }}</button>
+                    <button type="button" onclick="openQuickClientModal()" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: var(--accent-contrast); border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ {{ _('Бързо създаване') }}</button>
                     {% endif %}
                 </div>
                 {# Non-staff always order as their own linked client - server-side too, see create_order()'s
@@ -189,7 +189,7 @@
             <div class="form-group" style="margin-bottom: 20px;{% if not client_section_on('deliverers') %} display: none;{% endif %}">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <label for="deliverer_id" style="margin-bottom: 0;">{{ _('Куриер (по избор)') }}</label>
-                    <button type="button" onclick="openQuickDelivererModal()" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ {{ _('Бързо създаване') }}</button>
+                    <button type="button" onclick="openQuickDelivererModal()" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: var(--accent-contrast); border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ {{ _('Бързо създаване') }}</button>
                 </div>
                 <select id="deliverer_id" name="deliverer_id">
                     <option value="">-- {{ _('Без конкретен куриер') }} --</option>
@@ -219,7 +219,7 @@
             <div class="form-group" style="margin-bottom: 15px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <label for="qd_material" style="margin-bottom: 0;">Материал</label>
-                    <button type="button" onclick="openQuickMaterialModal('qd_material')" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
+                    <button type="button" onclick="openQuickMaterialModal('qd_material')" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: var(--accent-contrast); border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
                 </div>
                 <select id="qd_material" name="material" class="material-picker">
                     {% include 'partials/material_options.html' %}

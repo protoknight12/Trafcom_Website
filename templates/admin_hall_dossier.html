@@ -30,7 +30,7 @@
 </head>
 <body>
 {% include 'partials/navbar.html' %}
-<main class="dashboard-container" style="margin-top: 20px; max-width: 1300px;">
+<main class="dashboard-container" style="margin-top: 20px; max-width: 98vw;">
     <p><a href="{{ url_for('admin_hall') }}">← Към редактора на халето</a></p>
     <h1 style="margin-top:0">Досие: {% if m.no is not none %}№ {{ m.no }} · {% endif %}{{ m.name }}</h1>
     {% with msgs = get_flashed_messages(with_categories=true) %}

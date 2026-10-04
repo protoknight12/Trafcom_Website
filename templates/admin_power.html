@@ -42,10 +42,10 @@
         .status-running { background-color: rgba(23, 162, 184, 0.15); color: #17a2b8; border: 1px solid #17a2b8; }
         .status-maintenance { background-color: rgba(255, 193, 7, 0.15); color: #ffc107; border: 1px solid #ffc107; }
         .machine-link-row { margin-top: 6px; font-size: 0.85rem; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-        .machine-checklist { max-height: 160px; overflow-y: auto; border: 1px solid #333; border-radius: 6px; padding: 8px 10px; background-color: #1a1f30; }
+        .machine-checklist { max-height: 160px; overflow-y: auto; border: 1px solid #333; border-radius: 6px; padding: 8px 10px; background-color: #212429; }
         .machine-checklist-item { display: block; font-size: 0.85rem; padding: 3px 0; font-weight: normal; }
         .machine-checklist-item input { margin-right: 6px; }
-        .rename-input { padding: 4px 8px; background-color: #1a1f30; color: #fff; border: 1px solid #333; border-radius: 6px; font-size: 0.85rem; }
+        .rename-input { padding: 4px 8px; background-color: #212429; color: #fff; border: 1px solid #333; border-radius: 6px; font-size: 0.85rem; }
 
         .detail-layout { display: flex; gap: 20px; align-items: flex-start; }
         .detail-main { flex: 1 1 auto; min-width: 0; }
@@ -112,7 +112,7 @@
 <body>
 {% include 'partials/navbar.html' %}
 
-<main class="admin-container" style="max-width: 1100px; margin: 30px auto; padding: 0 15px;">
+<main class="admin-container" style="max-width: 98vw; margin: 30px auto; padding: 0 15px;">
 
     {% if focus_host %}
     <p><a href="{{ url_for('admin_power') }}" id="backLink">&larr; Назад</a></p>
@@ -681,14 +681,14 @@
 
         ctx.beginPath();
         points.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)));
-        ctx.strokeStyle = '#a855f7';
+        ctx.strokeStyle = '#f0be4a';
         ctx.lineWidth = 2;
         ctx.stroke();
 
         ctx.lineTo(w, h);
         ctx.lineTo(0, h);
         ctx.closePath();
-        ctx.fillStyle = 'rgba(168, 85, 247, 0.15)';
+        ctx.fillStyle = 'rgba(240, 190, 74, 0.15)';
         ctx.fill();
     }
 

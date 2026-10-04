@@ -21,7 +21,7 @@
         .fl-profiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 8px; }
         .fl-profiles button, .fl-mini { background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-muted);
             padding: 8px 4px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
-        .fl-profiles button.active { background: rgba(124, 58, 237, 0.25); border-color: var(--accent-primary); color: var(--text-main); font-weight: bold; }
+        .fl-profiles button.active { background: rgba(var(--accent-rgb), 0.25); border-color: var(--accent-primary); color: var(--text-main); font-weight: bold; }
         .fl-check { display: block; font-weight: normal; font-size: 0.85rem; margin: 6px 0; }
         .fl-hole { border: 1px solid var(--border-color); border-radius: 4px; padding: 8px; margin-bottom: 8px; }
         .fl-hole .fl-grid { grid-template-columns: repeat(3, 1fr); margin-bottom: 4px; }
@@ -53,7 +53,7 @@
 <body>
 <div class="no-print">{% include 'partials/navbar.html' %}</div>
 
-<main class="dashboard-container" style="margin-top: 20px; max-width: 1400px;">
+<main class="dashboard-container" style="margin-top: 20px; max-width: 98vw;">
     <div class="fl-layout">
         <div class="fl-panel fl-controls no-print">
             <div class="fl-title">{{ _('Профил') }}</div>

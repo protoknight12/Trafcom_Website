@@ -6,18 +6,21 @@
 }
 
 /* ==========================================================================
-   GLOBAL VARIABLES & THEMING (Cyber-Dark & Glow Purple)
+   GLOBAL VARIABLES & THEMING (Graphite & Amber)
    ========================================================================== */
 :root {
-    --bg-base: #0b0d13;           /* Dark slate black background */
-    --bg-surface: #141824;        /* Lighter dark surface for cards/containers */
-    --bg-input: #1a1f30;          /* Distinct dark fill for form inputs */
+    --bg-base: #111214;           /* Graphite background */
+    --bg-surface: #1a1c1f;        /* Lighter graphite surface for cards/containers */
+    --bg-input: #212429;          /* Distinct fill for form inputs */
 
-    --accent-primary: #7c3aed;    /* Core vivid purple */
-    --accent-secondary: #a855f7;  /* Light violet, used for hover/accent states */
+    --accent-primary: #e0a526;    /* Amber - primary accent */
+    --accent-secondary: #f0be4a;  /* Light amber, used for hover/accent states */
+    --accent-contrast: #17130a;   /* Text/icons on an amber fill (white is unreadable on amber) */
+    --accent-rgb: 224, 165, 38;   /* Same colors as channels, for rgba(var(--accent-rgb), a) tints */
+    --accent2-rgb: 240, 190, 74;
 
-    --text-main: #f8fafc;         /* Bright off-white for high legibility */
-    --text-muted: #94a3b8;        /* Slate gray for secondary text */
+    --text-main: #eceef0;         /* Bright off-white for high legibility */
+    --text-muted: #8f959c;        /* Slate gray for secondary text */
 
     /* Status Colors (Optimized for Dark Backgrounds) */
     --success-border: #10b981;
@@ -36,7 +39,7 @@
     --border-radius-md: 12px;
     --border-radius-lg: 16px;
 
-    --border-color: #262f45;      /* Low-contrast border for clean gridlines */
+    --border-color: #2f3338;      /* Low-contrast border for clean gridlines */
 }
 
 /* Base Body Reset */
@@ -83,7 +86,7 @@ body {
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
 }
 .nav-container {
-    max-width: 1340px;
+    max-width: 98vw;
     margin: 0 auto;
     padding: 0 24px;
     display: flex;
@@ -225,7 +228,7 @@ select {
 }
 input:focus, textarea:focus, select:focus {
     border-color: var(--accent-secondary);
-    box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.15);
+    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.15);
 }
 select {
     /* Custom chevron to replace the browser's native (light-themed) arrow,
@@ -255,7 +258,7 @@ input[type="file"] {
 }
 input[type="file"]::file-selector-button {
     background-color: var(--accent-primary);
-    color: var(--text-main);
+    color: var(--accent-contrast);
     border: none;
     border-radius: var(--border-radius-sm);
     padding: 8px 14px;
@@ -303,7 +306,7 @@ button, .btn {
 
 .btn-submit, .btn-primary {
     background-color: var(--accent-primary);
-    color: var(--text-main);
+    color: var(--accent-contrast);
     padding: 12px 24px;
     border-radius: var(--border-radius-sm);
 }
@@ -404,9 +407,9 @@ button, .btn {
     display: inline-block;
 }
 .badge-admin {
-    background-color: rgba(124, 58, 237, 0.15);
-    color: #c084fc;
-    border: 1px solid rgba(124, 58, 237, 0.3);
+    background-color: rgba(var(--accent-rgb), 0.15);
+    color: var(--accent-secondary);
+    border: 1px solid rgba(var(--accent-rgb), 0.3);
 }
 .badge-user {
     background-color: rgba(255, 255, 255, 0.05);
@@ -555,7 +558,7 @@ div[id$="Modal"] > .admin-card {
 }
 .upload-dropzone:hover {
     border-color: var(--accent-secondary);
-    background-color: rgba(124, 58, 237, 0.02);
+    background-color: rgba(var(--accent-rgb), 0.02);
 }
 
 /* ==========================================================================
@@ -629,7 +632,7 @@ div[id$="Modal"] > .admin-card {
     background-color: rgba(255, 255, 255, 0.06);
 }
 .lang-switcher a.lang-active {
-    color: var(--text-main);
+    color: var(--accent-contrast);
     background-color: var(--accent-primary);
 }
 
@@ -681,7 +684,7 @@ div[id$="Modal"] > .admin-card {
     width: 48px;
     height: 48px;
     border-radius: var(--border-radius-sm);
-    background: rgba(124, 58, 237, 0.12);
+    background: rgba(var(--accent-rgb), 0.12);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -888,7 +891,7 @@ div[id$="Modal"] > .admin-card {
 .machine-card:hover {
     border-color: var(--accent-secondary);
     transform: translateY(-4px);
-    box-shadow: 0 12px 30px rgba(124, 58, 237, 0.15);
+    box-shadow: 0 12px 30px rgba(var(--accent-rgb), 0.15);
 }
 
 .machine-img-container {
@@ -938,7 +941,7 @@ div[id$="Modal"] > .admin-card {
    ========================================================================== */
 
 .dmg-container {
-    max-width: 1340px;
+    max-width: 98vw;
     margin: 0 auto;
     padding: 40px 24px;
 }
@@ -1015,7 +1018,7 @@ div[id$="Modal"] > .admin-card {
 
 .hero-tag span {
     color: var(--text-main);
-    background-color: rgba(124, 58, 237, 0.2);
+    background-color: rgba(var(--accent-rgb), 0.2);
     padding: 2px 6px;
     border-radius: 4px;
     margin-right: 4px;
@@ -1118,9 +1121,9 @@ div[id$="Modal"] > .admin-card {
 }
 
 .dmg-card:hover {
-    border-color: rgba(168, 85, 247, 0.4);
+    border-color: rgba(var(--accent2-rgb), 0.4);
     transform: translateY(-5px);
-    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4), 0 0 30px rgba(124, 58, 237, 0.05);
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4), 0 0 30px rgba(var(--accent-rgb), 0.05);
 }
 
 .dmg-card-header {
@@ -1218,7 +1221,7 @@ div[id$="Modal"] > .admin-card {
     padding: 48px 24px 24px;
 }
 .footer-container {
-    max-width: 1340px;
+    max-width: 98vw;
     margin: 0 auto;
     display: grid;
     grid-template-columns: 2fr 1fr 1fr;
@@ -1244,7 +1247,7 @@ div[id$="Modal"] > .admin-card {
     margin-bottom: 10px;
 }
 .footer-bottom {
-    max-width: 1340px;
+    max-width: 98vw;
     margin: 40px auto 0;
     padding-top: 20px;
     border-top: 1px solid rgba(255, 255, 255, 0.05);
@@ -1493,7 +1496,7 @@ div[id$="Modal"] > .admin-card {
     border-radius: 50%;
     border: none;
     background: var(--accent-primary);
-    color: var(--text-main);
+    color: var(--accent-contrast);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
     cursor: pointer;
     display: flex;
@@ -1535,7 +1538,7 @@ div[id$="Modal"] > .admin-card {
 #chatbot-header {
     padding: 12px 16px;
     background: var(--accent-primary);
-    color: var(--text-main);
+    color: var(--accent-contrast);
     font-weight: 600;
 }
 
@@ -1561,7 +1564,7 @@ div[id$="Modal"] > .admin-card {
 .chatbot-msg-user {
     align-self: flex-end;
     background: var(--accent-primary);
-    color: var(--text-main);
+    color: var(--accent-contrast);
 }
 
 .chatbot-msg-assistant {
@@ -1592,7 +1595,7 @@ div[id$="Modal"] > .admin-card {
 #chatbot-form button {
     border: none;
     background: var(--accent-primary);
-    color: var(--text-main);
+    color: var(--accent-contrast);
     width: 44px;
     cursor: pointer;
     font-size: 1rem;

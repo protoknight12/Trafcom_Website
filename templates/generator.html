@@ -65,7 +65,7 @@
             transition: all 0.2s;
         }
         .shape-btn.active {
-            background: rgba(124, 58, 237, 0.25);
+            background: rgba(var(--accent-rgb), 0.25);
             border-color: var(--accent-primary);
             color: var(--text-main);
             font-weight: bold;
@@ -161,7 +161,7 @@
             position: absolute;
             top: 20px;
             right: 20px;
-            background: rgba(20, 24, 36, 0.85);
+            background: rgba(26, 28, 31, 0.85);
             border: 1px solid var(--border-color);
             padding: 16px;
             border-radius: var(--border-radius-sm);
@@ -179,7 +179,7 @@
             z-index: 2;
         }
         .view-toggle-btn {
-            background: rgba(20, 24, 36, 0.85);
+            background: rgba(26, 28, 31, 0.85);
             border: 1px solid var(--border-color);
             color: var(--text-muted);
             padding: 8px 18px;
@@ -190,7 +190,7 @@
             backdrop-filter: blur(4px);
         }
         .view-toggle-btn.active {
-            background: rgba(124, 58, 237, 0.35);
+            background: rgba(var(--accent-rgb), 0.35);
             border-color: var(--accent-primary);
             color: var(--text-main);
         }
@@ -199,7 +199,7 @@
 <body>
 {% include 'partials/navbar.html' %}
 
-<main class="dashboard-container" style="margin-top: 20px; max-width: 1400px;">
+<main class="dashboard-container" style="margin-top: 20px; max-width: 98vw;">
     <div class="generator-layout">
 
         <div class="controls-sidebar">
