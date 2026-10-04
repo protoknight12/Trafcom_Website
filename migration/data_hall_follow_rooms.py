@@ -2,13 +2,13 @@
 One-time data step (run by migration/run_once.py): makes the hall plan agree with the rooms that devices were given on the forms.
   1. an explicit parent (parent_id) of a plan shape / machine / device that names a room or building shape that no longer exists is cleared;
   2. every machine, panel, convector, sensor and battery stack with a room whose plan object stands outside that room's area is moved
-     to the room's centre (see _hall_follow_room, _hall_object_of).
+     to the room's centre (see _hall_follow_room).
 Nothing is created or deleted.
 
     python -m migration.data_hall_follow_rooms
 """
 from app import (app, db, HallShape, HallMachine, HallEquipment, Machine, ElectricalPanel, Convector, TemperatureSensor, BatteryStack,
-                 _hall_follow_room)
+                 _hall_follow_room, _hall_object_of)
 
 with app.app_context():
     ids = {i for (i,) in db.session.query(HallShape.id)}
