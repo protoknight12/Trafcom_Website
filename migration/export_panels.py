@@ -10,7 +10,7 @@ import os
 from datetime import datetime
 
 from app import (app, ElectricalPanel, PanelComponent, PanelWire, Machine, ShellyDevice, ModbusDevice, MachineConnection, HallMachine,
-                 NetworkHost, NetworkDevice, Room)
+                 NetworkHost, NetworkDevice, Room, HallShape)
 
 OUT = os.path.join(os.path.dirname(__file__), 'data', 'panels_export.json')
 SKIP = {'id', 'created_at'}
@@ -47,7 +47,16 @@ with app.app_context():
         d['wires'] = [dict(row(w, ('panel_id', 'from_component_id', 'to_component_id')), frm=w.from_component_id, to=w.to_component_id) for w in p.wires]
         panels.append(d)
 
+    rooms = {}                                                           # every room a panel stands in: its building + its place on the hall plan
+    for r in Room.query:
+        if r.name not in {p['room'] for p in panels}:
+            continue
+        sh = HallShape.query.filter_by(kind='room', room_id=r.id).first()
+        rooms[r.name] = {'building': r.building.name,
+                         'shape': {k: getattr(sh, k) for k in ('x', 'z', 'width', 'depth', 'height', 'floors', 'elevation')} if sh else None}
+
     out = {
+        'rooms': rooms,
         'panels': panels,
         'machine_panels': [{'machine': m.name, 'panel': nm(ElectricalPanel, m.panel_id)} for m in Machine.query if m.panel_id],
         'shelly': [{'host': s.host, 'panel': nm(ElectricalPanel, s.panel_id)} for s in ShellyDevice.query if s.panel_id],

@@ -13,7 +13,7 @@ import json
 import os
 
 from app import (app, db, ElectricalPanel, PanelComponent, PanelWire, Machine, ShellyDevice, ModbusDevice, MachineConnection, HallMachine,
-                 NetworkHost, NetworkDevice, Room)
+                 NetworkHost, NetworkDevice, Room, Building, HallShape)
 
 SRC = os.path.join(os.path.dirname(__file__), 'data', 'panels_export.json')
 MODBUS_PANEL_COLS = ('panel_id', 'grid_panel_id', 'main_panel_id', 'backup_panel_id', 'generator_panel_id')
@@ -37,6 +37,24 @@ with app.app_context():
     panel_by_name = {}                                                    # name -> panel (the first one wins)
     for p in ElectricalPanel.query.order_by(ElectricalPanel.id):
         panel_by_name.setdefault(p.name, p)
+
+    # 0. rooms the panels stand in that this database does not have: the Room (map card) in its building, plus its place on the hall plan
+    for name, r in data.get('rooms', {}).items():
+        if Room.query.filter_by(name=name).first():
+            continue
+        b = Building.query.filter_by(name=r['building']).first()
+        if b is None:
+            b = Building(name=r['building'])
+            db.session.add(b)
+            db.session.flush()
+        room = Room(name=name, building_id=b.id)
+        db.session.add(room)
+        db.session.flush()
+        if r['shape'] and not HallShape.query.filter_by(kind='room', room_id=room.id).first():
+            parent = HallShape.query.filter_by(kind='building', building_id=b.id).first()
+            db.session.add(HallShape(kind='room', name=name, room_id=room.id, parent_id=parent.id if parent else None, **r['shape']))
+        stats['rooms'] = stats.get('rooms', 0) + 1
+    db.session.flush()
 
     # 1. panels
     fresh = {}                                                            # name -> True when its schematic should be loaded
