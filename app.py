@@ -5991,6 +5991,34 @@ def _hall_room_at(cx, cz):
     return None
 
 
+def _hall_object_of(target):
+    """The plan object (HallMachine / HallEquipment) that stands for a Machine / panel / convector / sensor / battery stack, else None."""
+    if isinstance(target, Machine):
+        return HallMachine.query.filter_by(machine_id=target.id).first()
+    kind = {ElectricalPanel: 'panel', Convector: 'convector', TemperatureSensor: 'sensor', BatteryStack: 'battery'}.get(type(target))
+    return HallEquipment.query.filter_by(kind=kind, ref_id=target.id).first() if kind else None
+
+
+def _hall_follow_room(target):
+    """The room of a device was changed on a form (the plan is otherwise the source of truth for it): its object on the hall plan is cleared of
+    any explicit parent (it may name a room that no longer exists) and, when it stands outside the new room's area, moved to that room's
+    centre (room-map position 50/50). ponytail: every object moved this way lands on the centre, spread them by hand. Does not commit."""
+    obj = _hall_object_of(target)
+    if obj is None:
+        return
+    obj.parent_id = None
+    rect = _hall_room_rect(target.room_id)
+    if rect is None:
+        return
+    rx, rz, rw, rd = rect
+    cx, cz = obj.x + obj.width / 2, obj.z + obj.depth / 2
+    if rx <= cx <= rx + rw and rz <= cz <= rz + rd:
+        return
+    obj.x, obj.z = round(rx + rw / 2 - obj.width / 2, 3), round(rz + rd / 2 - obj.depth / 2, 3)
+    if hasattr(target, 'pos_x'):
+        target.pos_x, target.pos_y = 50.0, 50.0
+
+
 def _hall_push(kind, target, cx, cz, keep=False):
     """Hall position (centre, metres) -> the old maps of the same object: its Room and room-map position (percent of that room's area on the
     plan) and, for a panel inside the hall, its place on the distribution scheme (hall plan in percent)."""
@@ -6520,6 +6548,8 @@ def admin_hall_shape_delete(shape_id):
     for a in gone:
         db.session.delete(a)                                  # its generated walls and floor go with it
     room = db.session.get(Room, h.room_id) if was_room and h.room_id else None
+    for M in (HallShape, HallMachine, HallEquipment):
+        M.query.filter(M.parent_id == h.id).update({'parent_id': None})      # nothing may keep naming the deleted room/building
     db.session.delete(h)
     if room is not None:
         _remove_room(room)                                    # a room card cannot outlive its place on the plan
@@ -9713,6 +9743,7 @@ def rename_machine(id):
     panel_id_raw = request.form.get('panel_id', '')
     machine.room_id = int(room_id_raw) if room_id_raw.isdigit() else None
     machine.panel_id = int(panel_id_raw) if panel_id_raw.isdigit() else None
+    _hall_follow_room(machine)
     log_action(describe_changes(f'машина #{id}', machine, {'name': 'име', 'machine_type': 'тип'}))
     db.session.commit()
     flash('Машината беше преименувана успешно.', 'success')
@@ -15458,6 +15489,7 @@ def admin_update_panel(panel_id):
     panel.room_id = int(room_id_raw)
     panel.parent_panel_id = parent_id
     panel.notes = request.form.get('notes', '').strip() or None
+    _hall_follow_room(panel)
     db.session.commit()
     flash(f'Ел. табло "{panel.name}" беше обновено.', 'success')
     if request.form.get('popup') == '1':
@@ -15480,6 +15512,7 @@ def admin_update_panel_room(panel_id):
         flash('Невалидно помещение.', 'danger')
         return redirect(url_for('admin_power'))
     panel.room_id = room.id
+    _hall_follow_room(panel)
     db.session.commit()
     log_action(f'Преместено табло "{panel.name}" в помещение "{room.name}"')
     flash(f'Табло "{panel.name}" беше преместено в "{room.building.name} / {room.name}".', 'success')
@@ -16151,6 +16184,7 @@ def admin_update_stack(stack_id):
         return redirect(url_for('admin_battery_cabinets'))
     for key, value in values.items():
         setattr(stack, key, value)
+    _hall_follow_room(stack)
     db.session.commit()
     flash(f'Stack "{stack.name}" беше обновен.', 'success')
     if request.form.get('popup') == '1':
@@ -16529,6 +16563,7 @@ def admin_update_temperature_sensor(sensor_id):
     sensor.sensor_type = sensor_type
     sensor.room_id = room_id
     sensor.location_label = None if room_id else (request.form.get('location_label', '').strip() or None)
+    _hall_follow_room(sensor)
     db.session.commit()
     flash(f'Сензор "{sensor.name}" беше обновен.', 'success')
     if request.form.get('popup') == '1':
@@ -16677,6 +16712,7 @@ def admin_update_convector(conv_id):
     conv.relay_channel = relay_channel
     conv.room_id = room_id
     conv.location_label = None if room_id else (request.form.get('location_label', '').strip() or None)
+    _hall_follow_room(conv)
     db.session.commit()
     flash(f'Конвектор "{conv.name}" беше обновен.', 'success')
     if request.form.get('popup') == '1':
