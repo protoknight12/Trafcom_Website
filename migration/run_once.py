@@ -20,6 +20,7 @@ ONCE = (
     'data_hall_initial_sync',         # machines / rooms / panels for the unified hall map, device placement, empty map positions
     'data_hall_place_rooms',          # every Room without a place on the hall plan gets one
     'data_hall_drop_unplaced_rooms',  # ...and Rooms whose plan shape was deleted are dropped (a room card needs its place)
+    'data_import_panels',             # panels + schematics + machine/meter links + communications from the development DB (by name, nothing overwritten)
 )
 
 with app.app_context():
