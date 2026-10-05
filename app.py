@@ -4,6 +4,7 @@ import shutil
 import json
 import math
 import re
+import socket
 import calendar
 import subprocess
 import difflib
@@ -2700,6 +2701,7 @@ def _hall_parcels():
 HALL_EQUIPMENT_KINDS = {'inverter': 'Инвертор', 'battery': 'Батериен блок', 'panel': 'Ел. табло', 'convector': 'Конвектор',
                         'sensor': 'Температурен сензор', 'network': 'Мрежово устройство', 'camera': 'Камера'}
 
+CAMERA_CONN_TYPES = [{'value': 'nvr', 'label': 'През NVR (канал)'}, {'value': 'onvif', 'label': 'ONVIF (директно към камерата)'}, {'value': 'rtsp', 'label': 'RTSP (директно към камерата)'}]
 CAMERA_TYPES = {'dome': 'Купол', 'ptz': 'Въртяща (PTZ)', 'bullet': 'Bullet', 'fisheye': 'Рибешко око', 'other': 'Друга'}
 
 
@@ -2725,6 +2727,8 @@ class Camera(db.Model):
     host = db.Column(db.String(100), nullable=True)
     username = db.Column(db.String(100), nullable=True)
     password_encrypted = db.Column(db.Text, nullable=True)
+    conn_type = db.Column(db.String(6), nullable=False, default='nvr')   # how the camera is reached: 'nvr' (channel), 'onvif' or 'rtsp' (own IP)
+    port = db.Column(db.Integer, nullable=True)                          # ONVIF / RTSP port of an own-IP camera (defaults 80 / 554)
     rtsp_path = db.Column(db.String(200), nullable=True)              # own-IP cameras: RTSP path, e.g. /Streaming/Channels/102 (default = Hikvision sub stream)
     snapshot_path = db.Column(db.String(200), nullable=True)          # own-IP cameras that aren't Hikvision ISAPI, e.g. /cgi-bin/snapshot.cgi
     yaw = db.Column(db.Float, nullable=False, default=0.0)
@@ -2736,22 +2740,31 @@ class Camera(db.Model):
     nvr = db.relationship('CameraNvr', backref='cameras')
 
     def rtsp_url(self):
-        """rtsp:// URL (with login) of the light sub stream, for go2rtc; None when there is no way to reach the camera."""
+        """Source for go2rtc (login inside it): rtsp:// of the NVR sub stream, onvif:// (go2rtc asks the camera for its stream), or the camera's own rtsp://."""
         q = lambda v: urllib.parse.quote(v or '', safe='')
-        if self.host:
-            return f"rtsp://{q(self.username)}:{q(_decrypt_secret(self.password_encrypted))}@{self.host}:554{self.rtsp_path or '/Streaming/Channels/102'}"
-        if self.nvr and self.channel:
-            n = self.nvr
-            return f"rtsp://{q(n.username)}:{q(_decrypt_secret(n.password_encrypted))}@{n.host}:554/Streaming/Channels/{self.channel}02"
-        return None
+        if (self.conn_type or 'nvr') == 'nvr':
+            if self.nvr and self.channel:
+                n = self.nvr
+                return f"rtsp://{q(n.username)}:{q(_decrypt_secret(n.password_encrypted))}@{n.host}:554/Streaming/Channels/{self.channel}02"
+            return None
+        if not self.host:
+            return None
+        login = f"{q(self.username)}:{q(_decrypt_secret(self.password_encrypted))}@"
+        if self.conn_type == 'onvif':
+            return f"onvif://{login}{self.host}:{self.port or 80}"
+        if (self.rtsp_path or '').startswith('rtsp://'):
+            return self.rtsp_path
+        return f"rtsp://{login}{self.host}:{self.port or 554}{self.rtsp_path or '/'}"
 
     def snapshot_target(self):
-        """(url, user, password) of the JPEG snapshot, or None when neither a channel nor an own host is set."""
-        if self.host:
-            return f'http://{self.host}{self.snapshot_path or "/ISAPI/Streaming/channels/101/picture"}', self.username, _decrypt_secret(self.password_encrypted)
-        if self.nvr and self.channel:
-            n = self.nvr
-            return f'http://{n.host}:{n.port}/ISAPI/Streaming/channels/{self.channel}01/picture', n.username, _decrypt_secret(n.password_encrypted)
+        """(url, user, password) of the JPEG snapshot, or None (the route then decodes a frame of the stream instead)."""
+        if (self.conn_type or 'nvr') == 'nvr':
+            if self.nvr and self.channel:
+                n = self.nvr
+                return f'http://{n.host}:{n.port}/ISAPI/Streaming/channels/{self.channel}01/picture', n.username, _decrypt_secret(n.password_encrypted)
+            return None
+        if self.host and self.snapshot_path:
+            return f'http://{self.host}{self.snapshot_path}', self.username, _decrypt_secret(self.password_encrypted)
         return None
 
 
@@ -2782,7 +2795,7 @@ class HallEquipment(db.Model):
         cam = {'yaw': t.yaw, 'tilt': t.tilt, 'fov': t.fov, 'range': t.range_m, 'type': t.cam_type} if self.kind == 'camera' and t else None
         return {'cam': cam,'id': self.id, 'kind': self.kind, 'ref_id': self.ref_id, 'name': self.name or '', 'x': self.x, 'z': self.z,
                 'width': self.width, 'depth': self.depth, 'height': self.height, 'elevation': self.elevation, 'rotation': self.rotation, 'parent_id': self.parent_id,
-                'label': self.name or (t.name if t else '') or HALL_EQUIPMENT_KINDS[self.kind]}
+                'label': (t.name if t else '') or self.name or HALL_EQUIPMENT_KINDS[self.kind]}
 
 
 # (kind, name, x, z, width, depth, height, elevation, rotation) - Dyness battery stacks along the right wall facing the hall
@@ -6169,6 +6182,47 @@ def admin_hall_sync_maps():
     return jsonify(out)
 
 
+# Two-way link device <-> plan object: a device created anywhere (its own page, an import, the API) gets its plan object right after the
+# request that created it; a deleted device takes its plan object with it. (Deleting only the plan object leaves the device.)
+HALL_DEVICE_KINDS = {}
+
+
+def _hall_device_kinds():
+    if not HALL_DEVICE_KINDS:
+        HALL_DEVICE_KINDS.update({ElectricalPanel: 'panel', BatteryStack: 'battery', Convector: 'convector', TemperatureSensor: 'sensor',
+                                  NetworkDevice: 'network', Camera: 'camera', ModbusDevice: 'inverter'})
+    return HALL_DEVICE_KINDS
+
+
+def _hall_register_device_hooks():
+    def inserted(mapper, connection, target):
+        if has_app_context():
+            g.hall_new_device = True
+
+    def deleted(mapper, connection, target):
+        kind = _hall_device_kinds()[type(target)]
+        connection.execute(HallEquipment.__table__.delete().where((HallEquipment.__table__.c.kind == kind) & (HallEquipment.__table__.c.ref_id == target.id)))
+
+    for model in _hall_device_kinds():
+        db.event.listen(model, 'after_insert', inserted)
+        db.event.listen(model, 'after_delete', deleted)
+
+
+@app.after_request
+def _hall_place_new_devices(response):
+    if g.pop('hall_new_device', False) and response.status_code < 400:
+        try:
+            _hall_auto_place()
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('auto-place of a new device failed')
+    return response
+
+
+_hall_register_device_hooks()
+
+
 # size (w, d, h) and elevation of each equipment kind when it is placed automatically
 HALL_EQUIPMENT_DEFAULTS = {'panel': (0.8, 0.25, 1.2, 1.4), 'convector': (1.0, 0.12, 0.45, 0.2), 'sensor': (0.08, 0.03, 0.08, 1.6),
                            'network': (0.45, 0.25, 0.1, 2.0), 'battery': (0.6, 0.6, 1.8, 0.0), 'inverter': (0.6, 0.3, 0.7, 1.2),
@@ -6191,7 +6245,7 @@ def api_hall_sun():
                     'day': [dict(pos(start + timedelta(minutes=m)), m=m) for m in range(0, 1441, 10)]})
 
 
-def _hall_auto_place(keep=False):
+def _hall_auto_place(keep=False, only=None):
     """Puts every panel, convector, sensor, network device, battery stack and Solis inverter that is not on the map yet onto it.
     A device that sits in a room linked to a marked room on the plan lands inside that room - at its old room-map position (pos_x/pos_y are
     percent of that room's canvas, converted to metres) or spread along the room when it has none; the rest go to a service strip behind
@@ -6211,6 +6265,8 @@ def _hall_auto_place(keep=False):
     in_room, strip = {}, {}
     created = 0
     for kind, query, room_of in sources:
+        if only and kind not in only:
+            continue
         w, d, h, elev = HALL_EQUIPMENT_DEFAULTS[kind]
         for obj in query:
             if (kind, obj.id) in placed:
@@ -7009,6 +7065,9 @@ def admin_hall_equipment_save():
     e.name = str(data.get('name', '')).strip()[:150]
     if e.ref_id and e.target() is None:
         return jsonify({'error': 'Свързаният елемент не съществува.'}), 400
+    t = e.target()
+    if t is not None and e.name and getattr(t, 'name', e.name) != e.name:
+        t.name = e.name                                # renamed on the plan -> the device itself is renamed (two-way)
     db.session.add(e)
     if e.kind in HALL_SYNC_KINDS:
         _hall_push(e.kind, e.target(), e.x + e.width / 2, e.z + e.depth / 2)
@@ -16694,6 +16753,11 @@ def _nvr_channels(nvr):
             for i in sorted(status)]
 
 
+def _channel_option(c):
+    """Dropdown option of an NVR channel; offline ones are red everywhere."""
+    return {'value': c['channel'], 'label': _channel_label(c), 'style': '' if c['online'] else 'color:#dc2626'}
+
+
 def _channel_label(c):
     return f"{c['channel']} · {c['name'] or 'без име'} · {c['ip']} · {'онлайн' if c['online'] else 'офлайн'}"
 
@@ -16710,6 +16774,58 @@ def admin_camera_nvr_channels(nvr_id):
     for c in chans:
         c['label'] = _channel_label(c)
     return jsonify(chans)
+
+
+def _camera_statuses():
+    """{camera id: {online: True/False/None, info}} - NVR cameras from the NVR's channel status (one request per NVR),
+    own-IP cameras by a TCP connect to their ONVIF / RTSP port. None = could not find out (NVR not answering)."""
+    cams = Camera.query.all()
+    out, nvr_state = {}, {}
+    for n in {c.nvr for c in cams if (c.conn_type or 'nvr') == 'nvr' and c.nvr}:
+        try:
+            nvr_state[n.id] = {c['channel']: c for c in _nvr_channels(n)}
+        except Exception:
+            nvr_state[n.id] = None
+
+    def tcp(c):
+        port = c.port or (80 if c.conn_type == 'onvif' else 554)
+        try:
+            socket.create_connection((c.host, port), timeout=1.5).close()
+            return {'online': True, 'info': f'{c.host}:{port}'}
+        except OSError:
+            return {'online': False, 'info': f'{c.host}:{port} не отговаря'}
+
+    own = []
+    for c in cams:
+        if (c.conn_type or 'nvr') == 'nvr':
+            st = nvr_state.get(c.nvr_id)
+            if not c.nvr or not c.channel:
+                out[c.id] = {'online': None, 'info': 'няма NVR/канал'}
+            elif st is None:
+                out[c.id] = {'online': None, 'info': 'NVR не отговаря'}
+            elif c.channel not in st:
+                out[c.id] = {'online': False, 'info': 'каналът го няма в NVR'}
+            else:
+                out[c.id] = {'online': st[c.channel]['online'], 'info': st[c.channel]['ip']}
+        elif c.host:
+            own.append(c)
+        else:
+            out[c.id] = {'online': None, 'info': 'няма IP'}
+    if own:
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            for c, r in zip(own, ex.map(tcp, own)):
+                out[c.id] = r
+    return out
+
+
+@app.route('/admin/cameras/status')
+@role_required('admin')
+@limiter.exempt
+def admin_camera_status():
+    return jsonify({str(k): v for k, v in _camera_statuses().items()})
+
+
+CAMERA_EDIT_JS = "var s = document.createElement('script'); s.src = '/static/js/camera_form.js'; document.body.append(s);"
 
 
 @app.route('/admin/cameras')
@@ -16732,6 +16848,9 @@ def _fill_camera(cam):
     cam.name = f.get('name', '').strip()[:150]
     cam.cam_type = f.get('cam_type') if f.get('cam_type') in CAMERA_TYPES else 'dome'
     cam.model = f.get('model', '').strip()[:100] or None
+    cam.conn_type = f.get('conn_type') if f.get('conn_type') in ('nvr', 'onvif', 'rtsp') else 'nvr'
+    port = f.get('port', '')
+    cam.port = int(port) if port.isdigit() and 0 < int(port) < 65536 else None
     nvr_id = f.get('nvr_id', '')
     cam.nvr_id = int(nvr_id) if nvr_id.isdigit() and db.session.get(CameraNvr, int(nvr_id)) else None
     ch = f.get('channel', '')
@@ -16749,28 +16868,35 @@ def _fill_camera(cam):
     cam.fov = _form_float('fov', cam.fov or 90.0, 5, 360)
     cam.range_m = _form_float('range_m', cam.range_m or 10.0, 1, 100)
     cam.notes = f.get('notes', '').strip() or None
-    return bool(cam.name)
+    if cam.conn_type == 'nvr':
+        return bool(cam.name and cam.nvr_id and cam.channel)
+    return bool(cam.name and cam.host)
 
 
 def _camera_fields(cam):
-    channel = {'name': 'channel', 'label': 'Канал в NVR (1..N)', 'value': cam.channel or '', 'type': 'text'}
+    opts = [{'value': '', 'label': '-- няма --'}]
     if cam.nvr:
         try:
-            channel.update(type='select', options=[{'value': '', 'label': '-- няма --'}] + [{'value': c['channel'], 'label': _channel_label(c)} for c in _nvr_channels(cam.nvr)])
+            opts += [_channel_option(c) for c in _nvr_channels(cam.nvr)]
         except Exception:
-            pass                                       # NVR unreachable: keep the plain number field
+            pass                                       # NVR unreachable: just the saved channel below
+    if cam.channel and not any(o['value'] == cam.channel for o in opts):
+        opts.append({'value': cam.channel, 'label': f'{cam.channel}'})
+    channel = {'name': 'channel', 'label': 'Канал в NVR', 'value': cam.channel or '', 'type': 'select', 'options': opts}
     return [
         {'name': 'name', 'label': 'Име', 'value': cam.name, 'type': 'text', 'required': True},
         {'name': 'cam_type', 'label': 'Вид', 'value': cam.cam_type, 'type': 'select', 'options': [{'value': k, 'label': v} for k, v in CAMERA_TYPES.items()]},
         {'name': 'model', 'label': 'Модел', 'value': cam.model or '', 'type': 'text'},
+        {'name': 'conn_type', 'label': 'Връзка с камерата', 'value': cam.conn_type, 'type': 'select', 'options': CAMERA_CONN_TYPES},
         {'name': 'nvr_id', 'label': 'NVR', 'value': cam.nvr_id or '', 'type': 'select',
-         'options': [{'value': '', 'label': '-- няма (собствен IP) --'}] + [{'value': n.id, 'label': n.name} for n in CameraNvr.query.order_by(CameraNvr.name)]},
+         'options': [{'value': '', 'label': '-- изберете NVR --'}] + [{'value': n.id, 'label': n.name} for n in CameraNvr.query.order_by(CameraNvr.name)]},
         channel,
-        {'name': 'host', 'label': 'Собствен IP (вместо NVR)', 'value': cam.host or '', 'type': 'text'},
+        {'name': 'host', 'label': 'IP адрес на камерата (при NVR се попълва от канала)', 'value': cam.host or '', 'type': 'text'},
+        {'name': 'port', 'label': 'Порт (ONVIF по подразб. 80, RTSP 554)', 'value': cam.port or '', 'type': 'text'},
         {'name': 'rtsp_path', 'label': 'RTSP път на потока (само при собствен IP; празно = /Streaming/Channels/102)', 'value': cam.rtsp_path or '', 'type': 'text'},
         {'name': 'snapshot_path', 'label': 'Адрес на снимката (само при собствен IP; празно = Hikvision ISAPI)', 'value': cam.snapshot_path or '', 'type': 'text'},
-        {'name': 'username', 'label': 'Потребител (само при собствен IP)', 'value': cam.username or '', 'type': 'text'},
-        {'name': 'password', 'label': 'Парола (празно = без промяна)', 'value': '', 'type': 'password'},
+        {'name': 'username', 'label': 'Потребител на камерата', 'value': cam.username or '', 'type': 'text'},
+        {'name': 'password', 'label': 'Парола на камерата (празно = без промяна)', 'value': '', 'type': 'password'},
         {'name': 'yaw', 'label': 'Посока на плана, ° (0 = към +X, по часовниковата)', 'value': cam.yaw, 'type': 'text'},
         {'name': 'tilt', 'label': 'Наклон надолу, °', 'value': cam.tilt, 'type': 'text'},
         {'name': 'fov', 'label': 'Зрително поле, ° (до 360)', 'value': cam.fov, 'type': 'text'},
@@ -16784,9 +16910,11 @@ def _camera_fields(cam):
 def admin_add_camera():
     cam = Camera(yaw=0.0, tilt=30.0, fov=90.0, range_m=10.0)
     if not _fill_camera(cam):
-        flash('Моля въведете име на камерата.', 'danger')
+        flash('Попълнете името и данните за връзка (NVR + канал, или IP).', 'danger')
     else:
         db.session.add(cam)
+        db.session.flush()
+        _hall_auto_place(only=('camera',))              # a camera made here shows on the hall plan at once (service strip; drag it to its place)
         db.session.commit()
         log_action(f'Добавена камера "{cam.name}"')
         flash(f'Камера "{cam.name}" беше добавена. Сложете я на плана от „Хале 3D“.', 'success')
@@ -16798,7 +16926,7 @@ def admin_add_camera():
 def edit_camera_window(cam_id):
     cam = Camera.query.get_or_404(cam_id)
     return render_template('edit_window.html', item_label='камера', saved=request.args.get('saved') == '1',
-                           action=url_for('admin_update_camera', cam_id=cam.id), fields=_camera_fields(cam))
+                           action=url_for('admin_update_camera', cam_id=cam.id), fields=_camera_fields(cam), extra_script=CAMERA_EDIT_JS)
 
 
 @app.route('/admin/cameras/<int:cam_id>/update', methods=['POST'])
@@ -16806,8 +16934,9 @@ def edit_camera_window(cam_id):
 def admin_update_camera(cam_id):
     cam = Camera.query.get_or_404(cam_id)
     if not _fill_camera(cam):
-        flash('Моля въведете име на камерата.', 'danger')
+        flash('Попълнете името и данните за връзка (NVR + канал, или IP).', 'danger')
     else:
+        _hall_auto_place(only=('camera',))
         db.session.commit()
         log_action(f'Обновена камера "{cam.name}"')
         flash(f'Камера "{cam.name}" беше обновена.', 'success')
@@ -16839,7 +16968,11 @@ def _go2rtc_register(cam):
         raise ValueError('Камерата няма нито NVR канал, нито собствен IP.')
     name = f'cam{cam.id}'
     q = urllib.parse.urlencode([('name', name), ('src', rtsp), ('src', f'ffmpeg:{name}#video=mjpeg')])
-    urllib.request.urlopen(urllib.request.Request(f'{GO2RTC_URL}/api/streams?{q}', method='PUT'), timeout=4).read()
+    try:
+        urllib.request.urlopen(urllib.request.Request(f'{GO2RTC_URL}/api/streams?{q}', method='PUT'), timeout=4).read()
+    except urllib.error.HTTPError as exc:               # say what go2rtc objected to (login masked)
+        body = re.sub(r'//[^@\s/]*@', '//***@', exc.read().decode('utf-8', 'replace'))[:200]
+        raise ValueError(f'go2rtc {exc.code}: {body.strip()}') from None
     return name
 
 
@@ -16848,6 +16981,30 @@ def _go2rtc_register(cam):
 def admin_camera_stream_auth():
     """nginx auth_request target for /camstream/ (the video goes nginx -> go2rtc directly, so it never ties up a gunicorn worker)."""
     return ('', 204) if current_user.is_authenticated and current_user.is_admin else ('', 401)
+
+
+if os.environ.get('CAMSTREAM_PROXY') == '1':
+    # Local development only (no nginx): the dev server relays go2rtc's MJPEG/JPEG itself. In production nginx serves /camstream/ before Flask
+    # sees it - never enable this behind gunicorn, a stream would hold a worker for as long as the viewer watches.
+    @app.route('/camstream/api/<any(stream.mjpeg,frame.jpeg):kind>')
+    @role_required('admin')
+    @limiter.exempt
+    def camstream_dev_proxy(kind):
+        src = request.args.get('src', '')
+        if not re.fullmatch(r'cam\d+', src):
+            return '', 403
+        up = urllib.request.urlopen(f'{GO2RTC_URL}/api/{kind}?src={src}', timeout=10)
+
+        def chunks():
+            try:
+                while True:
+                    b = up.read(16384)
+                    if not b:
+                        break
+                    yield b
+            finally:
+                up.close()
+        return app.response_class(chunks(), mimetype=up.headers.get('Content-Type', 'image/jpeg'), headers={'Cache-Control': 'no-store'})
 
 
 @app.route('/admin/cameras/<int:cam_id>/video')

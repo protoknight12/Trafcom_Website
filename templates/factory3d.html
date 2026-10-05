@@ -816,13 +816,14 @@ function equipAdmin(m) {                                    // info panel of a p
         const img = document.createElement('img'); img.alt = ''; img.style.cssText = 'width:100%;margin-top:6px;border-radius:4px;display:block;background:#000;min-height:60px';
         let video = false;
         const t = setInterval(() => load(), 3000), load = () => { if (!img.isConnected) { clearInterval(t); img.src = ''; return; } if (!video && !document.hidden) img.src = '/admin/cameras/' + m.ref_id + '/snapshot?t=' + Date.now(); };
-        load(); info.append(img);
+        info.append(img); load();
         const vb = document.createElement('button'); vb.type = 'button'; vb.className = 'btn'; vb.style.marginTop = '6px'; vb.textContent = "▶ {{ _('Видео') }}";
         vb.onclick = async () => {
-            if (video) { video = false; vb.textContent = "▶ {{ _('Видео') }}"; load(); return; }
+            if (video) { video = false; img.onerror = null; vb.textContent = "▶ {{ _('Видео') }}"; load(); return; }
             const r = await fetch('/admin/cameras/' + m.ref_id + '/video'), d = await r.json().catch(() => ({}));
             if (!r.ok) return alert(d.error || 'Грешка');
-            video = true; vb.textContent = "⏸ {{ _('Снимка') }}"; img.src = d.url;
+            video = true; vb.textContent = "⏸ {{ _('Снимка') }}"; img.onerror = () => { img.onerror = null; video = false; vb.textContent = "▶ {{ _('Видео') }}"; alert('Видео потокът не се зареди: ' + d.url); };
+            img.src = d.url;
         };
         info.append(vb);
     }

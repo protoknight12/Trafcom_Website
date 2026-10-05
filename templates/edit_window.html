@@ -70,7 +70,7 @@
             {% elif f.type == 'select' %}
             <select id="field_{{ loop.index }}" name="{{ f.name }}">
                 {% for opt in f.options %}
-                <option value="{{ opt.value }}" {% if opt.value == f.value %}selected{% endif %}>{{ opt.label }}</option>
+                <option value="{{ opt.value }}" {% if opt.style %}style="{{ opt.style }}"{% endif %} {% if opt.value == f.value %}selected{% endif %}>{{ opt.label }}</option>
                 {% endfor %}
             </select>
             {% elif f.type == 'datalist' %}
@@ -128,5 +128,6 @@
         window.opener.location.reload();
     }
 </script>
+{% if extra_script %}<script>{{ extra_script|safe }}</script>{% endif %}
 </body>
 </html>
