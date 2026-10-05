@@ -3,8 +3,10 @@
 # go2rtc listens only on 127.0.0.1:1984 (RTSP only on localhost: its own ffmpeg transcoding reads from it; no WebRTC); streams are registered by the app, the browser reaches it through nginx /camstream/.
 set -e
 apt-get install -y ffmpeg curl
-curl -fL -o /usr/local/bin/go2rtc https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_linux_amd64   # arm64 server: go2rtc_linux_arm64
-chmod +x /usr/local/bin/go2rtc
+curl -fL -o /tmp/go2rtc.new https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_linux_amd64   # arm64 server: go2rtc_linux_arm64
+chmod +x /tmp/go2rtc.new
+systemctl stop go2rtc 2>/dev/null || true       # a running binary can't be overwritten (Text file busy)
+mv -f /tmp/go2rtc.new /usr/local/bin/go2rtc
 cat > /etc/go2rtc.yaml <<'YAML'
 api:
   listen: "127.0.0.1:1984"
