@@ -103,6 +103,7 @@ const hallLinks = () => LINKS.map(l => Object.assign({ A: hallEnd(l.a), B: hallE
             <button class="f3-btn active" data-m="3d">{{ _('3D карта') }}</button>
             <button class="f3-btn" data-m="plan">{{ _('План (редакция)') }}</button>
             <button class="f3-btn" data-m="roof">{{ _('Покрив и панели') }}</button>
+            <button class="f3-btn" data-m="cameras">{{ _('Камери') }}</button>
             <button class="f3-btn" data-m="devices">{{ _('Устройства и схеми') }}</button>
         </div>
         {% endif %}
@@ -155,6 +156,7 @@ const hallLinks = () => LINKS.map(l => Object.assign({ A: hallEnd(l.a), B: hallE
         </div>
         <iframe id="f3-devframe" style="width:100%;height:80vh;border:1px solid var(--border-color);border-radius:var(--border-radius-md);background:var(--bg-surface)" title="{{ _('Устройства и схеми') }}"></iframe>
     </div>
+    <div id="mode-cameras" hidden><iframe id="f3-camframe" data-src="{{ url_for('admin_cameras') }}" style="width:100%;height:80vh;border:1px solid var(--border-color);border-radius:var(--border-radius-md);background:var(--bg-surface)" title="{{ _('Камери') }}"></iframe></div>
     <div id="mode-roof" hidden><iframe id="f3-roofframe" data-src="{{ url_for('admin_solar_roof') }}" title="{{ _('Покрив и соларни панели') }}"></iframe></div>
     {% endif %}
 </main>
@@ -404,13 +406,23 @@ MACHINES.forEach(m => {
     const cap = [m.no, m.name.replace(/^CNC\s+/, '')].filter(v => v != null && v !== '').join(' · ');   // "3 · верт. обр. център DMG DMU 75 monoblok"
     if (cap) label(cap, g.position.x, (m.elevation || 0) + m.height + 1.2, g.position.z, 0.9, machineLabels);
 });
-const EQ = { inverter: "{{ _('Инвертор') }}", battery: "{{ _('Батериен блок') }}", panel: "{{ _('Ел. табло') }}", convector: "{{ _('Конвектор') }}", sensor: "{{ _('Температурен сензор') }}", network: "{{ _('Мрежово устройство') }}" };
+const EQ = { inverter: "{{ _('Инвертор') }}", battery: "{{ _('Батериен блок') }}", panel: "{{ _('Ел. табло') }}", convector: "{{ _('Конвектор') }}", sensor: "{{ _('Температурен сензор') }}", network: "{{ _('Мрежово устройство') }}", camera: "{{ _('Камера') }}" };
 EQUIP.forEach(e => {
-    tgt = layer(e.kind === 'network' ? 'network' : e.kind === 'convector' || e.kind === 'sensor' ? 'iot' : 'equip');
+    tgt = layer(e.kind === 'network' ? 'network' : e.kind === 'camera' ? 'cam' : e.kind === 'convector' || e.kind === 'sensor' ? 'iot' : 'equip');
     const [lw, ld] = dims(e.width, e.depth, e.rotation);
     const g = place(buildEquipment(e.kind, lw, ld, e.height), e, Object.assign({ equip: true }, e));
     if (e.ref_id) OBJ[e.kind + ':' + e.ref_id] = g;
     label(e.label, g.position.x, (e.elevation || 0) + e.height + 0.8, g.position.z, 1.3);
+    if (e.cam) {                    // field of view: translucent cone from the camera, pointing along yaw (0 = +X, clockwise from above) and tilted down
+        const c = e.cam, len = c.range, rad = c.fov >= 359 ? len * 0.9 : Math.min(len * Math.tan(c.fov * Math.PI / 360), len * 3);
+        const cone = new THREE.Mesh(new THREE.ConeGeometry(rad, len, 24, 1, true), new THREE.MeshBasicMaterial({ color: 0xe879f9, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false }));
+        cone.geometry.translate(0, -len / 2, 0);        // apex at the origin, axis along -Y
+        const pivot = new THREE.Group();
+        pivot.position.set(e.x + e.width / 2, (e.elevation || 0) + e.height / 2, e.z + e.depth / 2);
+        const ya = c.yaw * Math.PI / 180, ti = c.tilt * Math.PI / 180;    // plan yaw clockwise from +X toward +Z (plan "down"), tilt below the horizon
+        pivot.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), new THREE.Vector3(Math.cos(ti) * Math.cos(ya), -Math.sin(ti), Math.cos(ti) * Math.sin(ya)));
+        pivot.add(cone); tgt.add(pivot);
+    }
 });
 
 tgt = scene;
@@ -597,7 +609,7 @@ const LAYER_DEFS = [
                            ['block', "{{ _('Съседни сгради') }}"], ['floor', "{{ _('Подова настилка') }}"], ['room', "{{ _('Помещения') }}"], ['fixture', "{{ _('Обзавеждане') }}"]]],
     ["{{ _('Имоти') }}", [['parcel', "{{ _('Граници на имотите (кадастър)') }}"]]],
     ["{{ _('Оборудване') }}", [['machine', "{{ _('Машини и инвентар') }}"], ['equip', "{{ _('Инвертори, батерии, табла') }}"],
-                              ['network', "{{ _('Мрежови устройства (суичове, рутери)') }}"], ['iot', "{{ _('IoT: сензори, конвектори, измерватели') }}"]]],
+                              ['network', "{{ _('Мрежови устройства (суичове, рутери)') }}"], ['cam', "{{ _('Камери и зрително поле') }}"], ['iot', "{{ _('IoT: сензори, конвектори, измерватели') }}"]]],
     ...(IS_ADMIN ? [["{{ _('Връзки (анимирани)') }}", [['links_power', "{{ _('Ел. връзки: табла, инвертори, батерии, машини') }}"], ['links_data', "{{ _('Мрежови връзки и комуникации') }}"],
                                                     ['links_dc', "{{ _('DC кабели на панелите (стринг -> инвертор, по билото)') }}"]]]] : []),
     ["{{ _('Надписи') }}", [['mlabels', "{{ _('Машини: номера и имена') }}"], ['labels', "{{ _('Други надписи') }}"]]],
@@ -651,7 +663,7 @@ KEYS.forEach(applyLayer);
 const shown = o => { for (; o; o = o.parent) if (!o.visible) return false; return true; };
 
 // ---- modes: 3D map / plan editor / roof (admins); everything shares the layers above ----
-const MODES = ['3d', 'plan', 'roof', 'devices'];
+const MODES = ['3d', 'plan', 'roof', 'cameras', 'devices'];
 function resizeNow() { if (typeof resize === 'function') resize(); }
 function setMode(m) {
     if (!IS_ADMIN || !MODES.includes(m)) m = '3d';
@@ -663,6 +675,7 @@ function setMode(m) {
         const fr = document.getElementById('f3-roofframe');
         if (!fr.src) { fr.src = fr.dataset.src; fr.onload = () => { try { fr.contentDocument.getElementById('backLink')?.remove(); } catch (e) { } }; }
     }
+    if (m === 'cameras') { const fr = document.getElementById('f3-camframe'); if (!fr.src) fr.src = fr.dataset.src; }
     if (m === 'devices' && !document.getElementById('f3-devframe').src) openDevice(document.querySelector('#f3-devnav [data-url]').dataset.url);
     if (IS_ADMIN && location.hash.slice(1) !== m) history.replaceState(null, '', '#' + m);
     if (m === '3d') resizeNow();
@@ -799,6 +812,20 @@ function equipAdmin(m) {                                    // info panel of a p
     info.append(document.createElement('hr'));
     const live = document.createElement('div'); live.style.fontSize = '0.85rem'; live.append("{{ _('Състояние') }}: ", Object.assign(document.createElement('b'), { id: 'f3-live', textContent: '...' })); info.append(live);
     relatedLinks(m);
+    if (m.kind === 'camera' && m.ref_id) {                      // snapshot every 3 s; "Видео" switches the same <img> to the live MJPEG stream (nginx -> go2rtc)
+        const img = document.createElement('img'); img.alt = ''; img.style.cssText = 'width:100%;margin-top:6px;border-radius:4px;display:block;background:#000;min-height:60px';
+        let video = false;
+        const t = setInterval(() => load(), 3000), load = () => { if (!img.isConnected) { clearInterval(t); img.src = ''; return; } if (!video && !document.hidden) img.src = '/admin/cameras/' + m.ref_id + '/snapshot?t=' + Date.now(); };
+        load(); info.append(img);
+        const vb = document.createElement('button'); vb.type = 'button'; vb.className = 'btn'; vb.style.marginTop = '6px'; vb.textContent = "▶ {{ _('Видео') }}";
+        vb.onclick = async () => {
+            if (video) { video = false; vb.textContent = "▶ {{ _('Видео') }}"; load(); return; }
+            const r = await fetch('/admin/cameras/' + m.ref_id + '/video'), d = await r.json().catch(() => ({}));
+            if (!r.ok) return alert(d.error || 'Грешка');
+            video = true; vb.textContent = "⏸ {{ _('Снимка') }}"; img.src = d.url;
+        };
+        info.append(vb);
+    }
     const row = document.createElement('div'); row.className = 'act';
     if (m.kind === 'convector' && m.ref_id) {
         const t = document.createElement('button'); t.className = 'btn'; t.id = 'f3-toggle'; t.type = 'button'; t.textContent = "{{ _('Превключи') }}";

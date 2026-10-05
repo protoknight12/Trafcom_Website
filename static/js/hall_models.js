@@ -187,6 +187,10 @@ const EQUIPMENT = {
         box(g, w, h, d, 0, 0, 0, MAT.white);
         box(g, w * 0.3, h * 0.3, 0.01, 0, h * 0.4, d / 2 + 0.006, MAT.green);
     },
+    camera(g, w, d, h) {                                       // dome / bullet camera: white body with a dark lens
+        box(g, w, h, d, 0, 0, 0, MAT.white);
+        box(g, w * 0.5, h * 0.5, 0.02, 0, h * 0.25, d / 2 + 0.01, MAT.black);
+    },
     network(g, w, d, h) {                                      // switch / router: flat dark box with a row of port lights
         box(g, w, h, d, 0, 0, 0, MAT.dark);
         for (let i = 0; i < 8; i++) box(g, w * 0.07, h * 0.25, 0.01, (i - 3.5) * w * 0.11, h * 0.5, d / 2 + 0.006, MAT.green);

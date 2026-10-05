@@ -13,6 +13,7 @@ import csv
 import webbrowser
 import threading
 import time
+import xml.etree.ElementTree as ET
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -2697,7 +2698,61 @@ def _hall_parcels():
 
 
 HALL_EQUIPMENT_KINDS = {'inverter': 'Инвертор', 'battery': 'Батериен блок', 'panel': 'Ел. табло', 'convector': 'Конвектор',
-                        'sensor': 'Температурен сензор', 'network': 'Мрежово устройство'}
+                        'sensor': 'Температурен сензор', 'network': 'Мрежово устройство', 'camera': 'Камера'}
+
+CAMERA_TYPES = {'dome': 'Купол', 'ptz': 'Въртяща (PTZ)', 'bullet': 'Bullet', 'fisheye': 'Рибешко око', 'other': 'Друга'}
+
+
+class CameraNvr(db.Model):
+    """A Hikvision NVR the cameras are recorded on; a camera is one of its channels (1..N)."""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    host = db.Column(db.String(100), nullable=False)
+    port = db.Column(db.Integer, nullable=False, default=80)          # HTTP (ISAPI) port
+    username = db.Column(db.String(100), nullable=True)
+    password_encrypted = db.Column(db.Text, nullable=True)            # _encrypt_secret(); needs NETWORK_API_ENCRYPTION_KEY
+
+
+class Camera(db.Model):
+    """An IP camera. Reached either through its NVR channel (nvr_id + channel) or directly (host + own login).
+    yaw = compass-free hall direction in degrees (0 = +X axis, clockwise on the plan), tilt = degrees below horizontal."""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(150), nullable=False)
+    cam_type = db.Column(db.String(10), nullable=False, default='dome')
+    model = db.Column(db.String(100), nullable=True)
+    nvr_id = db.Column(db.Integer, db.ForeignKey('camera_nvr.id'), nullable=True)
+    channel = db.Column(db.Integer, nullable=True)
+    host = db.Column(db.String(100), nullable=True)
+    username = db.Column(db.String(100), nullable=True)
+    password_encrypted = db.Column(db.Text, nullable=True)
+    rtsp_path = db.Column(db.String(200), nullable=True)              # own-IP cameras: RTSP path, e.g. /Streaming/Channels/102 (default = Hikvision sub stream)
+    snapshot_path = db.Column(db.String(200), nullable=True)          # own-IP cameras that aren't Hikvision ISAPI, e.g. /cgi-bin/snapshot.cgi
+    yaw = db.Column(db.Float, nullable=False, default=0.0)
+    tilt = db.Column(db.Float, nullable=False, default=30.0)
+    fov = db.Column(db.Float, nullable=False, default=90.0)           # horizontal field of view, degrees (PTZ/fisheye: 360 allowed)
+    range_m = db.Column(db.Float, nullable=False, default=10.0)
+    notes = db.Column(db.Text, nullable=True)
+
+    nvr = db.relationship('CameraNvr', backref='cameras')
+
+    def rtsp_url(self):
+        """rtsp:// URL (with login) of the light sub stream, for go2rtc; None when there is no way to reach the camera."""
+        q = lambda v: urllib.parse.quote(v or '', safe='')
+        if self.host:
+            return f"rtsp://{q(self.username)}:{q(_decrypt_secret(self.password_encrypted))}@{self.host}:554{self.rtsp_path or '/Streaming/Channels/102'}"
+        if self.nvr and self.channel:
+            n = self.nvr
+            return f"rtsp://{q(n.username)}:{q(_decrypt_secret(n.password_encrypted))}@{n.host}:554/Streaming/Channels/{self.channel}02"
+        return None
+
+    def snapshot_target(self):
+        """(url, user, password) of the JPEG snapshot, or None when neither a channel nor an own host is set."""
+        if self.host:
+            return f'http://{self.host}{self.snapshot_path or "/ISAPI/Streaming/channels/101/picture"}', self.username, _decrypt_secret(self.password_encrypted)
+        if self.nvr and self.channel:
+            n = self.nvr
+            return f'http://{n.host}:{n.port}/ISAPI/Streaming/channels/{self.channel}01/picture', n.username, _decrypt_secret(n.password_encrypted)
+        return None
 
 
 class HallEquipment(db.Model):
@@ -2719,12 +2774,13 @@ class HallEquipment(db.Model):
 
     def target(self):
         model = {'inverter': ModbusDevice, 'battery': BatteryStack, 'panel': ElectricalPanel, 'convector': Convector,
-                 'sensor': TemperatureSensor, 'network': NetworkDevice}[self.kind]
+                 'sensor': TemperatureSensor, 'network': NetworkDevice, 'camera': Camera}[self.kind]
         return db.session.get(model, self.ref_id) if self.ref_id else None
 
     def as_dict(self):
         t = self.target()
-        return {'id': self.id, 'kind': self.kind, 'ref_id': self.ref_id, 'name': self.name or '', 'x': self.x, 'z': self.z,
+        cam = {'yaw': t.yaw, 'tilt': t.tilt, 'fov': t.fov, 'range': t.range_m, 'type': t.cam_type} if self.kind == 'camera' and t else None
+        return {'cam': cam,'id': self.id, 'kind': self.kind, 'ref_id': self.ref_id, 'name': self.name or '', 'x': self.x, 'z': self.z,
                 'width': self.width, 'depth': self.depth, 'height': self.height, 'elevation': self.elevation, 'rotation': self.rotation, 'parent_id': self.parent_id,
                 'label': self.name or (t.name if t else '') or HALL_EQUIPMENT_KINDS[self.kind]}
 
@@ -2751,6 +2807,7 @@ def _hall_equipment_choices():
         'convector': [{'id': c.id, 'label': c.name} for c in Convector.query.order_by(Convector.name)],
         'sensor': [{'id': t.id, 'label': t.name} for t in TemperatureSensor.query.order_by(TemperatureSensor.name)],
         'network': [{'id': n.id, 'label': n.name} for n in NetworkDevice.query.order_by(NetworkDevice.name)],
+        'camera': [{'id': c.id, 'label': c.name} for c in Camera.query.order_by(Camera.name)],
     }
 
 
@@ -5035,6 +5092,9 @@ CREATE_NEW_TARGETS = {
     'user': ('admin_users', 1),
     'network_device': ('admin_network', 1),
     'inverter': ('admin_power', 2),
+    'camera': ('admin_cameras', 2),           # 1 = "+ Нов NVR"
+    'sensor': ('admin_temperature_sensors', 1),
+    'convector': ('admin_convectors', 1),
 }
 
 
@@ -6111,7 +6171,8 @@ def admin_hall_sync_maps():
 
 # size (w, d, h) and elevation of each equipment kind when it is placed automatically
 HALL_EQUIPMENT_DEFAULTS = {'panel': (0.8, 0.25, 1.2, 1.4), 'convector': (1.0, 0.12, 0.45, 0.2), 'sensor': (0.08, 0.03, 0.08, 1.6),
-                           'network': (0.45, 0.25, 0.1, 2.0), 'battery': (0.6, 0.6, 1.8, 0.0), 'inverter': (0.6, 0.3, 0.7, 1.2)}
+                           'network': (0.45, 0.25, 0.1, 2.0), 'battery': (0.6, 0.6, 1.8, 0.0), 'inverter': (0.6, 0.3, 0.7, 1.2),
+                           'camera': (0.15, 0.15, 0.12, 4.0)}
 
 
 @app.route('/api/hall/sun')
@@ -6145,7 +6206,8 @@ def _hall_auto_place(keep=False):
                ('sensor', TemperatureSensor.query.order_by(TemperatureSensor.id), lambda o: o.room_id),
                ('inverter', ModbusDevice.query.filter_by(device_type='solis_s6').order_by(ModbusDevice.id),
                 lambda o: o.panel.room_id if o.panel_id else None),
-               ('network', NetworkDevice.query.order_by(NetworkDevice.id), lambda o: None)]
+               ('network', NetworkDevice.query.order_by(NetworkDevice.id), lambda o: None),
+               ('camera', Camera.query.order_by(Camera.id), lambda o: None)]
     in_room, strip = {}, {}
     created = 0
     for kind, query, room_of in sources:
@@ -6910,6 +6972,13 @@ def admin_hall_renumber():
     db.session.commit()
     log_action(f'Хале 3D: преномерирани {len(machines)} машини')
     return jsonify({str(m.id): m.no for m in machines})
+
+
+@app.route('/admin/hall/choices')
+@role_required('admin')
+def admin_hall_choices():
+    """Fresh link targets per equipment kind - the plan editor re-reads them after a device was created in a dialog."""
+    return jsonify(_hall_equipment_choices())
 
 
 @app.route('/admin/hall/equipment/save', methods=['POST'])
@@ -16581,6 +16650,301 @@ def admin_delete_temperature_sensor(sensor_id):
     log_action(f'Изтрит температурен сензор "{name}"')
     flash(f'Сензор "{name}" беше изтрит.', 'success')
     return redirect(url_for('admin_temperature_sensors'))
+
+
+# ----------------- КАМЕРИ (Hikvision NVR / IP камери) -----------------
+
+def _camera_snapshot_jpeg(cam, timeout=4):
+    """JPEG bytes from the camera's ISAPI snapshot (digest auth, Hikvision default; basic as fallback) or raises."""
+    target = cam.snapshot_target()
+    if not target:
+        raise ValueError('Камерата няма нито NVR канал, нито собствен IP.')
+    return _isapi_get(*target, timeout=timeout)
+
+
+def _isapi_get(url, user, password, timeout=4):
+    """GET with digest (Hikvision default) or basic auth; returns the body bytes."""
+    mgr = urllib.request.HTTPPasswordMgrWithDefaultRealm()
+    mgr.add_password(None, url, user or '', password or '')
+    opener = urllib.request.build_opener(urllib.request.HTTPDigestAuthHandler(mgr), urllib.request.HTTPBasicAuthHandler(mgr))
+    with opener.open(url, timeout=timeout) as r:
+        return r.read()
+
+
+def _nvr_channels(nvr):
+    """[{channel, name, ip, protocol, online}] of the NVR's IP channels (ISAPI InputProxy), or raises."""
+    base, user, pw = f'http://{nvr.host}:{nvr.port}', nvr.username, _decrypt_secret(nvr.password_encrypted)
+
+    def rows(path, tag):
+        out = {}
+        for el in ET.fromstring(_isapi_get(base + path, user, pw, timeout=8)):
+            if not el.tag.endswith('}' + tag) and el.tag != tag:
+                continue
+            d = {}
+            for e in el.iter():
+                d.setdefault(e.tag.split('}')[-1], (e.text or '').strip())
+            if d.get('id', '').isdigit():
+                out[int(d['id'])] = d
+        return out
+
+    info = rows('/ISAPI/ContentMgmt/InputProxy/channels', 'InputProxyChannel')
+    status = rows('/ISAPI/ContentMgmt/InputProxy/channels/status', 'InputProxyChannelStatus')
+    return [{'channel': i, 'name': info.get(i, {}).get('name') or status[i].get('deviceID') or '',
+             'ip': status[i].get('ipAddress', ''), 'protocol': status[i].get('proxyProtocol', ''), 'online': status[i].get('online') == 'true'}
+            for i in sorted(status)]
+
+
+def _channel_label(c):
+    return f"{c['channel']} · {c['name'] or 'без име'} · {c['ip']} · {'онлайн' if c['online'] else 'офлайн'}"
+
+
+@app.route('/admin/cameras/nvr/<int:nvr_id>/channels')
+@role_required('admin')
+def admin_camera_nvr_channels(nvr_id):
+    """Channels the NVR reports, for the camera form's dropdown."""
+    nvr = CameraNvr.query.get_or_404(nvr_id)
+    try:
+        chans = _nvr_channels(nvr)
+    except Exception as exc:
+        return jsonify({'error': f'NVR не отговаря: {exc}'}), 502
+    for c in chans:
+        c['label'] = _channel_label(c)
+    return jsonify(chans)
+
+
+@app.route('/admin/cameras')
+@role_required('admin')
+def admin_cameras():
+    return render_template('admin_cameras.html', nvrs=CameraNvr.query.order_by(CameraNvr.name).all(),
+                           cameras=Camera.query.order_by(Camera.name).all(), types=CAMERA_TYPES,
+                           key_ok=_network_api_fernet() is not None, active_page='admin_cameras')
+
+
+def _form_float(name, default, lo, hi):
+    try:
+        return max(lo, min(hi, float(request.form.get(name, '').replace(',', '.'))))
+    except ValueError:
+        return default
+
+
+def _fill_camera(cam):
+    f = request.form
+    cam.name = f.get('name', '').strip()[:150]
+    cam.cam_type = f.get('cam_type') if f.get('cam_type') in CAMERA_TYPES else 'dome'
+    cam.model = f.get('model', '').strip()[:100] or None
+    nvr_id = f.get('nvr_id', '')
+    cam.nvr_id = int(nvr_id) if nvr_id.isdigit() and db.session.get(CameraNvr, int(nvr_id)) else None
+    ch = f.get('channel', '')
+    cam.channel = int(ch) if ch.isdigit() and int(ch) > 0 else None
+    cam.host = f.get('host', '').strip()[:100] or None
+    cam.username = f.get('username', '').strip()[:100] or None
+    rp = f.get('rtsp_path', '').strip()[:200]
+    cam.rtsp_path = (rp if rp.startswith('/') else '/' + rp) if rp else None
+    path = f.get('snapshot_path', '').strip()[:200]
+    cam.snapshot_path = (path if path.startswith('/') else '/' + path) if path else None
+    if f.get('password'):
+        cam.password_encrypted = _encrypt_secret(f['password'])
+    cam.yaw = _form_float('yaw', cam.yaw or 0.0, -360, 360)
+    cam.tilt = _form_float('tilt', cam.tilt if cam.tilt is not None else 30.0, 0, 90)
+    cam.fov = _form_float('fov', cam.fov or 90.0, 5, 360)
+    cam.range_m = _form_float('range_m', cam.range_m or 10.0, 1, 100)
+    cam.notes = f.get('notes', '').strip() or None
+    return bool(cam.name)
+
+
+def _camera_fields(cam):
+    channel = {'name': 'channel', 'label': 'Канал в NVR (1..N)', 'value': cam.channel or '', 'type': 'text'}
+    if cam.nvr:
+        try:
+            channel.update(type='select', options=[{'value': '', 'label': '-- няма --'}] + [{'value': c['channel'], 'label': _channel_label(c)} for c in _nvr_channels(cam.nvr)])
+        except Exception:
+            pass                                       # NVR unreachable: keep the plain number field
+    return [
+        {'name': 'name', 'label': 'Име', 'value': cam.name, 'type': 'text', 'required': True},
+        {'name': 'cam_type', 'label': 'Вид', 'value': cam.cam_type, 'type': 'select', 'options': [{'value': k, 'label': v} for k, v in CAMERA_TYPES.items()]},
+        {'name': 'model', 'label': 'Модел', 'value': cam.model or '', 'type': 'text'},
+        {'name': 'nvr_id', 'label': 'NVR', 'value': cam.nvr_id or '', 'type': 'select',
+         'options': [{'value': '', 'label': '-- няма (собствен IP) --'}] + [{'value': n.id, 'label': n.name} for n in CameraNvr.query.order_by(CameraNvr.name)]},
+        channel,
+        {'name': 'host', 'label': 'Собствен IP (вместо NVR)', 'value': cam.host or '', 'type': 'text'},
+        {'name': 'rtsp_path', 'label': 'RTSP път на потока (само при собствен IP; празно = /Streaming/Channels/102)', 'value': cam.rtsp_path or '', 'type': 'text'},
+        {'name': 'snapshot_path', 'label': 'Адрес на снимката (само при собствен IP; празно = Hikvision ISAPI)', 'value': cam.snapshot_path or '', 'type': 'text'},
+        {'name': 'username', 'label': 'Потребител (само при собствен IP)', 'value': cam.username or '', 'type': 'text'},
+        {'name': 'password', 'label': 'Парола (празно = без промяна)', 'value': '', 'type': 'password'},
+        {'name': 'yaw', 'label': 'Посока на плана, ° (0 = към +X, по часовниковата)', 'value': cam.yaw, 'type': 'text'},
+        {'name': 'tilt', 'label': 'Наклон надолу, °', 'value': cam.tilt, 'type': 'text'},
+        {'name': 'fov', 'label': 'Зрително поле, ° (до 360)', 'value': cam.fov, 'type': 'text'},
+        {'name': 'range_m', 'label': 'Обхват, м', 'value': cam.range_m, 'type': 'text'},
+        {'name': 'notes', 'label': 'Бележки', 'value': cam.notes or '', 'type': 'textarea'},
+    ]
+
+
+@app.route('/admin/cameras/create', methods=['POST'])
+@role_required('admin')
+def admin_add_camera():
+    cam = Camera(yaw=0.0, tilt=30.0, fov=90.0, range_m=10.0)
+    if not _fill_camera(cam):
+        flash('Моля въведете име на камерата.', 'danger')
+    else:
+        db.session.add(cam)
+        db.session.commit()
+        log_action(f'Добавена камера "{cam.name}"')
+        flash(f'Камера "{cam.name}" беше добавена. Сложете я на плана от „Хале 3D“.', 'success')
+    return redirect(url_for('admin_cameras'))
+
+
+@app.route('/admin/cameras/<int:cam_id>/edit')
+@role_required('admin')
+def edit_camera_window(cam_id):
+    cam = Camera.query.get_or_404(cam_id)
+    return render_template('edit_window.html', item_label='камера', saved=request.args.get('saved') == '1',
+                           action=url_for('admin_update_camera', cam_id=cam.id), fields=_camera_fields(cam))
+
+
+@app.route('/admin/cameras/<int:cam_id>/update', methods=['POST'])
+@role_required('admin')
+def admin_update_camera(cam_id):
+    cam = Camera.query.get_or_404(cam_id)
+    if not _fill_camera(cam):
+        flash('Моля въведете име на камерата.', 'danger')
+    else:
+        db.session.commit()
+        log_action(f'Обновена камера "{cam.name}"')
+        flash(f'Камера "{cam.name}" беше обновена.', 'success')
+    if request.form.get('popup') == '1':
+        return redirect(url_for('edit_camera_window', cam_id=cam_id, saved='1'))
+    return redirect(url_for('admin_cameras'))
+
+
+@app.route('/admin/cameras/<int:cam_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_delete_camera(cam_id):
+    cam = Camera.query.get_or_404(cam_id)
+    HallEquipment.query.filter_by(kind='camera', ref_id=cam.id).delete()
+    log_action(f'Изтрита камера "{cam.name}"')
+    db.session.delete(cam)
+    db.session.commit()
+    flash('Камерата беше изтрита.', 'success')
+    return redirect(url_for('admin_cameras'))
+
+
+GO2RTC_URL = os.environ.get('GO2RTC_URL', 'http://127.0.0.1:1984')
+
+
+def _go2rtc_register(cam):
+    """(Re)registers the camera as stream cam<id> in the local go2rtc (login stays inside this app; go2rtc only listens on localhost).
+    Second source = the same stream transcoded to MJPEG (needs ffmpeg), which is what the browser <img> plays."""
+    rtsp = cam.rtsp_url()
+    if not rtsp:
+        raise ValueError('Камерата няма нито NVR канал, нито собствен IP.')
+    name = f'cam{cam.id}'
+    q = urllib.parse.urlencode([('name', name), ('src', rtsp), ('src', f'ffmpeg:{name}#video=mjpeg')])
+    urllib.request.urlopen(urllib.request.Request(f'{GO2RTC_URL}/api/streams?{q}', method='PUT'), timeout=4).read()
+    return name
+
+
+@app.route('/admin/cameras/auth')
+@limiter.exempt
+def admin_camera_stream_auth():
+    """nginx auth_request target for /camstream/ (the video goes nginx -> go2rtc directly, so it never ties up a gunicorn worker)."""
+    return ('', 204) if current_user.is_authenticated and current_user.is_admin else ('', 401)
+
+
+@app.route('/admin/cameras/<int:cam_id>/video')
+@role_required('admin')
+@limiter.exempt
+def admin_camera_video(cam_id):
+    """Registers the stream in go2rtc and returns the MJPEG URL to put in an <img>."""
+    cam = Camera.query.get_or_404(cam_id)
+    try:
+        name = _go2rtc_register(cam)
+    except Exception as exc:
+        return jsonify({'error': f'Видеото не е налично (go2rtc): {exc}'}), 502
+    return jsonify({'url': f'/camstream/api/stream.mjpeg?src={name}'})
+
+
+@app.route('/admin/cameras/<int:cam_id>/snapshot')
+@role_required('admin')
+@limiter.exempt
+def admin_camera_snapshot(cam_id):
+    """Live frame (JPEG) for the 3D info panel / cameras page; polled every few seconds."""
+    cam = Camera.query.get_or_404(cam_id)
+    try:
+        data = _camera_snapshot_jpeg(cam)
+    except Exception as exc:
+        try:                                            # the NVR can't make a JPEG of some channels (Device Error): decode the stream instead
+            name = _go2rtc_register(cam)
+            data = urllib.request.urlopen(f'{GO2RTC_URL}/api/frame.jpeg?src={name}', timeout=8).read()
+        except Exception:
+            return jsonify({'error': f'Камерата не отговаря: {exc}'}), 502
+    return app.response_class(data, mimetype='image/jpeg', headers={'Cache-Control': 'no-store'})
+
+
+def _fill_nvr(n):
+    f = request.form
+    n.name = f.get('name', '').strip()[:100]
+    n.host = f.get('host', '').strip()[:100]
+    n.port = int(f['port']) if f.get('port', '').isdigit() and 0 < int(f['port']) < 65536 else 80
+    n.username = f.get('username', '').strip()[:100] or None
+    if f.get('password'):
+        n.password_encrypted = _encrypt_secret(f['password'])
+    return bool(n.name and n.host)
+
+
+@app.route('/admin/cameras/nvr/create', methods=['POST'])
+@role_required('admin')
+def admin_add_camera_nvr():
+    n = CameraNvr()
+    if not _fill_nvr(n):
+        flash('Моля въведете име и IP на NVR.', 'danger')
+    else:
+        db.session.add(n)
+        db.session.commit()
+        log_action(f'Добавен NVR "{n.name}"')
+        flash(f'NVR "{n.name}" беше добавен.', 'success')
+    return redirect(url_for('admin_cameras'))
+
+
+@app.route('/admin/cameras/nvr/<int:nvr_id>/edit')
+@role_required('admin')
+def edit_camera_nvr_window(nvr_id):
+    n = CameraNvr.query.get_or_404(nvr_id)
+    return render_template('edit_window.html', item_label='NVR', saved=request.args.get('saved') == '1',
+                           action=url_for('admin_update_camera_nvr', nvr_id=n.id), fields=[
+        {'name': 'name', 'label': 'Име', 'value': n.name, 'type': 'text', 'required': True},
+        {'name': 'host', 'label': 'IP адрес', 'value': n.host, 'type': 'text', 'required': True},
+        {'name': 'port', 'label': 'HTTP порт (ISAPI)', 'value': n.port, 'type': 'text'},
+        {'name': 'username', 'label': 'Потребител', 'value': n.username or '', 'type': 'text'},
+        {'name': 'password', 'label': 'Парола (празно = без промяна)', 'value': '', 'type': 'password'}])
+
+
+@app.route('/admin/cameras/nvr/<int:nvr_id>/update', methods=['POST'])
+@role_required('admin')
+def admin_update_camera_nvr(nvr_id):
+    n = CameraNvr.query.get_or_404(nvr_id)
+    if not _fill_nvr(n):
+        flash('Моля въведете име и IP на NVR.', 'danger')
+    else:
+        db.session.commit()
+        log_action(f'Обновен NVR "{n.name}"')
+        flash(f'NVR "{n.name}" беше обновен.', 'success')
+    if request.form.get('popup') == '1':
+        return redirect(url_for('edit_camera_nvr_window', nvr_id=nvr_id, saved='1'))
+    return redirect(url_for('admin_cameras'))
+
+
+@app.route('/admin/cameras/nvr/<int:nvr_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_delete_camera_nvr(nvr_id):
+    n = CameraNvr.query.get_or_404(nvr_id)
+    if n.cameras:
+        flash('NVR има свързани камери - първо ги преместете или изтрийте.', 'danger')
+    else:
+        log_action(f'Изтрит NVR "{n.name}"')
+        db.session.delete(n)
+        db.session.commit()
+        flash('NVR беше изтрит.', 'success')
+    return redirect(url_for('admin_cameras'))
 
 
 # ----------------- КОНВЕКТОРИ -----------------

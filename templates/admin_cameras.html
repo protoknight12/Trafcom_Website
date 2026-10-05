@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Камери - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    {% if not key_ok %}
+    <div class="alert alert-danger">Не е зададен <code>NETWORK_API_ENCRYPTION_KEY</code> - паролите на NVR/камерите не могат да се запазят.</div>
+    {% endif %}
+
+    <section class="admin-card" data-dialog-section="+ Нов NVR">
+        <h3>Нов NVR (Hikvision)</h3>
+        <form action="{{ url_for('admin_add_camera_nvr') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group"><label>Име</label><input type="text" name="name" required placeholder="напр. NVR хале"></div>
+            <div class="form-group"><label>IP адрес</label><input type="text" name="host" required placeholder="192.168.18.x"></div>
+            <div class="form-group"><label>HTTP порт (ISAPI)</label><input type="text" name="port" value="80" inputmode="numeric"></div>
+            <div class="form-group"><label>Потребител</label><input type="text" name="username"></div>
+            <div class="form-group"><label>Парола</label><input type="password" name="password" autocomplete="new-password"></div>
+            <button type="submit" class="btn-submit">Добави NVR</button>
+        </form>
+    </section>
+
+    <section class="admin-card" data-dialog-section="+ Нова камера">
+        <h3>Нова камера</h3>
+        <p class="section-subtitle">Или през NVR (изберете NVR и канал), или директно по собствен IP с потребител и парола.</p>
+        <form action="{{ url_for('admin_add_camera') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group"><label>Име</label><input type="text" name="name" required placeholder="напр. Купол - вход"></div>
+            <div class="form-group"><label>Вид</label>
+                <select name="cam_type">{% for k, v in types.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></div>
+            <div class="form-group"><label>Модел</label><input type="text" name="model" placeholder="напр. DS-2CD2347G2"></div>
+            <div class="form-group"><label>NVR</label>
+                <select name="nvr_id" id="newCamNvr"><option value="">-- няма (собствен IP) --</option>
+                    {% for n in nvrs %}<option value="{{ n.id }}">{{ n.name }}</option>{% endfor %}</select></div>
+            <div class="form-group"><label>Канал в NVR</label>
+                <select name="channel" id="newCamChannel"><option value="">-- първо изберете NVR --</option></select>
+                <p class="text-small text-muted" id="newCamChannelMsg" style="margin-top:4px"></p></div>
+            <div class="form-group"><label>Собствен IP (вместо NVR)</label><input type="text" name="host"></div>
+            <div class="form-group"><label>Адрес на снимката (само при собствен IP; празно = Hikvision ISAPI)</label><input type="text" name="snapshot_path" placeholder="напр. /cgi-bin/snapshot.cgi"></div>
+            <div class="form-group"><label>Потребител (само при собствен IP)</label><input type="text" name="username"></div>
+            <div class="form-group"><label>Парола (само при собствен IP)</label><input type="password" name="password" autocomplete="new-password"></div>
+            <div class="form-group"><label>Посока на плана, ° (0 = към +X, по часовниковата)</label><input type="text" name="yaw" value="0"></div>
+            <div class="form-group"><label>Наклон надолу, °</label><input type="text" name="tilt" value="30"></div>
+            <div class="form-group"><label>Зрително поле, ° (до 360)</label><input type="text" name="fov" value="90"></div>
+            <div class="form-group"><label>Обхват, м</label><input type="text" name="range_m" value="10"></div>
+            <div class="form-group"><label>Бележки</label><textarea name="notes" rows="3"></textarea></div>
+            <button type="submit" class="btn-submit">Добави камера</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>NVR</h3>
+        {% if nvrs %}
+        <div class="table-responsive"><table class="users-table">
+            <thead><tr><th>Име</th><th>Адрес</th><th>Потребител</th><th>Камери</th><th class="text-right">Действие</th><th class="text-right">Изтриване</th></tr></thead>
+            <tbody>
+            {% for n in nvrs %}
+            <tr>
+                <td><strong>{{ n.name }}</strong></td><td>{{ n.host }}:{{ n.port }}</td><td>{{ n.username or '—' }}</td><td>{{ n.cameras|length }}</td>
+                <td class="text-right"><a href="{{ url_for('edit_camera_nvr_window', nvr_id=n.id) }}" data-frame class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a></td>
+                <td class="text-right"><form action="{{ url_for('admin_delete_camera_nvr', nvr_id=n.id) }}" method="POST" onsubmit="return confirm('Изтриване на NVR?');" style="display:inline;">
+                    {% include 'partials/csrf_field.html' %}<button type="submit" class="btn-delete">Изтрий</button></form></td>
+            </tr>
+            {% endfor %}
+            </tbody></table></div>
+        {% else %}<p class="no-data text-center">Няма добавени NVR.</p>{% endif %}
+    </section>
+
+    <section class="admin-card">
+        <h3>Камери</h3>
+        {% if cameras %}
+        <div id="camAll" style="display:flex;gap:6px;align-items:center;margin-bottom:10px">
+            <span class="text-small text-muted">Преглед на всички:</span>
+            <button type="button" class="btn-secondary active" data-mode="frames">Кадри</button>
+            <button type="button" class="btn-secondary" data-mode="video">Видео</button>
+            <span class="text-small text-muted">· клик върху образа го уголемява</span>
+        </div>
+        <div class="table-responsive"><table class="users-table">
+            <thead><tr><th>Кадър</th><th>Име</th><th>Вид</th><th>Връзка</th><th>Поле</th><th class="text-right">Действие</th><th class="text-right">Изтриване</th></tr></thead>
+            <tbody>
+            {% for c in cameras %}
+            <tr>
+                <td><img data-snap="{{ url_for('admin_camera_snapshot', cam_id=c.id) }}" data-cam="{{ c.id }}" alt="" style="width:120px;border-radius:4px;display:block">
+                    <button type="button" class="btn-secondary" data-video="{{ c.id }}" style="padding:2px 8px;font-size:0.8rem;margin-top:4px">▶ Видео</button></td>
+                <td><strong>{{ c.name }}</strong><br><span class="text-small text-muted">{{ c.model or '' }}</span></td>
+                <td>{{ types.get(c.cam_type, c.cam_type) }}</td>
+                <td class="text-small">{% if c.host %}{{ c.host }}{% elif c.nvr %}{{ c.nvr.name }} · канал {{ c.channel or '?' }}{% else %}—{% endif %}</td>
+                <td class="text-small text-muted">{{ c.fov|round|int }}° · {{ c.range_m|round|int }} м</td>
+                <td class="text-right"><a href="{{ url_for('edit_camera_window', cam_id=c.id) }}" data-frame class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a></td>
+                <td class="text-right"><form action="{{ url_for('admin_delete_camera', cam_id=c.id) }}" method="POST" onsubmit="return confirm('Изтриване на камера &quot;{{ c.name|e }}&quot;?');" style="display:inline;">
+                    {% include 'partials/csrf_field.html' %}<button type="submit" class="btn-delete">Изтрий</button></form></td>
+            </tr>
+            {% endfor %}
+            </tbody></table></div>
+        <p class="text-muted text-small" style="margin-top:10px">Кадърите се обновяват на около 5 секунди; празен кадър = камерата не отговаря.</p>
+        {% else %}<p class="no-data text-center">Няма добавени камери.</p>{% endif %}
+    </section>
+</main>
+
+<script>
+(function () {      // NVR chosen -> its channels (name, IP, online) in the dropdown; picking one fills the empty name
+    const nvr = document.getElementById('newCamNvr'), ch = document.getElementById('newCamChannel'), msg = document.getElementById('newCamChannelMsg');
+    if (!nvr) return;
+    let list = [];
+    nvr.onchange = async () => {
+        ch.innerHTML = '<option value="">--</option>'; list = []; msg.textContent = '';
+        if (!nvr.value) return;
+        msg.textContent = 'Чета каналите от NVR...';
+        const r = await fetch('/admin/cameras/nvr/' + nvr.value + '/channels').catch(() => null), d = r ? await r.json().catch(() => ({})) : {};
+        if (!r || !r.ok) { msg.textContent = d.error || 'Грешка при връзка с NVR.'; return; }
+        list = d; msg.textContent = d.length + ' канала.';
+        d.forEach(c => ch.append(new Option(c.label, c.channel)));
+    };
+    ch.onchange = () => {
+        const c = list.find(x => String(x.channel) === ch.value), n = ch.form.elements.name;
+        if (c && n && !n.value.trim()) n.value = c.name || ('Канал ' + c.channel);
+    };
+})();
+(function () {      // snapshots refresh every 5 s; "Видео" turns one camera (or all) into the live MJPEG stream; click an image to enlarge it
+    const imgs = document.querySelectorAll('img[data-snap]'), btns = {};
+    document.querySelectorAll('[data-video]').forEach(b => btns[b.dataset.video] = b);
+    const snap = i => { if (!i.dataset.live) i.src = i.dataset.snap + '?t=' + Date.now(); };
+    const tick = () => { if (!document.hidden) imgs.forEach(snap); };
+    async function setLive(img, on) {
+        const b = btns[img.dataset.cam];
+        if (!on) { delete img.dataset.live; if (b) b.textContent = '▶ Видео'; snap(img); return true; }
+        const r = await fetch('/admin/cameras/' + img.dataset.cam + '/video'), d = await r.json().catch(() => ({}));
+        if (!r.ok) { alert(d.error || 'Грешка'); return false; }
+        img.dataset.live = '1'; img.src = d.url; if (b) b.textContent = '⏸ Кадри';
+        return true;
+    }
+    imgs.forEach(i => i.onclick = () => { i.style.width = i.style.width === '480px' ? '120px' : '480px'; });
+    Object.values(btns).forEach(b => b.onclick = () => { const i = document.querySelector('img[data-cam="' + b.dataset.video + '"]'); setLive(i, !i.dataset.live); });
+    const all = document.getElementById('camAll');
+    if (all) all.querySelectorAll('[data-mode]').forEach(b => b.onclick = async () => {
+        const live = b.dataset.mode === 'video';
+        if (live && imgs.length > 4 && !confirm('Видео на ' + imgs.length + ' камери едновременно товари сървъра. Продължаване?')) return;
+        all.querySelectorAll('[data-mode]').forEach(x => x.classList.toggle('active', x === b));
+        for (const i of imgs) await setLive(i, live);
+    });
+    tick(); setInterval(tick, 5000);
+})();
+</script>
+</body>
+</html>

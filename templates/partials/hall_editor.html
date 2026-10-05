@@ -56,7 +56,7 @@
         #hl-svg .lnk.hl { stroke: #ff3df2 !important; stroke-width: 0.22; } #hl-svg .lnk.hl2 { stroke: #2cff9a !important; stroke-width: 0.22; } #hl-svg .lnk.dim { opacity: 0.12; }
         @keyframes lnkflow { to { stroke-dashoffset: -0.9; } }
         #hl-svg.hide-links_power .lnk.power, #hl-svg.hide-links_data .lnk.data { display: none; }
-        #hl-svg.hide-equip .q:not(.q-iot):not(.q-net), #hl-svg.hide-equip .qt:not(.qt-iot):not(.qt-net), #hl-svg.hide-iot .q-iot, #hl-svg.hide-iot .qt-iot, #hl-svg.hide-network .q-net, #hl-svg.hide-network .qt-net, #hl-svg.hide-mlabels .mt, #hl-svg.hide-labels .lbl { display: none; }
+        #hl-svg.hide-equip .q:not(.q-iot):not(.q-net):not(.q-cam), #hl-svg.hide-equip .qt:not(.qt-iot):not(.qt-net):not(.qt-cam), #hl-svg.hide-cam .q-cam, #hl-svg.hide-cam .qt-cam, #hl-svg.hide-cam .fov, #hl-svg.hide-iot .q-iot, #hl-svg.hide-iot .qt-iot, #hl-svg.hide-network .q-net, #hl-svg.hide-network .qt-net, #hl-svg.hide-mlabels .mt, #hl-svg.hide-labels .lbl { display: none; }
 </style>
     <p style="color: var(--text-muted)">Всеки елемент е <b>заключен</b>, докато не натиснете „Отключи“; тогава се мести (влачене, стрелки, полетата) и „Запази и заключи“ го заключва отново. Влачете машина, оборудване, стена, врата или помещение, за да ги преместите; размерите и връзките се задават вдясно.
         <b>Разстояние от пода</b> е височината на долната им страна. <b>Помещение</b> е маркирана зона с височина на етаж и брой етажи;
@@ -163,6 +163,7 @@
                 <button class="btn" data-add="convector" type="button">+ Конвектор</button>
                 <button class="btn" data-add="sensor" type="button">+ Сензор</button>
                 <button class="btn" data-add="network" type="button">+ Мрежово устройство</button>
+                <button class="btn" data-add="camera" type="button">+ Камера</button>
                 <button class="btn" data-add="wall" type="button">+ Стена</button>
                 <button class="btn" data-add="door" type="button">+ Врата</button>
                 <button class="btn" data-add="room" type="button">+ Помещение</button>
@@ -174,13 +175,15 @@
     </div>
 <script>
 const CHOICES = {{ equipment_choices|tojson }};
+const CREATE = {{ {'camera': create_url('camera'), 'sensor': create_url('sensor'), 'convector': create_url('convector'), 'network': create_url('network_device'),
+                   'panel': create_url('panel'), 'inverter': create_url('inverter')}|tojson }};   // kind -> page whose "+ Нов ..." dialog creates the device it links to
 MACHINES.forEach(o => o._t = 'machine');   // the lists themselves come from the page's data script
 SHAPES.forEach(o => o._t = 'shape');
 EQUIP.forEach(o => o._t = 'equip');
 const COLORS = { laser: '#e07a2f', mill: '#3b82f6', lathe: '#14b8a6', press: '#a855f7', util: '#94a3b8' };
-const EQ_COLORS = { inverter: '#facc15', battery: '#22c55e', panel: '#ef4444', convector: '#fb923c', sensor: '#2dd4bf', network: '#38bdf8' };
-const QK = k => k === 'convector' || k === 'sensor' ? ' q-iot' : k === 'network' ? ' q-net' : '';   // layer class: IoT / network devices hide separately
-const EQ_ABBR = { inverter: 'И', battery: 'Б', panel: 'Т', convector: 'К', sensor: 'С', network: 'М' };
+const EQ_COLORS = { inverter: '#facc15', battery: '#22c55e', panel: '#ef4444', convector: '#fb923c', sensor: '#2dd4bf', network: '#38bdf8', camera: '#e879f9' };
+const QK = k => k === 'convector' || k === 'sensor' ? ' q-iot' : k === 'network' ? ' q-net' : k === 'camera' ? ' q-cam' : '';   // layer class: IoT / network devices hide separately
+const EQ_ABBR = { inverter: 'И', battery: 'Б', panel: 'Т', convector: 'К', sensor: 'С', network: 'М', camera: 'К' };
 const ROOM_COLORS = ['#60a5fa', '#34d399', '#f472b6', '#fbbf24', '#a78bfa'];
 const svg = document.getElementById('hl-svg'), NS = 'http://www.w3.org/2000/svg';
 const $ = id => document.getElementById(id);
@@ -268,6 +271,13 @@ function draw() {
         svg.appendChild(r);
         const t = el('text', { class: 'mt' + FD(m), x: m.x + m.width / 2, y: m.z + m.depth / 2 }); t.textContent = m.no ?? '';
         svg.appendChild(t);
+    });
+    EQUIP.filter(q => q.cam).forEach(q => {      // camera field of view: a wedge from the camera, yaw 0 = +X, clockwise on the plan (z points down)
+        const c = q.cam, cx = q.x + q.width / 2, cz = q.z + q.depth / 2, r = Math.max(1, c.range * Math.cos(c.tilt * Math.PI / 180) * 0.9);   // ground reach, not slant range
+        const a = v => v * Math.PI / 180, p = d => `${cx + r * Math.cos(a(d))},${cz + r * Math.sin(a(d))}`;
+        const path = c.fov >= 359 ? null : `M${cx},${cz} L${p(c.yaw - c.fov / 2)} A${r},${r} 0 ${c.fov > 180 ? 1 : 0} 1 ${p(c.yaw + c.fov / 2)} Z`;
+        const st = { fill: '#e879f9', 'fill-opacity': 0.18, stroke: '#e879f9', 'stroke-width': 0.05, style: 'pointer-events:none' };
+        svg.appendChild(path ? el('path', { class: 'fov', d: path, ...st }) : el('circle', { class: 'fov', cx, cy: cz, r, ...st }));
     });
     EQUIP.forEach(q => {      // small boxes - drawn at least 0.8 m so they stay grabbable
         const w = Math.max(q.width, 0.8), d = Math.max(q.depth, 0.8);
@@ -444,6 +454,27 @@ function syncKind() {
 }
 $('f-kind').onchange = syncKind;
 $('f-ekind').onchange = () => fillRef($('f-ekind').value, null);
+// creates the device an equipment object links to in a dialog (the real "add" form of that device), then links the new one;
+// the dialog closes as soon as the new record exists
+function createLinked(o) {
+    const kind = o.kind, url = CREATE[kind];
+    if (!url) return;
+    let done = false;
+    const pull = async () => {
+        if (done) return;
+        const d = await fetch('{{ url_for("admin_hall_choices") }}').then(r => r.json()).catch(() => null);
+        if (!d) return;
+        const have = new Set((CHOICES[kind] || []).map(c => c.id)), added = (d[kind] || []).filter(c => !have.has(c.id));
+        CHOICES[kind] = d[kind];
+        if (!added.length || sel !== o) return;
+        done = true;
+        const c = added[added.length - 1];
+        o.ref_id = c.id; o.name = o.name || c.label; o.label = o.name;
+        fillRef(kind, c.id); $('f-name').value = o.name; draw();
+        window.closeFrameDialog(false);
+    };
+    window.openFrameDialog(url, true, null, { onLoad: pull, onClose: pull });
+}
 
 // ---- a door / window sticks to the nearest wall (within 0.6 m): centred in its thickness, turned along it, slid along it ----
 function snapToWall(o, nx, nz) {
@@ -628,6 +659,7 @@ const NEW = {
     convector: eq('convector', '', 1.0, 0.12, 0.45, 0.2),
     sensor: eq('sensor', '', 0.08, 0.03, 0.08, 1.6),
     network: eq('network', '', 0.45, 0.25, 0.1, 2.0),
+    camera: eq('camera', '', 0.15, 0.15, 0.12, 4.0),
     wall: { _t: 'shape', id: null, kind: 'wall', name: '', x: 2, z: 2, width: 4, depth: 0.4, height: 5, elevation: 0, floors: 1, room_id: null, label: '' },
     door: { _t: 'shape', id: null, kind: 'door', name: 'Врата', x: 2, z: 2, width: 4, depth: 0.15, height: 4, elevation: 0, floors: 1, room_id: null, label: 'Врата' },
     window: { _t: 'shape', id: null, kind: 'window', name: '', x: 2, z: 2, width: 3, depth: 0.3, height: 1.4, elevation: 3.3, floors: 1, model: null, rotation: 0, room_id: null, label: '' },
@@ -647,6 +679,7 @@ document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => {
     }
     o._unlocked = true;                  // a new object is placed first, then saved (and locked)
     LISTS[o._t].push(o); select(o);   // saved on first "Запази"/drag
+    if (o._t === 'equip' && CREATE[o.kind]) createLinked(o);   // a device with its own parameters: open its add form now, so the object is linked from the start
 });
 $('hl-envelopes').onclick = async () => {
     if (!confirm('Да се направят ли стени и подова настилка за помещенията, които нямат стени по контура си?')) return;

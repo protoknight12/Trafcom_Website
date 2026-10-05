@@ -81,6 +81,8 @@
                 <option value="{{ opt }}"></option>
                 {% endfor %}
             </datalist>
+            {% elif f.type == 'password' %}
+            <input type="password" id="field_{{ loop.index }}" name="{{ f.name }}" value="" autocomplete="new-password">
             {% elif f.type == 'date' %}
             <input type="date" id="field_{{ loop.index }}" name="{{ f.name }}" value="{{ f.value }}"
                    {% if f.required %}required{% endif %}>

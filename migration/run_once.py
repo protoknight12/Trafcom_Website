@@ -23,6 +23,7 @@ ONCE = (
     'data_import_panels',             # panels + schematics + machine/meter links + communications from the development DB (by name, nothing overwritten)
     'data_hall_follow_rooms',         # plan objects follow the room set on their form; explicit parents naming deleted rooms are cleared
     'data_hall_place_devices',        # devices without a plan object (e.g. the imported panels) get one, so they show in the editor and 3D
+    'migrate_add_camera_snapshot_path',  # camera.snapshot_path column (the camera table already existed on some databases)
 )
 
 with app.app_context():

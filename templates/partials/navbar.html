@@ -125,8 +125,7 @@
                                             <a href="{{ url_for('admin_panels') }}">Ел. табла</a>
                                             <a href="{{ url_for('admin_temperature_sensors') }}">Температурни сензори</a>
                                             <a href="{{ url_for('admin_convectors') }}">Конвектори</a>
-                                            {% if current_user.is_admin %}
-                                                <a href="{{ url_for('admin_power') }}">Консумация</a>
+                                            {% if current_user.is_admin %}                                                <a href="{{ url_for('admin_power') }}">Консумация</a>
                                                 <a href="{{ url_for('factory3d') }}#roof">Покрив (соларни панели)</a>
                                                 <a href="{{ url_for('admin_battery_cabinets') }}">Батерийно стопанство</a>
                                             {% endif %}
