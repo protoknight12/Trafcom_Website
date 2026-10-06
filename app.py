@@ -15177,6 +15177,11 @@ HEATPUMP_COOLING_MODE = 2  # Betriebsart value for "Kühlen"
 HEATPUMP_COST_GAP = 300    # seconds: longer holes in either log are skipped, not interpolated
 
 
+def _shelly_by_key(key):
+    """A meter as chosen on the page: its IP, or the MQTT topic of a device with no IP (the same key shelly_fleet_snapshot()/ShellyReadingLog use)."""
+    return key and ShellyDevice.query.filter((ShellyDevice.host == key) | (ShellyDevice.mqtt_topic == key)).first()
+
+
 def _heatpump_cost_cfg():
     def num(name, default):
         try:
@@ -15287,14 +15292,14 @@ def admin_heatpump():
                 for n, (lbl, unit) in HEATPUMP_WRITABLE.items()}
     return render_template('admin_heatpump.html', active_page='admin_heatpump',
                            host=get_text(HEATPUMP_HOST_KEY, ''), modes=HEATPUMP_MODES, writable=writable,
-                           meters=[(m.host, m.name) for m in ShellyDevice.query.order_by(ShellyDevice.name)]
+                           meters=[(m.host or m.mqtt_topic, m.name) for m in ShellyDevice.query.order_by(ShellyDevice.name)]
                            + [(f'{d.host}:{d.port}', d.name) for d in ModbusDevice.query.filter_by(device_type='dtsu666').order_by(ModbusDevice.name)], cost_cfg=_heatpump_cost_cfg())
 
 
 def _heatpump_power():
     """Instantaneous draw of the meter chosen for the pump: {'w', 'online'}, or None when no meter is chosen."""
     host = get_text(_HP_PREFIX + 'meter', '')
-    meter = ShellyDevice.query.filter_by(host=host).first()
+    meter = _shelly_by_key(host)
     if meter:
         snap = shelly_fleet_snapshot(_shelly_snapshot_args([meter]))[0]
     else:                                             # a Modbus meter is chosen as "ip:port"
