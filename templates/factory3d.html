@@ -122,7 +122,6 @@ const hallLinks = () => LINKS.map(l => Object.assign({ A: hallEnd(l.a), B: hallE
             <button class="f3-btn active" data-m="3d">{{ _('3D карта') }}</button>
             <button class="f3-btn" data-m="plan">{{ _('План (редакция)') }}</button>
             <button class="f3-btn" data-m="roof">{{ _('Покрив и панели') }}</button>
-            <button class="f3-btn" data-m="cameras">{{ _('Камери') }}</button>
             <button class="f3-btn" data-m="objects">{{ _('Свои обекти') }}</button>
             <button class="f3-btn" data-m="devices">{{ _('Устройства и схеми') }}</button>
         </div>
@@ -170,13 +169,12 @@ const hallLinks = () => LINKS.map(l => Object.assign({ A: hallEnd(l.a), B: hallE
             {% for label, url in [(_('Схема на разпределението'), url_for('admin_factory_map_overview')), (_('Карти на помещенията'), url_for('admin_factory_map')),
                                   (_('Сгради и помещения'), url_for('admin_buildings')), (_('Ел. табла'), url_for('admin_panels')), (_('Конвектори'), url_for('admin_convectors')),
                                   (_('Температурни сензори'), url_for('admin_temperature_sensors')), (_('Измерватели и консумация'), url_for('admin_power')),
-                                  (_('Мрежа'), url_for('admin_network')), (_('Батерийно стопанство'), url_for('admin_battery_cabinets')), (_('Машини и досиета'), url_for('list_machines'))] %}
+                                  (_('Мрежа'), url_for('admin_network')), (_('Батерийно стопанство'), url_for('admin_battery_cabinets')), (_('Машини и досиета'), url_for('list_machines')), (_('Камери'), url_for('admin_cameras')), (_('Термопомпа'), url_for('admin_heatpump'))] %}
             <button class="f3-btn" data-url="{{ url }}">{{ label }}</button>
             {% endfor %}
         </div>
         <iframe id="f3-devframe" style="width:100%;height:80vh;border:1px solid var(--border-color);border-radius:var(--border-radius-md);background:var(--bg-surface)" title="{{ _('Устройства и схеми') }}"></iframe>
     </div>
-    <div id="mode-cameras" hidden><iframe id="f3-camframe" data-src="{{ url_for('admin_cameras') }}" style="width:100%;height:80vh;border:1px solid var(--border-color);border-radius:var(--border-radius-md);background:var(--bg-surface)" title="{{ _('Камери') }}"></iframe></div>
     <div id="mode-objects" hidden><iframe id="f3-objframe" data-src="{{ url_for('admin_objects') }}" style="width:100%;height:80vh;border:1px solid var(--border-color);border-radius:var(--border-radius-md);background:var(--bg-surface)" title="{{ _('Свои обекти') }}"></iframe></div>
     <div id="mode-roof" hidden><iframe id="f3-roofframe" data-src="{{ url_for('admin_solar_roof') }}" title="{{ _('Покрив и соларни панели') }}"></iframe></div>
     {% endif %}
@@ -706,7 +704,7 @@ KEYS.forEach(applyLayer);
 const shown = o => { for (; o; o = o.parent) if (!o.visible) return false; return true; };
 
 // ---- modes: 3D map / plan editor / roof (admins); everything shares the layers above ----
-const MODES = ['3d', 'plan', 'roof', 'cameras', 'objects', 'devices'];
+const MODES = ['3d', 'plan', 'roof', 'objects', 'devices'];
 function resizeNow() { if (typeof resize === 'function') resize(); }
 function setMode(m) {
     if (!IS_ADMIN || !MODES.includes(m)) m = '3d';
@@ -719,7 +717,6 @@ function setMode(m) {
         if (!fr.src) { fr.src = fr.dataset.src; fr.onload = () => { try { fr.contentDocument.getElementById('backLink')?.remove(); } catch (e) { } }; }
     }
     if (m === 'objects') { const fr = document.getElementById('f3-objframe'); if (!fr.src) fr.src = fr.dataset.src; }
-    if (m === 'cameras') { const fr = document.getElementById('f3-camframe'); if (!fr.src) fr.src = fr.dataset.src; }
     if (m === 'devices' && !document.getElementById('f3-devframe').src) openDevice(document.querySelector('#f3-devnav [data-url]').dataset.url);
     if (IS_ADMIN && location.hash.slice(1) !== m) history.replaceState(null, '', '#' + m);
     if (m === '3d') resizeNow();
