@@ -210,3 +210,14 @@ def test_convector_circuit_makes_pipe_links(client):
     assert pipes() == ['cool', 'heat']
     client.post(f'/admin/convectors/{cid}/update', data=dict(base, heatpump_circuit='x'))   # invalid -> cleared
     assert pipes() == []
+
+
+def test_cost_settings_mqtt_meter(client):
+    _login(client, 'hp_admin')
+    with flask_app.app_context():
+        db.session.add(appmod.ShellyDevice(name='tp', host=None, mqtt_topic='shellies/tp_em3', connection_type='mqtt'))
+        db.session.commit()
+    data = {'meter': 'shellies/tp_em3', 'price_day': '0.17', 'price_night': '0.17', 'night_from': '22', 'night_to': '6'}
+    r = client.post('/admin/heatpump/cost-settings', data=data, follow_redirects=True)
+    with flask_app.app_context():
+        assert appmod._heatpump_cost_cfg()['meter'] == 'shellies/tp_em3', r.get_data(as_text=True)[:3000]

@@ -15260,7 +15260,7 @@ def admin_heatpump_cost():
 def admin_heatpump_cost_settings():
     f = request.form
     meter = f.get('meter', '').strip()
-    if meter and not ShellyDevice.query.filter_by(host=meter).first()             and not any(f'{d.host}:{d.port}' == meter for d in ModbusDevice.query.filter_by(device_type='dtsu666')):
+    if meter and not _shelly_by_key(meter) and not any(f'{d.host}:{d.port}' == meter for d in ModbusDevice.query.filter_by(device_type='dtsu666')):
         flash('Избраният измервател не съществува.', 'error')
         return redirect(url_for('admin_heatpump'))
     try:
