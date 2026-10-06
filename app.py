@@ -15297,8 +15297,8 @@ def admin_heatpump():
                 for n, (lbl, unit) in HEATPUMP_WRITABLE.items()}
     return render_template('admin_heatpump.html', active_page='admin_heatpump',
                            host=get_text(HEATPUMP_HOST_KEY, ''), modes=HEATPUMP_MODES, writable=writable,
-                           meters=[(_shelly_key(m), m.name) for m in ShellyDevice.query.order_by(ShellyDevice.name)]
-                           + [(f'{d.host}:{d.port}', d.name) for d in ModbusDevice.query.filter_by(device_type='dtsu666').order_by(ModbusDevice.name)], cost_cfg=_heatpump_cost_cfg())
+                           meters=[(_shelly_key(m), f'{m.name} - {CONNECTION_TYPES.get(m.connection_type, m.connection_type)}') for m in ShellyDevice.query.order_by(ShellyDevice.name)]
+                           + [(f'{d.host}:{d.port}', f'{d.name} - Modbus') for d in ModbusDevice.query.filter_by(device_type='dtsu666').order_by(ModbusDevice.name)], cost_cfg=_heatpump_cost_cfg())
 
 
 def _heatpump_power():
