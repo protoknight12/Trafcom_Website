@@ -1,3 +1,5 @@
+from bisect import bisect_right
+from collections import deque
 from datetime import datetime, timedelta
 import os
 import shutil
@@ -52,7 +54,7 @@ from pymodbus.client import ModbusTcpClient
 from flask_babel import Babel, gettext
 import librouteros
 import serial as pyserial
-from htheatpump import HtHeatpump
+from htheatpump import HtHeatpump, HtParams, HtDataTypes
 from librouteros.query import Key as RouterosKey
 from cryptography.fernet import Fernet, InvalidToken
 from netmiko import ConnectHandler
@@ -1822,6 +1824,7 @@ CONVECTOR_TYPES = {
 # rather than a separate dict so the label text stays one source of truth
 # with ShellyDevice's own connection-type selector.
 CONVECTOR_CONNECTION_TYPES = {k: v for k, v in CONNECTION_TYPES.items() if k in ('ip', 'mqtt')}
+CONVECTOR_CIRCUITS = {'heating': 'Отопление', 'cooling': 'Охлаждане', 'both': 'Отопление и охлаждане'}  # heat pump circuit feeding a convector
 
 # Vehicle.deadlines/vehicle_deadline_status() warning window - see
 # inject_vehicle_alerts(). A deadline starts showing as 'warning' this many
@@ -2326,6 +2329,8 @@ class Convector(db.Model):
     location_label = db.Column(db.String(150), nullable=True)
     pos_x = db.Column(db.Float, nullable=True)
     pos_y = db.Column(db.Float, nullable=True)
+    # Which heat pump circuit feeds it: None = not on the pump, else a key of CONVECTOR_CIRCUITS (pipes layers of the 3D map).
+    heatpump_circuit = db.Column(db.String(10), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
     room = db.relationship('Room', backref='convectors')
@@ -2702,7 +2707,8 @@ def _hall_parcels():
 
 
 HALL_EQUIPMENT_KINDS = {'inverter': 'Инвертор', 'battery': 'Батериен блок', 'panel': 'Ел. табло', 'convector': 'Конвектор',
-                        'sensor': 'Температурен сензор', 'network': 'Мрежово устройство', 'camera': 'Камера'}
+                        'sensor': 'Температурен сензор', 'network': 'Мрежово устройство', 'camera': 'Камера',
+                        'heatpump': 'Термопомпа'}
 
 CAMERA_CONN_TYPES = [{'value': 'nvr', 'label': 'През NVR (канал)'}, {'value': 'onvif', 'label': 'ONVIF (директно към камерата)'}, {'value': 'rtsp', 'label': 'RTSP (директно към камерата)'}]
 CAMERA_TYPES = {'dome': 'Купол', 'ptz': 'Въртяща (PTZ)', 'bullet': 'Bullet', 'fisheye': 'Рибешко око', 'other': 'Друга'}
@@ -2835,8 +2841,8 @@ class HallEquipment(db.Model):
 
     def target(self):
         model = {'inverter': ModbusDevice, 'battery': BatteryStack, 'panel': ElectricalPanel, 'convector': Convector,
-                 'sensor': TemperatureSensor, 'network': NetworkDevice, 'camera': Camera}[self.kind]
-        return db.session.get(model, self.ref_id) if self.ref_id else None
+                 'sensor': TemperatureSensor, 'network': NetworkDevice, 'camera': Camera}.get(self.kind)   # 'heatpump' has no record: there is one pump
+        return db.session.get(model, self.ref_id) if model and self.ref_id else None
 
     def as_dict(self):
         t = self.target()
@@ -2869,6 +2875,7 @@ def _hall_equipment_choices():
         'sensor': [{'id': t.id, 'label': t.name} for t in TemperatureSensor.query.order_by(TemperatureSensor.name)],
         'network': [{'id': n.id, 'label': n.name} for n in NetworkDevice.query.order_by(NetworkDevice.name)],
         'camera': [{'id': c.id, 'label': c.name} for c in Camera.query.order_by(Camera.name)],
+        'heatpump': [],
     }
 
 
@@ -5971,6 +5978,10 @@ def _hall_links():
         out.append({'a': ['inverter', d.id], 'b': ['panel', d.panel_id], 'kind': 'power', 'label': f'{d.name} → {d.panel.name}'})
     for st in BatteryStack.query.filter(BatteryStack.inverter_device_id.isnot(None)):
         out.append({'a': ['inverter', st.inverter_device_id], 'b': ['battery', st.id], 'kind': 'power', 'label': f'{st.inverter.name} → {st.name}' if getattr(st, 'inverter', None) else st.name})
+    for c in Convector.query.filter(Convector.heatpump_circuit.isnot(None)):   # pipes: the one heat pump -> its convectors
+        for kind, circuit, word in (('heat', 'heating', 'отопление'), ('cool', 'cooling', 'охлаждане')):
+            if c.heatpump_circuit in (circuit, 'both'):
+                out.append({'a': ['heatpump', None], 'b': ['convector', c.id], 'kind': kind, 'label': f'Термопомпа → {c.name} ({word})'})
     for l in NetworkLink.query:
         out.append({'a': ['network', l.device_a_id], 'b': ['network', l.device_b_id], 'kind': 'data',
                     'label': f'{l.type_label}{f" VLAN{l.vlan}" if l.vlan else ""}: {l.device_a.name} ↔ {l.device_b.name}'})
@@ -6061,7 +6072,14 @@ def admin_hall_live():
         if sn:
             snap = _mqtt_temp_snapshot(sn)
             sensors[sn.id] = {'temperature': snap.get('temperature'), 'humidity': snap.get('humidity'), 'online': snap.get('online')}
-    return jsonify({'machines': machines, 'convectors': convectors, 'batteries': batteries, 'sensors': sensors,
+    heatpump = None
+    if HallEquipment.query.filter_by(kind='heatpump').first():
+        d = _heatpump_live['data']
+        heatpump = {'online': _heatpump_live['online'], 'power': _heatpump_power(), 'vorlauf': d.get('Temp. Vorlauf'),
+                    'ruecklauf': d.get('Temp. Ruecklauf'), 'aussen': d.get('Temp. Aussen'),
+                    'compressor': d.get('Verdichter'), 'fault': d.get('Stoerung'),
+                    'mode': _heatpump_live['slow'].get('Betriebsart')}
+    return jsonify({'machines': machines, 'convectors': convectors, 'batteries': batteries, 'sensors': sensors, 'heatpump': heatpump,
                     'panels': {pid: {'power': round(e['total_power']), 'online': e['online']} for pid, e in by_panel.items()}})
 
 
@@ -6274,7 +6292,7 @@ _hall_register_device_hooks()
 # size (w, d, h) and elevation of each equipment kind when it is placed automatically
 HALL_EQUIPMENT_DEFAULTS = {'panel': (0.8, 0.25, 1.2, 1.4), 'convector': (1.0, 0.12, 0.45, 0.2), 'sensor': (0.08, 0.03, 0.08, 1.6),
                            'network': (0.45, 0.25, 0.1, 2.0), 'battery': (0.6, 0.6, 1.8, 0.0), 'inverter': (0.6, 0.3, 0.7, 1.2),
-                           'camera': (0.15, 0.15, 0.12, 4.0)}
+                           'camera': (0.15, 0.15, 0.12, 4.0), 'heatpump': (1.0, 0.8, 1.4, 0.0)}
 
 
 @app.route('/api/hall/sun')
@@ -15004,14 +15022,31 @@ class HeatPumpReading(db.Model):
 HEATPUMP_HOST_KEY = 'settings.heatpump_host'  # "ip:port" of the RS232->Ethernet converter (EditableText, like the registration lock)
 HEATPUMP_POLL_INTERVAL = 3    # seconds between fast queries (live values)
 HEATPUMP_SLOW_INTERVAL = 60   # seconds between settings/fault reads and DB rows
-# SP (settings) values worth showing; read-only in this phase.
-HEATPUMP_SLOW_PARAMS = ('Betriebsart', 'HKR Soll_Raum', 'HKR Heizgrenze', 'WW Normaltemp.', 'WW Minimaltemp.',
-                        'Verdichter_Status', 'BSZ Verdichter Betriebsst. ges', 'BSZ Verdichter Betriebsst. WW',
-                        'BSZ Verdichter Betriebsst. HKR')
+# SP settings the page may change (label, unit) - this dict IS the write whitelist for admin_heatpump_set();
+# the allowed range comes from htheatpump's own limits table (HtParams).
+HEATPUMP_WRITABLE = {
+    'Betriebsart': ('Режим', ''),
+    'HKR Soll_Raum': ('Стайна температура', '°C'),
+    'HKR Aufheiztemp. (K)': ('Повишение при отопление', 'K'),
+    'HKR Absenktemp. (K)': ('Понижение (намалено)', 'K'),
+    'HKR Heizgrenze': ('Граница на отопление', '°C'),
+    'HKR RLT Soll_oHG (Heizkurve)': ('Крива: над границата', '°C'),
+    'HKR RLT Soll_0 (Heizkurve)': ('Крива: при 0 °C', '°C'),
+    'HKR RLT Soll_uHG (Heizkurve)': ('Крива: под границата', '°C'),
+    'WW Normaltemp.': ('БГВ нормална', '°C'),
+    'WW Hysterese Normaltemp.': ('БГВ хистерезис нормална', 'K'),
+    'WW Minimaltemp.': ('БГВ минимална', '°C'),
+    'WW Hysterese Minimaltemp.': ('БГВ хистерезис минимална', 'K'),
+}
+# SP values read once a minute: everything writable (to show the current value) plus read-only status/counters.
+HEATPUMP_SLOW_PARAMS = tuple(HEATPUMP_WRITABLE) + ('Verdichter_Status', 'BSZ Verdichter Betriebsst. ges',
+                                                    'BSZ Verdichter Betriebsst. WW', 'BSZ Verdichter Betriebsst. HKR')
+HEATPUMP_SET_TIMEOUT = 30  # seconds the page waits for the poller thread to apply a change
 HEATPUMP_MODES = {0: 'Изключена', 1: 'Автоматика', 2: 'Охлаждане', 3: 'Лято', 4: 'Постоянно отопление',
                   5: 'Намалено', 6: 'Отпуск', 7: 'Парти'}  # ponytail: Heliotherm labels from community docs; 1 = Автоматика matches this unit
 _heatpump_live = {'ts': None, 'online': False, 'error': 'още не е свързано', 'data': {}, 'slow': {}}
 _heatpump_started = False
+_heatpump_cmds = deque()  # pending writes, consumed by the poller thread (the only one talking to the pump)
 
 
 class _HtHeatpumpSocket(HtHeatpump):
@@ -15060,6 +15095,25 @@ def _heatpump_slow(hp):
     return slow
 
 
+def _heatpump_run_cmds(hp):
+    """Apply queued writes on the poller thread, each read back from the pump
+    to confirm. A write whose caller already gave up (cancelled / past its
+    deadline) is dropped - a late, unexpected change on the pump is worse than
+    a refused one."""
+    while _heatpump_cmds:
+        cmd = _heatpump_cmds.popleft()
+        if cmd['cancelled'] or time.monotonic() > cmd['deadline']:
+            continue
+        try:
+            hp.set_param(cmd['name'], cmd['value'])
+            val = hp.get_param(cmd['name'])
+            _heatpump_live['slow'][cmd['name']] = val
+            cmd['result'] = {'ok': True, 'value': val}
+        except Exception as e:
+            cmd['result'] = {'ok': False, 'error': str(e) or e.__class__.__name__}
+        cmd['done'].set()
+
+
 def _heatpump_loop():
     """Sole owner of the pump connection: the converter allows one TCP client
     and the pump one session, so everything (live view + history) goes
@@ -15082,13 +15136,15 @@ def _heatpump_loop():
                     hp = None
                 if hp is None:
                     hp, hp_host = _heatpump_open(host), host
+                _heatpump_run_cmds(hp)
                 data = _heatpump_fast(hp)
                 now = time.time()
                 if now - last_slow >= HEATPUMP_SLOW_INTERVAL:
                     _heatpump_live['slow'] = _heatpump_slow(hp)
                     with app.app_context():
                         try:
-                            db.session.add(HeatPumpReading(ts=int(now), data_json=json.dumps(data)))
+                            db.session.add(HeatPumpReading(ts=int(now), data_json=json.dumps(
+                                {**data, 'Betriebsart': _heatpump_live['slow'].get('Betriebsart')})))
                             db.session.commit()
                         finally:
                             db.session.remove()
@@ -15113,18 +15169,140 @@ def start_heatpump_poller():
     threading.Thread(target=_heatpump_loop, daemon=True, name='heatpump-poller').start()
 
 
+# --- cost of heating / cooling: a Shelly meter on the pump + a day/night tariff ---
+
+_HP_PREFIX = 'settings.heatpump_'
+HEATPUMP_COOLING_MODE = 2  # Betriebsart value for "Kühlen"
+HEATPUMP_COST_GAP = 300    # seconds: longer holes in either log are skipped, not interpolated
+
+
+def _heatpump_cost_cfg():
+    def num(name, default):
+        try:
+            return float(get_text(_HP_PREFIX + name, ''))
+        except ValueError:
+            return default
+    return {'meter': get_text(_HP_PREFIX + 'meter', ''), 'price_day': num('price_day', 0.0),
+            'price_night': num('price_night', 0.0), 'night_from': int(num('night_from', 22)),
+            'night_to': int(num('night_to', 6))}
+
+
+def _heatpump_tariff(ts, cfg):
+    """Price per kWh at unix time `ts` (server local hour decides day/night; the window may wrap midnight)."""
+    h = datetime.fromtimestamp(ts).hour
+    a, b = cfg['night_from'], cfg['night_to']
+    night = (a <= h < b) if a < b else (h >= a or h < b)
+    return cfg['price_night'] if night else cfg['price_day']
+
+
+def _heatpump_cost(energy_rows, pump_rows, cfg):
+    """Split the meter's energy into heating / cooling / standby (compressor off) and price it.
+
+    energy_rows: [(ts, cumulative_kwh)], pump_rows: [(ts, reading dict)], both ascending. Each energy
+    interval takes the pump state sampled just before its end.
+    ponytail: the pump is sampled once a minute, so a compressor that cycles inside one minute is
+    attributed to whatever state the sample caught - fine over days, noisy over minutes."""
+    out = {k: {'kwh': 0.0, 'cost': 0.0} for k in ('heating', 'cooling', 'standby')}
+    stamps = [t for t, _ in pump_rows]
+    for (t0, e0), (t1, e1) in zip(energy_rows, energy_rows[1:]):
+        delta = e1 - e0
+        if delta < 0 or t1 - t0 > HEATPUMP_COST_GAP:  # meter reset or a hole in the log
+            continue
+        i = bisect_right(stamps, t1) - 1
+        if i < 0 or t1 - stamps[i] > HEATPUMP_COST_GAP:
+            continue
+        state = pump_rows[i][1]
+        if not state.get('Verdichter'):
+            cat = 'standby'
+        else:
+            cat = 'cooling' if state.get('Betriebsart') == HEATPUMP_COOLING_MODE else 'heating'
+        out[cat]['kwh'] += delta
+        out[cat]['cost'] += delta * _heatpump_tariff(t1, cfg)
+    return out
+
+
+@app.route('/admin/heatpump/cost')
+@limiter.exempt
+@role_required('admin')
+def admin_heatpump_cost():
+    cfg = _heatpump_cost_cfg()
+    if not cfg['meter']:
+        return jsonify(configured=False)
+    now = datetime.now()
+    start = {'7d': now - timedelta(days=7), '30d': now - timedelta(days=30),
+             'month': now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+             }.get(request.args.get('period'), now.replace(hour=0, minute=0, second=0, microsecond=0))
+    since = int(start.timestamp())
+    energy = [(r.ts, r.total_energy) for r in ShellyReadingLog.query
+              .filter(ShellyReadingLog.host == cfg['meter'], ShellyReadingLog.ts >= since)
+              .order_by(ShellyReadingLog.ts) if r.total_energy is not None]
+    pump = [(r.ts, json.loads(r.data_json)) for r in HeatPumpReading.query
+            .filter(HeatPumpReading.ts >= since - HEATPUMP_COST_GAP).order_by(HeatPumpReading.ts)]
+    res = _heatpump_cost(energy, pump, cfg)
+    return jsonify(configured=True, categories={k: {m: round(v, 3 if m == 'kwh' else 2) for m, v in d.items()}
+                                                for k, d in res.items()},
+                   since=since, first_data=pump[0][0] if pump else None)
+
+
+@app.route('/admin/heatpump/cost-settings', methods=['POST'])
+@role_required('admin')
+def admin_heatpump_cost_settings():
+    f = request.form
+    meter = f.get('meter', '').strip()
+    if meter and not ShellyDevice.query.filter_by(host=meter).first():
+        flash('Избраният измервател не съществува.', 'error')
+        return redirect(url_for('admin_heatpump'))
+    try:
+        day, night = float(f.get('price_day', '').replace(',', '.')), float(f.get('price_night', '').replace(',', '.'))
+        night_from, night_to = int(f.get('night_from', '')), int(f.get('night_to', ''))
+    except ValueError:
+        flash('Цените трябва да са числа, а часовете - цели числа от 0 до 23.', 'error')
+        return redirect(url_for('admin_heatpump'))
+    if min(day, night) < 0 or not (0 <= night_from <= 23 and 0 <= night_to <= 23):
+        flash('Цените не могат да са отрицателни, а часовете са от 0 до 23.', 'error')
+        return redirect(url_for('admin_heatpump'))
+    for key, val in (('meter', meter), ('price_day', day), ('price_night', night),
+                     ('night_from', night_from), ('night_to', night_to)):
+        _heatpump_save_setting(_HP_PREFIX + key, str(val))
+    db.session.commit()
+    log_action(f'Термопомпа: цена ден {day} / нощ {night} (нощ {night_from}:00-{night_to}:00), измервател {meter or "няма"}')
+    flash('Настройките за разхода са запазени.', 'success')
+    return redirect(url_for('admin_heatpump'))
+
+
+def _heatpump_save_setting(key, value):
+    row = db.session.get(EditableText, key)
+    if row:
+        row.content = value
+    else:
+        db.session.add(EditableText(key=key, content=value))
+
+
 @app.route('/admin/heatpump')
 @role_required('admin')
 def admin_heatpump():
+    writable = {n: {'label': lbl, 'unit': unit, 'min': HtParams[n].min_val, 'max': HtParams[n].max_val,
+                    'int': HtParams[n].data_type == HtDataTypes.INT}
+                for n, (lbl, unit) in HEATPUMP_WRITABLE.items()}
     return render_template('admin_heatpump.html', active_page='admin_heatpump',
-                           host=get_text(HEATPUMP_HOST_KEY, ''), modes=HEATPUMP_MODES)
+                           host=get_text(HEATPUMP_HOST_KEY, ''), modes=HEATPUMP_MODES, writable=writable,
+                           meters=ShellyDevice.query.order_by(ShellyDevice.name).all(), cost_cfg=_heatpump_cost_cfg())
+
+
+def _heatpump_power():
+    """Instantaneous draw of the meter chosen for the pump: {'w', 'online'}, or None when no meter is chosen."""
+    meter = ShellyDevice.query.filter_by(host=get_text(_HP_PREFIX + 'meter', '')).first()
+    if not meter:
+        return None
+    snap = shelly_fleet_snapshot(_shelly_snapshot_args([meter]))[0]
+    return {'w': round(snap['total_power']), 'online': snap['online']}
 
 
 @app.route('/admin/heatpump/data')
 @limiter.exempt
 @role_required('admin')
 def admin_heatpump_data():
-    return jsonify(_heatpump_live)
+    return jsonify({**_heatpump_live, 'power': _heatpump_power()})
 
 
 @app.route('/admin/heatpump/history')
@@ -15145,6 +15323,44 @@ def admin_heatpump_history():
     return jsonify(series)
 
 
+@app.route('/admin/heatpump/set', methods=['POST'])
+@limiter.limit('30 per hour')
+@role_required('admin')
+def admin_heatpump_set():
+    """Change one whitelisted pump setting (JSON reply). The write is queued to
+    the poller thread and confirmed by reading the value back."""
+    name = request.form.get('name', '')
+    if name not in HEATPUMP_WRITABLE:
+        return jsonify(ok=False, error='Този параметър не може да се променя оттук.'), 400
+    param = HtParams[name]
+    try:
+        value = float(request.form.get('value', '').replace(',', '.'))
+    except ValueError:
+        return jsonify(ok=False, error='Невалидна стойност.'), 400
+    if param.data_type == HtDataTypes.INT:
+        if value != int(value):
+            return jsonify(ok=False, error='Стойността трябва да е цяло число.'), 400
+        value = int(value)
+    if not param.in_limits(value):
+        return jsonify(ok=False, error=f'Допустимият диапазон е {param.min_val} … {param.max_val}.'), 400
+    if not _heatpump_live['online']:
+        return jsonify(ok=False, error='Няма връзка с термопомпата.'), 503
+    old = _heatpump_live['slow'].get(name)
+    cmd = {'name': name, 'value': value, 'cancelled': False, 'done': threading.Event(), 'result': None,
+           'deadline': time.monotonic() + HEATPUMP_SET_TIMEOUT}
+    _heatpump_cmds.append(cmd)
+    if not cmd['done'].wait(HEATPUMP_SET_TIMEOUT):
+        cmd['cancelled'] = True
+        return jsonify(ok=False, error='Няма потвърждение от термопомпата - провери текущата стойност.'), 504
+    res = cmd['result']
+    if res['ok'] and abs(res['value'] - value) > 0.05:
+        res = {'ok': False, 'error': f"Термопомпата върна {res['value']} вместо {value}."}
+    if not res['ok']:
+        return jsonify(res), 502
+    log_action(f'Термопомпа: {HEATPUMP_WRITABLE[name][0]} {old} → {res["value"]}')
+    return jsonify(res)
+
+
 @app.route('/admin/heatpump/host', methods=['POST'])
 @role_required('admin')
 def admin_heatpump_set_host():
@@ -15152,11 +15368,7 @@ def admin_heatpump_set_host():
     if host and not re.fullmatch(r'[A-Za-z0-9.\-]+:\d{1,5}', host):
         flash('Адресът трябва да е във вид IP:порт, напр. 192.168.18.123:23.', 'error')
         return redirect(url_for('admin_heatpump'))
-    row = db.session.get(EditableText, HEATPUMP_HOST_KEY)
-    if row:
-        row.content = host
-    else:
-        db.session.add(EditableText(key=HEATPUMP_HOST_KEY, content=host))
+    _heatpump_save_setting(HEATPUMP_HOST_KEY, host)
     db.session.commit()
     log_action(f'Адрес на конвертора на термопомпата: {host or "изчистен"}')
     flash('Адресът е запазен.', 'success')
@@ -17872,6 +18084,9 @@ def edit_convector_window(conv_id):
             ] + [{'value': r.id, 'label': f'{r.building.name} / {r.name}'} for r in rooms]},
             {'name': 'location_label', 'label': 'Или свободно място (ако не е в помещение)',
              'value': conv.location_label or '', 'type': 'text'},
+            {'name': 'heatpump_circuit', 'label': 'Захранване от термопомпата (слой тръби в 3D)', 'value': conv.heatpump_circuit or '',
+             'type': 'select', 'options': [{'value': '', 'label': '-- не е свързан --'}] +
+                                          [{'value': k, 'label': v} for k, v in CONVECTOR_CIRCUITS.items()]},
         ]
     )
 
@@ -17913,6 +18128,9 @@ def admin_update_convector(conv_id):
     conv.relay_channel = relay_channel
     conv.room_id = room_id
     conv.location_label = None if room_id else (request.form.get('location_label', '').strip() or None)
+    circuit = request.form.get('heatpump_circuit', '')
+    if 'heatpump_circuit' in request.form:           # forms that don't carry the field leave it alone
+        conv.heatpump_circuit = circuit if circuit in CONVECTOR_CIRCUITS else None
     _hall_follow_room(conv)
     db.session.commit()
     flash(f'Конвектор "{conv.name}" беше обновен.', 'success')

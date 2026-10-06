@@ -52,10 +52,10 @@
         #hl-svg.hide-fixture .s.fixture, #hl-svg.hide-fixture .lk-fixture, #hl-svg.hide-stairs .s.stairs, #hl-svg.hide-stairs .lk-stairs,
         #hl-svg.hide-block .s.block, #hl-svg.hide-block .lk-block, #hl-svg.hide-machine .m, #hl-svg.hide-machine .acc, #hl-svg.hide-machine .mt,
         #hl-svg .lnk { fill: none; stroke-width: 0.12; stroke-dasharray: 0.5 0.4; animation: lnkflow 1s linear infinite; pointer-events: none; }
-        #hl-svg .lnk.power { stroke: #ff9d2e; } #hl-svg .lnk.data { stroke: #38bdf8; }
+        #hl-svg .lnk.power { stroke: #ff9d2e; } #hl-svg .lnk.data { stroke: #38bdf8; } #hl-svg .lnk.heat { stroke: #ef4444; } #hl-svg .lnk.cool { stroke: #3b82f6; }
         #hl-svg .lnk.hl { stroke: #ff3df2 !important; stroke-width: 0.22; } #hl-svg .lnk.hl2 { stroke: #2cff9a !important; stroke-width: 0.22; } #hl-svg .lnk.dim { opacity: 0.12; }
         @keyframes lnkflow { to { stroke-dashoffset: -0.9; } }
-        #hl-svg.hide-links_power .lnk.power, #hl-svg.hide-links_data .lnk.data { display: none; }
+        #hl-svg.hide-links_power .lnk.power, #hl-svg.hide-links_data .lnk.data, #hl-svg.hide-links_heat .lnk.heat, #hl-svg.hide-links_cool .lnk.cool { display: none; }
         #hl-svg.hide-equip .q:not(.q-iot):not(.q-net):not(.q-cam), #hl-svg.hide-equip .qt:not(.qt-iot):not(.qt-net):not(.qt-cam), #hl-svg.hide-cam .q-cam, #hl-svg.hide-cam .qt-cam, #hl-svg.hide-cam .fov, #hl-svg.hide-iot .q-iot, #hl-svg.hide-iot .qt-iot, #hl-svg.hide-network .q-net, #hl-svg.hide-network .qt-net, #hl-svg.hide-mlabels .mt, #hl-svg.hide-labels .lbl { display: none; }
 </style>
     <p style="color: var(--text-muted)">Всеки елемент е <b>заключен</b>, докато не натиснете „Отключи“; тогава се мести (влачене, стрелки, полетата) и „Запази и заключи“ го заключва отново. Влачете машина, оборудване, стена, врата или помещение, за да ги преместите; размерите и връзките се задават вдясно.
@@ -164,6 +164,7 @@
                 <button class="btn" data-add="sensor" type="button">+ Сензор</button>
                 <button class="btn" data-add="network" type="button">+ Мрежово устройство</button>
                 <button class="btn" data-add="camera" type="button">+ Камера</button>
+                <button class="btn" data-add="heatpump" type="button">+ Термопомпа</button>
                 <button class="btn" data-add="wall" type="button">+ Стена</button>
                 <button class="btn" data-add="door" type="button">+ Врата</button>
                 <button class="btn" data-add="room" type="button">+ Помещение</button>
@@ -181,9 +182,9 @@ MACHINES.forEach(o => o._t = 'machine');   // the lists themselves come from the
 SHAPES.forEach(o => o._t = 'shape');
 EQUIP.forEach(o => o._t = 'equip');
 const COLORS = { laser: '#e07a2f', mill: '#3b82f6', lathe: '#14b8a6', press: '#a855f7', util: '#94a3b8' };
-const EQ_COLORS = { inverter: '#facc15', battery: '#22c55e', panel: '#ef4444', convector: '#fb923c', sensor: '#2dd4bf', network: '#38bdf8', camera: '#e879f9' };
+const EQ_COLORS = { inverter: '#facc15', battery: '#22c55e', panel: '#ef4444', convector: '#fb923c', sensor: '#2dd4bf', network: '#38bdf8', camera: '#e879f9', heatpump: '#f97316' };
 const QK = k => k === 'convector' || k === 'sensor' ? ' q-iot' : k === 'network' ? ' q-net' : k === 'camera' ? ' q-cam' : '';   // layer class: IoT / network devices hide separately
-const EQ_ABBR = { inverter: 'И', battery: 'Б', panel: 'Т', convector: 'К', sensor: 'С', network: 'М', camera: 'К' };
+const EQ_ABBR = { inverter: 'И', battery: 'Б', panel: 'Т', convector: 'К', sensor: 'С', network: 'М', camera: 'К', heatpump: 'ТП' };
 const ROOM_COLORS = ['#60a5fa', '#34d399', '#f472b6', '#fbbf24', '#a78bfa'];
 const svg = document.getElementById('hl-svg'), NS = 'http://www.w3.org/2000/svg';
 const $ = id => document.getElementById(id);
@@ -263,7 +264,7 @@ function draw() {
         }
     });
     const selKey = sel && sel._t !== 'shape' ? hallKey(sel) : null, selUp = selKey ? upstream(selKey) : null;
-    hallLinks().forEach((l, i) => svg.appendChild(el('polyline', { class: 'lnk ' + l.kind + (selKey ? (touches(l, selKey) ? ' hl' : selUp.has(l.src) ? ' hl2' : ' dim') : ''), points: hallRoute(l.A, l.B, 0.3 + (i % 6) * 0.07).map(q => q.join(',')).join(' ') })));   // same wall route as in 3D   // animated connections
+    hallLinks().forEach((l, i) => svg.appendChild(el('polyline', { class: 'lnk ' + l.kind + (selKey ? (touches(l, selKey) ? ' hl' : selUp.has(l.src) ? ' hl2' : ' dim') : ''), points: hallPath(l, i).map(q => q.join(',')).join(' ') })));   // same wall route as in 3D   // animated connections
     MACHINES.forEach(m => {
         if (m.acc_length > 0) { const a = accessoryShape(m); if (FD(m)) a.classList.add('fdim'); svg.appendChild(a); }
         const r = el('rect', { class: 'm' + FD(m) + (m === sel ? ' sel' : '') + (m._unlocked ? ' unlocked' : ''), x: m.x, y: m.z, width: m.width, height: m.depth, fill: COLORS[m.category] || COLORS.util });
@@ -660,6 +661,7 @@ const NEW = {
     sensor: eq('sensor', '', 0.08, 0.03, 0.08, 1.6),
     network: eq('network', '', 0.45, 0.25, 0.1, 2.0),
     camera: eq('camera', '', 0.15, 0.15, 0.12, 4.0),
+    heatpump: eq('heatpump', 'Термопомпа', 1.0, 0.8, 1.4, 0),
     wall: { _t: 'shape', id: null, kind: 'wall', name: '', x: 2, z: 2, width: 4, depth: 0.4, height: 5, elevation: 0, floors: 1, room_id: null, label: '' },
     door: { _t: 'shape', id: null, kind: 'door', name: 'Врата', x: 2, z: 2, width: 4, depth: 0.15, height: 4, elevation: 0, floors: 1, room_id: null, label: 'Врата' },
     window: { _t: 'shape', id: null, kind: 'window', name: '', x: 2, z: 2, width: 3, depth: 0.3, height: 1.4, elevation: 3.3, floors: 1, model: null, rotation: 0, room_id: null, label: '' },

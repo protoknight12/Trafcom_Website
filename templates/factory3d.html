@@ -93,6 +93,25 @@ function hallRoute(A, B, ins = 0.3) {
     const mid = [0, Wd, Wd + Dd, 2 * Wd + Dd].map(c => ({ c, d: fwd ? (c - a.t + Lp) % Lp : (a.t - c + Lp) % Lp })).filter(o => o.d > 0 && o.d < len).sort((p, q) => p.d - q.d).map(o => at(o.c));
     return [[A.x, A.z], a.pt, ...mid, b.pt, [B.x, B.z]];
 }
+// Heating/cooling pipes follow one trunk like the real installation: from the boiler room along the hall's right wall (front -> back), then along the
+// back wall; every convector is a branch from the nearest point of that trunk (straight, at right angles to the wall).
+const PIPE_TRUNK = [[HALL_W - 0.3, HALL_D - 0.3], [HALL_W - 0.3, 0.3], [0.3, 0.3]];
+function hallPipe(A, B) {
+    const P = PIPE_TRUNK, near = p => {
+        let best = null;
+        for (let s = 0; s < P.length - 1; s++) {
+            const [x0, z0] = P[s], [x1, z1] = P[s + 1], dx = x1 - x0, dz = z1 - z0, u = Math.max(0, Math.min(1, ((p.x - x0) * dx + (p.z - z0) * dz) / (dx * dx + dz * dz)));
+            const q = [x0 + u * dx, z0 + u * dz], d = Math.hypot(p.x - q[0], p.z - q[1]);
+            if (!best || d < best.d) best = { d, q, s, pos: s + u };
+        }
+        return best;
+    };
+    const a = near(A), b = near(B), mid = [];
+    if (a.pos < b.pos) for (let k = a.s + 1; k <= b.s; k++) mid.push(P[k]); else for (let k = a.s; k > b.s; k--) mid.push(P[k]);
+    return [[A.x, A.z], [a.q[0], A.z], a.q, ...mid, b.q, [B.x, B.z]];       // the boiler room is usually outside the hall: out to the wall at right angles first
+}
+// Route of one link: cables follow the walls (hallRoute, shortest way round), pipes the trunk above.
+const hallPath = (l, i) => l.kind === 'heat' || l.kind === 'cool' ? hallPipe(l.A, l.B) : hallRoute(l.A, l.B, 0.3 + (i % 6) * 0.07);
 const hallLinks = () => LINKS.map(l => Object.assign({ A: hallEnd(l.a), B: hallEnd(l.b), src: l }, l)).filter(l => l.A && l.B);
 </script>
 <main class="dashboard-container" style="margin-top: 20px; max-width: 98vw;">
@@ -409,7 +428,7 @@ MACHINES.forEach(m => {
     const cap = [m.no, m.name.replace(/^CNC\s+/, '')].filter(v => v != null && v !== '').join(' · ');   // "3 · верт. обр. център DMG DMU 75 monoblok"
     if (cap) label(cap, g.position.x, (m.elevation || 0) + m.height + 1.2, g.position.z, 0.9, machineLabels);
 });
-const EQ = { inverter: "{{ _('Инвертор') }}", battery: "{{ _('Батериен блок') }}", panel: "{{ _('Ел. табло') }}", convector: "{{ _('Конвектор') }}", sensor: "{{ _('Температурен сензор') }}", network: "{{ _('Мрежово устройство') }}", camera: "{{ _('Камера') }}" };
+const EQ = { inverter: "{{ _('Инвертор') }}", battery: "{{ _('Батериен блок') }}", panel: "{{ _('Ел. табло') }}", convector: "{{ _('Конвектор') }}", sensor: "{{ _('Температурен сензор') }}", network: "{{ _('Мрежово устройство') }}", camera: "{{ _('Камера') }}", heatpump: "{{ _('Термопомпа') }}" };
 EQUIP.forEach(e => {
     tgt = layer(e.kind === 'network' ? 'network' : e.kind === 'camera' ? 'cam' : e.kind === 'convector' || e.kind === 'sensor' ? 'iot' : 'equip');
     const [lw, ld] = dims(e.width, e.depth, e.rotation);
@@ -433,10 +452,10 @@ tgt = scene;
 // animated connections: cable-tray style routes (up, across at tray height, down); dashes move from end A to end B
 const FLOW = [];
 if (IS_ADMIN) {
-    const TRAY = { power: 4.25, data: 4.5 }, COL = { power: 0xff9d2e, data: 0x38bdf8 };
+    const TRAY = { power: 4.25, data: 4.5, heat: 3.9, cool: 3.7 }, COL = { power: 0xff9d2e, data: 0x38bdf8, heat: 0xef4444, cool: 0x3b82f6 };
     hallLinks().forEach((l, i) => {
-        const y = TRAY[l.kind] + (i % 5) * 0.05,         // rises to the ceiling, runs to the nearest wall, along the walls, and down to the other end
-            pts = [[l.A.x, l.A.top, l.A.z], ...hallRoute(l.A, l.B, 0.3 + (i % 6) * 0.07).map(([x, z]) => [x, y, z]), [l.B.x, l.B.top, l.B.z]].map(p => new THREE.Vector3(...p));
+        const y = TRAY[l.kind] + (l.kind === 'heat' || l.kind === 'cool' ? 0 : (i % 5) * 0.05),   // a pipe's branches share the trunk's height         // rises to the ceiling, runs to the nearest wall, along the walls, and down to the other end
+            pts = [[l.A.x, l.A.top, l.A.z], ...hallPath(l, i).map(([x, z]) => [x, y, z]), [l.B.x, l.B.top, l.B.z]].map(p => new THREE.Vector3(...p));
         const geo = new THREE.BufferGeometry().setFromPoints(pts), grp = layer('links_' + l.kind);
         const base = new THREE.LineBasicMaterial({ color: COL[l.kind], transparent: true, opacity: 0.25 });
         grp.add(new THREE.Line(geo, base));
@@ -634,6 +653,7 @@ const LAYER_DEFS = [
     ["{{ _('Оборудване') }}", [['machine', "{{ _('Машини и инвентар') }}"], ['equip', "{{ _('Инвертори, батерии, табла') }}"],
                               ['network', "{{ _('Мрежови устройства (суичове, рутери)') }}"], ['cam', "{{ _('Камери и зрително поле') }}"], ['detect', "{{ _('Открити обекти (хора, коли)') }}"], ['iot', "{{ _('IoT: сензори, конвектори, измерватели') }}"]]],
     ...(IS_ADMIN ? [["{{ _('Връзки (анимирани)') }}", [['links_power', "{{ _('Ел. връзки: табла, инвертори, батерии, машини') }}"], ['links_data', "{{ _('Мрежови връзки и комуникации') }}"],
+                                                    ['links_heat', "{{ _('Отопление: термопомпа → конвектори') }}"], ['links_cool', "{{ _('Охлаждане: термопомпа → конвектори') }}"],
                                                     ['links_dc', "{{ _('DC кабели на панелите (стринг -> инвертор, по билото)') }}"]]]] : []),
     ["{{ _('Надписи') }}", [['mlabels', "{{ _('Машини: номера и имена') }}"], ['labels', "{{ _('Други надписи') }}"]]],
     ["{{ _('Покрив') }}", [['ceiling', "{{ _('Таван и осветление') }}"], ['roof', "{{ _('Покривни панели') }}"], ['solar', "{{ _('Соларни панели (подробности)') }}"],
@@ -727,6 +747,13 @@ function showLive() {
     if (k === 'sensor') {
         const z = (LIVE.sensors || {})[id];
         e.textContent = z && z.temperature != null ? z.temperature + ' °C' + (z.humidity != null ? ' · ' + z.humidity + ' %' : '') + (z.online ? '' : " ({{ _('няма връзка') }})") : '-';
+        return;
+    }
+    if (k === 'heatpump') {
+        const h = LIVE.heatpump, p = h && h.power;
+        e.textContent = !h ? '-' : !h.online ? "{{ _('няма връзка') }}" : [h.fault ? "{{ _('АВАРИЯ') }}" : null, h.compressor ? "{{ _('компресор: работи') }}" : "{{ _('компресор: спрян') }}",
+            p && p.online ? p.w + ' W' : null, h.vorlauf != null ? "{{ _('подаване') }} " + h.vorlauf + ' °C' : null, h.ruecklauf != null ? "{{ _('връщане') }} " + h.ruecklauf + ' °C' : null,
+            h.aussen != null ? "{{ _('външна') }} " + h.aussen + ' °C' : null].filter(Boolean).join(' · ');
         return;
     }
     if (k === 'battery') { const b = (LIVE.batteries || {})[id]; e.textContent = b ? (b.soc != null ? b.soc + ' %' : '') + (b.power != null ? ' · ' + b.power + ' W' : '') : '-'; return; }
@@ -825,12 +852,12 @@ renderer.domElement.addEventListener('pointerup', e => {
     info.style.display = 'block';
 });
 const DEV_URL = { panel: id => '/admin/panels/' + id + '/schematic', convector: id => '/admin/convectors/' + id + '/edit', sensor: id => '/admin/temperature-sensors/' + id + '/edit',
-                  network: () => "{{ url_for('admin_network') }}", inverter: () => "{{ url_for('admin_power') }}", battery: () => "{{ url_for('admin_battery_cabinets') }}" };
+                  network: () => "{{ url_for('admin_network') }}", inverter: () => "{{ url_for('admin_power') }}", heatpump: () => "{{ url_for('admin_heatpump') }}", battery: () => "{{ url_for('admin_battery_cabinets') }}" };
 function relatedLinks(m) {                                  // every animated connection that touches the picked object
     const mine = hallLinks().filter(l => [l.a, l.b].some(r => (m.equip ? r[0] === m.kind && r[1] === m.ref_id : r[0] === 'machine' && r[1] === m.id)));
     if (!mine.length) return;
     const d = document.createElement('div'); d.style.cssText = 'font-size:0.8rem;margin-top:4px'; d.textContent = "{{ _('Връзки') }}:"; info.append(d);
-    mine.forEach(l => { const r = document.createElement('div'); r.style.cssText = 'font-size:0.8rem;padding-left:8px'; r.textContent = (l.kind === 'power' ? '⚡ ' : '🌐 ') + l.label; info.append(r); });
+    mine.forEach(l => { const r = document.createElement('div'); r.style.cssText = 'font-size:0.8rem;padding-left:8px'; r.textContent = (l.kind === 'power' ? '⚡ ' : l.kind === 'heat' ? '🔥 ' : l.kind === 'cool' ? '❄️ ' : '🌐 ') + l.label; info.append(r); });
 }
 function equipAdmin(m) {                                    // info panel of a placed panel / inverter / battery / convector / sensor / network device
     info.append(document.createElement('hr'));
@@ -861,7 +888,7 @@ function equipAdmin(m) {                                    // info panel of a p
             const d = await r.json().catch(() => ({})); if (!r.ok) alert(d.error || 'Грешка'); else { (LIVE.convectors = LIVE.convectors || {})[m.ref_id] = Object.assign(LIVE.convectors[m.ref_id] || { online: true }, { is_on: d.is_on }); showLive(); } };
         row.append(t);
     }
-    if (m.ref_id && DEV_URL[m.kind]) { const o = document.createElement('button'); o.className = 'btn'; o.type = 'button'; o.textContent = "⚙ {{ _('Управление') }}"; o.onclick = () => openDevice(DEV_URL[m.kind](m.ref_id)); row.append(o); }
+    if ((m.ref_id || m.kind === 'heatpump') && DEV_URL[m.kind]) { const o = document.createElement('button'); o.className = 'btn'; o.type = 'button'; o.textContent = "⚙ {{ _('Управление') }}"; o.onclick = () => openDevice(DEV_URL[m.kind](m.ref_id)); row.append(o); }
     info.append(row); actions(m, 'equip', null, row);
 }
 function meterBox(m) {                                      // attached meters (IoT) + attach / detach from the map
@@ -910,8 +937,14 @@ setMode(location.hash.slice(1) || '{{ initial }}');
     }
     const now = performance.now() / 1000;
     if (LAYER.rays.visible) RAYMAT.forEach(m => m.dashOffset = -(now * 5) % 3.6);       // dashes travel from the sun toward the roof
-    FLOW.forEach(({ mat, l }) => {                      // flow speed follows live power at the receiving end; idle (0 W) links crawl
+    FLOW.forEach(({ mat, base, l }) => {                      // flow speed follows live power at the receiving end; idle (0 W) links crawl
         const e = l.b[0] === 'panel' ? (LIVE.panels || {})[l.b[1]] : l.b[0] === 'machine' ? (LIVE.machines || {})[l.b[1]] : null;
+        const hp = LIVE.heatpump, cooling = hp && hp.mode === 2, runs = !!(hp && hp.online && hp.compressor && (l.kind === 'cool') === cooling);
+        if (l.kind === 'heat' || l.kind === 'cool') {     // red while the pump heats, blue while it cools, grey (still) when that circuit is off
+            const col = runs ? (l.kind === 'heat' ? 0xef4444 : 0x3b82f6) : 0x8a8f98;
+            mat.color.setHex(col); base.color.setHex(col);
+            mat.dashOffset = -(now * (runs ? 1.5 : 0)) % 0.65; mat.opacity = runs ? 1 : 0.5; return;
+        }
         const speed = l.kind === 'data' ? 1.2 : e && e.online ? (e.power > 0 ? Math.min(4, 1 + e.power / 4000) : 0.15) : 1;
         mat.dashOffset = -(now * speed) % 0.65;
     });

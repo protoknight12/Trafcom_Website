@@ -23,6 +23,13 @@
         .hp-legend { font-size: 0.8rem; margin: 8px 0 18px; display: flex; gap: 16px; flex-wrap: wrap; }
         .hp-legend i { display: inline-block; width: 12px; height: 3px; margin-right: 5px; vertical-align: middle; }
         .hp-section { margin: 22px 0 8px; }
+        [title] .hp-label, .hp-tip { cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
+        .hp-ctl { display: grid; grid-template-columns: minmax(180px, 1.3fr) 110px 150px auto; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border-color); }
+        .hp-ctl input, .hp-ctl select { padding: 6px 8px; background-color: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); border-radius: 4px; width: 100%; box-sizing: border-box; }
+        .hp-ctl-msg { font-size: 0.8rem; grid-column: 1 / -1; min-height: 0; }
+        .hp-ctl-msg.ok { color: var(--success-text); }
+        .hp-ctl-msg.err { color: var(--danger-text); }
+        @media (max-width: 640px) { .hp-ctl { grid-template-columns: 1fr 1fr; } }
     </style>
 </head>
 <body>
@@ -44,6 +51,10 @@
     <h3 class="hp-section">Състояние</h3>
     <div class="hp-grid" id="gridStates"></div>
 
+    <h3 class="hp-section">Управление</h3>
+    <p class="text-muted text-small" style="margin-top: 0;">Промяната се праща на термопомпата и се потвърждава с прочитане на стойността. Допустимите граници са на самата помпа; всяка промяна се записва в журнала.</p>
+    <div id="controls"><span class="text-muted text-small">Изчаква се първо четене на настройките…</span></div>
+
     <h3 class="hp-section">История
         <select id="hoursSel" style="margin-left: 10px; padding: 3px 6px; background-color: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); border-radius: 4px;">
             <option value="6">6 ч</option>
@@ -54,6 +65,36 @@
     </h3>
     <canvas id="chart" class="hp-chart"></canvas>
     <div class="hp-legend" id="legend"></div>
+
+    <h3 class="hp-section">Разход и цена
+        <select id="costPeriod" style="margin-left: 10px; padding: 3px 6px; background-color: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-color); border-radius: 4px;">
+            <option value="today">Днес</option>
+            <option value="7d">7 дни</option>
+            <option value="30d">30 дни</option>
+            <option value="month">Този месец</option>
+        </select>
+    </h3>
+    <div class="hp-grid" id="costGrid"></div>
+    <p class="text-muted text-small" id="costNote"></p>
+    <form action="{{ url_for('admin_heatpump_cost_settings') }}" method="POST" class="admin-form" style="max-width: 520px;">
+        {% include 'partials/csrf_field.html' %}
+        <div class="form-group">
+            <label>Измервател на термопомпата (само за нея, с всички помпи)</label>
+            <select name="meter">
+                <option value="">— няма —</option>
+                {% for m in meters %}<option value="{{ m.host }}" {{ 'selected' if m.host == cost_cfg.meter else '' }}>{{ m.name }} ({{ m.host }})</option>{% endfor %}
+            </select>
+        </div>
+        <div class="form-group"><label>Дневна цена (€ за kWh)</label>
+            <input type="number" name="price_day" step="0.0001" min="0" value="{{ cost_cfg.price_day }}" required></div>
+        <div class="form-group"><label>Нощна цена (€ за kWh)</label>
+            <input type="number" name="price_night" step="0.0001" min="0" value="{{ cost_cfg.price_night }}" required></div>
+        <div class="form-group"><label>Нощната тарифа започва в (час, 0–23)</label>
+            <input type="number" name="night_from" min="0" max="23" value="{{ cost_cfg.night_from }}" required></div>
+        <div class="form-group"><label>Нощната тарифа свършва в (час, 0–23)</label>
+            <input type="number" name="night_to" min="0" max="23" value="{{ cost_cfg.night_to }}" required></div>
+        <button type="submit" class="btn">Запази</button>
+    </form>
 
     <h3 class="hp-section">Настройки на връзката</h3>
     <form action="{{ url_for('admin_heatpump_set_host') }}" method="POST" class="admin-form" style="max-width: 420px;">
@@ -69,10 +110,12 @@
 <script>
 (function () {
     var MODES = {{ modes|tojson }};
+    var WRITABLE = {{ writable|tojson }};
+    var CSRF = '{{ csrf_token() }}';
     var TEMPS = [
         ['Temp. Aussen', 'Външна', '°C'], ['Temp. Aussen verzoegert', 'Външна (забавена)', '°C'],
         ['Temp. Vorlauf', 'Подаване', '°C'], ['Temp. Ruecklauf', 'Връщане', '°C'],
-        ['HKR_Sollwert', 'Зададено подаване', '°C'], ['Temp. Brauchwasser', 'Бойлер (БГВ)', '°C'],
+        ['HKR_Sollwert', 'Зададена от кривата', '°C'], ['Temp. Brauchwasser', 'Бойлер (БГВ)', '°C'],
         ['Temp. Frischwasser_Istwert', 'Прясна вода', '°C'],
         ['Temp. EQ_Eintritt', 'Източник вход', '°C'], ['Temp. EQ_Austritt', 'Източник изход', '°C'],
         ['Temp. Sauggas', 'Сауг газ', '°C'], ['Temp. Heissgas', 'Горещ газ', '°C'],
@@ -97,8 +140,56 @@
     var COLORS = {'Temp. Aussen': '#4aa3ff', 'Temp. Vorlauf': '#ff6b4a', 'Temp. Ruecklauf': '#f0b429', 'Temp. Brauchwasser': '#3ccf91'};
     var NAMES = {'Temp. Aussen': 'Външна', 'Temp. Vorlauf': 'Подаване', 'Temp. Ruecklauf': 'Връщане', 'Temp. Brauchwasser': 'Бойлер'};
 
-    function card(label, valueHtml) {
-        return '<div class="hp-card"><div class="hp-label">' + label + '</div><div class="hp-value">' + valueHtml + '</div></div>';
+    // Обяснения (по общата документация на Heliotherm) - показват се като подсказка при посочване.
+    var TIPS = {
+        'Temp. Aussen': 'Текуща външна температура от датчика на помпата.',
+        'Temp. Aussen verzoegert': 'Външна температура, осреднена във времето. По нея се управлява отоплението, за да не реагира на кратки колебания.',
+        'Temp. Vorlauf': 'Температурата на водата, която помпата подава към отоплителния кръг.',
+        'Temp. Ruecklauf': 'Температурата на водата, която се връща от отоплителния кръг. Разликата между подаване и връщане показва колко топлина се отдава.',
+        'HKR_Sollwert': 'Целевата температура на отоплителния кръг, изчислена от отоплителната крива за текущата външна температура.',
+        'Temp. Brauchwasser': 'Температура на бойлера за топла вода (БГВ). „—“ означава, че няма свързан датчик.',
+        'Temp. Frischwasser_Istwert': 'Температура на прясната вода при станция за прясна вода. „—“ означава, че няма такава станция или датчик.',
+        'Temp. EQ_Eintritt': 'Температура на източника на топлина (земя, вода или въздух) на входа на помпата.',
+        'Temp. EQ_Austritt': 'Температура на източника на изхода. Разликата вход–изход показва колко топлина се взема от източника.',
+        'Temp. Sauggas': 'Температура на хладилния газ преди компресора.',
+        'Temp. Heissgas': 'Температура на газа след компресора, най-горещата точка на хладилния кръг. Твърде висока стойност води до защитно изключване.',
+        'Temp. Verdampfung': 'Температура на изпарение на хладилния агент, определена от ниското налягане.',
+        'Temp. Kondensation': 'Температура на кондензация на хладилния агент, определена от високото налягане. Колкото е по-висока, толкова повече работи компресорът.',
+        'Niederdruck (bar)': 'Налягане от страната на изпарителя (смукване). Много ниско налягане означава недостиг на топлина от източника или проблем в кръга.',
+        'Hochdruck (bar)': 'Налягане след компресора (нагнетяване). Твърде високо налягане води до защитно изключване.',
+        'Verdichter': 'Компресорът работи в момента.',
+        'Heizkreispumpe': 'Циркулационната помпа на отоплителния кръг работи.',
+        'EQ Pumpe (Ventilator)': 'Помпата (или вентилаторът) на източника на топлина работи.',
+        'Zirkulationspumpe WW': 'Циркулационната помпа на топлата вода (рециркулация) работи.',
+        'Warmwasservorrang': 'Помпата в момента загрява бойлера и спира отоплението (приоритет на топлата вода).',
+        'Hauptschalter': 'Главният ключ на термопомпата е включен.',
+        'Stoerung': 'Има активна авария. Подробности са в „Последна авария“.',
+        'last_fault': 'Последният запис в журнала на помпата и общият брой записи в него. „No Error“ означава, че няма авария.',
+        'BSZ Verdichter Betriebsst. ges': 'Общо моточасове на компресора от пускането на помпата.',
+        'BSZ Verdichter Betriebsst. WW': 'Колко от моточасовете на компресора са за загряване на топлата вода.',
+        'BSZ Verdichter Betriebsst. HKR': 'Колко от моточасовете на компресора са за отопление.',
+        'power': 'Моментна електрическа мощност на измервателя на термопомпата (всички помпи и компресор заедно).',
+        'cost_heating': 'Електроенергия и цена за времето, когато компресорът работи в режим отопление.',
+        'cost_cooling': 'Електроенергия и цена за времето, когато компресорът работи в режим охлаждане.',
+        'cost_standby': 'Електроенергия, когато компресорът е спрян, а помпата още консумира (циркулационни помпи, управление).',
+        'cost_total': 'Общо консумирана електроенергия на измервателя за периода и цена по дневна и нощна тарифа.',
+        'Betriebsart': 'Режим на работа на помпата. „Автоматика“ следва зададените времеви програми; другите режими я държат постоянно в избраното състояние.',
+        'HKR Soll_Raum': 'Желаната стайна температура. Влияе на отоплителната крива: по-висока стойност вдига целевата температура на подаване.',
+        'HKR Aufheiztemp. (K)': 'С колко градуса се повишава целевата температура в периоди на нагряване (по програма).',
+        'HKR Absenktemp. (K)': 'С колко градуса се понижава целевата температура в периоди на намалено отопление (например нощем). Стойността е отрицателна.',
+        'HKR Heizgrenze': 'Външна температура, над която отоплението не работи (лятно изключване).',
+        'HKR RLT Soll_oHG (Heizkurve)': 'Точка от отоплителната крива: целева температура на връщане при външна температура около границата на отопление (най-топлата точка).',
+        'HKR RLT Soll_0 (Heizkurve)': 'Точка от отоплителната крива: целева температура на връщане при външна температура 0 °C.',
+        'HKR RLT Soll_uHG (Heizkurve)': 'Точка от отоплителната крива: целева температура на връщане при най-ниската външна температура (най-студената точка).',
+        'WW Normaltemp.': 'Целева температура на бойлера в нормален режим.',
+        'WW Hysterese Normaltemp.': 'На колко градуса под нормалната температура трябва да падне бойлерът, за да започне ново загряване.',
+        'WW Minimaltemp.': 'Целева температура на бойлера в намален режим (минимална).',
+        'WW Hysterese Minimaltemp.': 'На колко градуса под минималната температура трябва да падне бойлерът, за да започне ново загряване.'
+    };
+    function tipAttr(key) { return TIPS[key] ? ' title="' + TIPS[key].replace(/"/g, '&quot;') + '"' : ''; }
+
+    function card(label, valueHtml, tipKey) {
+        return '<div class="hp-card"' + tipAttr(tipKey) + '><div class="hp-label">' + label + '</div><div class="hp-value">' + valueHtml + '</div></div>';
     }
     function num(v, unit) { return v == null ? '<small>—</small>' : v + ' <small>' + unit + '</small>'; }
 
@@ -110,18 +201,68 @@
         if (r.ts) document.getElementById('lastUpdate').textContent = 'Обновено: ' + new Date(r.ts * 1000).toLocaleTimeString('bg-BG');
         var d = r.data || {}, s = r.slow || {};
         if (!Object.keys(d).length) return;
-        document.getElementById('gridTemps').innerHTML = TEMPS.map(function (t) { return card(t[1], num(d[t[0]], t[2])); }).join('');
-        var html = BOOLS.map(function (b) {
+        document.getElementById('gridTemps').innerHTML = TEMPS.map(function (t) { return card(t[1], num(d[t[0]], t[2]), t[0]); }).join('');
+        var html = '';
+        if (r.power) {
+            html += card('Консумация сега', r.power.online ? (r.power.w >= 1000 ? (r.power.w / 1000).toFixed(2) + ' <small>kW</small>' : r.power.w + ' <small>W</small>') : '<small>измервателят не отговаря</small>', 'power');
+        }
+        html += BOOLS.map(function (b) {
             var on = !!d[b[0]], bad = b[0] === 'Stoerung';
-            return card(b[1], '<span class="' + (on ? (bad ? 'hp-fault' : 'hp-on') : 'hp-off') + '">' + (on ? (bad ? 'ДА' : 'Вкл.') : (bad ? 'Не' : 'Изкл.')) + '</span>');
+            return card(b[1], '<span class="' + (on ? (bad ? 'hp-fault' : 'hp-on') : 'hp-off') + '">' + (on ? (bad ? 'ДА' : 'Вкл.') : (bad ? 'Не' : 'Изкл.')) + '</span>', b[0]);
         }).join('');
         html += SLOW.filter(function (x) { return s[x[0]] != null; })
-            .map(function (x) { return card(x[1], '<span style="font-size:1.15rem">' + x[2](s[x[0]]) + '</span>'); }).join('');
+            .map(function (x) { return card(x[1], '<span style="font-size:1.15rem">' + x[2](s[x[0]]) + '</span>', x[0]); }).join('');
         if (s.last_fault) {
             html += card('Последна авария (' + s.fault_count + ' записа)',
-                '<span style="font-size:0.95rem">' + s.last_fault.text + '<br><small>' + new Date(s.last_fault.ts).toLocaleString('bg-BG') + '</small></span>');
+                '<span style="font-size:0.95rem">' + s.last_fault.text + '<br><small>' + new Date(s.last_fault.ts).toLocaleString('bg-BG') + '</small></span>', 'last_fault');
         }
         document.getElementById('gridStates').innerHTML = html;
+        renderControls(s);
+    }
+
+    var ctlBuilt = false;
+    function renderControls(s) {
+        var names = Object.keys(WRITABLE);
+        if (!ctlBuilt) {
+            if (!names.every(function (n) { return s[n] != null; })) return;
+            document.getElementById('controls').innerHTML = names.map(function (n, i) {
+                var w = WRITABLE[n], input;
+                if (n === 'Betriebsart') {
+                    input = '<select id="in' + i + '">' + Object.keys(MODES).map(function (k) { return '<option value="' + k + '">' + MODES[k] + '</option>'; }).join('') + '</select>';
+                } else {
+                    input = '<input id="in' + i + '" type="number" min="' + w.min + '" max="' + w.max + '" step="' + (w.int ? 1 : 0.5) + '">';
+                }
+                return '<div class="hp-ctl"><div' + tipAttr(n) + '><span class="hp-tip">' + w.label + '</span><div class="text-muted text-small">' + w.min + ' … ' + w.max + ' ' + w.unit + '</div></div>' +
+                    '<div>сега: <b id="cur' + i + '"></b></div>' + input +
+                    '<button type="button" class="btn" data-i="' + i + '" data-n="' + n + '">Задай</button><div class="hp-ctl-msg" id="msg' + i + '"></div></div>';
+            }).join('');
+            names.forEach(function (n, i) { document.getElementById('in' + i).value = s[n]; });
+            document.getElementById('controls').addEventListener('click', onSet);
+            ctlBuilt = true;
+        }
+        names.forEach(function (n, i) {
+            var w = WRITABLE[n];
+            document.getElementById('cur' + i).textContent = (n === 'Betriebsart' ? (MODES[s[n]] || s[n]) : s[n] + ' ' + w.unit);
+        });
+    }
+
+    function onSet(e) {
+        var b = e.target.closest('button[data-n]');
+        if (!b) return;
+        var n = b.dataset.n, i = b.dataset.i, w = WRITABLE[n], el = document.getElementById('in' + i), msg = document.getElementById('msg' + i);
+        var shown = el.tagName === 'SELECT' ? el.options[el.selectedIndex].text : el.value + ' ' + w.unit;
+        if (!confirm('Да се зададе на термопомпата: ' + w.label + ' = ' + shown + ' ?')) return;
+        b.disabled = true; msg.className = 'hp-ctl-msg'; msg.textContent = 'Изпраща се…';
+        fetch('{{ url_for("admin_heatpump_set") }}', {
+            method: 'POST',
+            headers: {'X-CSRFToken': CSRF, 'Content-Type': 'application/x-www-form-urlencoded'},
+            body: new URLSearchParams({name: n, value: el.value})
+        }).then(function (r) { return r.json(); }).then(function (j) {
+            msg.className = 'hp-ctl-msg ' + (j.ok ? 'ok' : 'err');
+            msg.textContent = j.ok ? 'Записано: ' + j.value : (j.error || 'Грешка');
+            if (j.ok) poll();
+        }).catch(function () { msg.className = 'hp-ctl-msg err'; msg.textContent = 'Грешка в заявката.'; })
+          .then(function () { b.disabled = false; });
     }
 
     function poll() {
@@ -165,6 +306,26 @@
             }).join('');
         });
     }
+
+    function loadCost() {
+        fetch('{{ url_for("admin_heatpump_cost") }}?period=' + document.getElementById('costPeriod').value)
+            .then(function (r) { return r.json(); }).then(function (j) {
+                var grid = document.getElementById('costGrid'), note = document.getElementById('costNote');
+                if (!j.configured) { grid.innerHTML = ''; note.textContent = 'Избери измервател и цени, за да се изчислява разходът.'; return; }
+                var C = j.categories, rows = [['cost_heating', 'Отопление', C.heating], ['cost_cooling', 'Охлаждане', C.cooling], ['cost_standby', 'Готовност', C.standby]];
+                var kwh = 0, eur = 0;
+                rows.forEach(function (r) { kwh += r[2].kwh; eur += r[2].cost; });
+                rows.push(['cost_total', 'Общо', {kwh: kwh, cost: eur}]);
+                grid.innerHTML = rows.map(function (r) {
+                    return card(r[1], r[2].cost.toFixed(2) + ' <small>€</small><div class="text-muted text-small" style="font-weight:400">' + r[2].kwh.toFixed(2) + ' kWh</div>', r[0]);
+                }).join('');
+                note.textContent = j.first_data && j.first_data > j.since
+                    ? 'Данните за термопомпата започват от ' + new Date(j.first_data * 1000).toLocaleString('bg-BG') + ' - преди това периодът не може да се раздели.'
+                    : '';
+            });
+    }
+    document.getElementById('costPeriod').addEventListener('change', loadCost);
+    loadCost(); setInterval(loadCost, 60000);
 
     document.getElementById('hoursSel').addEventListener('change', drawChart);
     poll(); setInterval(poll, 3000);

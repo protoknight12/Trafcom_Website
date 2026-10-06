@@ -191,6 +191,11 @@ const EQUIPMENT = {
         box(g, w, h, d, 0, 0, 0, MAT.white);
         box(g, w * 0.5, h * 0.5, 0.02, 0, h * 0.25, d / 2 + 0.01, MAT.black);
     },
+    heatpump(g, w, d, h) {                                     // Heliotherm unit: white cabinet, dark fan grille, small green display
+        box(g, w, h, d, 0, 0, 0, MAT.white);
+        box(g, w * 0.7, h * 0.55, 0.02, 0, h * 0.12, d / 2 + 0.011, MAT.dark);
+        box(g, w * 0.25, h * 0.08, 0.01, w * 0.2, h * 0.82, d / 2 + 0.006, MAT.green);
+    },
     network(g, w, d, h) {                                      // switch / router: flat dark box with a row of port lights
         box(g, w, h, d, 0, 0, 0, MAT.dark);
         for (let i = 0; i < 8; i++) box(g, w * 0.07, h * 0.25, 0.01, (i - 3.5) * w * 0.11, h * 0.5, d / 2 + 0.006, MAT.green);
