@@ -14,6 +14,7 @@ import csv
 import webbrowser
 import threading
 import time
+import logging
 import xml.etree.ElementTree as ET
 import urllib.request
 import urllib.parse
@@ -50,6 +51,8 @@ import paho.mqtt.client as mqtt_client
 from pymodbus.client import ModbusTcpClient
 from flask_babel import Babel, gettext
 import librouteros
+import serial as pyserial
+from htheatpump import HtHeatpump
 from librouteros.query import Key as RouterosKey
 from cryptography.fernet import Fernet, InvalidToken
 from netmiko import ConnectHandler
@@ -14987,6 +14990,179 @@ def admin_power():
     if focus_name is None:
         focus_name = next((d.name for d in modbus_devices if focus_modbus_host(d) == focus_host), focus_host)
     # Every device has a working "История за период" now: Gen2 goes through
+# ----- HELIOTHERM ТЕРМОПОМПА (RS-232 -> Ethernet) -----
+
+class HeatPumpReading(db.Model):
+    """One row a minute of the pump's fast-query values (see _heatpump_loop()),
+    as JSON - which of them end up charted is decided later, so no per-field
+    columns. `ts` is unix seconds, same convention as ShellyReadingLog."""
+    id = db.Column(db.Integer, primary_key=True)
+    ts = db.Column(db.Integer, nullable=False, index=True)
+    data_json = db.Column(db.Text, nullable=False)
+
+
+HEATPUMP_HOST_KEY = 'settings.heatpump_host'  # "ip:port" of the RS232->Ethernet converter (EditableText, like the registration lock)
+HEATPUMP_POLL_INTERVAL = 3    # seconds between fast queries (live values)
+HEATPUMP_SLOW_INTERVAL = 60   # seconds between settings/fault reads and DB rows
+# SP (settings) values worth showing; read-only in this phase.
+HEATPUMP_SLOW_PARAMS = ('Betriebsart', 'HKR Soll_Raum', 'HKR Heizgrenze', 'WW Normaltemp.', 'WW Minimaltemp.',
+                        'Verdichter_Status', 'BSZ Verdichter Betriebsst. ges', 'BSZ Verdichter Betriebsst. WW',
+                        'BSZ Verdichter Betriebsst. HKR')
+HEATPUMP_MODES = {0: 'Изключена', 1: 'Автоматика', 2: 'Охлаждане', 3: 'Лято', 4: 'Постоянно отопление',
+                  5: 'Намалено', 6: 'Отпуск', 7: 'Парти'}  # ponytail: Heliotherm labels from community docs; 1 = Автоматика matches this unit
+_heatpump_live = {'ts': None, 'online': False, 'error': 'още не е свързано', 'data': {}, 'slow': {}}
+_heatpump_started = False
+
+
+class _HtHeatpumpSocket(HtHeatpump):
+    """HtHeatpump only knows real serial ports; this opens "socket://host:port" (the converter) instead."""
+
+    def open_connection(self):
+        settings = dict(self._ser_settings)
+        url = settings.pop('port')
+        self._ser = pyserial.serial_for_url(url, **settings)
+
+
+def _heatpump_open(host):
+    hp = _HtHeatpumpSocket('socket://' + host, baudrate=9600, xonxoff=False, timeout=5)
+    hp.open_connection()
+    # The pump can still hold a late reply from the previous session; without
+    # this the first answers arrive one request behind.
+    time.sleep(1)
+    hp._ser.reset_input_buffer()
+    hp.login(update_param_limits=False)
+    return hp
+
+
+def _heatpump_close(hp):
+    try:
+        hp.logout()
+    except Exception:
+        pass
+    try:
+        hp.close_connection()
+    except Exception:
+        pass
+
+
+def _heatpump_fast(hp):
+    data = hp.fast_query()
+    # -50 on a temperature = sensor not connected.
+    return {k: (None if k.startswith('Temp.') and v == -50.0 else v) for k, v in data.items()}
+
+
+def _heatpump_slow(hp):
+    slow = dict(hp.query(*HEATPUMP_SLOW_PARAMS))
+    slow['fault_count'] = hp.get_fault_list_size()
+    last = hp.get_last_fault()  # (idx, code, datetime, text)
+    slow['last_fault'] = {'text': last[3], 'code': last[1], 'ts': last[2].isoformat()}
+    slow['pump_time'] = hp.get_date_time()[0].isoformat()
+    return slow
+
+
+def _heatpump_loop():
+    """Sole owner of the pump connection: the converter allows one TCP client
+    and the pump one session, so everything (live view + history) goes
+    through this thread. Any error drops the connection and retries next tick.
+
+    ponytail: one thread per process - behind several gunicorn workers each
+    would fight over the single connection; run one worker or add a lock."""
+    hp = hp_host = None
+    last_slow = 0.0
+    while True:
+        try:
+            with app.app_context():
+                host = get_text(HEATPUMP_HOST_KEY, '').strip()
+                db.session.remove()
+            if not host:
+                _heatpump_live.update(online=False, error='не е зададен адрес на конвертора')
+            else:
+                if hp is not None and hp_host != host:
+                    _heatpump_close(hp)
+                    hp = None
+                if hp is None:
+                    hp, hp_host = _heatpump_open(host), host
+                data = _heatpump_fast(hp)
+                now = time.time()
+                if now - last_slow >= HEATPUMP_SLOW_INTERVAL:
+                    _heatpump_live['slow'] = _heatpump_slow(hp)
+                    with app.app_context():
+                        try:
+                            db.session.add(HeatPumpReading(ts=int(now), data_json=json.dumps(data)))
+                            db.session.commit()
+                        finally:
+                            db.session.remove()
+                    last_slow = now
+                _heatpump_live.update(ts=now, online=True, error=None, data=data)
+        except Exception as e:
+            if hp is not None:
+                _heatpump_close(hp)
+            hp = None
+            last_slow = 0.0
+            _heatpump_live.update(online=False, error=str(e) or e.__class__.__name__)
+        time.sleep(HEATPUMP_POLL_INTERVAL)
+
+
+def start_heatpump_poller():
+    """Idempotent daemon thread; call from a real entrypoint (app.py __main__, wsgi.py), never at import."""
+    global _heatpump_started
+    if _heatpump_started:
+        return
+    _heatpump_started = True
+    logging.getLogger('htheatpump').setLevel(logging.ERROR)  # a missing sensor (-50) logs a warning every poll
+    threading.Thread(target=_heatpump_loop, daemon=True, name='heatpump-poller').start()
+
+
+@app.route('/admin/heatpump')
+@role_required('admin')
+def admin_heatpump():
+    return render_template('admin_heatpump.html', active_page='admin_heatpump',
+                           host=get_text(HEATPUMP_HOST_KEY, ''), modes=HEATPUMP_MODES)
+
+
+@app.route('/admin/heatpump/data')
+@limiter.exempt
+@role_required('admin')
+def admin_heatpump_data():
+    return jsonify(_heatpump_live)
+
+
+@app.route('/admin/heatpump/history')
+@limiter.exempt
+@role_required('admin')
+def admin_heatpump_history():
+    """Chart series for the last ?hours= (default 24, max 168), thinned to <= ~600 points."""
+    hours = min(max(request.args.get('hours', 24, type=int), 1), 168)
+    rows = HeatPumpReading.query.filter(HeatPumpReading.ts >= int(time.time()) - hours * 3600) \
+        .order_by(HeatPumpReading.ts).all()
+    step = max(1, len(rows) // 600)
+    keys = ('Temp. Aussen', 'Temp. Vorlauf', 'Temp. Ruecklauf', 'Temp. Brauchwasser')
+    series = {k: [] for k in keys}
+    for r in rows[::step]:
+        d = json.loads(r.data_json)
+        for k in keys:
+            series[k].append([r.ts, d.get(k)])
+    return jsonify(series)
+
+
+@app.route('/admin/heatpump/host', methods=['POST'])
+@role_required('admin')
+def admin_heatpump_set_host():
+    host = request.form.get('host', '').strip()
+    if host and not re.fullmatch(r'[A-Za-z0-9.\-]+:\d{1,5}', host):
+        flash('Адресът трябва да е във вид IP:порт, напр. 192.168.18.123:23.', 'error')
+        return redirect(url_for('admin_heatpump'))
+    row = db.session.get(EditableText, HEATPUMP_HOST_KEY)
+    if row:
+        row.content = host
+    else:
+        db.session.add(EditableText(key=HEATPUMP_HOST_KEY, content=host))
+    db.session.commit()
+    log_action(f'Адрес на конвертора на термопомпата: {host or "изчистен"}')
+    flash('Адресът е запазен.', 'success')
+    return redirect(url_for('admin_heatpump'))
+
+
     # shelly_history() as before, Gen1 through _aggregate_local_shelly_log()
     # (our own ShellyReadingLog, fed by the always-on poller - see
     # start_shelly_history_poller()) instead of the meter's own history API.
@@ -20746,4 +20922,5 @@ if __name__ == '__main__':
         start_solis_history_poller()
         start_mqtt_listener()
 
-    app.run(debug=debug_mode)
+    app.run(debug=debug_mode)        start_detection_worker()
+        start_heatpump_poller()

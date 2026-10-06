@@ -37,7 +37,7 @@
 
                     {% if current_user.is_admin or current_user.is_worker or current_user.can_edit_content or current_user.can_manage_quality %}
                         <div class="dropdown">
-                            <a class="dropdown-trigger {{ 'active-nav-link' if active_page in ['admin', 'admin_users', 'admin_materials', 'admin_details', 'admin_products', 'admin_services', 'admin_clients', 'admin_offers', 'admin_delivery_notes', 'admin_client_delivery_notes', 'production', 'admin_missing_stock', 'admin_production_orders', 'machines', 'admin_power', 'content', 'storage', 'admin_log', 'admin_generator_presets', 'admin_quality_control', 'admin_measuring_instruments', 'admin_documents', 'admin_capa', 'admin_audits', 'admin_management_reviews', 'admin_training', 'admin_risk_register', 'admin_customer_satisfaction', 'admin_factory_map', 'admin_hall', 'admin_buildings', 'admin_panels', 'admin_temperature_sensors', 'admin_solar_roof', 'admin_vehicles'] else '' }}" href="#" tabindex="0" onclick="event.preventDefault()">Управление <span class="dropdown-arrow">▼</span></a>
+                            <a class="dropdown-trigger {{ 'active-nav-link' if active_page in ['admin', 'admin_users', 'admin_materials', 'admin_details', 'admin_products', 'admin_services', 'admin_clients', 'admin_offers', 'admin_delivery_notes', 'admin_client_delivery_notes', 'production', 'admin_missing_stock', 'admin_production_orders', 'machines', 'admin_power', 'admin_heatpump', 'content', 'storage', 'admin_log', 'admin_generator_presets', 'admin_quality_control', 'admin_measuring_instruments', 'admin_documents', 'admin_capa', 'admin_audits', 'admin_management_reviews', 'admin_training', 'admin_risk_register', 'admin_customer_satisfaction', 'admin_factory_map', 'admin_hall', 'admin_buildings', 'admin_panels', 'admin_temperature_sensors', 'admin_solar_roof', 'admin_vehicles'] else '' }}" href="#" tabindex="0" onclick="event.preventDefault()">Управление <span class="dropdown-arrow">▼</span></a>
                             <div class="dropdown-content dropdown-content-grouped">
                                 {% if current_user.is_admin %}
                                     <a href="{{ url_for('admin_dashboard') }}" class="dropdown-home-link">Админ Панел</a>
@@ -126,6 +126,7 @@
                                             <a href="{{ url_for('admin_temperature_sensors') }}">Температурни сензори</a>
                                             <a href="{{ url_for('admin_convectors') }}">Конвектори</a>
                                             {% if current_user.is_admin %}                                                <a href="{{ url_for('admin_power') }}">Консумация</a>
+                                                <a href="{{ url_for('admin_heatpump') }}">Термопомпа</a>
                                                 <a href="{{ url_for('factory3d') }}#roof">Покрив (соларни панели)</a>
                                                 <a href="{{ url_for('admin_battery_cabinets') }}">Батерийно стопанство</a>
                                             {% endif %}
