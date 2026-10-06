@@ -15177,8 +15177,13 @@ HEATPUMP_COOLING_MODE = 2  # Betriebsart value for "Kühlen"
 HEATPUMP_COST_GAP = 300    # seconds: longer holes in either log are skipped, not interpolated
 
 
+def _shelly_key(d):
+    """The key ShellyReadingLog files this meter's readings under: the MQTT topic for an MQTT device (even if it also has an old IP), else the IP."""
+    return d.mqtt_topic if d.connection_type == 'mqtt' and d.mqtt_topic else d.host
+
+
 def _shelly_by_key(key):
-    """A meter as chosen on the page: its IP, or the MQTT topic of a device with no IP (the same key shelly_fleet_snapshot()/ShellyReadingLog use)."""
+    """A meter as chosen on the page, by _shelly_key()."""
     return key and ShellyDevice.query.filter((ShellyDevice.host == key) | (ShellyDevice.mqtt_topic == key)).first()
 
 
@@ -15292,7 +15297,7 @@ def admin_heatpump():
                 for n, (lbl, unit) in HEATPUMP_WRITABLE.items()}
     return render_template('admin_heatpump.html', active_page='admin_heatpump',
                            host=get_text(HEATPUMP_HOST_KEY, ''), modes=HEATPUMP_MODES, writable=writable,
-                           meters=[(m.host or m.mqtt_topic, m.name) for m in ShellyDevice.query.order_by(ShellyDevice.name)]
+                           meters=[(_shelly_key(m), m.name) for m in ShellyDevice.query.order_by(ShellyDevice.name)]
                            + [(f'{d.host}:{d.port}', d.name) for d in ModbusDevice.query.filter_by(device_type='dtsu666').order_by(ModbusDevice.name)], cost_cfg=_heatpump_cost_cfg())
 
 
