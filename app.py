@@ -14901,9 +14901,10 @@ def _shelly_history_poll_tick():
     background thread/sleep loop.
     """
     devices = ShellyDevice.query.order_by(ShellyDevice.id).all()
-    if not devices:
-        return
-    snapshots = shelly_fleet_snapshot(_shelly_snapshot_args(devices))
+    snapshots = shelly_fleet_snapshot(_shelly_snapshot_args(devices)) if devices else []
+    # Modbus DTSU666 meters go into the same log under host "ip:port" (its snapshot has the same shape), so every reader of the log
+    # (heat pump cost, ...) works with any meter type. ponytail: read one after another; threads if many meters make a tick slow.
+    snapshots += [_dtsu666_snapshot(d) for d in ModbusDevice.query.filter_by(device_type='dtsu666').order_by(ModbusDevice.id)]
     now_ts = int(datetime.now().timestamp())
     for snap in snapshots:
         if snap['online']:
@@ -15249,7 +15250,7 @@ def admin_heatpump_cost():
 def admin_heatpump_cost_settings():
     f = request.form
     meter = f.get('meter', '').strip()
-    if meter and not ShellyDevice.query.filter_by(host=meter).first():
+    if meter and not ShellyDevice.query.filter_by(host=meter).first()             and not any(f'{d.host}:{d.port}' == meter for d in ModbusDevice.query.filter_by(device_type='dtsu666')):
         flash('Избраният измервател не съществува.', 'error')
         return redirect(url_for('admin_heatpump'))
     try:
@@ -15286,15 +15287,21 @@ def admin_heatpump():
                 for n, (lbl, unit) in HEATPUMP_WRITABLE.items()}
     return render_template('admin_heatpump.html', active_page='admin_heatpump',
                            host=get_text(HEATPUMP_HOST_KEY, ''), modes=HEATPUMP_MODES, writable=writable,
-                           meters=ShellyDevice.query.order_by(ShellyDevice.name).all(), cost_cfg=_heatpump_cost_cfg())
+                           meters=[(m.host, m.name) for m in ShellyDevice.query.order_by(ShellyDevice.name)]
+                           + [(f'{d.host}:{d.port}', d.name) for d in ModbusDevice.query.filter_by(device_type='dtsu666').order_by(ModbusDevice.name)], cost_cfg=_heatpump_cost_cfg())
 
 
 def _heatpump_power():
     """Instantaneous draw of the meter chosen for the pump: {'w', 'online'}, or None when no meter is chosen."""
-    meter = ShellyDevice.query.filter_by(host=get_text(_HP_PREFIX + 'meter', '')).first()
-    if not meter:
-        return None
-    snap = shelly_fleet_snapshot(_shelly_snapshot_args([meter]))[0]
+    host = get_text(_HP_PREFIX + 'meter', '')
+    meter = ShellyDevice.query.filter_by(host=host).first()
+    if meter:
+        snap = shelly_fleet_snapshot(_shelly_snapshot_args([meter]))[0]
+    else:                                             # a Modbus meter is chosen as "ip:port"
+        dev = next((d for d in ModbusDevice.query.filter_by(device_type='dtsu666') if f'{d.host}:{d.port}' == host), None)
+        if not dev:
+            return None
+        snap = _dtsu666_snapshot(dev)
     return {'w': round(snap['total_power']), 'online': snap['online']}
 
 

@@ -86,7 +86,7 @@
             <label>Измервател на термопомпата (само за нея, с всички помпи)</label>
             <select name="meter">
                 <option value="">— няма —</option>
-                {% for m in meters %}<option value="{{ m.host }}" {{ 'selected' if m.host == cost_cfg.meter else '' }}>{{ m.name }} ({{ m.host }})</option>{% endfor %}
+                {% for host, name in meters %}<option value="{{ host }}" {{ 'selected' if host == cost_cfg.meter else '' }}>{{ name }} ({{ host }})</option>{% endfor %}
             </select>
         </div>
         <div class="form-group"><label>Дневна цена (€ за kWh)</label>
