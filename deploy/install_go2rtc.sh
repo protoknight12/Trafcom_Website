@@ -15,6 +15,7 @@ rtsp:
 webrtc:
   listen: ""
 YAML
+chown www-data:www-data /etc/go2rtc.yaml   # go2rtc runs as www-data and rewrites this file when streams are registered
 cp /opt/trafcom/deploy/go2rtc.service /etc/systemd/system/go2rtc.service
 systemctl daemon-reload
 systemctl enable --now go2rtc
