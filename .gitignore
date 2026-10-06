@@ -29,3 +29,7 @@ seed_test_data.py
 graphify-out/
 machine_files/
 tools/
+
+models/
+detection_files/
+training_files/

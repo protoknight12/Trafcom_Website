@@ -65,6 +65,7 @@
             <div class="form-group"><label>Наклон надолу, °</label><input type="text" name="tilt" value="30"></div>
             <div class="form-group"><label>Зрително поле, ° (до 360)</label><input type="text" name="fov" value="90"></div>
             <div class="form-group"><label>Обхват, м</label><input type="text" name="range_m" value="10"></div>
+            <div class="form-group"><label><input type="checkbox" name="detect" value="1"> Разпознаване на хора и превозни средства</label></div>
             <div class="form-group"><label>Бележки</label><textarea name="notes" rows="3"></textarea></div>
             <button type="submit" class="btn-submit">Добави камера</button>
         </form>
@@ -111,7 +112,8 @@
                     {% else %}{{ c.host or '—' }}{% if c.port %}:{{ c.port }}{% endif %}{% endif %}</td>
                 <td class="text-small" data-status="{{ c.id }}"><span class="text-muted">…</span></td>
                 <td class="text-small text-muted">{{ c.fov|round|int }}° · {{ c.range_m|round|int }} м</td>
-                <td class="text-right"><a href="{{ url_for('edit_camera_window', cam_id=c.id) }}" data-frame class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a></td>
+                <td class="text-right"><a href="{{ url_for('admin_camera_calibrate', cam_id=c.id) }}" data-frame="stay" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;" title="Посока, наклон и зрително поле по известни обекти">🎯 Калибрирай</a>
+                    <a href="{{ url_for('edit_camera_window', cam_id=c.id) }}" data-frame class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a></td>
                 <td class="text-right"><form action="{{ url_for('admin_delete_camera', cam_id=c.id) }}" method="POST" onsubmit="return confirm('Изтриване на камера &quot;{{ c.name|e }}&quot;?');" style="display:inline;">
                     {% include 'partials/csrf_field.html' %}<button type="submit" class="btn-delete">Изтрий</button></form></td>
             </tr>
@@ -120,9 +122,37 @@
         <p class="text-muted text-small" style="margin-top:10px">Кадърите се обновяват на около 5 секунди; празен кадър = камерата не отговаря.</p>
         {% else %}<p class="no-data text-center">Няма добавени камери.</p>{% endif %}
     </section>
+
+    <section class="admin-card">
+        <h3>Събития от разпознаването</h3>
+        {% if not detector_ready %}
+        <div class="alert alert-danger">Моделът за разпознаване липсва (<code>models/yolox_s.onnx</code>) - вижте <code>deploy/install_detector.sh</code>.</div>
+        {% endif %}
+        <form method="GET" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+            <select name="ev_camera"><option value="">Всички камери</option>{% for c in cameras %}<option value="{{ c.id }}" {% if ev_cam == c.id %}selected{% endif %}>{{ c.name }}</option>{% endfor %}</select>
+            <select name="ev_label"><option value="">Всичко</option>{% for l in labels %}<option value="{{ l }}" {% if ev_label == l %}selected{% endif %}>{{ l }}</option>{% endfor %}</select>
+            <button type="submit" class="btn-secondary">Филтрирай</button>
+            <span class="text-small text-muted">последните 60; пазят се 30 дни</span>
+        </form>
+        {% if events %}
+        <div class="table-responsive"><table class="users-table">
+            <thead><tr><th>Кадър</th><th>Време</th><th>Камера</th><th>Открито</th></tr></thead>
+            <tbody>
+            {% for e in events %}
+            <tr>
+                <td>{% if e.image_filename %}<a href="{{ url_for('admin_detection_image', event_id=e.id) }}" target="_blank"><img src="{{ url_for('admin_detection_image', event_id=e.id) }}" alt="" loading="lazy" style="width:140px;border-radius:4px;display:block"></a>{% endif %}</td>
+                <td>{{ e.ts.strftime('%d.%m.%Y %H:%M:%S') }}</td>
+                <td>{{ e.camera.name }}</td>
+                <td><strong>{{ e.label }}</strong>{% if e.count > 1 %} × {{ e.count }}{% endif %} <span class="text-muted text-small">({{ (e.score * 100)|round|int }}%)</span></td>
+            </tr>
+            {% endfor %}
+            </tbody></table></div>
+        {% else %}<p class="no-data text-center">Още няма събития. Включете „Разпознаване“ при камерата (Редактирай).</p>{% endif %}
+    </section>
 </main>
 
 <script src="{{ url_for('static', filename='js/camera_form.js') }}"></script>
+<script src="{{ url_for('static', filename='js/detect_overlay.js') }}"></script>
 <script>
 (function () {      // snapshots refresh every 5 s; "Видео" turns one camera (or all) into the live MJPEG stream; click an image to enlarge it
     const imgs = document.querySelectorAll('img[data-snap]'), btns = {};
@@ -138,6 +168,7 @@
         img.dataset.live = '1'; img.src = d.url; if (b) b.textContent = '⏸ Кадри';
         return true;
     }
+    imgs.forEach(i => window.attachDetectOverlay(i, i.dataset.cam));
     imgs.forEach(i => i.onclick = () => { i.style.width = i.style.width === '480px' ? '120px' : '480px'; });
     Object.values(btns).forEach(b => b.onclick = () => { const i = document.querySelector('img[data-cam="' + b.dataset.video + '"]'); setLive(i, !i.dataset.live); });
     const all = document.getElementById('camAll');

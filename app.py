@@ -22,7 +22,7 @@ import urllib.error
 from html import escape as html_escape
 from html.parser import HTMLParser
 from concurrent.futures import ThreadPoolExecutor
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory, send_file, g, session, has_request_context, has_app_context
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory, send_file, g, session, has_request_context, has_app_context, abort
 from openpyxl import Workbook
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import inspect as sa_inspect
@@ -2732,9 +2732,12 @@ class Camera(db.Model):
     password_encrypted = db.Column(db.Text, nullable=True)
     conn_type = db.Column(db.String(6), nullable=False, default='nvr')   # how the camera is reached: 'nvr' (channel), 'onvif' or 'rtsp' (own IP)
     port = db.Column(db.Integer, nullable=True)                          # ONVIF / RTSP port of an own-IP camera (defaults 80 / 554)
+    detect = db.Column(db.Boolean, nullable=False, default=False)         # run object detection on this camera (see start_detection_worker)
     rtsp_path = db.Column(db.String(200), nullable=True)              # own-IP cameras: RTSP path, e.g. /Streaming/Channels/102 (default = Hikvision sub stream)
     snapshot_path = db.Column(db.String(200), nullable=True)          # own-IP cameras that aren't Hikvision ISAPI, e.g. /cgi-bin/snapshot.cgi
     yaw = db.Column(db.Float, nullable=False, default=0.0)
+    roll = db.Column(db.Float, nullable=False, default=0.0)           # turn about the view axis, degrees (set by the calibration)
+    calib_json = db.Column(db.Text, nullable=True)                    # the calibration's point pairs, to refine them later
     tilt = db.Column(db.Float, nullable=False, default=30.0)
     fov = db.Column(db.Float, nullable=False, default=90.0)           # horizontal field of view, degrees (PTZ/fisheye: 360 allowed)
     range_m = db.Column(db.Float, nullable=False, default=10.0)
@@ -2771,6 +2774,48 @@ class Camera(db.Model):
         return None
 
 
+class DetectionState(db.Model):
+    """Latest detections of a camera (one row, overwritten every tick) - in the DB so every web worker can serve the overlay, not only the one running the detector."""
+    camera_id = db.Column(db.Integer, db.ForeignKey('camera.id', ondelete='CASCADE'), primary_key=True)
+    updated_at = db.Column(db.Float, nullable=False)           # unix seconds
+    items_json = db.Column(db.Text, nullable=False, default='[]')   # [{label, score, box:[x1,y1,x2,y2] as 0..1 fractions}]
+    error = db.Column(db.String(200), nullable=True)
+
+
+class DetectionEvent(db.Model):
+    """One journal row: a kind of object appeared in a camera's view (see _detection_tick for the appear / re-log rules)."""
+    id = db.Column(db.Integer, primary_key=True)
+    ts = db.Column(db.DateTime, nullable=False, default=datetime.now, index=True)
+    camera_id = db.Column(db.Integer, db.ForeignKey('camera.id', ondelete='CASCADE'), nullable=False, index=True)
+    label = db.Column(db.String(30), nullable=False)
+    count = db.Column(db.Integer, nullable=False, default=1)
+    score = db.Column(db.Float, nullable=False, default=0.0)    # best score of that label in the frame
+    image_filename = db.Column(db.String(100), nullable=True)   # DETECTION_FOLDER/<file>: the frame with the boxes drawn
+
+    camera = db.relationship('Camera', backref=db.backref('detection_events', cascade='all, delete-orphan', passive_deletes=True))
+
+
+class CustomClass(db.Model):
+    """A kind of the shop's own object the detector should learn (forklift, pallet, a part ...); its position in the class list is the class id of the trained model."""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(60), nullable=False, unique=True)
+
+
+class TrainImage(db.Model):
+    """A frame for training the own-objects model, with the boxes the user drew: [{cls: CustomClass.id, box: [x1, y1, x2, y2] as 0..1 fractions}]."""
+    id = db.Column(db.Integer, primary_key=True)
+    filename = db.Column(db.String(100), nullable=False)
+    width = db.Column(db.Integer, nullable=False)
+    height = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
+    camera_id = db.Column(db.Integer, db.ForeignKey('camera.id', ondelete='SET NULL'), nullable=True)
+    boxes_json = db.Column(db.Text, nullable=False, default='[]')
+
+    @property
+    def boxes(self):
+        return json.loads(self.boxes_json or '[]')
+
+
 class HallEquipment(db.Model):
     """Inverter / battery stack / electrical panel placed on the hall plan (metres). elevation = distance
     of its bottom from the floor. ref_id points at the ModbusDevice (inverter), BatteryStack or
@@ -2795,8 +2840,8 @@ class HallEquipment(db.Model):
 
     def as_dict(self):
         t = self.target()
-        cam = {'yaw': t.yaw, 'tilt': t.tilt, 'fov': t.fov, 'range': t.range_m, 'type': t.cam_type} if self.kind == 'camera' and t else None
-        return {'cam': cam,'id': self.id, 'kind': self.kind, 'ref_id': self.ref_id, 'name': self.name or '', 'x': self.x, 'z': self.z,
+        cam = {'yaw': t.yaw, 'tilt': t.tilt, 'roll': t.roll or 0.0, 'fov': t.fov, 'range': t.range_m, 'type': t.cam_type} if self.kind == 'camera' and t else None
+        return {'cam': cam,'id': self.id, 'kind': self.kind, 'ref_id': self.ref_id, 'name': (t.name if t else '') or self.name or '', 'x': self.x, 'z': self.z,
                 'width': self.width, 'depth': self.depth, 'height': self.height, 'elevation': self.elevation, 'rotation': self.rotation, 'parent_id': self.parent_id,
                 'label': (t.name if t else '') or self.name or HALL_EQUIPMENT_KINDS[self.kind]}
 
@@ -14945,51 +14990,6 @@ def start_solis_history_poller(interval=SOLIS_POLLER_INTERVAL):
     threading.Thread(target=_loop, daemon=True, name='solis-history-poller').start()
 
 
-@app.route('/admin/power')
-@role_required('admin')
-def admin_power():
-    """
-    Live power-consumption dashboard for the shop's Shelly energy meters, plus
-    the add/remove-a-machine management panel (see admin_power_add_device()/
-    admin_power_delete_device()). The page is mostly static chrome -
-    admin_power_data() below feeds the live cards on an interval; the
-    management panel is server-rendered from `devices` directly, so an
-    add/delete takes a normal full-page redirect back here rather than going
-    through the JS polling path.
-
-    ?host=<ip> scopes the page to one machine (clicking a machine's name in the
-    all-machines view links here with it set) - same template, same JS, just a
-    single-device payload instead of the whole fleet. Not validated against
-    what's configured: an unknown host simply matches nothing and renders an
-    empty page, same as a fleet with zero configured meters.
-    """
-    devices = ShellyDevice.query.order_by(ShellyDevice.id).all()
-    modbus_devices = ModbusDevice.query.order_by(ModbusDevice.id).all()
-    machines = Machine.query.order_by(Machine.name).all()
-    panels = ElectricalPanel.query.join(Room).order_by(Room.name, ElectricalPanel.name).all()
-    rooms = Room.query.join(Building).order_by(Building.name, Room.name).all()
-    # Just the name lookup for renderBatteryGroup()'s "БМС порт N" labels -
-    # live data itself already comes from each Solis device's own
-    # battery_groups (see _solis_snapshot()), this only attaches a friendly
-    # Cabinet/Stack name where one's been configured.
-    battery_stacks = BatteryStack.query.filter(
-        BatteryStack.source_type == 'inverter',
-        BatteryStack.inverter_device_id.isnot(None), BatteryStack.bms_port.isnot(None),
-    ).all()
-    focus_host = request.args.get('host') or None
-    # Modbus devices have no separate "host" identity of their own - their
-    # snapshot/history key is "host:port" (see _dtsu666_snapshot()), so a
-    # focus link to one of them looks like "192.168.18.90:502" instead of a
-    # bare IP. "История за период" only exists for Shelly meters (Gen1/Gen2 -
-    # see admin_power_history()) - a Modbus meter has no logging table to
-    # query, so the template only offers that section when the focused
-    # device really is a Shelly one.
-    focus_modbus_host = lambda d: f'{d.host}:{d.port}'
-    focus_name = next((d.name for d in devices if d.host == focus_host), None)
-    focus_is_shelly = focus_name is not None
-    if focus_name is None:
-        focus_name = next((d.name for d in modbus_devices if focus_modbus_host(d) == focus_host), focus_host)
-    # Every device has a working "История за период" now: Gen2 goes through
 # ----- HELIOTHERM ТЕРМОПОМПА (RS-232 -> Ethernet) -----
 
 class HeatPumpReading(db.Model):
@@ -15163,6 +15163,51 @@ def admin_heatpump_set_host():
     return redirect(url_for('admin_heatpump'))
 
 
+@app.route('/admin/power')
+@role_required('admin')
+def admin_power():
+    """
+    Live power-consumption dashboard for the shop's Shelly energy meters, plus
+    the add/remove-a-machine management panel (see admin_power_add_device()/
+    admin_power_delete_device()). The page is mostly static chrome -
+    admin_power_data() below feeds the live cards on an interval; the
+    management panel is server-rendered from `devices` directly, so an
+    add/delete takes a normal full-page redirect back here rather than going
+    through the JS polling path.
+
+    ?host=<ip> scopes the page to one machine (clicking a machine's name in the
+    all-machines view links here with it set) - same template, same JS, just a
+    single-device payload instead of the whole fleet. Not validated against
+    what's configured: an unknown host simply matches nothing and renders an
+    empty page, same as a fleet with zero configured meters.
+    """
+    devices = ShellyDevice.query.order_by(ShellyDevice.id).all()
+    modbus_devices = ModbusDevice.query.order_by(ModbusDevice.id).all()
+    machines = Machine.query.order_by(Machine.name).all()
+    panels = ElectricalPanel.query.join(Room).order_by(Room.name, ElectricalPanel.name).all()
+    rooms = Room.query.join(Building).order_by(Building.name, Room.name).all()
+    # Just the name lookup for renderBatteryGroup()'s "БМС порт N" labels -
+    # live data itself already comes from each Solis device's own
+    # battery_groups (see _solis_snapshot()), this only attaches a friendly
+    # Cabinet/Stack name where one's been configured.
+    battery_stacks = BatteryStack.query.filter(
+        BatteryStack.source_type == 'inverter',
+        BatteryStack.inverter_device_id.isnot(None), BatteryStack.bms_port.isnot(None),
+    ).all()
+    focus_host = request.args.get('host') or None
+    # Modbus devices have no separate "host" identity of their own - their
+    # snapshot/history key is "host:port" (see _dtsu666_snapshot()), so a
+    # focus link to one of them looks like "192.168.18.90:502" instead of a
+    # bare IP. "История за период" only exists for Shelly meters (Gen1/Gen2 -
+    # see admin_power_history()) - a Modbus meter has no logging table to
+    # query, so the template only offers that section when the focused
+    # device really is a Shelly one.
+    focus_modbus_host = lambda d: f'{d.host}:{d.port}'
+    focus_name = next((d.name for d in devices if d.host == focus_host), None)
+    focus_is_shelly = focus_name is not None
+    if focus_name is None:
+        focus_name = next((d.name for d in modbus_devices if focus_modbus_host(d) == focus_host), focus_host)
+    # Every device has a working "История за период" now: Gen2 goes through
     # shelly_history() as before, Gen1 through _aggregate_local_shelly_log()
     # (our own ShellyReadingLog, fed by the always-on poller - see
     # start_shelly_history_poller()) instead of the meter's own history API.
@@ -15767,7 +15812,7 @@ def edit_panel_window(panel_id):
             {'name': 'parent_panel_id', 'label': 'Захранва се от табло', 'value': panel.parent_panel_id or '', 'type': 'select', 'options': [
                 {'value': '', 'label': '-- директно от мрежата --'}
             ] + [{'value': p.id, 'label': f'{p.room.name} / {p.name}'} for p in other_panels if p.id not in excluded_ids]},
-            {'name': 'notes', 'label': 'Бележки', 'value': panel.notes or '', 'type': 'textarea'},
+        {'name': 'notes', 'label': 'Бележки', 'value': panel.notes or '', 'type': 'textarea'},
         ]
     )
 
@@ -17001,13 +17046,460 @@ def admin_camera_status():
     return jsonify({str(k): v for k, v in _camera_statuses().items()})
 
 
+# ----------------- РАЗПОЗНАВАНЕ НА ОБЕКТИ (YOLOX на CPU, виж detection.py) -----------------
+
+DETECT_INTERVAL = float(os.environ.get('DETECT_INTERVAL', '2'))       # seconds between two frames of a camera
+DETECT_MIN_SCORE = float(os.environ.get('DETECT_MIN_SCORE', '0.4'))
+DETECT_KEEP_DAYS = int(os.environ.get('DETECT_KEEP_DAYS', '30'))
+DETECTION_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'detection_files')
+os.makedirs(DETECTION_FOLDER, exist_ok=True)
+_detect_started = False
+_detect_lock_conn = None
+
+
+def _detection_lock():
+    """Only one process runs the detector (gunicorn has several workers): a Postgres advisory lock held on a dedicated connection.
+    Without Postgres (tests, sqlite) the caller just runs. Called until it returns True, then never again."""
+    global _detect_lock_conn
+    if db.engine.dialect.name != 'postgresql':
+        return True
+    if _detect_lock_conn is None:
+        _detect_lock_conn = db.engine.connect()
+    got = _detect_lock_conn.execute(db.text('SELECT pg_try_advisory_lock(735100)')).scalar()
+    _detect_lock_conn.commit()
+    return bool(got)
+
+
+def _draw_detections(jpeg, items):
+    """The frame with a box and label per detection (for the journal's picture)."""
+    from PIL import Image, ImageDraw, ImageFont
+    img = Image.open(io.BytesIO(jpeg)).convert('RGB')
+    w, h = img.size
+    font = None
+    for name in ('DejaVuSans.ttf', 'arial.ttf'):
+        try:
+            font = ImageFont.truetype(name, max(12, h // 30))
+            break
+        except OSError:
+            pass
+    d = ImageDraw.Draw(img)
+    for it in items:
+        x1, y1, x2, y2 = it['box'][0] * w, it['box'][1] * h, it['box'][2] * w, it['box'][3] * h
+        d.rectangle([x1, y1, x2, y2], outline=(255, 60, 60), width=3)
+        d.text((x1 + 3, max(0, y1 - 18)), f"{it['label']} {int(it['score'] * 100)}%", fill=(255, 255, 0), font=font)
+    out = io.BytesIO()
+    img.save(out, 'JPEG', quality=80)
+    return out.getvalue()
+
+
+def _detection_tick(memo):
+    """One pass over the cameras with detect on: frame -> detections -> DetectionState; a label that appears (absent for 20 s) or stays
+    5 minutes gets a journal row with the annotated frame. memo = per-process {(camera, label): (last_seen, last_logged)}."""
+    import detection
+    from PIL import Image
+    now = time.time()
+    for cam in Camera.query.filter_by(detect=True).all():
+        err, items = None, []
+        try:
+            name = _go2rtc_register(cam)
+            jpeg = urllib.request.urlopen(f'{GO2RTC_URL}/api/frame.jpeg?src={name}', timeout=8).read()
+            items = detection.detect(jpeg, DETECT_MIN_SCORE)
+            size = Image.open(io.BytesIO(jpeg)).size
+        except Exception as exc:
+            err, size = str(exc)[:200], (0, 0)
+        st = db.session.get(DetectionState, cam.id) or DetectionState(camera_id=cam.id, updated_at=now)
+        st.updated_at, st.items_json, st.error = now, json.dumps({'w': size[0], 'h': size[1], 'items': items}), err
+        db.session.add(st)
+        if not err:
+            by = {}
+            for it in items:
+                by.setdefault(it['label'], []).append(it)
+            for label, group in by.items():
+                seen, logged = memo.get((cam.id, label), (0, 0))
+                if now - seen > 20 or now - logged > 300:
+                    fn = f'{cam.id}_{int(now * 1000)}.jpg'
+                    with open(os.path.join(DETECTION_FOLDER, fn), 'wb') as fh:
+                        fh.write(_draw_detections(jpeg, items))
+                    db.session.add(DetectionEvent(camera_id=cam.id, label=label, count=len(group), score=max(g['score'] for g in group), image_filename=fn))
+                    logged = now
+                memo[(cam.id, label)] = (now, logged)
+        try:
+            db.session.commit()
+        except IntegrityError:                          # another process wrote this camera's state first (no lock on sqlite / a second dev server): next tick
+            db.session.rollback()
+
+
+def _detection_cleanup():
+    cutoff = datetime.now() - timedelta(days=DETECT_KEEP_DAYS)
+    for ev in DetectionEvent.query.filter(DetectionEvent.ts < cutoff).all():
+        if ev.image_filename:
+            try:
+                os.remove(os.path.join(DETECTION_FOLDER, ev.image_filename))
+            except OSError:
+                pass
+        db.session.delete(ev)
+    db.session.commit()
+
+
+def start_detection_worker():
+    """Daemon thread: object detection on every camera with detect on. Needs models/yolox_s.onnx (see deploy/install_detector.sh);
+    without the model or onnxruntime it does nothing. Started from a real entrypoint only (like the Shelly poller); across gunicorn workers
+    exactly one wins _detection_lock(). ponytail: one frame at a time on CPU - at ~0.1 s a frame that is fine for a dozen cameras; a GPU box if not."""
+    global _detect_started
+    import detection
+    if _detect_started or not detection.available():
+        return
+    _detect_started = True
+
+    def loop():
+        memo, has_lock, last_clean = {}, False, 0
+        while True:
+            try:
+                with app.app_context():
+                    has_lock = has_lock or _detection_lock()
+                    if has_lock:
+                        t0 = time.time()
+                        _detection_tick(memo)
+                        if t0 - last_clean > 3600:
+                            _detection_cleanup()
+                            last_clean = t0
+                        time.sleep(max(0.2, DETECT_INTERVAL - (time.time() - t0)))
+                        continue
+            except Exception:
+                db.session.rollback()
+                app.logger.exception('detection tick failed')
+            time.sleep(30 if not has_lock else DETECT_INTERVAL)
+
+    threading.Thread(target=loop, daemon=True, name='detector').start()
+
+
+@app.route('/admin/cameras/<int:cam_id>/detections')
+@role_required('admin')
+@limiter.exempt
+def admin_camera_detections(cam_id):
+    """Latest detections of a camera for the overlay drawn over its frame / video."""
+    cam = Camera.query.get_or_404(cam_id)
+    st = db.session.get(DetectionState, cam_id)
+    fresh = bool(st and cam.detect and time.time() - st.updated_at < 10)
+    return jsonify({'enabled': cam.detect, 'items': _state_items(st)['items'] if fresh else [], 'error': st.error if st else None})
+
+
+def _state_items(st):
+    """{'w', 'h', 'items'} of a DetectionState (older rows stored just the list)."""
+    d = json.loads(st.items_json or '[]')
+    return d if isinstance(d, dict) else {'w': 0, 'h': 0, 'items': d}
+
+
+def _fused_detections():
+    """Objects on the hall floor from every camera's fresh detections. One camera: the bottom of the box is cast onto the floor along its view ray.
+    Cameras that overlap and see the same kind of object: their rays through the box centres are triangulated (least squares) when they pass within
+    0.8 m of each other in front of every camera - a cluster of rays then gives one 3D point, which is both more exact and has a real height."""
+    import camera_pose as cp
+    now = time.time()
+    pos = {}
+    for e in HallEquipment.query.filter_by(kind='camera'):
+        pos[e.ref_id] = (e.x + e.width / 2, (e.elevation or 0) + e.height / 2, e.z + e.depth / 2)
+    cams = {c.id: c for c in Camera.query.all()}
+    seen = []
+    for st in DetectionState.query.all():
+        c, o = cams.get(st.camera_id), pos.get(st.camera_id)
+        d = _state_items(st)
+        if not c or not o or st.error or now - st.updated_at > 10 or not d['w']:
+            continue
+        pose, aspect = (c.yaw, c.tilt, c.roll or 0.0, c.fov), d['h'] / d['w']
+        for it in d['items']:
+            x1, y1, x2, y2 = it['box']
+            seen.append({'cam': c.id, 'o': o, 'label': it['label'], 'score': it['score'],
+                         'ray': cp.ray(pose, (x1 + x2) / 2, (y1 + y2) / 2, aspect),
+                         'floor': cp.floor_point(o, cp.ray(pose, (x1 + x2) / 2, y2, aspect))})
+    clusters = []
+    for it in sorted(seen, key=lambda i: -i['score']):
+        best = None
+        for cl in clusters:
+            if cl[0]['label'] != it['label'] or any(m['cam'] == it['cam'] for m in cl):
+                continue
+            p, worst, front = cp.triangulate([(m['o'], m['ray']) for m in cl + [it]])
+            if p and front and worst < 0.8 and -0.3 < p[1] < 4.5 and (best is None or worst < best[0]):
+                best = (worst, cl)
+        if best:
+            best[1].append(it)
+        else:
+            clusters.append([it])
+    out = []
+    for cl in clusters:
+        if len(cl) > 1:
+            p, _, _ = cp.triangulate([(m['o'], m['ray']) for m in cl])
+            x, y, z = p
+        elif cl[0]['floor']:
+            x, z = cl[0]['floor']
+            y = 0.9
+        else:
+            continue
+        out.append({'label': cl[0]['label'], 'score': round(max(m['score'] for m in cl), 2), 'x': round(x, 2), 'y': round(y, 2), 'z': round(z, 2), 'cams': len(cl)})
+    return out
+
+
+@app.route('/admin/hall/detections')
+@role_required('admin')
+@limiter.exempt
+def admin_hall_detections():
+    """Detected objects on the hall floor (see _fused_detections) for the 3D map."""
+    return jsonify({'objects': _fused_detections()})
+
+
+@app.route('/admin/detections/<int:event_id>/image')
+@role_required('admin')
+def admin_detection_image(event_id):
+    ev = DetectionEvent.query.get_or_404(event_id)
+    if not ev.image_filename:
+        abort(404)
+    return send_from_directory(DETECTION_FOLDER, ev.image_filename, mimetype='image/jpeg')
+
+
+# ----------------- КАЛИБРИРАНЕ НА КАМЕРА ПО ИЗВЕСТНИ ОБЕКТИ -----------------
+
+def _calibration_landmarks():
+    """Known 3D points to pair with image points: the corners (floor level and top) of machines, walls, doors, windows, props and equipment on the plan."""
+    corners = ('задно-ляво', 'задно-дясно', 'предно-дясно', 'предно-ляво')      # back = small z (top of the plan)
+
+    def add(out, name, o):
+        x, z, w, d, h, el = o['x'], o['z'], o['width'], o['depth'], o['height'], o.get('elevation') or 0
+        oid = len({p['obj'] for p in out})                                  # which plan object a corner belongs to (the calibration page's mini plan)
+        for k, (cx, cz) in enumerate(((x, z), (x + w, z), (x + w, z + d), (x, z + d))):
+            out.append({'label': f'{name} · {corners[k]} · долу', 'x': cx, 'y': el, 'z': cz, 'obj': oid, 'name': name})
+            if h > 0:
+                out.append({'label': f'{name} · {corners[k]} · горе', 'x': cx, 'y': el + h, 'z': cz, 'obj': oid, 'name': name})
+
+    out = []
+    for m in _hall_machines(plan_only=True):
+        d = m.as_dict()
+        add(out, f"Машина {d.get('no') or ''} {d['name']}".replace('  ', ' ').strip(), d)
+    for sh in _hall_shapes():
+        d = sh.as_dict()
+        if d.get('kind') in ('wall', 'door', 'window', 'fixture', 'stairs', 'building', 'room'):
+            add(out, f"{HALL_SHAPE_KINDS.get(d['kind'], d['kind'])} {d.get('label') or d.get('name') or ''}".strip(), d)
+    for e in _hall_equipment():
+        if e.kind != 'camera':
+            d = e.as_dict()
+            add(out, f"{HALL_EQUIPMENT_KINDS[e.kind]} {d['label']}".strip(), d)
+    return out
+
+
+def _camera_position(cam):
+    eq = HallEquipment.query.filter_by(kind='camera', ref_id=cam.id).first()
+    if eq is None:
+        return None
+    return (eq.x + eq.width / 2, (eq.elevation or 0) + eq.height / 2, eq.z + eq.depth / 2)
+
+
+@app.route('/admin/cameras/<int:cam_id>/calibrate')
+@role_required('admin')
+def admin_camera_calibrate(cam_id):
+    cam = Camera.query.get_or_404(cam_id)
+    return render_template('admin_camera_calibrate.html', cam=cam, pos=_camera_position(cam), landmarks=_calibration_landmarks(),
+                           pairs=json.loads(cam.calib_json) if cam.calib_json else [])
+
+
+@app.route('/admin/cameras/<int:cam_id>/calibrate/solve', methods=['POST'])
+@role_required('admin')
+def admin_camera_calibrate_solve(cam_id):
+    import camera_pose
+    cam = Camera.query.get_or_404(cam_id)
+    pos = _camera_position(cam)
+    data = request.get_json(silent=True) or {}
+    if pos is None:
+        return jsonify({'error': 'Камерата още не е на плана - сложете я в „План (редакция)“.'}), 400
+    try:
+        w, h = float(data['w']), float(data['h'])
+        pairs = [((float(p['x']), float(p['y']), float(p['z'])), (float(p['u']), float(p['v']))) for p in data['points']]
+        pose = camera_pose.solve(pos, pairs, w, h)
+    except (KeyError, TypeError, ValueError) as exc:
+        return jsonify({'error': str(exc) if isinstance(exc, ValueError) else 'Невалидни данни.'}), 400
+    pose['projected'] = [camera_pose.project(pos, (pose['yaw'], pose['tilt'], pose['roll'], pose['fov']), pt, h / w) for pt, _ in pairs]
+    return jsonify(pose)
+
+
+@app.route('/admin/cameras/<int:cam_id>/calibrate/save', methods=['POST'])
+@role_required('admin')
+def admin_camera_calibrate_save(cam_id):
+    cam = Camera.query.get_or_404(cam_id)
+    data = request.get_json(silent=True) or {}
+    try:
+        cam.yaw, cam.tilt, cam.roll = float(data['yaw']) % 360, max(0.0, min(90.0, float(data['tilt']))), float(data.get('roll') or 0)
+        cam.fov = max(5.0, min(360.0, float(data['fov'])))
+    except (KeyError, TypeError, ValueError):
+        return jsonify({'error': 'Невалидни данни.'}), 400
+    cam.calib_json = json.dumps(data.get('pairs') or [])
+    db.session.commit()
+    log_action(f'Калибрирана камера "{cam.name}": посока {cam.yaw:.0f}°, наклон {cam.tilt:.0f}°, зрително поле {cam.fov:.0f}°')
+    return jsonify({'ok': True})
+
+
+# ----------------- СОБСТВЕНИ ОБЕКТИ: снимки, белязане, набор за обучение -----------------
+
+TRAIN_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'training_files')
+os.makedirs(TRAIN_FOLDER, exist_ok=True)
+
+
+def _save_train_image(jpeg, camera_id=None):
+    from PIL import Image
+    img = Image.open(io.BytesIO(jpeg))
+    img.load()
+    fn = f'{uuid.uuid4().hex}.jpg'
+    img.convert('RGB').save(os.path.join(TRAIN_FOLDER, fn), 'JPEG', quality=92)
+    ti = TrainImage(filename=fn, width=img.width, height=img.height, camera_id=camera_id)
+    db.session.add(ti)
+    db.session.commit()
+    return ti
+
+
+@app.route('/admin/objects')
+@role_required('admin')
+def admin_objects():
+    import detection
+    names = None
+    if detection.custom_available():
+        with open(detection.CUSTOM_NAMES_PATH, encoding='utf-8') as fh:
+            names = json.load(fh)
+    return render_template('admin_objects.html', classes=CustomClass.query.order_by(CustomClass.id).all(), images=TrainImage.query.order_by(TrainImage.id.desc()).all(),
+                           cameras=Camera.query.order_by(Camera.name).all(), model_names=names, active_page='admin_objects')
+
+
+@app.route('/admin/objects/classes', methods=['POST'])
+@role_required('admin')
+def admin_object_class_add():
+    name = request.form.get('name', '').strip()[:60]
+    if not name:
+        flash('Въведете име на обекта.', 'danger')
+    elif CustomClass.query.filter(db.func.lower(CustomClass.name) == name.lower()).first():
+        flash(f'„{name}“ вече го има.', 'danger')
+    else:
+        db.session.add(CustomClass(name=name))
+        db.session.commit()
+        log_action(f'Добавен собствен обект "{name}"')
+    return redirect(url_for('admin_objects'))
+
+
+@app.route('/admin/objects/classes/<int:class_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_object_class_delete(class_id):
+    c = CustomClass.query.get_or_404(class_id)
+    for ti in TrainImage.query.all():                       # its boxes go with it
+        keep = [b for b in ti.boxes if b['cls'] != c.id]
+        if len(keep) != len(ti.boxes):
+            ti.boxes_json = json.dumps(keep)
+    log_action(f'Изтрит собствен обект "{c.name}"')
+    db.session.delete(c)
+    db.session.commit()
+    return redirect(url_for('admin_objects'))
+
+
+@app.route('/admin/objects/images/camera/<int:cam_id>', methods=['POST'])
+@role_required('admin')
+def admin_object_image_from_camera(cam_id):
+    cam = Camera.query.get_or_404(cam_id)
+    try:
+        ti = _save_train_image(_camera_frame_jpeg(cam), cam.id)
+    except Exception as exc:
+        return jsonify({'error': f'Камерата не отговаря: {exc}'}), 502
+    return jsonify({'id': ti.id})
+
+
+@app.route('/admin/objects/images/upload', methods=['POST'])
+@role_required('admin')
+def admin_object_image_upload():
+    n = 0
+    for f in request.files.getlist('files'):
+        try:
+            _save_train_image(f.read())
+            n += 1
+        except Exception:
+            flash(f'„{f.filename}“ не е картина.', 'danger')
+    if n:
+        flash(f'Добавени снимки: {n}.', 'success')
+    return redirect(url_for('admin_objects'))
+
+
+@app.route('/admin/objects/images/<int:image_id>/file')
+@role_required('admin')
+def admin_object_image_file(image_id):
+    return send_from_directory(TRAIN_FOLDER, TrainImage.query.get_or_404(image_id).filename, mimetype='image/jpeg')
+
+
+@app.route('/admin/objects/images/<int:image_id>/boxes', methods=['POST'])
+@role_required('admin')
+def admin_object_image_boxes(image_id):
+    ti = TrainImage.query.get_or_404(image_id)
+    ids = {c.id for c in CustomClass.query.all()}
+    out = []
+    try:
+        for b in (request.get_json(silent=True) or {}).get('boxes', []):
+            x1, y1, x2, y2 = (max(0.0, min(1.0, float(v))) for v in b['box'])
+            if b['cls'] in ids and x2 - x1 > 0.005 and y2 - y1 > 0.005:
+                out.append({'cls': int(b['cls']), 'box': [round(min(x1, x2), 5), round(min(y1, y2), 5), round(max(x1, x2), 5), round(max(y1, y2), 5)]})
+    except (KeyError, TypeError, ValueError):
+        return jsonify({'error': 'Невалидни данни.'}), 400
+    ti.boxes_json = json.dumps(out)
+    db.session.commit()
+    return jsonify({'ok': True, 'n': len(out)})
+
+
+@app.route('/admin/objects/images/<int:image_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_object_image_delete(image_id):
+    ti = TrainImage.query.get_or_404(image_id)
+    try:
+        os.remove(os.path.join(TRAIN_FOLDER, ti.filename))
+    except OSError:
+        pass
+    db.session.delete(ti)
+    db.session.commit()
+    return redirect(url_for('admin_objects'))
+
+
+@app.route('/admin/objects/export.zip')
+@role_required('admin')
+def admin_objects_export():
+    """The labelled images as a COCO dataset (what YOLOX trains on) + custom.json, the class names in class-id order - see docs/CUSTOM_OBJECTS.md."""
+    import zipfile
+    classes = CustomClass.query.order_by(CustomClass.id).all()
+    cat = {c.id: i + 1 for i, c in enumerate(classes)}                  # COCO category ids 1..n; class id of the model = position - 1
+    images, annotations = [], []
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_STORED) as z:
+        for ti in TrainImage.query.order_by(TrainImage.id).all():
+            boxes = [b for b in ti.boxes if b['cls'] in cat]
+            if not boxes:
+                continue
+            images.append({'id': ti.id, 'file_name': f'{ti.id}.jpg', 'width': ti.width, 'height': ti.height})
+            z.write(os.path.join(TRAIN_FOLDER, ti.filename), f'images/{ti.id}.jpg')
+            for b in boxes:
+                x1, y1, x2, y2 = b['box'][0] * ti.width, b['box'][1] * ti.height, b['box'][2] * ti.width, b['box'][3] * ti.height
+                annotations.append({'id': len(annotations) + 1, 'image_id': ti.id, 'category_id': cat[b['cls']], 'bbox': [round(x1, 1), round(y1, 1), round(x2 - x1, 1), round(y2 - y1, 1)],
+                                    'area': round((x2 - x1) * (y2 - y1), 1), 'iscrowd': 0})
+        z.writestr('annotations.json', json.dumps({'images': images, 'annotations': annotations, 'categories': [{'id': cat[c.id], 'name': c.name} for c in classes]}, ensure_ascii=False))
+        z.writestr('custom.json', json.dumps([c.name for c in classes], ensure_ascii=False))
+    buf.seek(0)
+    log_action(f'Износ на набор за обучение: {len(images)} снимки, {len(annotations)} рамки')
+    return send_file(buf, mimetype='application/zip', as_attachment=True, download_name='trafcom_objects_dataset.zip')
+
+
 CAMERA_EDIT_JS = "var s = document.createElement('script'); s.src = '/static/js/camera_form.js'; document.body.append(s);"
 
 
 @app.route('/admin/cameras')
 @role_required('admin')
 def admin_cameras():
-    return render_template('admin_cameras.html', nvrs=CameraNvr.query.order_by(CameraNvr.name).all(),
+    q = DetectionEvent.query
+    ev_cam, ev_label = request.args.get('ev_camera', type=int), request.args.get('ev_label', '')
+    if ev_cam:
+        q = q.filter_by(camera_id=ev_cam)
+    if ev_label:
+        q = q.filter_by(label=ev_label)
+    import detection
+    return render_template('admin_cameras.html', events=q.order_by(DetectionEvent.ts.desc()).limit(60).all(), ev_cam=ev_cam, ev_label=ev_label,
+                           labels=sorted(set(detection.CLASSES.values())), detector_ready=detection.available(),
+                           nvrs=CameraNvr.query.order_by(CameraNvr.name).all(),
                            cameras=Camera.query.order_by(Camera.name).all(), types=CAMERA_TYPES,
                            key_ok=_network_api_fernet() is not None, active_page='admin_cameras')
 
@@ -17043,7 +17535,9 @@ def _fill_camera(cam):
     cam.tilt = _form_float('tilt', cam.tilt if cam.tilt is not None else 30.0, 0, 90)
     cam.fov = _form_float('fov', cam.fov or 90.0, 5, 360)
     cam.range_m = _form_float('range_m', cam.range_m or 10.0, 1, 100)
+    cam.roll = _form_float('roll', cam.roll or 0.0, -180, 180)
     cam.notes = f.get('notes', '').strip() or None
+    cam.detect = f.get('detect') == '1'
     if cam.conn_type == 'nvr':
         return bool(cam.name and cam.nvr_id and cam.channel)
     return bool(cam.name and cam.host)
@@ -17074,9 +17568,11 @@ def _camera_fields(cam):
         {'name': 'username', 'label': 'Потребител на камерата', 'value': cam.username or '', 'type': 'text'},
         {'name': 'password', 'label': 'Парола на камерата (празно = без промяна)', 'value': '', 'type': 'password'},
         {'name': 'yaw', 'label': 'Посока на плана, ° (0 = към +X, по часовниковата)', 'value': cam.yaw, 'type': 'text'},
+        {'name': 'roll', 'label': 'Завъртане около оста на гледане (roll), °', 'value': cam.roll or 0, 'type': 'text'},
         {'name': 'tilt', 'label': 'Наклон надолу, °', 'value': cam.tilt, 'type': 'text'},
         {'name': 'fov', 'label': 'Зрително поле, ° (до 360)', 'value': cam.fov, 'type': 'text'},
         {'name': 'range_m', 'label': 'Обхват, м', 'value': cam.range_m, 'type': 'text'},
+        {'name': 'detect', 'label': 'Разпознаване на хора и превозни средства', 'value': cam.detect, 'type': 'checkbox'},
         {'name': 'notes', 'label': 'Бележки', 'value': cam.notes or '', 'type': 'textarea'},
     ]
 
@@ -17196,6 +17692,18 @@ def admin_camera_video(cam_id):
     return jsonify({'url': f'/camstream/api/stream.mjpeg?src={name}'})
 
 
+def _camera_frame_jpeg(cam):
+    """A current JPEG frame: the camera's / NVR's own snapshot, or (the NVR can't make a JPEG of some channels - Device Error) one decoded from the stream."""
+    try:
+        return _camera_snapshot_jpeg(cam)
+    except Exception as first:
+        try:
+            name = _go2rtc_register(cam)
+            return urllib.request.urlopen(f'{GO2RTC_URL}/api/frame.jpeg?src={name}', timeout=8).read()
+        except Exception:
+            raise first from None
+
+
 @app.route('/admin/cameras/<int:cam_id>/snapshot')
 @role_required('admin')
 @limiter.exempt
@@ -17203,13 +17711,9 @@ def admin_camera_snapshot(cam_id):
     """Live frame (JPEG) for the 3D info panel / cameras page; polled every few seconds."""
     cam = Camera.query.get_or_404(cam_id)
     try:
-        data = _camera_snapshot_jpeg(cam)
+        data = _camera_frame_jpeg(cam)
     except Exception as exc:
-        try:                                            # the NVR can't make a JPEG of some channels (Device Error): decode the stream instead
-            name = _go2rtc_register(cam)
-            data = urllib.request.urlopen(f'{GO2RTC_URL}/api/frame.jpeg?src={name}', timeout=8).read()
-        except Exception:
-            return jsonify({'error': f'Камерата не отговаря: {exc}'}), 502
+        return jsonify({'error': f'Камерата не отговаря: {exc}'}), 502
     return app.response_class(data, mimetype='image/jpeg', headers={'Cache-Control': 'no-store'})
 
 
@@ -20921,6 +21425,7 @@ if __name__ == '__main__':
         start_shelly_history_poller()
         start_solis_history_poller()
         start_mqtt_listener()
-
-    app.run(debug=debug_mode)        start_detection_worker()
+        start_detection_worker()
         start_heatpump_poller()
+
+    app.run(debug=debug_mode)

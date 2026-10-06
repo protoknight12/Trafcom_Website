@@ -1,4 +1,4 @@
-from app import app, start_shelly_history_poller, start_solis_history_poller, start_mqtt_listener, start_heatpump_poller
+from app import app, start_shelly_history_poller, start_solis_history_poller, start_mqtt_listener, start_detection_worker, start_heatpump_poller
 
 # Runs once per worker process on import - gunicorn/waitress import this
 # module fresh in each worker, unlike app.py's db.create_all() etc. which are
@@ -9,6 +9,7 @@ from app import app, start_shelly_history_poller, start_solis_history_poller, st
 start_shelly_history_poller()
 start_solis_history_poller()
 start_mqtt_listener()
+start_detection_worker()
 start_heatpump_poller()
 
 if __name__ == '__main__':

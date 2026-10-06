@@ -104,6 +104,7 @@ const hallLinks = () => LINKS.map(l => Object.assign({ A: hallEnd(l.a), B: hallE
             <button class="f3-btn" data-m="plan">{{ _('План (редакция)') }}</button>
             <button class="f3-btn" data-m="roof">{{ _('Покрив и панели') }}</button>
             <button class="f3-btn" data-m="cameras">{{ _('Камери') }}</button>
+            <button class="f3-btn" data-m="objects">{{ _('Свои обекти') }}</button>
             <button class="f3-btn" data-m="devices">{{ _('Устройства и схеми') }}</button>
         </div>
         {% endif %}
@@ -157,10 +158,12 @@ const hallLinks = () => LINKS.map(l => Object.assign({ A: hallEnd(l.a), B: hallE
         <iframe id="f3-devframe" style="width:100%;height:80vh;border:1px solid var(--border-color);border-radius:var(--border-radius-md);background:var(--bg-surface)" title="{{ _('Устройства и схеми') }}"></iframe>
     </div>
     <div id="mode-cameras" hidden><iframe id="f3-camframe" data-src="{{ url_for('admin_cameras') }}" style="width:100%;height:80vh;border:1px solid var(--border-color);border-radius:var(--border-radius-md);background:var(--bg-surface)" title="{{ _('Камери') }}"></iframe></div>
+    <div id="mode-objects" hidden><iframe id="f3-objframe" data-src="{{ url_for('admin_objects') }}" style="width:100%;height:80vh;border:1px solid var(--border-color);border-radius:var(--border-radius-md);background:var(--bg-surface)" title="{{ _('Свои обекти') }}"></iframe></div>
     <div id="mode-roof" hidden><iframe id="f3-roofframe" data-src="{{ url_for('admin_solar_roof') }}" title="{{ _('Покрив и соларни панели') }}"></iframe></div>
     {% endif %}
 </main>
 
+<script src="{{ url_for('static', filename='js/detect_overlay.js') }}"></script>
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -484,6 +487,26 @@ EQUIP.filter(e => e.kind === 'sensor' && e.ref_id).forEach(e => {
     spr.scale.set(1.2, 0.3, 1); spr.position.set(e.x + e.width / 2, (e.elevation || 0) + e.height + 0.3, e.z + e.depth / 2); spr.renderOrder = 10;
     layer('iot').add(spr); TEMPS.push({ spr, ctx: c.getContext('2d'), tex, e });
 });
+// detected objects (admins): the server turns every camera's detections into floor positions with the camera's pose (see _fused_detections:
+// one camera = the box bottom cast onto the floor, overlapping cameras = triangulation) - drawn here as a marker + caption.
+// Needs each camera's pose right ("🎯 Калибрирай по обекти"), otherwise the points sit off.
+const DET = layer('detect');
+const DET_COL = { 'човек': 0x22d3ee, 'кола': 0xf97316, 'камион': 0xef4444, 'автобус': 0xef4444, 'мотор': 0xa855f7, 'колело': 0xa855f7 };
+let detGroup = null;
+async function pollDetections() {
+    if (!IS_ADMIN || document.hidden || !layerOn('detect')) { if (detGroup) { DET.remove(detGroup); detGroup = null; } return; }
+    const d = await fetch("{{ url_for('admin_hall_detections') }}").then(r => r.json()).catch(() => null);
+    if (!d) return;
+    if (detGroup) { DET.remove(detGroup); detGroup.traverse(o => { if (o.material && o.material.map) o.material.map.dispose(); if (o.material) o.material.dispose(); if (o.geometry) o.geometry.dispose(); }); }
+    detGroup = new THREE.Group(); DET.add(detGroup);
+    (d.objects || []).forEach(o => {                // already placed on the floor by the server (triangulated when 2+ cameras see it)
+        const person = o.label === 'човек', hgt = person ? 1.7 : 1.5, wd = person ? 0.5 : 1.8;
+        const m = new THREE.Mesh(new THREE.BoxGeometry(wd, hgt, person ? 0.5 : 4), new THREE.MeshBasicMaterial({ color: DET_COL[o.label] || 0xffffff, transparent: true, opacity: o.cams > 1 ? 0.8 : 0.45 }));
+        m.position.set(o.x, Math.max(hgt / 2, o.y), o.z); detGroup.add(m);
+        label(o.label + ' ' + Math.round(o.score * 100) + '%' + (o.cams > 1 ? ' ×' + o.cams + ' кам.' : ''), o.x, Math.max(hgt, o.y + hgt / 2) + 0.4, o.z, 0.5, detGroup);
+    });
+}
+setInterval(pollDetections, 2000);
 tgt = scene;
 
 // ---- camera views + zones ----
@@ -609,7 +632,7 @@ const LAYER_DEFS = [
                            ['block', "{{ _('Съседни сгради') }}"], ['floor', "{{ _('Подова настилка') }}"], ['room', "{{ _('Помещения') }}"], ['fixture', "{{ _('Обзавеждане') }}"]]],
     ["{{ _('Имоти') }}", [['parcel', "{{ _('Граници на имотите (кадастър)') }}"]]],
     ["{{ _('Оборудване') }}", [['machine', "{{ _('Машини и инвентар') }}"], ['equip', "{{ _('Инвертори, батерии, табла') }}"],
-                              ['network', "{{ _('Мрежови устройства (суичове, рутери)') }}"], ['cam', "{{ _('Камери и зрително поле') }}"], ['iot', "{{ _('IoT: сензори, конвектори, измерватели') }}"]]],
+                              ['network', "{{ _('Мрежови устройства (суичове, рутери)') }}"], ['cam', "{{ _('Камери и зрително поле') }}"], ['detect', "{{ _('Открити обекти (хора, коли)') }}"], ['iot', "{{ _('IoT: сензори, конвектори, измерватели') }}"]]],
     ...(IS_ADMIN ? [["{{ _('Връзки (анимирани)') }}", [['links_power', "{{ _('Ел. връзки: табла, инвертори, батерии, машини') }}"], ['links_data', "{{ _('Мрежови връзки и комуникации') }}"],
                                                     ['links_dc', "{{ _('DC кабели на панелите (стринг -> инвертор, по билото)') }}"]]]] : []),
     ["{{ _('Надписи') }}", [['mlabels', "{{ _('Машини: номера и имена') }}"], ['labels', "{{ _('Други надписи') }}"]]],
@@ -663,7 +686,7 @@ KEYS.forEach(applyLayer);
 const shown = o => { for (; o; o = o.parent) if (!o.visible) return false; return true; };
 
 // ---- modes: 3D map / plan editor / roof (admins); everything shares the layers above ----
-const MODES = ['3d', 'plan', 'roof', 'cameras', 'devices'];
+const MODES = ['3d', 'plan', 'roof', 'cameras', 'objects', 'devices'];
 function resizeNow() { if (typeof resize === 'function') resize(); }
 function setMode(m) {
     if (!IS_ADMIN || !MODES.includes(m)) m = '3d';
@@ -675,6 +698,7 @@ function setMode(m) {
         const fr = document.getElementById('f3-roofframe');
         if (!fr.src) { fr.src = fr.dataset.src; fr.onload = () => { try { fr.contentDocument.getElementById('backLink')?.remove(); } catch (e) { } }; }
     }
+    if (m === 'objects') { const fr = document.getElementById('f3-objframe'); if (!fr.src) fr.src = fr.dataset.src; }
     if (m === 'cameras') { const fr = document.getElementById('f3-camframe'); if (!fr.src) fr.src = fr.dataset.src; }
     if (m === 'devices' && !document.getElementById('f3-devframe').src) openDevice(document.querySelector('#f3-devnav [data-url]').dataset.url);
     if (IS_ADMIN && location.hash.slice(1) !== m) history.replaceState(null, '', '#' + m);
@@ -816,7 +840,7 @@ function equipAdmin(m) {                                    // info panel of a p
         const img = document.createElement('img'); img.alt = ''; img.style.cssText = 'width:100%;margin-top:6px;border-radius:4px;display:block;background:#000;min-height:60px';
         let video = false;
         const t = setInterval(() => load(), 3000), load = () => { if (!img.isConnected) { clearInterval(t); img.src = ''; return; } if (!video && !document.hidden) img.src = '/admin/cameras/' + m.ref_id + '/snapshot?t=' + Date.now(); };
-        info.append(img); load();
+        info.append(img); load(); window.attachDetectOverlay(img, m.ref_id);
         const vb = document.createElement('button'); vb.type = 'button'; vb.className = 'btn'; vb.style.marginTop = '6px'; vb.textContent = "▶ {{ _('Видео') }}";
         vb.onclick = async () => {
             if (video) { video = false; img.onerror = null; vb.textContent = "▶ {{ _('Видео') }}"; load(); return; }
@@ -826,6 +850,9 @@ function equipAdmin(m) {                                    // info panel of a p
             img.src = d.url;
         };
         info.append(vb);
+        const cb = document.createElement('button'); cb.type = 'button'; cb.className = 'btn'; cb.style.cssText = 'margin:6px 0 0 6px'; cb.textContent = "🎯 {{ _('Калибрирай по обекти') }}";
+        cb.onclick = () => window.openFrameDialog('/admin/cameras/' + m.ref_id + '/calibrate', true);
+        info.append(cb);
     }
     const row = document.createElement('div'); row.className = 'act';
     if (m.kind === 'convector' && m.ref_id) {

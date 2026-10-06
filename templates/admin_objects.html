@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Свои обекти - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+        .thumb { position: relative; border: 1px solid var(--border-color); border-radius: 6px; overflow: hidden; cursor: pointer; background: #000; line-height: 0; }
+        .thumb img { width: 100%; }
+        .thumb .badge { position: absolute; right: 4px; top: 4px; background: rgba(0,0,0,.7); color: #fff; font-size: 0.75rem; line-height: 1.2; padding: 2px 6px; border-radius: 10px; }
+        .thumb .badge.zero { background: #b45309; }
+        #annot { display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,.85); padding: 12px; overflow: auto; }
+        #annot .box { background: var(--bg-surface); border-radius: 8px; padding: 12px; max-width: 1400px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 3fr) minmax(240px, 1fr); gap: 12px; }
+        @media (max-width: 900px) { #annot .box { grid-template-columns: 1fr; } }
+        #aWrap { position: relative; line-height: 0; background: #000; cursor: crosshair; user-select: none; touch-action: none; }
+        #aImg { width: 100%; display: block; pointer-events: none; }
+        #aCv { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+        .brow { display: flex; justify-content: space-between; gap: 6px; font-size: 0.9rem; padding: 3px 0; border-bottom: 1px solid var(--border-color); }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}<div class="flash-messages">{% for category, message in messages %}<div class="alert alert-{{ category }}">{{ message }}</div>{% endfor %}</div>{% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h3>Свои обекти (кари, палети, детайли ...)</h3>
+        <p class="text-small text-muted">Детекторът знае хора и превозни средства. Тук го учите на вашите неща: <b>1.</b> въведете какви обекти търсите, <b>2.</b> снимайте от камерите (или качете снимки), <b>3.</b> белязвате с рамки, <b>4.</b> изнасяте набора и обучавате модела (ръководство: <code>docs/CUSTOM_OBJECTS.md</code>),
+            <b>5.</b> слагате готовия <code>custom.onnx</code> и <code>custom.json</code> в <code>models/</code>. Нужни са по 30 до 100 различни кадъра на обект, при различна светлина и ъгли.</p>
+        <p>
+            {% if model_names %}<span style="color:#16a34a"><b>● Собственият модел е качен:</b></span> {{ model_names|join(', ') }}
+            {% else %}<span class="text-muted">● Още няма собствен модел (<code>models/custom.onnx</code>) - разпознава се само от общия.</span>{% endif %}
+        </p>
+    </section>
+
+    <section class="admin-card">
+        <h3>Обекти за разпознаване</h3>
+        <form action="{{ url_for('admin_object_class_add') }}" method="POST" class="admin-form" style="display:flex;gap:8px;align-items:end;flex-wrap:wrap">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group" style="margin:0"><label>Нов обект</label><input type="text" name="name" required placeholder="напр. мотокар, палет, ламарина"></div>
+            <button type="submit" class="btn-submit">Добави</button>
+        </form>
+        <p style="margin-top:10px">
+            {% for c in classes %}
+            <form action="{{ url_for('admin_object_class_delete', class_id=c.id) }}" method="POST" style="display:inline" onsubmit="return confirm('Изтриване на „{{ c.name|e }}“ и всичките му рамки?');">
+                {% include 'partials/csrf_field.html' %}
+                <span class="btn-secondary" style="padding:4px 10px;display:inline-block">{{ c.name }} <button type="submit" class="btn-delete" style="padding:0 6px;margin-left:4px">✕</button></span>
+            </form>
+            {% else %}<span class="text-muted">Още няма.</span>{% endfor %}
+        </p>
+    </section>
+
+    <section class="admin-card">
+        <h3>Снимки за обучение ({{ images|length }}) · с рамки: {{ images|selectattr('boxes')|list|length }}</h3>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+            <select id="capCam">{% for c in cameras %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select>
+            <button type="button" class="btn-secondary" id="capBtn">📷 Снимай от камерата</button>
+            <form action="{{ url_for('admin_object_image_upload') }}" method="POST" enctype="multipart/form-data" style="display:inline-flex;gap:6px;align-items:center">
+                {% include 'partials/csrf_field.html' %}
+                <input type="file" name="files" accept="image/*" multiple required>
+                <button type="submit" class="btn-secondary">Качи</button>
+            </form>
+            <a class="btn-submit" href="{{ url_for('admin_objects_export') }}" style="margin-left:auto">⬇ Износ на набора (zip)</a>
+        </div>
+        <div class="thumbs">
+            {% for im in images %}
+            <div class="thumb" data-id="{{ im.id }}" data-boxes='{{ im.boxes|tojson|forceescape }}'>
+                <img src="{{ url_for('admin_object_image_file', image_id=im.id) }}" alt="" loading="lazy">
+                <span class="badge {{ '' if im.boxes else 'zero' }}">{{ im.boxes|length }} рамки</span>
+            </div>
+            {% else %}<span class="text-muted">Още няма снимки.</span>{% endfor %}
+        </div>
+    </section>
+</main>
+
+<div id="annot">
+    <div class="box">
+        <div>
+            <div id="aWrap"><img id="aImg" alt=""><canvas id="aCv"></canvas></div>
+            <p class="text-small text-muted" style="margin-top:6px">Дръпнете с мишката, за да очертаете обект. Клик върху рамка в списъка я маркира, ✕ я трие.</p>
+        </div>
+        <div>
+            <div class="form-group"><label>Какво очертавате</label>
+                <select id="aClass">{% for c in classes %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select></div>
+            <div id="aList"></div>
+            <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
+                <button type="button" class="btn-submit" id="aSave">Запази</button>
+                <button type="button" class="btn-secondary" id="aClose">Затвори</button>
+                <form id="aDelForm" method="POST" style="display:inline" onsubmit="return confirm('Изтриване на снимката?');">{% include 'partials/csrf_field.html' %}<button type="submit" class="btn-delete">Изтрий снимката</button></form>
+            </div>
+            <p id="aMsg" class="text-small"></p>
+        </div>
+    </div>
+</div>
+
+<script>
+const CLASSES = {{ classes|map(attribute='name')|list|tojson }}, CLASS_IDS = {{ classes|map(attribute='id')|list|tojson }}, CSRF = window.CSRF_TOKEN || '';
+const $ = id => document.getElementById(id), img = $('aImg'), cv = $('aCv');
+const name = id => CLASSES[CLASS_IDS.indexOf(id)] || '?';
+let cur = null, boxes = [], drag = null, sel = -1;
+const COL = ['#ef4444', '#22c55e', '#3b82f6', '#f59e0b', '#a855f7', '#14b8a6', '#ec4899'];
+
+function draw() {
+    const w = img.naturalWidth || 1280, h = img.naturalHeight || 720; cv.width = w; cv.height = h;
+    const c = cv.getContext('2d'); c.clearRect(0, 0, w, h); c.lineWidth = Math.max(2, w / 420); c.font = Math.round(w / 50) + 'px sans-serif';
+    const rect = (b, col, txt, thick) => { const [x1, y1, x2, y2] = b; c.strokeStyle = col; c.lineWidth = thick ? c.lineWidth * 2 : c.lineWidth; c.strokeRect(x1 * w, y1 * h, (x2 - x1) * w, (y2 - y1) * h);
+        if (txt) { c.fillStyle = col; c.fillText(txt, x1 * w + 4, Math.max(14, y1 * h - 5)); } c.lineWidth = Math.max(2, w / 420); };
+    boxes.forEach((b, i) => rect(b.box, COL[CLASS_IDS.indexOf(b.cls) % COL.length], name(b.cls), i === sel));
+    if (drag) rect([Math.min(drag.x1, drag.x2), Math.min(drag.y1, drag.y2), Math.max(drag.x1, drag.x2), Math.max(drag.y1, drag.y2)], '#facc15');
+}
+function list() {
+    const l = $('aList'); l.innerHTML = '';
+    boxes.forEach((b, i) => { const d = document.createElement('div'); d.className = 'brow'; d.style.fontWeight = i === sel ? '700' : '400';
+        d.append(Object.assign(document.createElement('span'), { textContent: (i + 1) + '. ' + name(b.cls), onclick: () => { sel = i; list(); draw(); }, style: 'cursor:pointer' }));
+        d.append(Object.assign(document.createElement('button'), { type: 'button', textContent: '✕', className: 'btn-delete', onclick: () => { boxes.splice(i, 1); sel = -1; list(); draw(); } })); l.append(d); });
+    draw();
+}
+function openAnnot(id, bx) {
+    cur = id; boxes = bx.map(b => ({ cls: b.cls, box: b.box.slice() })); sel = -1; $('aMsg').textContent = '';
+    img.onload = draw; img.src = '/admin/objects/images/' + id + '/file'; $('aDelForm').action = '/admin/objects/images/' + id + '/delete';
+    $('annot').style.display = 'block'; list();
+}
+document.querySelectorAll('.thumb').forEach(t => t.onclick = () => openAnnot(Number(t.dataset.id), JSON.parse(t.dataset.boxes)));
+$('aClose').onclick = () => { $('annot').style.display = 'none'; };
+const pt = e => { const r = img.getBoundingClientRect(); return [Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)), Math.max(0, Math.min(1, (e.clientY - r.top) / r.height))]; };
+$('aWrap').addEventListener('pointerdown', e => { const [x, y] = pt(e); drag = { x1: x, y1: y, x2: x, y2: y }; $('aWrap').setPointerCapture(e.pointerId); });
+$('aWrap').addEventListener('pointermove', e => { if (drag) { [drag.x2, drag.y2] = pt(e); draw(); } });
+$('aWrap').addEventListener('pointerup', () => {
+    if (!drag) return;
+    const b = [Math.min(drag.x1, drag.x2), Math.min(drag.y1, drag.y2), Math.max(drag.x1, drag.x2), Math.max(drag.y1, drag.y2)]; drag = null;
+    if (b[2] - b[0] > 0.01 && b[3] - b[1] > 0.01 && $('aClass').value) { boxes.push({ cls: Number($('aClass').value), box: b }); sel = boxes.length - 1; }
+    list();
+});
+$('aSave').onclick = async () => {
+    const r = await fetch('/admin/objects/images/' + cur + '/boxes', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF }, body: JSON.stringify({ boxes }) }), d = await r.json().catch(() => ({}));
+    $('aMsg').textContent = r.ok ? 'Запазено (' + d.n + ' рамки).' : (d.error || 'Грешка'); $('aMsg').style.color = r.ok ? '#16a34a' : '#dc2626';
+    if (r.ok) { const t = document.querySelector('.thumb[data-id="' + cur + '"]'); t.dataset.boxes = JSON.stringify(boxes); const bd = t.querySelector('.badge'); bd.textContent = d.n + ' рамки'; bd.classList.toggle('zero', !d.n); }
+};
+$('capBtn').onclick = async () => {
+    const id = $('capCam').value; if (!id) return; $('capBtn').disabled = true;
+    const r = await fetch('/admin/objects/images/camera/' + id, { method: 'POST', headers: { 'X-CSRFToken': CSRF } }), d = await r.json().catch(() => ({}));
+    if (!r.ok) { alert(d.error || 'Грешка'); $('capBtn').disabled = false; return; }
+    location.reload();
+};
+</script>
+</body>
+</html>

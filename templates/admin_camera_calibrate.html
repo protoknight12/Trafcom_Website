@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Калибриране на камера - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .cal { display: grid; grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); gap: 16px; }
+        @media (max-width: 900px) { .cal { grid-template-columns: 1fr; } }
+        #calWrap { position: relative; background: #000; border-radius: 6px; cursor: crosshair; line-height: 0; }
+        #calImg { width: 100%; display: block; }
+        #calCv { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
+        #lmList { width: 100%; height: 170px; }
+        .cal-pair { display: flex; justify-content: space-between; gap: 6px; font-size: 0.85rem; padding: 2px 0; border-bottom: 1px solid var(--border-color); }
+        .cal-pair button { padding: 0 6px; }
+        #calRes { font-size: 0.95rem; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+<main class="admin-container">
+    <h3>Калибриране на „{{ cam.name }}“ по известни обекти</h3>
+    {% if not pos %}
+    <div class="alert alert-danger">Камерата още не е сложена на плана. Сложете я в „План (редакция)“ (позиция и височина), после калибрирайте.</div>
+    {% else %}
+    <p class="text-small text-muted">Позицията и височината идват от камерата на плана (x {{ '%.2f'|format(pos[0]) }} м, z {{ '%.2f'|format(pos[2]) }} м, на {{ '%.2f'|format(pos[1]) }} м).
+        <b>1.</b> Кликнете върху кадъра точка, чиято позиция знаете (ъгъл на машина, стена, врата...). <b>2.</b> Изберете същата точка от списъка. <b>3.</b> „Добави“. Повторете за 5 и повече точки на различни места и височини, после „Изчисли“.</p>
+    <div class="cal">
+        <div>
+            <div id="calWrap"><img id="calImg" alt="" src="{{ url_for('admin_camera_snapshot', cam_id=cam.id) }}?t=0"><canvas id="calCv"></canvas></div>
+            <p style="margin-top:6px"><button type="button" class="btn-secondary" id="calReload">↻ Нов кадър</button>
+                <span class="text-small text-muted">червено = вашият клик, зелено = къде пада точката при изчислената поза</span></p>
+        </div>
+        <div>
+            <svg id="lmPlan" style="width:100%;height:240px;background:var(--bg-secondary,#f3f4f6);border:1px solid var(--border-color);border-radius:6px"></svg>
+            <p class="text-small text-muted" style="margin:2px 0 8px">Кликнете обект на плана - в списъка остават само ъглите му; ъгъл от списъка се отбелязва на плана.
+                <a href="#" id="lmAll">Покажи всички</a></p>
+            <div class="form-group"><label>Търси обект</label><input type="text" id="lmFilter" placeholder="напр. машина 3, стена, врата"></div>
+            <select id="lmList" size="8"></select>
+            <p style="margin:6px 0"><button type="button" class="btn-submit" id="calAdd" disabled>Добави двойка</button> <span id="calPending" class="text-small text-muted">Кликнете върху кадъра.</span></p>
+            <h4 style="margin:10px 0 4px">Двойки (<span id="calN">0</span>)</h4>
+            <div id="calPairs"></div>
+            <p style="margin-top:10px"><button type="button" class="btn-submit" id="calSolve">Изчисли позата</button></p>
+            <div id="calRes" class="text-muted">—</div>
+            <p><button type="button" class="btn-submit" id="calSave" disabled>Запази позата</button></p>
+        </div>
+    </div>
+    {% endif %}
+</main>
+{% if pos %}
+<script>
+const LM = {{ landmarks|tojson }}, PAIRS = {{ pairs|tojson }}, CSRF = window.CSRF_TOKEN || document.querySelector('meta[name=csrf-token]')?.content || '';
+const $ = id => document.getElementById(id), img = $('calImg'), cv = $('calCv');
+let pending = null, pose = null, hiPair = null, pairs = PAIRS.filter(p => LM[p.lm] && LM[p.lm].label === p.label);      // pairs = [{lm, label, u, v}]
+const post = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF }, body: JSON.stringify(body) })
+    .then(async r => [r.ok, await r.json().catch(() => ({}))]);
+
+function fillList() {
+    const q = $('lmFilter').value.trim().toLowerCase(), l = $('lmList'); l.innerHTML = '';
+    LM.forEach((m, i) => { if ((selObj === null || m.obj === selObj) && (!q || m.label.toLowerCase().includes(q))) l.append(new Option(m.label, i)); });
+    drawPlan();
+}
+// mini plan (top view, metres): one rectangle per plan object, built from its corner landmarks
+let selObj = null;
+const OBJ = new Map(); LM.forEach(m => { const o = OBJ.get(m.obj) || OBJ.set(m.obj, { id: m.obj, name: m.name, x0: 1e9, x1: -1e9, z0: 1e9, z1: -1e9 }).get(m.obj); o.x0 = Math.min(o.x0, m.x); o.x1 = Math.max(o.x1, m.x); o.z0 = Math.min(o.z0, m.z); o.z1 = Math.max(o.z1, m.z); });
+const CAM = { x: {{ pos[0]|tojson }}, z: {{ pos[2]|tojson }} };
+function drawPlan() {
+    const svg = $('lmPlan'), NS = 'http://www.w3.org/2000/svg', os = [...OBJ.values()];
+    const x0 = Math.min(0, CAM.x, ...os.map(o => o.x0)) - 1, x1 = Math.max(56, CAM.x, ...os.map(o => o.x1)) + 1, z0 = Math.min(0, CAM.z, ...os.map(o => o.z0)) - 1, z1 = Math.max(12, CAM.z, ...os.map(o => o.z1)) + 1;
+    svg.setAttribute('viewBox', `${x0} ${z0} ${x1 - x0} ${z1 - z0}`); svg.innerHTML = '';
+    const mk = (t, a) => { const e = document.createElementNS(NS, t); for (const k in a) e.setAttribute(k, a[k]); svg.append(e); return e; }, px = (x1 - x0) / 700;
+    os.sort((a, b) => (b.x1 - b.x0) * (b.z1 - b.z0) - (a.x1 - a.x0) * (a.z1 - a.z0)).forEach(o => {      // big first, so small objects stay clickable on top
+        const sel = o.id === selObj, r = mk('rect', { x: o.x0, y: o.z0, width: Math.max(o.x1 - o.x0, px * 3), height: Math.max(o.z1 - o.z0, px * 3), fill: sel ? 'rgba(250,204,21,.55)' : 'rgba(59,130,246,.15)', stroke: sel ? '#ca8a04' : '#3b82f6', 'stroke-width': px * (sel ? 2.5 : 1), style: 'cursor:pointer' });
+        const t = document.createElementNS(NS, 'title'); t.textContent = o.name; r.append(t); r.onclick = () => { selObj = sel ? null : o.id; fillList(); };
+    });
+    mk('circle', { cx: CAM.x, cy: CAM.z, r: px * 6, fill: '#dc2626' });
+    const hp = hiPair !== null && pairs[hiPair] && LM[pairs[hiPair].lm];
+    if (hp) mk('circle', { cx: hp.x, cy: hp.z, r: px * 9, fill: '#22d3ee', stroke: '#0e7490', 'stroke-width': px * 2 });      // picked pair: same colour on the photo and here
+    const m = LM[Number($('lmList').value)];
+    if (selObj !== null) {                                   // selected object: its corners are pickable points (a click on a corner cycles bottom -> top)
+        const at = new Map(); LM.forEach((p, i) => { if (p.obj === selObj) { const k = p.x + '|' + p.z; at.set(k, [...(at.get(k) || []), i]); } });
+        at.forEach(ix => {
+            const p = LM[ix[0]], on = m && ix.includes(Number($('lmList').value));
+            const c = mk('circle', { cx: p.x, cy: p.z, r: px * 7, fill: on ? '#16a34a' : '#fff', stroke: '#16a34a', 'stroke-width': px * 2.5, style: 'cursor:pointer' });
+            const t = document.createElementNS(NS, 'title'); t.textContent = ix.map(i => LM[i].label).join('\n'); c.append(t);
+            c.onclick = ev => { ev.stopPropagation(); const cur = ix.indexOf(Number($('lmList').value)); $('lmList').value = ix[(cur + 1) % ix.length]; $('lmList').onchange(); $('lmList').selectedOptions[0]?.scrollIntoView({ block: 'nearest' }); };
+        });
+    } else if (m) mk('circle', { cx: m.x, cy: m.z, r: px * 6, fill: 'none', stroke: '#16a34a', 'stroke-width': px * 3 });
+}
+function draw() {
+    const w = img.naturalWidth || 1280, h = img.naturalHeight || 720; cv.width = w; cv.height = h;
+    const c = cv.getContext('2d'); c.clearRect(0, 0, w, h); c.lineWidth = Math.max(2, w / 400); c.font = Math.round(w / 55) + 'px sans-serif';
+    const cross = (u, v, col, txt) => { const x = u * w, y = v * h, s = w / 90; c.strokeStyle = col; c.beginPath(); c.moveTo(x - s, y); c.lineTo(x + s, y); c.moveTo(x, y - s); c.lineTo(x, y + s); c.stroke(); if (txt) { c.fillStyle = col; c.fillText(txt, x + s, y - s / 2); } };
+    pairs.forEach((p, i) => {
+        cross(p.u, p.v, i === hiPair ? '#22d3ee' : '#ff3c3c', String(i + 1));
+        if (i === hiPair) { c.strokeStyle = '#22d3ee'; c.beginPath(); c.arc(p.u * w, p.v * h, w / 45, 0, 7); c.stroke(); }
+        const q = pose && pose.projected[i];
+        if (q) { c.strokeStyle = '#22c55e'; c.beginPath(); c.arc(q[0] * w, q[1] * h, w / 90, 0, 7); c.moveTo(p.u * w, p.v * h); c.lineTo(q[0] * w, q[1] * h); c.stroke(); }
+    });
+    if (pending) cross(pending.u, pending.v, '#facc15');
+}
+function drawPairs() {
+    $('calN').textContent = pairs.length; const box = $('calPairs'); box.innerHTML = '';
+    pairs.forEach((p, i) => { const d = document.createElement('div'); d.className = 'cal-pair'; const sp = Object.assign(document.createElement('span'), { textContent: (i + 1) + '. ' + p.label }); sp.style.cursor = 'pointer'; if (i === hiPair) { sp.style.color = '#0e7490'; sp.style.fontWeight = '600'; } sp.onclick = () => { hiPair = hiPair === i ? null : i; drawPairs(); drawPlan(); }; d.append(sp);
+        const x = Object.assign(document.createElement('button'), { type: 'button', textContent: '✕', className: 'btn-delete' }); x.onclick = () => { pairs.splice(i, 1); hiPair = null; pose = null; $('calSave').disabled = true; drawPairs(); draw(); }; d.append(x); box.append(d); });
+    draw();
+}
+img.addEventListener('load', draw);
+$('calWrap').addEventListener('click', e => {
+    const r = img.getBoundingClientRect(); pending = { u: (e.clientX - r.left) / r.width, v: (e.clientY - r.top) / r.height };
+    $('calPending').textContent = 'Точка избрана - изберете обекта от списъка.'; $('calAdd').disabled = !$('lmList').value; draw();
+});
+$('lmList').onchange = () => { $('calAdd').disabled = !pending; drawPlan(); };
+$('lmAll').onclick = e => { e.preventDefault(); selObj = null; fillList(); };
+$('lmFilter').oninput = fillList;
+$('calAdd').onclick = () => {
+    const m = LM[Number($('lmList').value)]; if (!pending || !m) return;
+    pairs.push({ lm: Number($('lmList').value), label: m.label, u: pending.u, v: pending.v }); pending = null; pose = null; $('calSave').disabled = true;
+    $('calPending').textContent = 'Кликнете следващата точка.'; $('calAdd').disabled = true; drawPairs();
+};
+$('calReload').onclick = () => { img.src = "{{ url_for('admin_camera_snapshot', cam_id=cam.id) }}?t=" + Date.now(); };
+$('calSolve').onclick = async () => {
+    if (pairs.length < 3) { $('calRes').textContent = 'Трябват поне 3 двойки (по-добре 5 и повече).'; return; }
+    $('calRes').textContent = 'Смятам...';
+    const [ok, d] = await post("{{ url_for('admin_camera_calibrate_solve', cam_id=cam.id) }}", { w: img.naturalWidth, h: img.naturalHeight,
+        points: pairs.map(p => ({ x: LM[p.lm].x, y: LM[p.lm].y, z: LM[p.lm].z, u: p.u, v: p.v })) });
+    if (!ok) { $('calRes').textContent = d.error || 'Грешка.'; return; }
+    pose = d; $('calSave').disabled = false;
+    $('calRes').innerHTML = 'Посока <b>' + d.yaw + '°</b> · наклон <b>' + d.tilt + '°</b> · завъртане <b>' + d.roll + '°</b> · зрително поле <b>' + d.fov + '°</b><br>Средно отклонение <b style="color:' + (d.error_px < 15 ? '#16a34a' : '#dc2626') + '">' + d.error_px + ' px</b>'
+        + (d.error_px >= 15 ? ' - голямо: проверете двойките (грешен ъгъл или обект), добавете още точки.' : '');
+    draw();
+};
+$('calSave').onclick = async () => {
+    const [ok, d] = await post("{{ url_for('admin_camera_calibrate_save', cam_id=cam.id) }}", { yaw: pose.yaw, tilt: pose.tilt, roll: pose.roll, fov: pose.fov, pairs });
+    $('calRes').innerHTML += ok ? '<br><b style="color:#16a34a">Запазено.</b> Планът и 3D картата ще я покажат след презареждане.' : '<br>' + (d.error || 'Грешка при запис.');
+};
+fillList(); drawPairs();
+</script>
+{% endif %}
+</body>
+</html>
