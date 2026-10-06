@@ -140,7 +140,7 @@
                     <div><label>Дължина (X), м</label><input id="f-width" type="number" step="0.1" min="0.1"></div>
                     <div><label>Ширина (Z), м</label><input id="f-depth" type="number" step="0.1" min="0.1"></div>
                     <div><label id="l-height">Височина, м</label><input id="f-height" type="number" step="0.1" min="0" max="10"></div>
-                    <div><label>Разстояние от пода, м</label><input id="f-elevation" type="number" step="0.1" min="0" max="20"></div>
+                    <div><label id="l-elev">Разстояние от пода, м</label><input id="f-elevation" type="number" step="0.1" min="0" max="20"></div>
                 </div>
                 <div class="hl-btns">
                     <button class="btn" id="hl-unlock" type="button">🔓 Отключи</button>
@@ -421,6 +421,7 @@ function select(o) {
         $('g-shape').style.display = o._t === 'shape' ? '' : 'none';
         $('g-equip').style.display = o._t === 'equip' ? '' : 'none';
         COMMON.forEach(f => $('f-' + f).value = o[f] ?? '');
+        setBase(o, floorBase(o)); $('f-elevation').value = Math.round(((o.elevation || 0) - o._base) * 1000) / 1000;
         if (o._t === 'machine') { $('f-no').value = o.no ?? ''; $('f-category').value = o.category; $('f-card').value = o.card_id ?? ''; $('f-model').value = o.model ?? ''; $('f-rotation').value = o.rotation ?? 0; ['acc_length', 'acc_width', 'acc_height'].forEach(k => $('f-' + k).value = o[k] ?? ''); $('f-acc_name').value = o.acc_name ?? ''; $('f-acc_side').value = o.acc_side ?? 'left'; }
         $('hl-dossier').style.display = o._t === 'machine' && o.id ? '' : 'none';
         if (o._t === 'machine' && o.id) $('hl-dossier').href = '/admin/hall/' + o.id + '/dossier';
@@ -584,6 +585,7 @@ async function save(o, lockAfter = false) {
 }
 function applyForm() {            // form fields -> the selected object (not saved yet)
     COMMON.forEach(f => sel[f] = f === 'name' ? $('f-name').value : Number($('f-' + f).value));
+    sel.elevation = Math.round((sel.elevation + (sel._base || 0)) * 1000) / 1000;
     if (sel._t === 'machine') {
         sel.no = $('f-no').value === '' ? null : Number($('f-no').value);
         sel.category = $('f-category').value; sel.card_id = $('f-card').value ? Number($('f-card').value) : null;
@@ -606,13 +608,28 @@ $('hl-save').onclick = () => { if (!sel) return; applyForm(); save(sel, true); }
 // choosing another room under "Принадлежи към" moves the object into that room (centred; left alone if it is already inside it)
 $('f-parent').addEventListener('change', () => {
     const room = sel && !isRoomOrBuilding(sel) && SHAPES.find(r => r.kind === 'room' && r.id === Number($('f-parent').value) && $('f-parent').value !== '');
+    if (sel && !isRoomOrBuilding(sel)) setBase(sel, room ? room.elevation || 0 : $('f-parent').value === '' ? floorBase(sel) : 0);   // the typed height now counts from the new room's floor
     if (!room || inRect(room, [sel.x + sel.width / 2, sel.z + sel.depth / 2])) return;
     const w = Number($('f-width').value) || sel.width, d = Number($('f-depth').value) || sel.depth;
     let x = room.x + Math.max(0, (room.width - w) / 2), z = room.z + Math.max(0, (room.depth - d) / 2);
     $('f-x').value = Math.round(x * 10) / 10; $('f-z').value = Math.round(z * 10) / 10;
-    if (!Number($('f-elevation').value) && room.elevation) $('f-elevation').value = room.elevation;
     msg('Обектът е преместен в помещение „' + (room.label || room.name) + '“.');
 });
+// "distance from the floor" is typed relative to the floor of the object's room (stored absolute, from the ground): base = that room's elevation
+function floorBase(o) {
+    if (o._t === 'shape' && (o.kind === 'room' || o.kind === 'building')) return 0;
+    const rooms = SHAPES.filter(r => r.kind === 'room' && r !== o), p = rooms.find(r => r.id && r.id === o.parent_id);
+    if (p) return p.elevation || 0;
+    if (o.parent_id === 0) return 0;
+    const e = (o.elevation || 0) + 0.001;     // by position: the stacked room whose storey span holds the object's height
+    const top = r => r.elevation + (r.height > 0 ? r.height : 3) * (r.floors || 1);
+    const c = rooms.filter(r => inRect(r, mid(o)) && r.elevation <= e && e < top(r)).sort((a, b) => b.elevation - a.elevation)[0];
+    return c ? c.elevation || 0 : 0;
+}
+function setBase(o, base) {
+    o._base = base;
+    $('l-elev').textContent = base ? 'Разстояние от пода на помещението, м' : 'Разстояние от пода, м';
+}
 const isRoomOrBuilding = o => o._t === 'shape' && (o.kind === 'room' || o.kind === 'building');
 const live = () => { if (sel && sel._unlocked) { applyForm(); draw(); } };
 $('hl-form').addEventListener('input', live); $('hl-form').addEventListener('change', live);

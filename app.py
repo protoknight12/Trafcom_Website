@@ -15320,6 +15320,11 @@ def admin_heatpump_history():
         d = json.loads(r.data_json)
         for k in keys:
             series[k].append([r.ts, d.get(k)])
+    series['Power'] = []                                  # W from the chosen meter's local log (empty when no meter is chosen)
+    host = get_text(_HP_PREFIX + 'meter', '')
+    if host:
+        logs = ShellyReadingLog.query.filter(ShellyReadingLog.host == host, ShellyReadingLog.ts >= int(time.time()) - hours * 3600)             .order_by(ShellyReadingLog.ts).all()
+        series['Power'] = [[g.ts, round(g.total_power)] for g in logs[::max(1, len(logs) // 600)] if g.total_power is not None]
     return jsonify(series)
 
 

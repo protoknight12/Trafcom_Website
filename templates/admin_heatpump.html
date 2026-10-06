@@ -63,7 +63,11 @@
             <option value="168">7 дни</option>
         </select>
     </h3>
-    <canvas id="chart" class="hp-chart"></canvas>
+    <div style="position:relative">
+        <canvas id="chart" class="hp-chart"></canvas>
+        <div id="chartLine" style="position:absolute;top:8px;bottom:20px;width:1px;background:rgba(128,128,128,.7);display:none;pointer-events:none"></div>
+        <div id="chartTip" style="position:absolute;display:none;pointer-events:none;padding:6px 9px;font-size:.8rem;line-height:1.4;white-space:nowrap;background:var(--bg-input);color:var(--text-main);border:1px solid var(--border-color);border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.35)"></div>
+    </div>
     <div class="hp-legend" id="legend"></div>
 
     <h3 class="hp-section">Разход и цена
@@ -269,6 +273,36 @@
         fetch('{{ url_for("admin_heatpump_data") }}').then(function (r) { return r.json(); }).then(render).catch(function () {});
     }
 
+    var chartHover = null;
+    (function () {
+        var cv = document.getElementById('chart'), tip = document.getElementById('chartTip'), line = document.getElementById('chartLine');
+        function hide() { tip.style.display = line.style.display = 'none'; }
+        cv.addEventListener('mouseleave', hide);
+        cv.addEventListener('mousemove', function (e) {
+            var H = chartHover; if (!H) return;
+            var x = e.clientX - cv.getBoundingClientRect().left;
+            var t = H.t0 + (x - H.L) / (H.w - H.L - H.R) * (H.t1 - H.t0);
+            var ref = H.series[H.keys[0]], best = -1, bd = Infinity;
+            ref.forEach(function (p, i) { var d = Math.abs(p[0] - t); if (d < bd) { bd = d; best = i; } });
+            if (best < 0 || x < H.L || x > H.w - H.R) return hide();
+            var ts = ref[best][0], lx = H.L + (ts - H.t0) / Math.max(1, H.t1 - H.t0) * (H.w - H.L - H.R);
+            var html = '<b>' + new Date(ts * 1000).toLocaleString('bg-BG', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'}) + '</b>';
+            H.keys.forEach(function (k) {
+                var p = H.series[k][best], v = p && p[1] != null ? p[1] + ' °C' : '—';
+                html += '<br><span style="color:' + COLORS[k] + '">●</span> ' + NAMES[k] + ': ' + v;
+            });
+            if (H.power.length) {
+                var pb = H.power[0];
+                H.power.forEach(function (p) { if (Math.abs(p[0] - ts) < Math.abs(pb[0] - ts)) pb = p; });
+                html += '<br><span style="color:#b07cff">●</span> Консумация: ' + (pb[1] / 1000).toFixed(2) + ' kW';
+            }
+            tip.innerHTML = html; tip.style.display = line.style.display = 'block';
+            line.style.left = lx + 'px';
+            tip.style.left = (lx + 12 + tip.offsetWidth > H.w ? lx - 12 - tip.offsetWidth : lx + 12) + 'px';
+            tip.style.top = '12px';
+        });
+    })();
+
     function drawChart() {
         var hours = document.getElementById('hoursSel').value;
         fetch('{{ url_for("admin_heatpump_history") }}?hours=' + hours).then(function (r) { return r.json(); }).then(function (series) {
@@ -276,13 +310,15 @@
             var w = cv.clientWidth, h = cv.clientHeight;
             cv.width = w * dpr; cv.height = h * dpr;
             var c = cv.getContext('2d'); c.scale(dpr, dpr); c.clearRect(0, 0, w, h);
+            var power = series.Power || []; delete series.Power;
             var pts = [], keys = Object.keys(series);
             keys.forEach(function (k) { series[k].forEach(function (p) { if (p[1] != null) pts.push(p); }); });
             if (!pts.length) { c.fillStyle = '#888'; c.fillText('Още няма записана история.', 14, 24); return; }
             var t0 = Math.min.apply(null, pts.map(function (p) { return p[0]; })), t1 = Math.max.apply(null, pts.map(function (p) { return p[0]; }));
             var lo = Math.min.apply(null, pts.map(function (p) { return p[1]; })), hi = Math.max.apply(null, pts.map(function (p) { return p[1]; }));
             lo = Math.floor(lo - 1); hi = Math.ceil(hi + 1);
-            var L = 38, B = 20, T = 8, R = 8;
+            var L = 38, B = 20, T = 8, R = power.length ? 44 : 8;
+            chartHover = {series: series, power: power, keys: keys, t0: t0, t1: t1, L: L, R: R, w: w};
             function X(t) { return L + (t - t0) / Math.max(1, t1 - t0) * (w - L - R); }
             function Y(v) { return T + (hi - v) / (hi - lo) * (h - T - B); }
             c.font = '11px sans-serif'; c.fillStyle = '#888'; c.strokeStyle = 'rgba(128,128,128,.25)';
@@ -301,9 +337,19 @@
                 });
                 c.stroke();
             });
+            if (power.length) {                                  // consumption: right axis in kW, drawn dashed
+                var pmax = Math.max(0.5, Math.max.apply(null, power.map(function (p) { return p[1]; })) / 1000);
+                function PY(wv) { return T + (1 - wv / 1000 / pmax) * (h - T - B); }
+                c.fillStyle = '#b07cff'; c.textAlign = 'right';
+                for (var j = 0; j <= 4; j++) c.fillText((pmax * j / 4).toFixed(1) + ' kW', w - 2, PY(pmax * j / 4 * 1000) + 4);
+                c.textAlign = 'left';
+                c.strokeStyle = '#b07cff'; c.lineWidth = 1.4; c.setLineDash([4, 3]); c.beginPath();
+                power.forEach(function (p, i) { if (i) c.lineTo(X(p[0]), PY(p[1])); else c.moveTo(X(p[0]), PY(p[1])); });
+                c.stroke(); c.setLineDash([]);
+            }
             document.getElementById('legend').innerHTML = keys.map(function (k) {
                 return '<span><i style="background:' + COLORS[k] + '"></i>' + NAMES[k] + '</span>';
-            }).join('');
+            }).join('') + (power.length ? '<span><i style="background:#b07cff"></i>Консумация</span>' : '');
         });
     }
 
