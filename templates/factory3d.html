@@ -722,7 +722,8 @@ function setLayers(map) {                 // map: key -> bool (keys left out are
     const ag = document.createElement('div'), al = document.createElement('label'), ar = document.createElement('input');
     ar.type = 'range'; ar.min = 0.05; ar.max = 0.9; ar.step = 0.05; ar.value = AIR_OP; ar.style.cssText = 'width:100%';
     ar.oninput = () => { AIR_OP = Number(ar.value); try { localStorage.setItem('hall.airOpacity', AIR_OP); } catch (e) { } };
-    al.append(" {{ _('Прозрачност на въздуха') }}", ar); ag.append(al); box.append(ag);
+    al.append(" {{ _('Прозрачност на въздуха') }}", ar); ag.append(al);
+    const info = document.createElement('div'); info.id = 'f3-airinfo'; info.className = 'text-small'; ag.append(info); box.append(ag);
     const pre = document.createElement('div'); pre.className = 'presets';
     const none = Object.fromEntries(KEYS.map(k => [k, false]));
     [["{{ _('Всичко') }}", Object.fromEntries(KEYS.map(k => [k, true]))],
@@ -792,7 +793,8 @@ function showLive() {
 }
 if (IS_ADMIN) {
     const poll = () => { if (document.hidden) return;      // also while the plan tab is shown: it colours its convectors and rooms from the same data
-        fetch("{{ url_for('admin_hall_live') }}").then(r => r.json()).then(d => { LIVE = d; window.hallLive = d; dispatchEvent(new Event('halllive')); showLive(); }).catch(() => { }); };
+        fetch("{{ url_for('admin_hall_live') }}").then(r => r.json()).then(d => { LIVE = d; window.hallLive = d;
+            const ai = document.getElementById('f3-airinfo'); if (ai) ai.textContent = (d.room_src || []).map(x => x.room + ' ← ' + x.sensor + ' ' + x.temperature + '° (' + x.via + ')').join('; ') || "{{ _('няма сензор с температура за помещение') }}"; dispatchEvent(new Event('halllive')); showLive(); }).catch(() => { }); };
     setInterval(poll, 5000); poll();
 }
 

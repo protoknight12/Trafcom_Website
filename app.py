@@ -6087,11 +6087,12 @@ def admin_hall_live():
     # smallest room shape its placed marker lies in, else to the hall when it is in the hall / linked to "Хале (общо)"; no sensor = not listed
     shapes = HallShape.query.filter_by(kind='room').all()
     placed = {eq.ref_id: eq for eq in HallEquipment.query.filter_by(kind='sensor')}
-    room_temps = {}
+    room_temps, room_src = {}, []          # room_src: which sensor colours which room and why (shown in the layers panel)
     for sn in TemperatureSensor.query.all():
         t = _mqtt_temp_snapshot(sn).get('temperature')
         if t is None:
             continue
+        via = 'стая'
         eq = placed.get(sn.id)
         mx, mz = (eq.x + eq.width / 2, eq.z + eq.depth / 2) if eq else (None, None)
         key = next((s.id for s in shapes if sn.room_id and s.room_id == sn.room_id), None)
@@ -6099,12 +6100,15 @@ def admin_hall_live():
             inside = [s for s in shapes if s.x <= mx <= s.x + s.width and s.z <= mz <= s.z + s.depth]
             my = (eq.elevation or 0) + (eq.height or 0) / 2        # rooms can stand above each other (office over the kitchen): the marker's height decides
             level = [s for s in inside if (s.elevation or 0) - 0.01 <= my <= (s.elevation or 0) + (s.height if s.height > 0 else 3) * (s.floors or 1)]
+            via = 'позиция'
             pool = level or (inside if len(inside) == 1 else [])
             key = max(pool, key=lambda s: ((s.elevation or 0), -s.width * s.depth)).id if pool else None   # overlapping heights: the room whose floor is highest below the marker
         if key is None and ((sn.room and sn.room.name == HALL_ROOM_NAME) or (eq and 0 <= mx <= HALL_W and 0 <= mz <= HALL_D)):
-            key = 'hall'
+            key, via = 'hall', 'хала'
         if key is not None:
             room_temps.setdefault(key, []).append(t)
+            sh = next((s for s in shapes if s.id == key), None)
+            room_src.append({'sensor': sn.name, 'via': via, 'temperature': t, 'room': sh.as_dict()['label'] if sh else HALL_ROOM_NAME})
     rooms = {k: round(sum(v) / len(v), 1) for k, v in room_temps.items()}
     heatpump = None
     if HallEquipment.query.filter_by(kind='heatpump').first():
@@ -6113,7 +6117,7 @@ def admin_hall_live():
                     'ruecklauf': d.get('Temp. Ruecklauf'), 'aussen': d.get('Temp. Aussen'),
                     'compressor': d.get('Verdichter'), 'fault': d.get('Stoerung'),
                     'mode': _heatpump_live['slow'].get('Betriebsart')}
-    return jsonify({'machines': machines, 'convectors': convectors, 'batteries': batteries, 'sensors': sensors, 'heatpump': heatpump, 'rooms': rooms,
+    return jsonify({'machines': machines, 'convectors': convectors, 'batteries': batteries, 'sensors': sensors, 'heatpump': heatpump, 'rooms': rooms, 'room_src': room_src,
                     'panels': {pid: {'power': round(e['total_power']), 'online': e['online']} for pid, e in by_panel.items()}})
 
 
