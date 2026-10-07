@@ -250,7 +250,7 @@ function draw() {
         t.textContent = 'ПИ ' + p.cadnum + ' · ' + Math.round(p.area) + ' м²'; svg.appendChild(t);
     });
     for (let i = 0; i <= 56; i += 4) svg.appendChild(el('line', { class: 'grid', x1: i, y1: 0, x2: i, y2: 12 }));
-    svg.appendChild(el('rect', { class: 'hall', x: 0, y: 0, width: 56, height: 12 }));
+    const hallRect = el('rect', { class: 'hall', x: 0, y: 0, width: 56, height: 12 }); hallRect.dataset.room = 'hall'; svg.appendChild(hallRect);
     const order = { building: -1, floor: -0.5, room: 0, block: 1, wall: 2, door: 3 };
     [...SHAPES].filter(s => s.kind !== 'building').sort((a, b) => order[a.kind] - order[b.kind]).forEach(s => {   // buildings are not drawn: the biggest object on the map is a room
         const attrs = { class: 's ' + s.kind + FD(s) + (s === sel ? ' sel' : '') + (s._unlocked ? ' unlocked' : ''), x: s.x, y: s.z, width: s.width, height: s.depth };
@@ -296,7 +296,7 @@ function draw() {
 function paintLive() {
     const L = window.hallLive; if (!L || !window.hallConvState) return;
     svg.querySelectorAll('[data-conv]').forEach(r => r.setAttribute('fill', window.HALL_CONV_COLORS[window.hallConvState((L.convectors || {})[r.dataset.conv], L.heatpump)]));
-    svg.querySelectorAll('[data-room]').forEach(r => { const t = (L.rooms || {})[r.dataset.room]; if (t != null) r.setAttribute('fill', 'rgb(' + window.hallTempRgb(t).map(Math.round) + ')'); });
+    svg.querySelectorAll('[data-room]').forEach(r => { const t = (L.rooms || {})[r.dataset.room]; if (t != null) { r.style.fill = 'rgb(' + window.hallTempRgb(t).map(Math.round) + ')'; r.style.fillOpacity = 0.35; } });
 }
 addEventListener('halllive', paintLive);
 

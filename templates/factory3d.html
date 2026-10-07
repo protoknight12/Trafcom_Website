@@ -329,7 +329,7 @@ SHAPES.forEach(s => {
 // room air: a translucent volume per marked room, coloured by its room sensor's temperature (no sensor = stays invisible)
 const ROOMAIR = {};
 tgt = layer('roomair');
-SHAPES.filter(s => s.kind === 'room').forEach(s => {
+[{ id: 'hall', x: 0, z: 0, width: W, depth: D, height: H, floors: 1 }, ...SHAPES.filter(s => s.kind === 'room')].forEach(s => {     // the main hall is not a marked room
     const fh = s.height > 0 ? s.height : 3, y0 = s.elevation || 0;
     const m = box(s.x, s.x + s.width, s.z, s.z + s.depth, y0 + 0.06, y0 + (s.floors || 1) * fh, new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0, depthWrite: false }));
     m.visible = false; m.userData.noPick = true; ROOMAIR[s.id] = m;

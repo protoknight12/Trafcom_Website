@@ -6083,13 +6083,26 @@ def admin_hall_live():
         if sn:
             snap = _mqtt_temp_snapshot(sn)
             sensors[sn.id] = {'temperature': snap.get('temperature'), 'humidity': snap.get('humidity'), 'online': snap.get('online')}
-    room_temps = {}              # room id -> temperatures of its online sensors; a room without a sensor stays out (the map leaves it uncoloured)
-    for sn in TemperatureSensor.query.filter(TemperatureSensor.room_id.isnot(None)):
+    # air temperature per marked room (shape id) or 'hall' (the main hall): a sensor belongs to the room shape linked to its Room, else to the
+    # smallest room shape its placed marker lies in, else to the hall when it is in the hall / linked to "Хале (общо)"; no sensor = not listed
+    shapes = HallShape.query.filter_by(kind='room').all()
+    placed = {eq.ref_id: eq for eq in HallEquipment.query.filter_by(kind='sensor')}
+    room_temps = {}
+    for sn in TemperatureSensor.query.all():
         t = _mqtt_temp_snapshot(sn).get('temperature')
-        if t is not None:
-            room_temps.setdefault(sn.room_id, []).append(t)
-    rooms = {s.id: round(sum(room_temps[s.room_id]) / len(room_temps[s.room_id]), 1)
-             for s in HallShape.query.filter_by(kind='room') if s.room_id in room_temps}
+        if t is None:
+            continue
+        eq = placed.get(sn.id)
+        mx, mz = (eq.x + eq.width / 2, eq.z + eq.depth / 2) if eq else (None, None)
+        key = next((s.id for s in shapes if sn.room_id and s.room_id == sn.room_id), None)
+        if key is None and eq:
+            inside = [s for s in shapes if s.x <= mx <= s.x + s.width and s.z <= mz <= s.z + s.depth]
+            key = min(inside, key=lambda s: s.width * s.depth).id if inside else None
+        if key is None and ((sn.room and sn.room.name == HALL_ROOM_NAME) or (eq and 0 <= mx <= HALL_W and 0 <= mz <= HALL_D)):
+            key = 'hall'
+        if key is not None:
+            room_temps.setdefault(key, []).append(t)
+    rooms = {k: round(sum(v) / len(v), 1) for k, v in room_temps.items()}
     heatpump = None
     if HallEquipment.query.filter_by(kind='heatpump').first():
         d = _heatpump_live['data']

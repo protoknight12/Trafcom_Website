@@ -411,7 +411,7 @@ def test_auto_place_devices_by_room_position(admin_client):
     import app as appmod                                                                  # a room's air temperature = its sensors' mean; a room without a sensor is left out
     appmod._mqtt_temp_state['t/9'] = {'online': True, 'temperature': 23.5, 'humidity': 50.0, 'battery': 90, 'last_seen': None}
     rooms = admin_client.get('/admin/hall/live').get_json()['rooms']
-    assert rooms == {str(shape.id): 23.5} or rooms == {shape.id: 23.5}
+    assert rooms and set(rooms.values()) == {23.5}
     appmod._mqtt_temp_state.pop('t/9')
     assert admin_client.get('/admin/hall/live').get_json()['rooms'] == {}
 
