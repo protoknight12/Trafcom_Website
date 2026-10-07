@@ -6099,7 +6099,8 @@ def admin_hall_live():
             inside = [s for s in shapes if s.x <= mx <= s.x + s.width and s.z <= mz <= s.z + s.depth]
             my = (eq.elevation or 0) + (eq.height or 0) / 2        # rooms can stand above each other (office over the kitchen): the marker's height decides
             level = [s for s in inside if (s.elevation or 0) - 0.01 <= my <= (s.elevation or 0) + (s.height if s.height > 0 else 3) * (s.floors or 1)]
-            key = min(level or inside if len(inside) == 1 else level, key=lambda s: s.width * s.depth).id if (level or len(inside) == 1) else None
+            pool = level or (inside if len(inside) == 1 else [])
+            key = max(pool, key=lambda s: ((s.elevation or 0), -s.width * s.depth)).id if pool else None   # overlapping heights: the room whose floor is highest below the marker
         if key is None and ((sn.room and sn.room.name == HALL_ROOM_NAME) or (eq and 0 <= mx <= HALL_W and 0 <= mz <= HALL_D)):
             key = 'hall'
         if key is not None:

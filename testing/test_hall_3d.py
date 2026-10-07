@@ -419,7 +419,7 @@ def test_auto_place_devices_by_room_position(admin_client):
     assert set(admin_client.get('/admin/hall/live').get_json()['rooms'].values()) == {19.0}
     # an office standing above the kitchen (same footprint): a sensor with no room link belongs to the room at its own height
     from app import HallShape
-    kit = HallShape(kind='room', name='Кухня', x=100, z=100, width=5, depth=5, height=2.5, elevation=0, floors=1)
+    kit = HallShape(kind='room', name='Кухня', x=100, z=100, width=4, depth=4, height=6, elevation=0, floors=1)
     off = HallShape(kind='room', name='Офис', x=100, z=100, width=5, depth=5, height=2.5, elevation=2.5, floors=1)
     sn = TemperatureSensor.query.filter_by(mqtt_topic='t/9').one()
     sn.room_id = None
