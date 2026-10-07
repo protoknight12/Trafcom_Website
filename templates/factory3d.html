@@ -332,7 +332,8 @@ tgt = layer('roomair');
 [{ id: 'hall', x: 0, z: 0, width: W, depth: D, height: H, floors: 1 }, ...SHAPES.filter(s => s.kind === 'room')].forEach(s => {     // the main hall is not a marked room
     const fh = s.height > 0 ? s.height : 3, y0 = s.elevation || 0;
     const m = box(s.x, s.x + s.width, s.z, s.z + s.depth, y0 + 0.06, y0 + (s.floors || 1) * fh, new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0, depthWrite: false }));
-    m.visible = false; m.userData.noPick = true; ROOMAIR[s.id] = m;
+    const fl = box(s.x, s.x + s.width, s.z, s.z + s.depth, y0 + 0.02, y0 + 0.08, new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0, depthWrite: false }));   // floor, more opaque: visible from above
+    m.visible = fl.visible = false; m.userData.floor = fl; ROOMAIR[s.id] = m;
 });
 // temperature -> colour gradient (shared with the plan): cold blue, comfortable green, warm yellow, hot red
 const TEMP_STOPS = [[14, [59, 130, 246]], [19, [34, 211, 238]], [22, [34, 197, 94]], [25, [250, 204, 21]], [30, [239, 68, 68]]];
@@ -984,9 +985,10 @@ setMode(location.hash.slice(1) || '{{ initial }}');
     });
     CONVS.forEach(({ mat, e }) => mat.color.set(window.HALL_CONV_COLORS[window.hallConvState((LIVE.convectors || {})[e.ref_id], LIVE.heatpump)]));
     Object.entries(ROOMAIR).forEach(([id, m]) => {      // the air fades toward the sensor's colour; no reading = fades out
-        const t = (LIVE.rooms || {})[id], want = t == null ? 0 : 0.16;
-        if (t != null) { const [r, g, b] = window.hallTempRgb(t); m.material.color.lerp(new THREE.Color(r / 255, g / 255, b / 255), 0.1); }
-        m.material.opacity += (want - m.material.opacity) * 0.1; m.visible = m.material.opacity > 0.005;
+        const t = (LIVE.rooms || {})[id], want = t == null ? 0 : 0.28, fl = m.userData.floor;
+        if (t != null) { const [r, g, b] = window.hallTempRgb(t); m.material.color.lerp(new THREE.Color(r / 255, g / 255, b / 255), 0.1); fl.material.color.copy(m.material.color); }
+        m.material.opacity += (want - m.material.opacity) * 0.1; fl.material.opacity = m.material.opacity * 2;
+        m.visible = fl.visible = m.material.opacity > 0.005;
     });
     IOT.forEach(({ s, m }) => { const e = (LIVE.machines || {})[m.id]; s.material.color.setHex(e ? (e.online ? 0x22d3ee : 0xef4444) : 0x64748b); s.scale.setScalar(1 + 0.25 * Math.sin(now * 4)); });
     controls.update();
