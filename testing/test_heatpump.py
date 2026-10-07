@@ -161,6 +161,14 @@ def test_cost_split_by_pump_state():
     assert gap['unknown']['kwh'] == 5 and sum(v['kwh'] for v in gap.values()) == 5
 
 
+def test_energy_series_falls_back_to_power():
+    from types import SimpleNamespace as R
+    flat = [R(ts=60 * i, total_energy=0.0, total_power=6000.0) for i in range(11)]   # 10 min at 6 kW
+    assert round(appmod._heatpump_energy_series(flat)[-1][1], 3) == 1.0
+    moving = [R(ts=60 * i, total_energy=5.0 + i, total_power=1.0) for i in range(3)]
+    assert appmod._heatpump_energy_series(moving)[-1][1] == 7.0
+
+
 def test_cost_settings_route(client):
     _login(client, 'hp_admin')
     assert client.get('/admin/heatpump/cost').get_json() == {'configured': False}

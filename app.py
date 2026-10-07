@@ -15232,6 +15232,24 @@ def _heatpump_cost(energy_rows, pump_rows, cfg):
     return out
 
 
+def _heatpump_energy_series(logs):
+    """[(ts, cumulative_kwh)] from meter log rows. Uses the meter's own energy counter when it moves; a meter
+    whose counter stays flat (Gen2 over MQTT never reports energy) gets it integrated from the logged power instead.
+    ponytail: power is sampled once a minute, so short spikes are approximated; holes > HEATPUMP_COST_GAP add nothing."""
+    counter = [(r.ts, r.total_energy) for r in logs if r.total_energy is not None]
+    if counter and max(e for _, e in counter) - min(e for _, e in counter) > 0.01:
+        return counter
+    out, cum, prev = [], 0.0, None
+    for r in logs:
+        if r.total_power is None:
+            continue
+        if prev and r.ts - prev[0] <= HEATPUMP_COST_GAP:
+            cum += (prev[1] + r.total_power) / 2 * (r.ts - prev[0]) / 3_600_000
+        out.append((r.ts, cum))
+        prev = (r.ts, r.total_power)
+    return out
+
+
 @app.route('/admin/heatpump/cost')
 @limiter.exempt
 @role_required('admin')
@@ -15244,9 +15262,9 @@ def admin_heatpump_cost():
              'month': now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
              }.get(request.args.get('period'), now.replace(hour=0, minute=0, second=0, microsecond=0))
     since = int(start.timestamp())
-    energy = [(r.ts, r.total_energy) for r in ShellyReadingLog.query
-              .filter(ShellyReadingLog.host == cfg['meter'], ShellyReadingLog.ts >= since)
-              .order_by(ShellyReadingLog.ts) if r.total_energy is not None]
+    logs = ShellyReadingLog.query.filter(ShellyReadingLog.host == cfg['meter'], ShellyReadingLog.ts >= since) \
+        .order_by(ShellyReadingLog.ts).all()
+    energy = _heatpump_energy_series(logs)
     pump = [(r.ts, json.loads(r.data_json)) for r in HeatPumpReading.query
             .filter(HeatPumpReading.ts >= since - HEATPUMP_COST_GAP).order_by(HeatPumpReading.ts)]
     res = _heatpump_cost(energy, pump, cfg)
