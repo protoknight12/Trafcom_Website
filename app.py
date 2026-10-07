@@ -2322,7 +2322,7 @@ class Convector(db.Model):
     name = db.Column(db.String(150), nullable=False)
     connection_type = db.Column(db.String(10), nullable=False, default='ip')
     host = db.Column(db.String(100), nullable=True)
-    mqtt_topic = db.Column(db.String(150), nullable=True, unique=True)
+    mqtt_topic = db.Column(db.String(150), nullable=True)   # not unique: one Shelly with 2 outputs = 2 convectors, same topic, different relay_channel
     device_type = db.Column(db.String(20), nullable=False, default='shelly_gen1')
     relay_channel = db.Column(db.Integer, nullable=False, default=0)
     room_id = db.Column(db.Integer, db.ForeignKey('room.id'), nullable=True)
@@ -18303,14 +18303,14 @@ def admin_add_convector():
     if connection_type == 'mqtt' and not mqtt_topic:
         flash('Моля въведете MQTT тема за връзка тип "MQTT".', 'danger')
         return redirect(url_for('admin_convectors'))
-    if mqtt_topic and Convector.query.filter_by(mqtt_topic=mqtt_topic).first():
-        flash(f'Вече има конвектор с MQTT тема "{mqtt_topic}".', 'danger')
-        return redirect(url_for('admin_convectors'))
     device_type = request.form.get('device_type', '')
     if device_type not in CONVECTOR_TYPES:
         device_type = 'shelly_gen1'
     channel_raw = request.form.get('relay_channel', '0')
     relay_channel = int(channel_raw) if channel_raw.isdigit() else 0
+    if mqtt_topic and Convector.query.filter_by(mqtt_topic=mqtt_topic, relay_channel=relay_channel).first():
+        flash(f'Вече има конвектор с MQTT тема "{mqtt_topic}" и реле №{relay_channel}.', 'danger')
+        return redirect(url_for('admin_convectors'))
     room_id_raw = request.form.get('room_id', '')
     room_id = int(room_id_raw) if room_id_raw.isdigit() and db.session.get(Room, int(room_id_raw)) else None
     location_label = request.form.get('location_label', '').strip() or None
@@ -18374,14 +18374,15 @@ def admin_update_convector(conv_id):
     if connection_type == 'mqtt' and not mqtt_topic:
         flash('Моля въведете MQTT тема за връзка тип "MQTT".', 'danger')
         return redirect(url_for('admin_convectors'))
-    if mqtt_topic and Convector.query.filter(Convector.mqtt_topic == mqtt_topic, Convector.id != conv.id).first():
-        flash(f'Вече има друг конвектор с MQTT тема "{mqtt_topic}".', 'danger')
-        return redirect(url_for('admin_convectors'))
     device_type = request.form.get('device_type', '')
     if device_type not in CONVECTOR_TYPES:
         device_type = conv.device_type
     channel_raw = request.form.get('relay_channel', '0')
     relay_channel = int(channel_raw) if channel_raw.isdigit() else conv.relay_channel
+    if mqtt_topic and Convector.query.filter(Convector.mqtt_topic == mqtt_topic, Convector.relay_channel == relay_channel,
+                                             Convector.id != conv.id).first():
+        flash(f'Вече има друг конвектор с MQTT тема "{mqtt_topic}" и реле №{relay_channel}.', 'danger')
+        return redirect(url_for('admin_convectors'))
     room_id_raw = request.form.get('room_id', '')
     room_id = int(room_id_raw) if room_id_raw.isdigit() and db.session.get(Room, int(room_id_raw)) else None
     conv.name = name
