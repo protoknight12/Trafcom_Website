@@ -413,7 +413,10 @@ def test_auto_place_devices_by_room_position(admin_client):
     rooms = admin_client.get('/admin/hall/live').get_json()['rooms']
     assert rooms and set(rooms.values()) == {23.5}
     appmod._mqtt_temp_state.pop('t/9')
-    assert admin_client.get('/admin/hall/live').get_json()['rooms'] == {}
+    from app import TemperatureReading                                                    # cache empty (restart): the last stored reading is shown
+    db.session.add(TemperatureReading(sensor_id=TemperatureSensor.query.filter_by(mqtt_topic='t/9').one().id, ts=1, temperature=19.0))
+    db.session.commit()
+    assert set(admin_client.get('/admin/hall/live').get_json()['rooms'].values()) == {19.0}
 
 
 def test_sun_endpoint_and_solar_strings_admin_only(admin_client):

@@ -14664,6 +14664,19 @@ def _apply_gen2_temp_leaf(state, leaf, payload):
 
 
 def _mqtt_temp_snapshot(sensor):
+    """Live state from the MQTT cache; a battery sensor reports rarely and the cache is empty after a restart, so a missing temperature /
+    humidity / battery comes from its last stored TemperatureReading (last_seen then stays None)."""
+    snap = _mqtt_temp_snapshot_live(sensor)
+    if snap['temperature'] is None or snap['humidity'] is None or snap['battery'] is None:
+        for col in ('temperature', 'humidity', 'battery'):
+            if snap[col] is None:
+                row = TemperatureReading.query.filter(TemperatureReading.sensor_id == sensor.id, getattr(TemperatureReading, col).isnot(None))                     .order_by(TemperatureReading.ts.desc()).first()
+                if row:
+                    snap[col] = getattr(row, col)
+    return snap
+
+
+def _mqtt_temp_snapshot_live(sensor):
     """Render-ready dict for one TemperatureSensor - reads as offline (not
     raising) if the broker hasn't delivered anything yet, same tolerance as
     _mqtt_snapshot().
