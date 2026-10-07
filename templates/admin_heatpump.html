@@ -50,6 +50,7 @@
             <h2 style="margin-bottom: 4px;">Термопомпа Heliotherm</h2>
             <p class="section-subtitle" style="margin: 0;">Данни на живо през RS-232 → Ethernet. Само отчитане. <span id="lastUpdate" class="text-muted"></span></p>
         </div>
+        <a href="{{ url_for('admin_device_log', kind='heatpump') }}" data-frame="stay" class="btn-secondary" style="padding: 4px 10px; font-size: 0.85rem; text-decoration: none;">Виж лог</a>
         <span id="hpState" class="hp-state state-offline">Няма връзка</span>
     </div>
     <p id="hpError" class="text-muted text-small"></p>

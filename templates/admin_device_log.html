@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Лог - {{ title }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .log-wrap { overflow-x: auto; max-height: 70vh; border: 1px solid var(--border-color); border-radius: 6px; }
+        .log-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+        .log-table th, .log-table td { padding: 5px 10px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--border-color); }
+        .log-table th { position: sticky; top: 0; background: var(--bg-secondary, #1f2937); }
+        .log-limits a { margin-right: 8px; }
+        .log-limits a.on { font-weight: 700; text-decoration: none; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+<main class="admin-container">
+    <h3>Лог: {{ title }}</h3>
+    <p class="log-limits text-small">Последни:
+        {% for n in limits %}<a href="{{ url_for('admin_device_log', kind=kind, id=ident, limit=n) }}" class="{{ 'on' if n == limit else '' }}">{{ n }}</a>{% endfor %}
+        записа, най-новите отгоре.</p>
+    {% for s in sections %}
+    <h4 style="margin: 14px 0 4px;">{{ s.title }} <span class="text-muted text-small">· показани {{ s.rows|length }} от {{ s.total }}</span></h4>
+    {% if s.rows %}
+    <div class="log-wrap">
+        <table class="log-table">
+            <thead><tr>{% for h in s.head %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+            <tbody>{% for r in s.rows %}<tr>{% for c in r %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+        </table>
+    </div>
+    {% else %}<p class="text-muted">Още няма записи за това устройство.</p>{% endif %}
+    {% else %}
+    <p class="text-muted">За това устройство не се записват данни.</p>
+    {% endfor %}
+</main>
+</body>
+</html>

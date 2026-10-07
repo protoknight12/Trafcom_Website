@@ -15342,6 +15342,98 @@ def admin_heatpump_cost():
                    since=since, until=until, first_data=pump[0][0] if pump else None)
 
 
+# ----- "Виж лог": the recorded rows of any device / machine, in a frame -----
+
+DEVICE_LOG_LIMITS = (50, 200, 1000, 5000)
+
+
+def _log_time(ts):
+    return datetime.fromtimestamp(ts).strftime('%d.%m.%Y %H:%M:%S')
+
+
+def _num(v, nd=0, unit=''):
+    return '—' if v is None else f'{round(v, nd) if nd else round(v)}{unit}'
+
+
+def _shelly_log_section(title, key, limit):
+    q = ShellyReadingLog.query.filter_by(host=key)
+    rows = []
+    for r in q.order_by(ShellyReadingLog.ts.desc()).limit(limit):
+        try:
+            phases = ' · '.join(f"{(c.get('label') or '')[-1:]} {_num(c.get('act_power'), 0, ' W')}" for c in json.loads(r.channels_json or '[]'))
+        except ValueError:
+            phases = ''
+        rows.append([_log_time(r.ts), _num(r.total_power, 0, ' W'), _num(r.total_energy, 2, ' kWh'), phases or '—'])
+    return {'title': f'{title} · {key}', 'head': ['Време', 'Мощност', 'Енергия (брояч)', 'По фази'], 'rows': rows, 'total': q.count()}
+
+
+def _solis_log_section(dev, limit, grid=False):
+    q = SolisReadingLog.query.filter_by(device_id=dev.id)
+    rows = []
+    for r in q.order_by(SolisReadingLog.ts.desc()).limit(limit):
+        if grid:                                  # the virtual grid meter has no log of its own: it is the CT part of its inverter's snapshot
+            m = json.loads(r.snapshot_json).get('meter_3p') or {}
+            rows.append([_log_time(r.ts), _num(m.get('active_power'), 0, ' W'), m.get('direction') or '—',
+                         ' / '.join(_num(m.get(f'voltage_{p}'), 0, ' V') for p in 'abc'),
+                         f"{_num(m.get('energy_from_grid_kwh'), 1)} / {_num(m.get('energy_to_grid_kwh'), 1)} kWh"])
+        else:
+            rows.append([_log_time(r.ts), _num(r.ac_power, 0, ' W'), _num(r.pv_power, 0, ' W'), _num(r.battery_soc, 0, ' %'),
+                         _num(r.battery_power, 0, ' W'), _num(r.temperature, 1, ' °C'), str(r.battery_fault_bits or 0)])
+    head = ['Време', 'Мощност', 'Посока', 'Напрежение A / B / C', 'Внос / износ (брояч)'] if grid else \
+           ['Време', 'AC мощност', 'PV мощност', 'Батерия', 'Батерия мощност', 'Температура', 'Аварии (битове)']
+    return {'title': f'{dev.name} · {dev.host}:{dev.port}', 'head': head, 'rows': rows, 'total': q.count()}
+
+
+def _heatpump_log_section(limit):
+    q = HeatPumpReading.query
+    keys = ('Temp. Aussen', 'Temp. Vorlauf', 'Temp. Ruecklauf', 'Verdichter', 'Betriebsart')
+    rows = []
+    for r in q.order_by(HeatPumpReading.ts.desc()).limit(limit):
+        d = json.loads(r.data_json)
+        rows.append([_log_time(r.ts)] + ['—' if d.get(k) is None else ('да' if d[k] is True else 'не' if d[k] is False else str(d[k])) for k in keys])
+    return {'title': 'Термопомпа Heliotherm', 'head': ['Време', 'Навън °C', 'Подаване °C', 'Връщане °C', 'Компресор', 'Режим'], 'rows': rows, 'total': q.count()}
+
+
+def _modbus_log_sections(d, limit):
+    if d.device_type == 'solis_s6':
+        return [_solis_log_section(d, limit)]
+    if d.device_type == 'solis_grid_meter':
+        return [_solis_log_section(d.source_device, limit, grid=True)] if d.source_device else []
+    return [_shelly_log_section(d.name, f'{d.host}:{d.port}', limit)]
+
+
+@app.route('/admin/device-log')
+@role_required('admin')
+def admin_device_log():
+    """Last ?limit= rows (50 / 200 / 1000 / 5000) the poller wrote for one device: ?kind=shelly|modbus|heatpump|machine (a machine = every meter linked to it) &id=."""
+    kind, ident = request.args.get('kind', ''), request.args.get('id', type=int)
+    limit = request.args.get('limit', 50, type=int)
+    limit = limit if limit in DEVICE_LOG_LIMITS else 50
+    sections = []
+
+    def shelly(d):
+        return [_shelly_log_section(d.name, k, limit) for k in dict.fromkeys(k for k in (d.mqtt_topic, d.host) if k)]     # a meter moved IP <-> MQTT has rows under both keys
+    if kind == 'shelly':
+        d = ShellyDevice.query.get_or_404(ident)
+        title, sections = d.name, shelly(d)
+    elif kind == 'modbus':
+        d = ModbusDevice.query.get_or_404(ident)
+        title, sections = d.name, _modbus_log_sections(d, limit)
+    elif kind == 'machine':
+        m = Machine.query.get_or_404(ident)
+        title = m.name
+        for d in m.shelly_devices:
+            sections += shelly(d)
+        for d in m.modbus_devices:
+            sections += _modbus_log_sections(d, limit)
+    elif kind == 'heatpump':
+        title, sections = 'Термопомпа', [_heatpump_log_section(limit)]
+    else:
+        abort(404)
+    return render_template('admin_device_log.html', title=title, sections=sections, limit=limit, limits=DEVICE_LOG_LIMITS,
+                           kind=kind, ident=ident)
+
+
 @app.route('/admin/heatpump/cost-settings', methods=['POST'])
 @role_required('admin')
 def admin_heatpump_cost_settings():

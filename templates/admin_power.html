@@ -287,6 +287,7 @@
         </script>
 
         {% macro modbus_edit_button(d) -%}
+        <a href="{{ url_for('admin_device_log', kind='modbus', id=d.id) }}" data-frame="stay" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Виж лог</a>
         <button type="button" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;" data-dialog="modbusDeviceDialog"
                 data-action="{{ url_for('admin_update_modbus_device', device_id=d.id) }}"
                 data-title="Редакция: {{ d.name }}"
@@ -357,6 +358,7 @@
                                 data-title="Редакция: {{ d.name }}"
                                 data-values='{{ {"name": d.name, "connection_type": d.connection_type, "host": d.host, "mqtt_topic": d.mqtt_topic,
                                     "panel_id": d.panel_id or "", "machine_ids": d.machines|map(attribute="id")|list}|tojson|forceescape }}'>Редактирай</button>
+                        <a href="{{ url_for('admin_device_log', kind='shelly', id=d.id) }}" data-frame="stay" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Виж лог</a>
                         {{ delete_button(url_for('admin_power_delete_device', device_id=d.id), d.name, 'Премахване на машина') }}
                     </td>
                 </tr>

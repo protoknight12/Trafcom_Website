@@ -78,6 +78,7 @@
                 <td>{% if hm %}<a class="btn" data-frame="stay" href="{{ url_for('admin_hall_dossier', machine_id=hm.id) }}">📁 Досие</a>
                     {% else %}<form method="post" action="{{ url_for('admin_machine_create_dossier', machine_id=mc.id) }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn" type="submit">Създай досие</button></form>{% endif %}
+                    {% if mc and (mc.shelly_devices or mc.modbus_devices) %}<a class="btn" data-frame="stay" href="{{ url_for('admin_device_log', kind='machine', id=mc.id) }}">📈 Лог</a>{% endif %}
                     <button class="btn md-merge" type="button" title="Слей тази машина с друга">⇄ Слей</button></td>
             </tr>
         {% endfor %}
