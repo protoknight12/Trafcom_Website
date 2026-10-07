@@ -2751,13 +2751,13 @@ class Camera(db.Model):
 
     nvr = db.relationship('CameraNvr', backref='cameras')
 
-    def rtsp_url(self):
-        """Source for go2rtc (login inside it): rtsp:// of the NVR sub stream, onvif:// (go2rtc asks the camera for its stream), or the camera's own rtsp://."""
+    def rtsp_url(self, main=False):
+        """Source for go2rtc (login inside it): rtsp:// of the NVR sub stream (main=True: the main stream, full resolution), onvif:// (go2rtc asks the camera for its stream), or the camera's own rtsp://."""
         q = lambda v: urllib.parse.quote(v or '', safe='')
         if (self.conn_type or 'nvr') == 'nvr':
             if self.nvr and self.channel:
                 n = self.nvr
-                return f"rtsp://{q(n.username)}:{q(_decrypt_secret(n.password_encrypted))}@{n.host}:554/Streaming/Channels/{self.channel}02"
+                return f"rtsp://{q(n.username)}:{q(_decrypt_secret(n.password_encrypted))}@{n.host}:554/Streaming/Channels/{self.channel}{'01' if main else '02'}"
             return None
         if not self.host:
             return None
@@ -17414,6 +17414,17 @@ def _draw_detections(jpeg, items):
     return out.getvalue()
 
 
+def _detection_frame(cam):
+    """The biggest frame the camera gives: its own JPEG snapshot (main-stream resolution, no decoding here), else a frame of the main
+    stream through go2rtc (the live view keeps the light sub stream)."""
+    if cam.snapshot_target():
+        try:
+            return _camera_snapshot_jpeg(cam, timeout=8)
+        except Exception:
+            pass
+    return urllib.request.urlopen(f'{GO2RTC_URL}/api/frame.jpeg?src={_go2rtc_register(cam, main=True)}', timeout=8).read()
+
+
 def _detection_tick(memo):
     """One pass over the cameras with detect on: frame -> detections -> DetectionState; a label that appears (absent for 20 s) or stays
     5 minutes gets a journal row with the annotated frame. memo = per-process {(camera, label): (last_seen, last_logged)}."""
@@ -17423,8 +17434,7 @@ def _detection_tick(memo):
     for cam in Camera.query.filter_by(detect=True).all():
         err, items = None, []
         try:
-            name = _go2rtc_register(cam)
-            jpeg = urllib.request.urlopen(f'{GO2RTC_URL}/api/frame.jpeg?src={name}', timeout=8).read()
+            jpeg = _detection_frame(cam)
             items = detection.detect(jpeg, DETECT_MIN_SCORE)
             size = Image.open(io.BytesIO(jpeg)).size
         except Exception as exc:
@@ -17958,13 +17968,13 @@ def admin_delete_camera(cam_id):
 GO2RTC_URL = os.environ.get('GO2RTC_URL', 'http://127.0.0.1:1984')
 
 
-def _go2rtc_register(cam):
-    """(Re)registers the camera as stream cam<id> in the local go2rtc (login stays inside this app; go2rtc only listens on localhost).
+def _go2rtc_register(cam, main=False):
+    """(Re)registers the camera as stream cam<id> (cam<id>main for the full-resolution main stream) in the local go2rtc (login stays inside this app; go2rtc only listens on localhost).
     Second source = the same stream transcoded to MJPEG (needs ffmpeg), which is what the browser <img> plays."""
-    rtsp = cam.rtsp_url()
+    rtsp = cam.rtsp_url(main)
     if not rtsp:
         raise ValueError('Камерата няма нито NVR канал, нито собствен IP.')
-    name = f'cam{cam.id}'
+    name = f'cam{cam.id}main' if main else f'cam{cam.id}'
     q = urllib.parse.urlencode([('name', name), ('src', rtsp), ('src', f'ffmpeg:{name}#video=mjpeg')])
     try:
         urllib.request.urlopen(urllib.request.Request(f'{GO2RTC_URL}/api/streams?{q}', method='PUT'), timeout=4).read()

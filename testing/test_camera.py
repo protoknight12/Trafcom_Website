@@ -5,6 +5,7 @@ n = CameraNvr(name='n', host='10.0.0.5', port=8080)
 nvr = Camera(name='a', nvr=n, channel=3)                       # nvr is the default connection
 assert nvr.snapshot_target()[0] == 'http://10.0.0.5:8080/ISAPI/Streaming/channels/301/picture'
 assert nvr.rtsp_url().endswith('@10.0.0.5:554/Streaming/Channels/302')
+assert nvr.rtsp_url(main=True).endswith('@10.0.0.5:554/Streaming/Channels/301')      # detection uses the main stream
 assert Camera(name='c', conn_type='nvr').snapshot_target() is None
 onvif = Camera(name='o', conn_type='onvif', host='1.2.3.4', username='u', port=8899)
 assert onvif.rtsp_url() == 'onvif://u:@1.2.3.4:8899' and onvif.snapshot_target() is None
