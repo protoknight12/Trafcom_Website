@@ -3,3 +3,6 @@
 # app.py) - right at that edge, so gunicorn kills the worker mid-request and
 # the client gets gunicorn's own HTML error page instead of the route's JSON.
 timeout = 120
+
+# gunicorn 25+ opens a control socket in $HOME/.gunicorn; www-data has HOME=/var/www (not writable) -> "Control server error: Permission denied". Not used here.
+control_socket_disable = True
