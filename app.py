@@ -15172,6 +15172,7 @@ def start_heatpump_poller():
 
 _HP_PREFIX = 'settings.heatpump_'
 HEATPUMP_COOLING_MODE = 2  # Betriebsart value for "Kühlen"
+HEATPUMP_MAX_KW = 30       # no heat pump draws more: a larger meter-counter step is a glitch
 HEATPUMP_COST_GAP = 300    # seconds: longer holes in either log are skipped, not interpolated
 
 
@@ -15233,18 +15234,25 @@ def _heatpump_cost(energy_rows, pump_rows, cfg):
 def _heatpump_energy_series(logs):
     """[(ts, cumulative_kwh)] from meter log rows. Uses the meter's own energy counter when it moves; a meter
     whose counter stays flat (Gen2 over MQTT never reports energy) gets it integrated from the logged power instead.
+    A counter step above HEATPUMP_MAX_KW for its interval (rows logged in different units, a glitch) is replaced by the
+    logged power for that interval.
     ponytail: power is sampled once a minute, so short spikes are approximated; holes > HEATPUMP_COST_GAP add nothing."""
     counter = [(r.ts, r.total_energy) for r in logs if r.total_energy is not None]
-    if counter and max(e for _, e in counter) - min(e for _, e in counter) > 0.01:
-        return counter
+    use_counter = bool(counter) and max(e for _, e in counter) - min(e for _, e in counter) > 0.01
     out, cum, prev = [], 0.0, None
     for r in logs:
-        if r.total_power is None:
+        if r.total_power is None and not use_counter:
             continue
-        if prev and r.ts - prev[0] <= HEATPUMP_COST_GAP:
-            cum += (prev[1] + r.total_power) / 2 * (r.ts - prev[0]) / 3_600_000
+        if prev:
+            dt = r.ts - prev.ts
+            by_power = (((prev.total_power or 0) + (r.total_power or 0)) / 2 * dt / 3_600_000) if dt <= HEATPUMP_COST_GAP else 0.0
+            step = (r.total_energy - prev.total_energy) if use_counter and r.total_energy is not None and prev.total_energy is not None else None
+            if step is None or step > HEATPUMP_MAX_KW * dt / 3600:
+                cum += by_power
+            elif step >= 0:  # a negative step is a counter reset: adds nothing
+                cum += step
         out.append((r.ts, cum))
-        prev = (r.ts, r.total_power)
+        prev = r
     return out
 
 

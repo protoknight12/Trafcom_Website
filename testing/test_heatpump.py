@@ -165,8 +165,11 @@ def test_energy_series_falls_back_to_power():
     from types import SimpleNamespace as R
     flat = [R(ts=60 * i, total_energy=0.0, total_power=6000.0) for i in range(11)]   # 10 min at 6 kW
     assert round(appmod._heatpump_energy_series(flat)[-1][1], 3) == 1.0
-    moving = [R(ts=60 * i, total_energy=5.0 + i, total_power=1.0) for i in range(3)]
-    assert appmod._heatpump_energy_series(moving)[-1][1] == 7.0
+    moving = [R(ts=60 * i, total_energy=5.0 + 0.1 * i, total_power=1.0) for i in range(3)]
+    assert abs(appmod._heatpump_energy_series(moving)[-1][1] - 0.2) < 1e-9
+    # one impossible counter jump (rows in different units) is replaced by the logged power, not counted
+    jump = [R(ts=60 * i, total_energy=(19000.0 if i >= 5 else 300.0 + 0.1 * i), total_power=6000.0) for i in range(11)]
+    assert round(appmod._heatpump_energy_series(jump)[-1][1], 3) == 0.5   # 4 real steps of 0.1 + the jump minute at 6 kW
 
 
 def test_cost_settings_route(client):
