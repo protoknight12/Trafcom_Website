@@ -296,7 +296,8 @@ function draw() {
 function paintLive() {
     const L = window.hallLive; if (!L || !window.hallConvState) return;
     svg.querySelectorAll('[data-conv]').forEach(r => r.setAttribute('fill', window.HALL_CONV_COLORS[window.hallConvState((L.convectors || {})[r.dataset.conv], L.heatpump)]));
-    svg.querySelectorAll('[data-room]').forEach(r => { const t = (L.rooms || {})[r.dataset.room]; if (t != null) { r.style.fill = 'rgb(' + window.hallTempRgb(t).map(Math.round) + ')'; r.style.fillOpacity = 0.35; } });
+    const air = !svg.classList.contains('hide-roomair');      // layer "Въздух" off: the rooms keep their own plan colours
+    svg.querySelectorAll('[data-room]').forEach(r => { const t = (L.rooms || {})[r.dataset.room]; if (!air) { r.style.fill = r.style.fillOpacity = ''; } else if (t != null) { r.style.fill = 'rgb(' + window.hallTempRgb(t).map(Math.round) + ')'; r.style.fillOpacity = 0.35; } });
 }
 addEventListener('halllive', paintLive);
 

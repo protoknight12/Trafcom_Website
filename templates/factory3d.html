@@ -673,7 +673,7 @@ setInterval(pollSolar, 5000);
 // ---- layers: one checkbox per kind of object; the same keys hide the matching shapes in the plan editor ----
 const LAYER_DEFS = [
     ["{{ _('Сграда') }}", [['wall', "{{ _('Стени') }}"], ['window', "{{ _('Прозорци') }}"], ['door', "{{ _('Врати') }}"], ['stairs', "{{ _('Стълби') }}"],
-                           ['block', "{{ _('Съседни сгради') }}"], ['floor', "{{ _('Подова настилка') }}"], ['room', "{{ _('Помещения') }}"], ['fixture', "{{ _('Обзавеждане') }}"]]],
+                           ['block', "{{ _('Съседни сгради') }}"], ['floor', "{{ _('Подова настилка') }}"], ['room', "{{ _('Помещения') }}"], ['roomair', "{{ _('Въздух: оцветяване по температура') }}"], ['fixture', "{{ _('Обзавеждане') }}"]]],
     ["{{ _('Имоти') }}", [['parcel', "{{ _('Граници на имотите (кадастър)') }}"]]],
     ["{{ _('Оборудване') }}", [['machine', "{{ _('Машини и инвентар') }}"], ['equip', "{{ _('Инвертори, батерии, табла') }}"],
                               ['network', "{{ _('Мрежови устройства (суичове, рутери)') }}"], ['cam', "{{ _('Камери и зрително поле') }}"], ['detect', "{{ _('Открити обекти (хора, коли)') }}"], ['iot', "{{ _('IoT: сензори, конвектори, измерватели') }}"]]],
@@ -686,7 +686,8 @@ const LAYER_DEFS = [
                            ['rays', "{{ _('Лъчи от слънцето (анимация)') }}"]]],
 ];
 const KEYS = LAYER_DEFS.flatMap(g => g[1].map(l => l[0])), OFF_BY_DEFAULT = ['ceiling', 'roof', 'solar', 'sun', 'links_dc'];
-let layerState = {};
+let layerState = {}, AIR_OP = 0.4;          // AIR_OP = opacity of the coloured room air (volume; the floor tint is twice as strong)
+try { AIR_OP = Number(localStorage.getItem('hall.airOpacity')) || 0.4; } catch (e) { }
 try { layerState = JSON.parse(localStorage.getItem('hall.layers')) || {}; } catch (e) { }
 const layerOn = k => k in layerState ? layerState[k] : !OFF_BY_DEFAULT.includes(k);
 function applyLayer(k) {
@@ -695,6 +696,7 @@ function applyLayer(k) {
     document.getElementById('hl-svg')?.classList.toggle('hide-' + k, !v);
     const cb = document.querySelector('#f3-layers input[data-k="' + k + '"]'); if (cb) cb.checked = v;
     if ((k === 'solar' || k === 'links_dc') && v && !SOLAR_LIVE) pollSolar();      // first values right away
+    if (k === 'roomair') dispatchEvent(new Event('halllive'));      // the plan repaints its rooms
     if (k === 'sun' || k === 'rays') applySun(); else if (k === 'solar') updateSolarCard();
 }
 function setLayers(map) {                 // map: key -> bool (keys left out are unchanged)
@@ -717,6 +719,10 @@ function setLayers(map) {                 // map: key -> bool (keys left out are
     c.type = 'checkbox'; c.id = 'f3-wallsolid';
     c.onchange = () => { wallOpacity = c.checked ? 1 : 0.35; wallMats.forEach(m => { m.opacity = wallOpacity; m.depthWrite = c.checked; m.needsUpdate = true; }); };
     l.append(c, " {{ _('Плътни стени (не прозрачни)') }}"); g.append(l); box.append(g);
+    const ag = document.createElement('div'), al = document.createElement('label'), ar = document.createElement('input');
+    ar.type = 'range'; ar.min = 0.05; ar.max = 0.9; ar.step = 0.05; ar.value = AIR_OP; ar.style.cssText = 'width:100%';
+    ar.oninput = () => { AIR_OP = Number(ar.value); try { localStorage.setItem('hall.airOpacity', AIR_OP); } catch (e) { } };
+    al.append(" {{ _('Прозрачност на въздуха') }}", ar); ag.append(al); box.append(ag);
     const pre = document.createElement('div'); pre.className = 'presets';
     const none = Object.fromEntries(KEYS.map(k => [k, false]));
     [["{{ _('Всичко') }}", Object.fromEntries(KEYS.map(k => [k, true]))],
@@ -985,7 +991,7 @@ setMode(location.hash.slice(1) || '{{ initial }}');
     });
     CONVS.forEach(({ mat, e }) => mat.color.set(window.HALL_CONV_COLORS[window.hallConvState((LIVE.convectors || {})[e.ref_id], LIVE.heatpump)]));
     Object.entries(ROOMAIR).forEach(([id, m]) => {      // the air fades toward the sensor's colour; no reading = fades out
-        const t = (LIVE.rooms || {})[id], want = t == null ? 0 : 0.4, fl = m.userData.floor;
+        const t = (LIVE.rooms || {})[id], want = t == null ? 0 : AIR_OP, fl = m.userData.floor;
         if (t != null) { const [r, g, b] = window.hallTempRgb(t); m.material.color.lerp(new THREE.Color(r / 255, g / 255, b / 255), 0.1); fl.material.color.copy(m.material.color); }
         m.material.opacity += (want - m.material.opacity) * 0.1; fl.material.opacity = Math.min(0.85, m.material.opacity * 2);
         m.visible = fl.visible = m.material.opacity > 0.005;
