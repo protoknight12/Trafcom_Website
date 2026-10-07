@@ -335,15 +335,11 @@ tgt = layer('roomair');
     const fl = box(s.x, s.x + s.width, s.z, s.z + s.depth, y0 + 0.02, y0 + 0.08, new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0, depthWrite: false }));   // floor, more opaque: visible from above
     m.visible = fl.visible = false; m.userData.floor = fl; ROOMAIR[s.id] = m;
 });
-// temperature -> colour gradient (shared with the plan): blue at 16 °C and below, red at 28 °C and above, blended in between
-const TEMP_STOPS = [[16, [37, 99, 235]], [28, [239, 68, 68]]];
-window.hallTempRgb = t => {
-    if (t <= TEMP_STOPS[0][0]) return TEMP_STOPS[0][1];
-    for (let i = 1; i < TEMP_STOPS.length; i++) if (t <= TEMP_STOPS[i][0]) {
-        const [t0, c0] = TEMP_STOPS[i - 1], [t1, c1] = TEMP_STOPS[i], k = (t - t0) / (t1 - t0);
-        return c0.map((v, j) => v + (c1[j] - v) * k);
-    }
-    return TEMP_STOPS[TEMP_STOPS.length - 1][1];
+// temperature -> colour gradient (shared with the plan): blue at the minimum and below, red at the maximum and above, blended in between
+const AIR_COLD = [37, 99, 235], AIR_HOT = [239, 68, 68];
+window.hallTempRgb = t => {          // AIR_MIN / AIR_MAX (layers panel): <= min fully blue, >= max fully red
+    const k = Math.min(1, Math.max(0, (t - AIR_MIN) / (AIR_MAX - AIR_MIN)));
+    return AIR_COLD.map((v, j) => v + (AIR_HOT[j] - v) * k);
 };
 // convector colour: grey = off / no answer, red = heating, blue = cooling (a convector on the pump's "both" circuit follows the pump's mode)
 window.hallConvState = (c, hp) => !c || !c.online || !c.is_on ? 'off' : c.circuit === 'cooling' || (c.circuit === 'both' && hp && hp.mode === 2) ? 'cool' : 'heat';
@@ -686,8 +682,8 @@ const LAYER_DEFS = [
                            ['rays', "{{ _('Лъчи от слънцето (анимация)') }}"]]],
 ];
 const KEYS = LAYER_DEFS.flatMap(g => g[1].map(l => l[0])), OFF_BY_DEFAULT = ['ceiling', 'roof', 'solar', 'sun', 'links_dc'];
-let layerState = {}, AIR_OP = 0.4;          // AIR_OP = opacity of the coloured room air (volume; the floor tint is twice as strong)
-try { AIR_OP = Number(localStorage.getItem('hall.airOpacity')) || 0.4; } catch (e) { }
+let layerState = {}, AIR_OP = 0.4, AIR_MIN = 16, AIR_MAX = 28;          // AIR_OP = opacity of the coloured room air (volume; the floor tint is twice as strong)
+try { AIR_OP = Number(localStorage.getItem('hall.airOpacity')) || 0.4; const r = JSON.parse(localStorage.getItem('hall.airRange')); if (r && r[1] > r[0]) [AIR_MIN, AIR_MAX] = r; } catch (e) { }
 try { layerState = JSON.parse(localStorage.getItem('hall.layers')) || {}; } catch (e) { }
 const layerOn = k => k in layerState ? layerState[k] : !OFF_BY_DEFAULT.includes(k);
 function applyLayer(k) {
@@ -723,6 +719,12 @@ function setLayers(map) {                 // map: key -> bool (keys left out are
     ar.type = 'range'; ar.min = 0.05; ar.max = 0.9; ar.step = 0.05; ar.value = AIR_OP; ar.style.cssText = 'width:100%';
     ar.oninput = () => { AIR_OP = Number(ar.value); try { localStorage.setItem('hall.airOpacity', AIR_OP); } catch (e) { } };
     al.append(" {{ _('Прозрачност на въздуха') }}", ar); ag.append(al);
+    const rg = document.createElement('div'), mkNum = v => { const i = document.createElement('input'); i.type = 'number'; i.step = 0.5; i.value = v; i.style.cssText = 'width:64px'; return i; }, lo = mkNum(AIR_MIN), hi = mkNum(AIR_MAX);
+    rg.append("{{ _('Градиент: синьо при') }} ", lo, " °C {{ _('червено при') }} ", hi, ' °C');
+    lo.onchange = hi.onchange = () => {      // the plan repaints with the next poll tick via the same event
+        if (Number(hi.value) > Number(lo.value)) { AIR_MIN = Number(lo.value); AIR_MAX = Number(hi.value); try { localStorage.setItem('hall.airRange', JSON.stringify([AIR_MIN, AIR_MAX])); } catch (e) { } dispatchEvent(new Event('halllive')); }
+        else { lo.value = AIR_MIN; hi.value = AIR_MAX; } };
+    ag.append(rg);
     const info = document.createElement('div'); info.id = 'f3-airinfo'; info.className = 'text-small'; ag.append(info); box.append(ag);
     const pre = document.createElement('div'); pre.className = 'presets';
     const none = Object.fromEntries(KEYS.map(k => [k, false]));

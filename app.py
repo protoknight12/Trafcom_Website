@@ -6155,12 +6155,14 @@ def _hall_room_rect(room_id):
     return (0.0, 0.0, HALL_W, HALL_D) if room and room.name == HALL_ROOM_NAME else None
 
 
-def _hall_room_at(cx, cz):
-    """(room_id, x, z, w, d) of the smallest marked room containing the point, else of the general hall room while the point is inside the hall."""
-    best = None
-    for sh in HallShape.query.filter(HallShape.kind == 'room', HallShape.room_id.isnot(None)):
-        if sh.x <= cx <= sh.x + sh.width and sh.z <= cz <= sh.z + sh.depth and (best is None or sh.width * sh.depth < best.width * best.depth):
-            best = sh
+def _hall_room_at(cx, cz, cy=None):
+    """(room_id, x, z, w, d) of the marked room containing the point, else of the general hall room while the point is inside the hall.
+    With a height `cy` rooms standing above each other are told apart (the room whose floor is highest below the point wins, then the smallest)."""
+    rooms = [sh for sh in HallShape.query.filter(HallShape.kind == 'room', HallShape.room_id.isnot(None))
+             if sh.x <= cx <= sh.x + sh.width and sh.z <= cz <= sh.z + sh.depth]
+    if cy is not None:
+        rooms = [sh for sh in rooms if (sh.elevation or 0) - 0.01 <= cy <= (sh.elevation or 0) + (sh.height if sh.height > 0 else 3) * (sh.floors or 1)] or rooms
+    best = max(rooms, key=lambda sh: ((sh.elevation or 0) if cy is not None else 0, -sh.width * sh.depth), default=None)
     if best:
         return best.room_id, best.x, best.z, best.width, best.depth
     if 0 <= cx <= HALL_W and 0 <= cz <= HALL_D:
@@ -6183,7 +6185,11 @@ def _hall_follow_room(target):
     obj = _hall_object_of(target)
     if obj is None:
         return
-    obj.parent_id = None
+    sh = HallShape.query.filter(HallShape.kind == 'room', HallShape.room_id == target.room_id).first() if target.room_id else None
+    obj.parent_id = sh.id if sh else None                   # the plan form's "Помещение" now names the same room as the device form
+    if sh:                                                   # and the marker stands at that room's level (rooms can be stacked)
+        top = (sh.elevation or 0) + (sh.height if sh.height > 0 else 3) * (sh.floors or 1)
+        obj.elevation = round(min(max(obj.elevation or 0, sh.elevation or 0), max(sh.elevation or 0, top - obj.height)), 3)
     rect = _hall_room_rect(target.room_id)
     if rect is None:
         return
@@ -6202,7 +6208,16 @@ def _hall_push(kind, target, cx, cz, keep=False):
     if target is None:
         return
     pct = lambda v, lo=0.0, hi=100.0: max(lo, min(hi, v))
-    rect = _hall_room_at(cx, cz)
+    obj = _hall_object_of(target)
+    rect = None
+    if obj is not None and obj.parent_id is not None:                      # a room chosen on the plan form wins over the position
+        ps = db.session.get(HallShape, obj.parent_id) if obj.parent_id else None
+        if obj.parent_id == 0:
+            rect = (_hall_general_room().id, 0.0, 0.0, HALL_W, HALL_D)
+        elif ps is not None and ps.kind == 'room' and ps.room_id:
+            rect = (ps.room_id, ps.x, ps.z, ps.width, ps.depth)
+    if rect is None:
+        rect = _hall_room_at(cx, cz, (obj.elevation or 0) + (obj.height or 0) / 2 if obj is not None and hasattr(obj, 'elevation') else None)
     if keep and getattr(target, 'room_id', None) and getattr(target, 'pos_x', None) is not None:
         rect = None                                                         # already has a room and a place on its map: leave it
     if rect and hasattr(target, 'room_id'):

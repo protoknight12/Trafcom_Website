@@ -60,7 +60,7 @@ def test_panel_room_change_moves_plan_object(admin_client):
     admin_client.post(f'/admin/panels/{pid}/update', data={'name': 'T', 'room_id': str(r2.id)})
     db.session.expire_all()
     e = db.session.get(HallEquipment, eid)
-    assert e.parent_id is None and 20 <= e.x <= 30 and 0 <= e.z <= 10
+    assert e.parent_id == s2.id and 20 <= e.x <= 30 and 0 <= e.z <= 10   # the plan form now names the new room (was: cleared)
 
 
 def test_room_shape_delete_clears_parents(admin_client):

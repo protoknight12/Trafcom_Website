@@ -813,3 +813,41 @@ def test_machine_data_sync_carries_the_hierarchy(admin_client, tmp_path, monkeyp
     assert db.session.get(HallParcel, nb.parcel_id).cadnum == '72343.500.3037'
     assert db.session.get(Building, nb.building_id).name == 'Ново хале'
     assert HallMachine.query.filter_by(name='Машина 17').one().parent_id == nr.id
+
+
+def test_room_two_way_sync_stacked_rooms(admin_client):
+    """Office stands above the kitchen (same footprint): the room chosen in the plan form reaches the device, and the room chosen on the device
+    form reaches the plan object (its "Помещение" + the marker's level) - for sensors and convectors alike."""
+    from app import Building, Room, TemperatureSensor, Convector, HallShape, HallEquipment, _hall_follow_room
+    admin_client.get('/admin/hall')
+    b = Building(name='Хале')
+    db.session.add(b)
+    db.session.flush()
+    kr, orr = Room(name='Кухня', building_id=b.id), Room(name='Офис', building_id=b.id)
+    db.session.add_all([kr, orr])
+    db.session.flush()
+    kit = HallShape(kind='room', name='Кухня', room_id=kr.id, x=30, z=30, width=4, depth=4, height=6, elevation=0, floors=1)
+    off = HallShape(kind='room', name='Офис', room_id=orr.id, x=30, z=30, width=5, depth=5, height=2.5, elevation=2.5, floors=1)
+    sn = TemperatureSensor(name='С', mqtt_topic='t/sync')
+    cv = Convector(name='К', connection_type='mqtt', mqtt_topic='c/sync', device_type='shelly_1_gen1')
+    db.session.add_all([kit, off, sn, cv])
+    db.session.commit()
+    for kind, dev in (('sensor', sn), ('convector', cv)):
+        base = {'kind': kind, 'ref_id': dev.id, 'x': 31, 'z': 31, 'width': 0.3, 'depth': 0.3, 'height': 0.3, 'elevation': 4.0, 'rotation': 0}
+        # plan -> device: explicit "Помещение" wins, and without one the marker's height decides (not the smaller footprint = kitchen)
+        ex = HallEquipment.query.filter_by(kind=kind, ref_id=dev.id).first()          # a device the plan already shows is updated, not duplicated
+        base['id'] = ex.id if ex else None
+        first = admin_client.post('/admin/hall/equipment/save', json=base | {'parent_id': off.id})
+        assert first.status_code == 200
+        base['id'] = first.get_json()['id']
+        db.session.refresh(dev); assert dev.room_id == orr.id
+        assert admin_client.post('/admin/hall/equipment/save', json=base | {'parent_id': kit.id}).status_code == 200
+        db.session.refresh(dev); assert dev.room_id == kr.id
+        assert admin_client.post('/admin/hall/equipment/save', json=base | {'parent_id': ''}).status_code == 200
+        db.session.refresh(dev); assert dev.room_id == orr.id
+        # device -> plan
+        dev.room_id = kr.id
+        _hall_follow_room(dev)
+        db.session.commit()
+        eq = HallEquipment.query.filter_by(kind=kind, ref_id=dev.id).one()
+        assert eq.parent_id == kit.id and 0 <= eq.elevation <= 6
