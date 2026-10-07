@@ -184,6 +184,18 @@ def test_energy_series_falls_back_to_power():
     assert round(appmod._heatpump_energy_series(jump)[-1][1], 3) == 0.5   # 4 real steps of 0.1 + the jump minute at 6 kW
 
 
+def test_billing_period():
+    from datetime import date
+    bp = appmod._billing_period
+    assert bp(15, date(2026, 10, 20)) == (date(2026, 10, 15), date(2026, 11, 15))
+    assert bp(15, date(2026, 10, 7)) == (date(2026, 9, 15), date(2026, 10, 15))              # before this month's reading
+    assert bp(15, date(2026, 10, 7), back=1) == (date(2026, 8, 15), date(2026, 9, 15))
+    assert bp(15, date(2026, 1, 3)) == (date(2025, 12, 15), date(2026, 1, 15))               # across New Year
+    assert bp(15, date(2026, 12, 20)) == (date(2026, 12, 15), date(2027, 1, 15))
+    assert bp(31, date(2026, 3, 5)) == (date(2026, 2, 28), date(2026, 3, 31))                # short month: last day
+    assert bp(1, date(2026, 10, 7)) == (date(2026, 10, 1), date(2026, 11, 1))
+
+
 def test_cost_settings_route(client):
     _login(client, 'hp_admin')
     assert client.get('/admin/heatpump/cost').get_json() == {'configured': False}
@@ -196,6 +208,18 @@ def test_cost_settings_route(client):
     with flask_app.app_context():
         cfg = appmod._heatpump_cost_cfg()
         assert (cfg['price_day'], cfg['price_night'], cfg['night_from'], cfg['night_to']) == (0.25, 0.12, 22, 6)
+        assert cfg['reading_day'] == 1                                                  # blank = the 1st
+    client.post('/admin/heatpump/cost-settings', data=dict(good, reading_day='15'))
+    client.post('/admin/heatpump/cost-settings', data=dict(good, reading_day='40'))   # out of range: kept
+    with flask_app.app_context():
+        assert appmod._heatpump_cost_cfg()['reading_day'] == 15
+        appmod._heatpump_save_setting(appmod._HP_PREFIX + 'meter', '10.1.1.1')           # any key: the log is just empty
+        appmod.db.session.commit()
+    for q in ('period=billing', 'period=billing_prev', 'period=custom&from=2026-01-01&to=2026-01-31'):
+        j = client.get('/admin/heatpump/cost?' + q).get_json()
+        assert j['configured'] and j['until'] > j['since'] and j['categories']['grid']['kwh'] == 0
+    assert 'error' in client.get('/admin/heatpump/cost?period=custom&from=2026-02-01&to=2026-01-01').get_json()
+    assert 'error' in client.get('/admin/heatpump/cost?period=custom').get_json()
 
 
 def test_heatpump_on_hall_plan(client, monkeypatch):

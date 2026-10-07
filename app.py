@@ -1,6 +1,6 @@
 from bisect import bisect_right
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import os
 import shutil
 import json
@@ -15194,7 +15194,7 @@ def _heatpump_cost_cfg():
             return default
     return {'meter': get_text(_HP_PREFIX + 'meter', ''), 'price_day': num('price_day', 0.0),
             'price_night': num('price_night', 0.0), 'night_from': int(num('night_from', 22)),
-            'night_to': int(num('night_to', 6))}
+            'night_to': int(num('night_to', 6)), 'reading_day': min(max(int(num('reading_day', 1)), 1), 31)}
 
 
 def _heatpump_tariff(ts, cfg):
@@ -15297,6 +15297,16 @@ def _heatpump_energy_series(logs):
     return out
 
 
+def _billing_period(reading_day, today, back=0):
+    """(start, end) dates of the billing period that contains `today`, or `back` periods earlier. A period runs from one
+    reading date to the next; a reading day past the end of a short month falls on that month's last day."""
+    def reading(y, m):
+        y, m0 = y + (m - 1) // 12, (m - 1) % 12
+        return date(y, m0 + 1, min(reading_day, calendar.monthrange(y, m0 + 1)[1]))
+    m = today.month - (reading(today.year, today.month) > today) - back
+    return reading(today.year, m), reading(today.year, m + 1)
+
+
 @app.route('/admin/heatpump/cost')
 @limiter.exempt
 @role_required('admin')
@@ -15305,19 +15315,31 @@ def admin_heatpump_cost():
     if not cfg['meter']:
         return jsonify(configured=False)
     now = datetime.now()
+    midnight = lambda d: datetime(d.year, d.month, d.day)
+    period, end = request.args.get('period'), now
     start = {'7d': now - timedelta(days=7), '30d': now - timedelta(days=30),
              'month': now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-             }.get(request.args.get('period'), now.replace(hour=0, minute=0, second=0, microsecond=0))
-    since = int(start.timestamp())
-    logs = ShellyReadingLog.query.filter(ShellyReadingLog.host == cfg['meter'], ShellyReadingLog.ts >= since) \
-        .order_by(ShellyReadingLog.ts).all()
+             }.get(period, midnight(now))
+    if period in ('billing', 'billing_prev'):    # from one reading date to the next (the current one runs until now)
+        a, b = _billing_period(cfg['reading_day'], now.date(), 1 if period == 'billing_prev' else 0)
+        start, end = midnight(a), (midnight(b) if period == 'billing_prev' else now)
+    elif period == 'custom':                      # from..to dates, both days included
+        try:
+            a, b = (datetime.strptime(request.args.get(k, ''), '%Y-%m-%d') for k in ('from', 'to'))
+        except ValueError:
+            return jsonify(configured=True, error='Избери начална и крайна дата.')
+        if b < a:
+            return jsonify(configured=True, error='Началната дата е след крайната.')
+        start, end = a, b + timedelta(days=1)
+    since, until = int(start.timestamp()), int(end.timestamp())
+    logs = ShellyReadingLog.query.filter(ShellyReadingLog.host == cfg['meter'], ShellyReadingLog.ts >= since, ShellyReadingLog.ts <= until)         .order_by(ShellyReadingLog.ts).all()
     energy = _heatpump_energy_series(logs)
     pump = [(r.ts, json.loads(r.data_json)) for r in HeatPumpReading.query
             .filter(HeatPumpReading.ts >= since - HEATPUMP_COST_GAP).order_by(HeatPumpReading.ts)]
     res = _heatpump_cost(energy, pump, cfg, _grid_share_rows(since))
     return jsonify(configured=True, categories={k: {m: round(v, 3 if m == 'kwh' else 2) for m, v in d.items()}
                                                 for k, d in res.items()},
-                   since=since, first_data=pump[0][0] if pump else None)
+                   since=since, until=until, first_data=pump[0][0] if pump else None)
 
 
 @app.route('/admin/heatpump/cost-settings', methods=['POST'])
@@ -15331,14 +15353,15 @@ def admin_heatpump_cost_settings():
     try:
         day, night = float(f.get('price_day', '').replace(',', '.')), float(f.get('price_night', '').replace(',', '.'))
         night_from, night_to = int(f.get('night_from', '')), int(f.get('night_to', ''))
+        reading_day = int(f.get('reading_day') or 1)
     except ValueError:
         flash('Цените трябва да са числа, а часовете - цели числа от 0 до 23.', 'error')
         return redirect(url_for('admin_heatpump'))
-    if min(day, night) < 0 or not (0 <= night_from <= 23 and 0 <= night_to <= 23):
-        flash('Цените не могат да са отрицателни, а часовете са от 0 до 23.', 'error')
+    if min(day, night) < 0 or not (0 <= night_from <= 23 and 0 <= night_to <= 23) or not 1 <= reading_day <= 31:
+        flash('Цените не могат да са отрицателни, часовете са от 0 до 23, а денят на отчитане - от 1 до 31.', 'error')
         return redirect(url_for('admin_heatpump'))
     for key, val in (('meter', meter), ('price_day', day), ('price_night', night),
-                     ('night_from', night_from), ('night_to', night_to)):
+                     ('night_from', night_from), ('night_to', night_to), ('reading_day', reading_day)):
         _heatpump_save_setting(_HP_PREFIX + key, str(val))
     db.session.commit()
     log_action(f'Термопомпа: цена ден {day} / нощ {night} (нощ {night_from}:00-{night_to}:00), измервател {meter or "няма"}')
