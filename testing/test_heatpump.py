@@ -156,9 +156,9 @@ def test_cost_split_by_pump_state():
     assert round(r['heating']['kwh'], 3) == 0.2 and round(r['cooling']['kwh'], 3) == 0.1
     assert round(r['standby']['kwh'], 3) == 0.3
     assert round(r['heating']['cost'], 4) == round(0.2 * 0.20, 4)
-    # a hole in the meter log and a counter reset are skipped, not turned into a huge/negative interval
+    # a hole in the meter log keeps its (real) energy as 'unknown'; a counter reset adds nothing negative
     gap = appmod._heatpump_cost([(t0, 100), (t0 + 3600, 105), (t0 + 3660, 1)], pump, _cfg())
-    assert all(v['kwh'] == 0 for v in gap.values())
+    assert gap['unknown']['kwh'] == 5 and sum(v['kwh'] for v in gap.values()) == 5
 
 
 def test_cost_settings_route(client):

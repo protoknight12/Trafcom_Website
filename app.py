@@ -15213,20 +15213,20 @@ def _heatpump_cost(energy_rows, pump_rows, cfg):
     interval takes the pump state sampled just before its end.
     ponytail: the pump is sampled once a minute, so a compressor that cycles inside one minute is
     attributed to whatever state the sample caught - fine over days, noisy over minutes."""
-    out = {k: {'kwh': 0.0, 'cost': 0.0} for k in ('heating', 'cooling', 'standby')}
+    out = {k: {'kwh': 0.0, 'cost': 0.0} for k in ('heating', 'cooling', 'standby', 'unknown')}
     stamps = [t for t, _ in pump_rows]
     for (t0, e0), (t1, e1) in zip(energy_rows, energy_rows[1:]):
         delta = e1 - e0
-        if delta < 0 or t1 - t0 > HEATPUMP_COST_GAP:  # meter reset or a hole in the log
+        if delta < 0:  # meter reset
             continue
+        # the counter is cumulative, so energy across a hole in either log is real - it just can't be split
         i = bisect_right(stamps, t1) - 1
-        if i < 0 or t1 - stamps[i] > HEATPUMP_COST_GAP:
-            continue
-        state = pump_rows[i][1]
-        if not state.get('Verdichter'):
+        if t1 - t0 > HEATPUMP_COST_GAP or i < 0 or t1 - stamps[i] > HEATPUMP_COST_GAP:
+            cat = 'unknown'
+        elif not pump_rows[i][1].get('Verdichter'):
             cat = 'standby'
         else:
-            cat = 'cooling' if state.get('Betriebsart') == HEATPUMP_COOLING_MODE else 'heating'
+            cat = 'cooling' if pump_rows[i][1].get('Betriebsart') == HEATPUMP_COOLING_MODE else 'heating'
         out[cat]['kwh'] += delta
         out[cat]['cost'] += delta * _heatpump_tariff(t1, cfg)
     return out
