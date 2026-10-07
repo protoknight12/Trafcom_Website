@@ -25,7 +25,7 @@ Four regressions are specifically being guarded:
     (em:0 -> em1:0/1/2, different field names).
   - Gen1 devices must keep working alongside Gen2 ones. Gen1 has no /rpc/
     namespace at all (GET /status instead, an `emeters` list, energy in
-    Watt-minutes not Wh) - a completely different shape from either Gen2 profile.
+    Wh) - a completely different shape from either Gen2 profile.
   - History windows must stay chunked. A wide window in a single request never
     completes on the device, so _shelly_time_chunks() has to tile the range
     with no gaps.
@@ -127,8 +127,8 @@ assert channels[0]['freq'] is None                       # not reported per-chan
 # apparent power isn't in the payload - derived as V*I
 assert abs(channels[0]['aprt_power'] - 243.1 * 0.78) < 0.001
 assert total_power == 96.0                # device's own total_power, preferred over re-summing
-# Watt-minutes -> kWh: (7811652.2 + 7093664.2 + 5150733.5) / 60000
-assert abs(total_energy - 334.27) < 0.01
+# Gen1 `total` is Wh -> kWh: (7811652.2 + 7093664.2 + 5150733.5) / 1000 (/60000 read it 60x too low)
+assert abs(total_energy - 20056.05) < 0.01
 
 # a 2-channel Gen1 device (plain Shelly EM) is independent circuits, not phases
 channels, _, _ = _shelly_readings({'emeters': GEN1_3EM['emeters'][:2]})

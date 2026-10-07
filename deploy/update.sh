@@ -6,6 +6,9 @@ git pull
 venv/bin/pip install -r requirements.txt
 venv/bin/python -c "from app import app, db; app.app_context().push(); db.create_all()"
 
+# no writers while migrations run (the poller threads would add rows in the old units mid-rescale)
+sudo systemctl stop trafcom
+
 for f in migration/migrate_*.py; do
     mod="migration.$(basename "$f" .py)"
     echo "== $mod =="

@@ -14307,9 +14307,8 @@ def _shelly_readings(status):
                 'freq': None,  # not exposed per-channel in Gen1's /status
             })
             total_power += m.get('power') or 0.0
-            # Gen1 energy counters are Watt-minutes, not Wh - /60000 for kWh
-            # (Gen2's total_act above is already Wh, hence /1000 there instead).
-            total_energy += (m.get('total') or 0.0) / 60000.0
+            # Gen1 `total` is Wh like Gen2's total_act (once misread as Watt-minutes, /60000: 60x too low)
+            total_energy += (m.get('total') or 0.0) / 1000.0
         # Prefer the device's own aggregate over our re-summed one when present.
         total_power = status.get('total_power', total_power)
     else:  # Gen2 monophase profile
@@ -14345,7 +14344,7 @@ def _shelly_readings(status):
 #   <prefix>/emeter/<N>/voltage           "232.51"       (V)
 #   <prefix>/emeter/<N>/current           "14.03"        (A)
 #   <prefix>/emeter/<N>/pf                "0.77"
-#   <prefix>/emeter/<N>/total             "106592.0"     (Watt-minutes, Gen1 units)
+#   <prefix>/emeter/<N>/total             "106592.0"     (Wh)
 #   <prefix>/emeter/<N>/total_returned    "18686.2"
 #   <prefix>/announce, <prefix>/info      JSON metadata (not needed for live power)
 # Temperature/humidity sensors (TemperatureSensor.mqtt_topic) come in
@@ -14498,7 +14497,7 @@ def _apply_gen2_em_status(state, component_key, data):
     _mqtt_snapshot() renders for Gen1 - see the caller's docstring for the
     empirical-confirmation caveat. Lifetime energy isn't included: Gen2
     exposes that via a separate 'emdata:N' component in Wh, not the
-    Watt-minute 'total' Gen1 channels carry, so a Gen2-via-MQTT device
+    Wh 'total' Gen1 channels carry, so a Gen2-via-MQTT device
     currently always shows 0 kWh total rather than guessing at a
     conversion - only live power/voltage/current/pf are wired up here."""
     if component_key.startswith('em1:'):
@@ -14550,9 +14549,8 @@ def _mqtt_snapshot(name, prefix):
             'pf': c.get('pf'), 'freq': None,
         })
         total_power += c.get('power') or 0.0
-        # Gen1 energy counters are Watt-minutes, not Wh - /60000 for kWh,
-        # same conversion as _shelly_readings()'s HTTP Gen1 branch.
-        total_energy += (c.get('total') or 0.0) / 60000.0
+        # Gen1 `total` is Wh - same conversion as _shelly_readings()'s HTTP Gen1 branch.
+        total_energy += (c.get('total') or 0.0) / 1000.0
 
     return {
         'name': name, 'host': prefix, 'online': True, 'error': None,

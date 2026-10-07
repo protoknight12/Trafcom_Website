@@ -263,9 +263,8 @@ shapes, not two, and none of them share field names.
     actual definition of apparent power, S = V·I), rather than left blank.
   - **Per-channel frequency** isn't exposed in `/status` — left as `None`.
 
-  Gen1's own cumulative energy counter (`total`) is in **Watt-minutes**, not Wh — divided by
-  `60000` for kWh, vs. Gen2's `/1000` (Wh → kWh). Getting this conversion wrong would silently
-  under-report energy by 60×, so it's covered directly in `testing/test_shelly_status.py`
+  Gen1's own cumulative energy counter (`total`) is in **Wh**, same as Gen2 — divided by `1000` for kWh. (Once read as Watt-minutes, `/60000`,
+  which silently under-reported energy by 60×; confirmed against the logged power of a real 3EM.) It's covered directly in `testing/test_shelly_status.py`
   against a real captured payload rather than trusted by inspection.
 
 Branches on **key presence** (`'em:0' in status`, then `'emeters' in status`), not truthiness —
@@ -470,7 +469,7 @@ Covers, using trimmed real captures from both installed meters (Gen2 Pro 3EM at
 
 - `_parse_shelly_devices` — blank/bare/labelled/mixed env values.
 - `_shelly_readings` — all three payload shapes (Gen2 triphase, Gen2 monophase, Gen1), partial
-  payloads, null-valued components, the Gen1 Watt-minutes→kWh conversion checked against a real
+  payloads, null-valued components, the Gen1 Wh→kWh conversion checked against a real
   captured payload (not just trusted by inspection, since a sign/scale error here silently
   under-reports energy by 60×).
 - `_shelly_time_chunks` — exact fits, short tails, sub-step windows, empty windows, no
