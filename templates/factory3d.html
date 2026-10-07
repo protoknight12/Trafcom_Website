@@ -985,9 +985,9 @@ setMode(location.hash.slice(1) || '{{ initial }}');
     });
     CONVS.forEach(({ mat, e }) => mat.color.set(window.HALL_CONV_COLORS[window.hallConvState((LIVE.convectors || {})[e.ref_id], LIVE.heatpump)]));
     Object.entries(ROOMAIR).forEach(([id, m]) => {      // the air fades toward the sensor's colour; no reading = fades out
-        const t = (LIVE.rooms || {})[id], want = t == null ? 0 : 0.28, fl = m.userData.floor;
+        const t = (LIVE.rooms || {})[id], want = t == null ? 0 : 0.4, fl = m.userData.floor;
         if (t != null) { const [r, g, b] = window.hallTempRgb(t); m.material.color.lerp(new THREE.Color(r / 255, g / 255, b / 255), 0.1); fl.material.color.copy(m.material.color); }
-        m.material.opacity += (want - m.material.opacity) * 0.1; fl.material.opacity = m.material.opacity * 2;
+        m.material.opacity += (want - m.material.opacity) * 0.1; fl.material.opacity = Math.min(0.85, m.material.opacity * 2);
         m.visible = fl.visible = m.material.opacity > 0.005;
     });
     IOT.forEach(({ s, m }) => { const e = (LIVE.machines || {})[m.id]; s.material.color.setHex(e ? (e.online ? 0x22d3ee : 0xef4444) : 0x64748b); s.scale.setScalar(1 + 0.25 * Math.sin(now * 4)); });
