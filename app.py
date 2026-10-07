@@ -17634,10 +17634,10 @@ def admin_camera_calibrate_solve(cam_id):
     try:
         w, h = float(data['w']), float(data['h'])
         pairs = [((float(p['x']), float(p['y']), float(p['z'])), (float(p['u']), float(p['v']))) for p in data['points']]
-        pose = camera_pose.solve(pos, pairs, w, h)
+        pose = camera_pose.solve(pos, pairs, w, h, bool(data.get('distortion')), bool(data.get('move')))
     except (KeyError, TypeError, ValueError) as exc:
         return jsonify({'error': str(exc) if isinstance(exc, ValueError) else 'Невалидни данни.'}), 400
-    pose['projected'] = [camera_pose.project(pos, (pose['yaw'], pose['tilt'], pose['roll'], pose['fov']), pt, h / w) for pt, _ in pairs]
+    pose['projected'] = [camera_pose.project(pose['pos'], (pose['yaw'], pose['tilt'], pose['roll'], pose['fov'], pose['k1']), pt, h / w) for pt, _ in pairs]
     return jsonify(pose)
 
 
@@ -17649,8 +17649,12 @@ def admin_camera_calibrate_save(cam_id):
     try:
         cam.yaw, cam.tilt, cam.roll = float(data['yaw']) % 360, max(0.0, min(90.0, float(data['tilt']))), float(data.get('roll') or 0)
         cam.fov = max(5.0, min(360.0, float(data['fov'])))
+        new_pos = [float(c) for c in data['pos']] if data.get('pos') else None
     except (KeyError, TypeError, ValueError):
         return jsonify({'error': 'Невалидни данни.'}), 400
+    eq, old = HallEquipment.query.filter_by(kind='camera', ref_id=cam.id).first(), _camera_position(cam)
+    if new_pos and eq and old and all(abs(a - b) <= 0.51 for a, b in zip(new_pos, old)):      # position nudged by the solver (never more than +-0.5 m)
+        eq.x, eq.z, eq.elevation = new_pos[0] - eq.width / 2, new_pos[2] - eq.depth / 2, new_pos[1] - eq.height / 2
     cam.calib_json = json.dumps(data.get('pairs') or [])
     db.session.commit()
     log_action(f'Калибрирана камера "{cam.name}": посока {cam.yaw:.0f}°, наклон {cam.tilt:.0f}°, зрително поле {cam.fov:.0f}°')

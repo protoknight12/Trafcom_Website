@@ -42,7 +42,9 @@
             <p style="margin:6px 0"><button type="button" class="btn-submit" id="calAdd" disabled>Добави двойка</button> <span id="calPending" class="text-small text-muted">Кликнете върху кадъра.</span></p>
             <h4 style="margin:10px 0 4px">Двойки (<span id="calN">0</span>)</h4>
             <div id="calPairs"></div>
-            <p style="margin-top:10px"><button type="button" class="btn-submit" id="calSolve">Изчисли позата</button></p>
+            <p style="margin-top:10px"><label><input type="checkbox" id="calK1"> Коригирай дисторзията на обектива (поне 4 точки)</label><br>
+                <label><input type="checkbox" id="calMove"> Донастрой позицията на камерата до ±0,5 м (поне 6 точки)</label></p>
+            <p><button type="button" class="btn-submit" id="calSolve">Изчисли позата</button></p>
             <div id="calRes" class="text-muted">—</div>
             <p><button type="button" class="btn-submit" id="calSave" disabled>Запази позата</button></p>
         </div>
@@ -122,18 +124,17 @@ $('calAdd').onclick = () => {
 };
 $('calReload').onclick = () => { img.src = "{{ url_for('admin_camera_snapshot', cam_id=cam.id) }}?t=" + Date.now(); };
 $('calSolve').onclick = async () => {
-    if (pairs.length < 3) { $('calRes').textContent = 'Трябват поне 3 двойки (по-добре 5 и повече).'; return; }
-    $('calRes').textContent = 'Смятам...';
-    const [ok, d] = await post("{{ url_for('admin_camera_calibrate_solve', cam_id=cam.id) }}", { w: img.naturalWidth, h: img.naturalHeight,
+        $('calRes').textContent = 'Смятам...';
+    const [ok, d] = await post("{{ url_for('admin_camera_calibrate_solve', cam_id=cam.id) }}", { w: img.naturalWidth, h: img.naturalHeight, distortion: $('calK1').checked, move: $('calMove').checked,
         points: pairs.map(p => ({ x: LM[p.lm].x, y: LM[p.lm].y, z: LM[p.lm].z, u: p.u, v: p.v })) });
     if (!ok) { $('calRes').textContent = d.error || 'Грешка.'; return; }
     pose = d; $('calSave').disabled = false;
-    $('calRes').innerHTML = 'Посока <b>' + d.yaw + '°</b> · наклон <b>' + d.tilt + '°</b> · завъртане <b>' + d.roll + '°</b> · зрително поле <b>' + d.fov + '°</b><br>Средно отклонение <b style="color:' + (d.error_px < 15 ? '#16a34a' : '#dc2626') + '">' + d.error_px + ' px</b>'
+    $('calRes').innerHTML = 'Посока <b>' + d.yaw + '°</b> · наклон <b>' + d.tilt + '°</b> · завъртане <b>' + d.roll + '°</b> · зрително поле <b>' + d.fov + '°</b>' + ($('calK1').checked ? ' · дисторзия k1 <b>' + d.k1 + '</b>' : '') + ($('calMove').checked ? '<br>Нова позиция <b>x ' + d.pos[0] + ' · y ' + d.pos[1] + ' · z ' + d.pos[2] + ' м</b>' : '') + '<br>Средно отклонение <b style="color:' + (d.error_px < 15 ? '#16a34a' : '#dc2626') + '">' + d.error_px + ' px</b>'
         + (d.error_px >= 15 ? ' - голямо: проверете двойките (грешен ъгъл или обект), добавете още точки.' : '');
     draw();
 };
 $('calSave').onclick = async () => {
-    const [ok, d] = await post("{{ url_for('admin_camera_calibrate_save', cam_id=cam.id) }}", { yaw: pose.yaw, tilt: pose.tilt, roll: pose.roll, fov: pose.fov, pairs });
+    const [ok, d] = await post("{{ url_for('admin_camera_calibrate_save', cam_id=cam.id) }}", { yaw: pose.yaw, tilt: pose.tilt, roll: pose.roll, fov: pose.fov, pos: $('calMove').checked ? pose.pos : null, pairs });
     $('calRes').innerHTML += ok ? '<br><b style="color:#16a34a">Запазено.</b> Планът и 3D картата ще я покажат след презареждане.' : '<br>' + (d.error || 'Грешка при запис.');
 };
 fillList(); drawPairs();

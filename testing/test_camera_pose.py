@@ -37,3 +37,15 @@ def test_triangulation_of_one_object_seen_by_two_cameras():
     p, worst, front = cp.triangulate(rays)
     assert front and worst < 1e-6 and all(abs(a - b) < 1e-6 for a, b in zip(p, obj))
     assert cp.floor_point(*rays[0]) is not None
+
+
+def test_recovers_distortion_and_position_offset():
+    true, k1, off = (35.0, 40.0, 0.0, 85.0), -0.15, (0.3, -0.2, 0.25)
+    real = tuple(c + o for c, o in zip(CAM, off))
+    w, h = 1920, 1080
+    pts = POINTS + [(11, 0, 9), (17, 2, 3)]
+    pairs = [(p, cp.project(real, true + (k1,), p, h / w)) for p in pts]
+    plain = cp.solve(CAM, pairs, w, h)
+    got = cp.solve(CAM, pairs, w, h, distortion=True, move=True)
+    assert got['error_px'] < plain['error_px'] and got['error_px'] < 3.0
+    assert all(abs(a - b) <= 0.5 + 1e-9 for a, b in zip(got['pos'], CAM))
