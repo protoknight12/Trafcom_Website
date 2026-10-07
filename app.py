@@ -3266,6 +3266,17 @@ class QualityMeasurement(db.Model):
         return {s.sample_index: s for s in self.samples}
 
 
+class TemperatureReading(db.Model):
+    """One row per report a TemperatureSensor sent (battery sensors report every 10-15 minutes), written by _temp_log_tick() from the
+    MQTT cache. `ts` is unix seconds like ShellyReadingLog; sensor_id is a plain number so a deleted sensor's history stays readable."""
+    id = db.Column(db.Integer, primary_key=True)
+    sensor_id = db.Column(db.Integer, nullable=False, index=True)
+    ts = db.Column(db.Integer, nullable=False, index=True)
+    temperature = db.Column(db.Float)
+    humidity = db.Column(db.Float)
+    battery = db.Column(db.Float)
+
+
 class QualitySample(db.Model):
     """One sample's reading for a QualityMeasurement dimension row - sample_index
     is 1-based, matching the paper form's numbered sample columns (1..sample_size)."""
@@ -14890,6 +14901,25 @@ SHELLY_POLLER_INTERVAL = 60  # seconds - matches Gen2's own minute-resolution hi
 _shelly_poller_started = False
 
 
+_temp_logged = {}      # sensor id -> last_seen already written
+
+
+def _temp_log_tick():
+    """Writes a TemperatureReading for every sensor that reported since the last tick (no commit: the caller's tick commits).
+    ponytail: last_seen is the MQTT cache's receive time, so a restart re-reads at most one already stored report - skipped by ts."""
+    for s in TemperatureSensor.query.all():
+        with _mqtt_lock:
+            state = dict(_mqtt_temp_state.get(s.mqtt_topic) or {})
+        seen = state.get('last_seen')
+        if not seen or _temp_logged.get(s.id) == seen or all(state.get(k) is None for k in ('temperature', 'humidity')):
+            continue
+        _temp_logged[s.id] = seen
+        ts = calendar.timegm(seen.timetuple())          # last_seen is utcnow()
+        if not TemperatureReading.query.filter_by(sensor_id=s.id, ts=ts).first():
+            db.session.add(TemperatureReading(sensor_id=s.id, ts=ts, temperature=state.get('temperature'),
+                                              humidity=state.get('humidity'), battery=state.get('battery')))
+
+
 def _shelly_history_poll_tick():
     """
     One poll-and-log cycle: snapshot every configured meter, write a
@@ -14904,6 +14934,7 @@ def _shelly_history_poll_tick():
     # (heat pump cost, ...) works with any meter type. ponytail: read one after another; threads if many meters make a tick slow.
     snapshots += [_dtsu666_snapshot(d) for d in ModbusDevice.query.filter_by(device_type='dtsu666').order_by(ModbusDevice.id)]
     now_ts = int(datetime.now().timestamp())
+    _temp_log_tick()
     for snap in snapshots:
         if snap['online']:
             db.session.add(ShellyReadingLog(
@@ -15384,6 +15415,13 @@ def _solis_log_section(dev, limit, grid=False):
     return {'title': f'{dev.name} · {dev.host}:{dev.port}', 'head': head, 'rows': rows, 'total': q.count()}
 
 
+def _sensor_log_section(s, limit):
+    q = TemperatureReading.query.filter_by(sensor_id=s.id)
+    rows = [[_log_time(r.ts), _num(r.temperature, 1, ' °C'), _num(r.humidity, 0, ' %'), _num(r.battery, 0, ' %')]
+            for r in q.order_by(TemperatureReading.ts.desc()).limit(limit)]
+    return {'title': f'{s.name} · {s.mqtt_topic}', 'head': ['Време', 'Температура', 'Влажност', 'Батерия'], 'rows': rows, 'total': q.count()}
+
+
 def _heatpump_log_section(limit):
     q = HeatPumpReading.query
     keys = ('Temp. Aussen', 'Temp. Vorlauf', 'Temp. Ruecklauf', 'Verdichter', 'Betriebsart')
@@ -15426,6 +15464,9 @@ def admin_device_log():
             sections += shelly(d)
         for d in m.modbus_devices:
             sections += _modbus_log_sections(d, limit)
+    elif kind == 'sensor':
+        s = TemperatureSensor.query.get_or_404(ident)
+        title, sections = s.name, [_sensor_log_section(s, limit)]
     elif kind == 'heatpump':
         title, sections = 'Термопомпа', [_heatpump_log_section(limit)]
     else:

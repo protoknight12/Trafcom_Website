@@ -30,7 +30,7 @@ from werkzeug.security import generate_password_hash
 
 import app as appmod
 from app import (app as flask_app, db, User, ShellyDevice, ShellyReadingLog, ModbusDevice, SolisReadingLog, HeatPumpReading,
-                 Machine, limiter)
+                 Machine, TemperatureSensor, TemperatureReading, limiter)
 
 
 @pytest.fixture
@@ -87,6 +87,26 @@ def test_logs_per_device_kind(client):
     assert '89 %' in client.get(f'/admin/device-log?kind=modbus&id={so}').get_data(as_text=True)
     assert 'да' in client.get('/admin/device-log?kind=heatpump').get_data(as_text=True)
     assert 'Мерач 1' in client.get(f'/admin/device-log?kind=machine&id={mid}').get_data(as_text=True)
+
+
+def test_temperature_sensor_log(client):
+    from datetime import datetime
+    with flask_app.app_context():
+        s = TemperatureSensor(name='Склад', mqtt_topic='shellies/ht1', sensor_type='shelly_ht_gen1')
+        db.session.add(s)
+        db.session.commit()
+        sid = s.id
+        seen = datetime(2026, 10, 7, 12, 0, 0)
+        appmod._mqtt_temp_state['shellies/ht1'] = {'online': True, 'temperature': 18.5, 'humidity': 55.0, 'battery': 90, 'last_seen': seen}
+        appmod._temp_log_tick(); db.session.commit()
+        appmod._temp_log_tick(); db.session.commit()                          # nothing new reported: no second row
+        assert TemperatureReading.query.filter_by(sensor_id=sid).count() == 1
+        appmod._mqtt_temp_state['shellies/ht1']['last_seen'] = datetime(2026, 10, 7, 12, 15, 0)
+        appmod._temp_log_tick(); db.session.commit()
+        assert TemperatureReading.query.filter_by(sensor_id=sid).count() == 2
+    _login(client, 'dl_admin')
+    page = client.get(f'/admin/device-log?kind=sensor&id={sid}').get_data(as_text=True)
+    assert '18.5 °C' in page and 'показани 2 от 2' in page
 
 
 def test_log_access_and_missing(client):

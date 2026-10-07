@@ -109,6 +109,7 @@
                     <td class="text-small text-muted">{{ s.mqtt_topic }}</td>
                     <td class="text-small text-muted">{{ sensor_types.get(s.sensor_type, s.sensor_type) }}</td>
                     <td class="text-right">
+                        <a href="{{ url_for('admin_device_log', kind='sensor', id=s.id) }}" data-frame="stay" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Виж лог</a>
                         <a href="{{ url_for('edit_temperature_sensor_window', sensor_id=s.id) }}" data-frame class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
                     </td>
                     <td class="text-right">
