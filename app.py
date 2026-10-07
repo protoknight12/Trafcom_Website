@@ -6070,7 +6070,7 @@ def admin_hall_live():
         conv = eq.target()
         if conv:
             st = _shelly_convector_status(conv)
-            convectors[conv.id] = {'online': st['online'], 'is_on': st.get('is_on'), 'power': st.get('power_w')}
+            convectors[conv.id] = {'online': st['online'], 'is_on': st.get('is_on'), 'power': st.get('power_w'), 'circuit': conv.heatpump_circuit}
     batteries = {}
     stacks = [eq.target() for eq in HallEquipment.query.filter_by(kind='battery')]
     stacks = [x for x in stacks if x]
@@ -6083,6 +6083,13 @@ def admin_hall_live():
         if sn:
             snap = _mqtt_temp_snapshot(sn)
             sensors[sn.id] = {'temperature': snap.get('temperature'), 'humidity': snap.get('humidity'), 'online': snap.get('online')}
+    room_temps = {}              # room id -> temperatures of its online sensors; a room without a sensor stays out (the map leaves it uncoloured)
+    for sn in TemperatureSensor.query.filter(TemperatureSensor.room_id.isnot(None)):
+        t = _mqtt_temp_snapshot(sn).get('temperature')
+        if t is not None:
+            room_temps.setdefault(sn.room_id, []).append(t)
+    rooms = {s.id: round(sum(room_temps[s.room_id]) / len(room_temps[s.room_id]), 1)
+             for s in HallShape.query.filter_by(kind='room') if s.room_id in room_temps}
     heatpump = None
     if HallEquipment.query.filter_by(kind='heatpump').first():
         d = _heatpump_live['data']
@@ -6090,7 +6097,7 @@ def admin_hall_live():
                     'ruecklauf': d.get('Temp. Ruecklauf'), 'aussen': d.get('Temp. Aussen'),
                     'compressor': d.get('Verdichter'), 'fault': d.get('Stoerung'),
                     'mode': _heatpump_live['slow'].get('Betriebsart')}
-    return jsonify({'machines': machines, 'convectors': convectors, 'batteries': batteries, 'sensors': sensors, 'heatpump': heatpump,
+    return jsonify({'machines': machines, 'convectors': convectors, 'batteries': batteries, 'sensors': sensors, 'heatpump': heatpump, 'rooms': rooms,
                     'panels': {pid: {'power': round(e['total_power']), 'online': e['online']} for pid, e in by_panel.items()}})
 
 

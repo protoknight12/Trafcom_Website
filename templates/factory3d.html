@@ -326,6 +326,27 @@ SHAPES.forEach(s => {
         if (s.label) label(s.label + (n > 1 ? ' (' + n + ' ' + "{{ _('етажа') }}" + ')' : ''), cx, y0 + 0.6, cz, Math.max(0.6, Math.min(1.1, Math.min(s.width, s.depth) * 0.4)));
     }
 });
+// room air: a translucent volume per marked room, coloured by its room sensor's temperature (no sensor = stays invisible)
+const ROOMAIR = {};
+tgt = layer('roomair');
+SHAPES.filter(s => s.kind === 'room').forEach(s => {
+    const fh = s.height > 0 ? s.height : 3, y0 = s.elevation || 0;
+    const m = box(s.x, s.x + s.width, s.z, s.z + s.depth, y0 + 0.06, y0 + (s.floors || 1) * fh, new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0, depthWrite: false }));
+    m.visible = false; m.userData.noPick = true; ROOMAIR[s.id] = m;
+});
+// temperature -> colour gradient (shared with the plan): cold blue, comfortable green, warm yellow, hot red
+const TEMP_STOPS = [[14, [59, 130, 246]], [19, [34, 211, 238]], [22, [34, 197, 94]], [25, [250, 204, 21]], [30, [239, 68, 68]]];
+window.hallTempRgb = t => {
+    if (t <= TEMP_STOPS[0][0]) return TEMP_STOPS[0][1];
+    for (let i = 1; i < TEMP_STOPS.length; i++) if (t <= TEMP_STOPS[i][0]) {
+        const [t0, c0] = TEMP_STOPS[i - 1], [t1, c1] = TEMP_STOPS[i], k = (t - t0) / (t1 - t0);
+        return c0.map((v, j) => v + (c1[j] - v) * k);
+    }
+    return TEMP_STOPS[TEMP_STOPS.length - 1][1];
+};
+// convector colour: grey = off / no answer, red = heating, blue = cooling (a convector on the pump's "both" circuit follows the pump's mode)
+window.hallConvState = (c, hp) => !c || !c.online || !c.is_on ? 'off' : c.circuit === 'cooling' || (c.circuit === 'both' && hp && hp.mode === 2) ? 'cool' : 'heat';
+window.HALL_CONV_COLORS = { off: '#9aa0a6', heat: '#ef4444', cool: '#3b82f6' };
 tgt = layer('parcel');                       // property boundaries: a ground outline per cadastral number
 PARCELS.forEach(p => {
     const pts = p.points.map(([x, z]) => new THREE.Vector3(x, 0.03, z));
@@ -427,11 +448,16 @@ MACHINES.forEach(m => {
     if (cap) label(cap, g.position.x, (m.elevation || 0) + m.height + 1.2, g.position.z, 0.9, machineLabels);
 });
 const EQ = { inverter: "{{ _('Инвертор') }}", battery: "{{ _('Батериен блок') }}", panel: "{{ _('Ел. табло') }}", convector: "{{ _('Конвектор') }}", sensor: "{{ _('Температурен сензор') }}", network: "{{ _('Мрежово устройство') }}", camera: "{{ _('Камера') }}", heatpump: "{{ _('Термопомпа') }}" };
+const CONVS = [];
 EQUIP.forEach(e => {
     tgt = layer(e.kind === 'network' ? 'network' : e.kind === 'camera' ? 'cam' : e.kind === 'convector' || e.kind === 'sensor' ? 'iot' : 'equip');
     const [lw, ld] = dims(e.width, e.depth, e.rotation);
     const g = place(buildEquipment(e.kind, lw, ld, e.height), e, Object.assign({ equip: true }, e));
     if (e.ref_id) OBJ[e.kind + ':' + e.ref_id] = g;
+    if (e.kind === 'convector') {                        // own copy of the body material (the white one is shared by every model) so only this convector changes colour
+        const body = g.children.find(o => o.isMesh);
+        if (body) { body.material = body.material.clone(); CONVS.push({ mat: body.material, e }); }
+    }
     label(e.label, g.position.x, (e.elevation || 0) + e.height + 0.8, g.position.z, 1.3);
     if (e.cam) {                    // field of view: translucent cone from the camera, pointing along yaw (0 = +X, clockwise from above) and tilted down
         const c = e.cam, len = c.range, rad = c.fov >= 359 ? len * 0.9 : Math.min(len * Math.tan(c.fov * Math.PI / 360), len * 3);
@@ -758,8 +784,8 @@ function showLive() {
     e.textContent = l ? (l.online ? l.power + ' W' : "{{ _('измервателят не отговаря') }}") : "{{ _('няма измерватели') }}";
 }
 if (IS_ADMIN) {
-    const poll = () => { if (document.hidden || !document.getElementById('mode-3d') || document.getElementById('mode-3d').hidden) return;
-        fetch("{{ url_for('admin_hall_live') }}").then(r => r.json()).then(d => { LIVE = d; showLive(); }).catch(() => { }); };
+    const poll = () => { if (document.hidden) return;      // also while the plan tab is shown: it colours its convectors and rooms from the same data
+        fetch("{{ url_for('admin_hall_live') }}").then(r => r.json()).then(d => { LIVE = d; window.hallLive = d; dispatchEvent(new Event('halllive')); showLive(); }).catch(() => { }); };
     setInterval(poll, 5000); poll();
 }
 
@@ -955,6 +981,12 @@ setMode(location.hash.slice(1) || '{{ initial }}');
         spr.userData.text = text; ctx.clearRect(0, 0, 256, 64);
         if (text) { ctx.font = 'bold 40px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineWidth = 7; ctx.strokeStyle = dark ? '#12161c' : '#e9eef4'; ctx.strokeText(text, 128, 32); ctx.fillStyle = '#2dd4bf'; ctx.fillText(text, 128, 32); }
         tex.needsUpdate = true;
+    });
+    CONVS.forEach(({ mat, e }) => mat.color.set(window.HALL_CONV_COLORS[window.hallConvState((LIVE.convectors || {})[e.ref_id], LIVE.heatpump)]));
+    Object.entries(ROOMAIR).forEach(([id, m]) => {      // the air fades toward the sensor's colour; no reading = fades out
+        const t = (LIVE.rooms || {})[id], want = t == null ? 0 : 0.16;
+        if (t != null) { const [r, g, b] = window.hallTempRgb(t); m.material.color.lerp(new THREE.Color(r / 255, g / 255, b / 255), 0.1); }
+        m.material.opacity += (want - m.material.opacity) * 0.1; m.visible = m.material.opacity > 0.005;
     });
     IOT.forEach(({ s, m }) => { const e = (LIVE.machines || {})[m.id]; s.material.color.setHex(e ? (e.online ? 0x22d3ee : 0xef4444) : 0x64748b); s.scale.setScalar(1 + 0.25 * Math.sin(now * 4)); });
     controls.update();

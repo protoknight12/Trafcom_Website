@@ -256,6 +256,7 @@ function draw() {
         const attrs = { class: 's ' + s.kind + FD(s) + (s === sel ? ' sel' : '') + (s._unlocked ? ' unlocked' : ''), x: s.x, y: s.z, width: s.width, height: s.depth };
         if (s.kind === 'room') attrs.fill = ROOM_COLORS[SHAPES.filter(o => o.kind === 'room').indexOf(s) % ROOM_COLORS.length];
         const r = el('rect', attrs);
+        if (s.kind === 'room') r.dataset.room = s.id;
         r.addEventListener('pointerdown', e => startDrag(e, s));
         svg.appendChild(r);
         if (s.kind !== 'wall' && s.label) {
@@ -283,11 +284,21 @@ function draw() {
     EQUIP.forEach(q => {      // small boxes - drawn at least 0.8 m so they stay grabbable
         const w = Math.max(q.width, 0.8), d = Math.max(q.depth, 0.8);
         const r = el('rect', { class: 'q' + QK(q.kind) + FD(q) + (q === sel ? ' sel' : '') + (q._unlocked ? ' unlocked' : ''), x: q.x, y: q.z, width: w, height: d, fill: EQ_COLORS[q.kind] });
+        if (q.kind === 'convector') r.dataset.conv = q.ref_id;
         r.addEventListener('pointerdown', e => startDrag(e, q));
         svg.appendChild(r);
         const t = el('text', { class: 'qt' + QK(q.kind).replace('q-', 'qt-') + FD(q), x: q.x + w / 2, y: q.z + d / 2 }); t.style.fill = '#000'; t.textContent = EQ_ABBR[q.kind]; svg.appendChild(t);
     });
+    paintLive();
 }
+
+// live colours from the 3D page's poll: convectors grey / red / blue, a room with a sensor takes its temperature's colour
+function paintLive() {
+    const L = window.hallLive; if (!L || !window.hallConvState) return;
+    svg.querySelectorAll('[data-conv]').forEach(r => r.setAttribute('fill', window.HALL_CONV_COLORS[window.hallConvState((L.convectors || {})[r.dataset.conv], L.heatpump)]));
+    svg.querySelectorAll('[data-room]').forEach(r => { const t = (L.rooms || {})[r.dataset.room]; if (t != null) r.setAttribute('fill', 'rgb(' + window.hallTempRgb(t).map(Math.round) + ')'); });
+}
+addEventListener('halllive', paintLive);
 
 // ---- hierarchy: ПИ -> Сграда -> Помещение -> machines / equipment / fixtures; all derived from positions (no extra links to maintain) ----
 const HALL_RECT = { x: 0, z: 0, width: 56, depth: 12 };

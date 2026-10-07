@@ -408,6 +408,12 @@ def test_auto_place_devices_by_room_position(admin_client):
     assert HallEquipment.query.filter_by(kind='network').one().z < 0                   # no room -> service strip behind the back wall
     assert admin_client.post('/admin/hall/auto-place').get_json()['created'] == 0 and HallEquipment.query.count() == before + 3   # idempotent
     assert 'sensors' in admin_client.get('/admin/hall/live').get_json()
+    import app as appmod                                                                  # a room's air temperature = its sensors' mean; a room without a sensor is left out
+    appmod._mqtt_temp_state['t/9'] = {'online': True, 'temperature': 23.5, 'humidity': 50.0, 'battery': 90, 'last_seen': None}
+    rooms = admin_client.get('/admin/hall/live').get_json()['rooms']
+    assert rooms == {str(shape.id): 23.5} or rooms == {shape.id: 23.5}
+    appmod._mqtt_temp_state.pop('t/9')
+    assert admin_client.get('/admin/hall/live').get_json()['rooms'] == {}
 
 
 def test_sun_endpoint_and_solar_strings_admin_only(admin_client):
