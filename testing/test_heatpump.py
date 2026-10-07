@@ -170,6 +170,7 @@ def test_cost_split_grid_vs_solar():
     assert round(r['grid']['kwh'], 3) == 0.15 and round(r['solar']['kwh'], 3) == 0.15   # 0.1 + 0.025 + 0.025 / 0 + 0.075 + 0.075
     assert round(r['src_unknown']['kwh'], 3) == 0.1                                    # the step after the long hole
     assert round(r['grid']['cost'], 4) == round(0.15 * 0.20, 4)                        # all in the day tariff
+    assert round(r['solar']['cost'], 4) == round(0.15 * 0.20, 4)                       # the saving is priced the same way
 
 
 def test_energy_series_falls_back_to_power():

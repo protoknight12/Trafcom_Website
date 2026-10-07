@@ -15259,7 +15259,7 @@ def _heatpump_cost(energy_rows, pump_rows, cfg, share_rows=()):
             cat = 'cooling' if pump_rows[i][1].get('Betriebsart') == HEATPUMP_COOLING_MODE else 'heating'
         out[cat]['kwh'] += delta
         out[cat]['cost'] += delta * _heatpump_tariff(t1, cfg)
-        # where it came from: the grid part is paid at the tariff, the sun's part is free
+        # where it came from: the grid part is paid at the tariff, the sun's part is the saving
         j = bisect_right(share_stamps, t1) - 1
         if j < 0 or t1 - share_stamps[j] > HEATPUMP_COST_GAP:
             out['src_unknown']['kwh'] += delta
@@ -15268,6 +15268,7 @@ def _heatpump_cost(energy_rows, pump_rows, cfg, share_rows=()):
             out['grid']['kwh'] += delta * g
             out['grid']['cost'] += delta * g * _heatpump_tariff(t1, cfg)
             out['solar']['kwh'] += delta * (1 - g)
+            out['solar']['cost'] += delta * (1 - g) * _heatpump_tariff(t1, cfg)   # what the grid would have charged: the saving
     return out
 
 
