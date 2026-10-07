@@ -93,8 +93,43 @@ def decode(raw, ratio, w, h, min_score=0.4, nms_iou=0.5, names=None):
     return sorted(res, key=lambda d: -d['score'])
 
 
-def detect(jpeg, min_score=0.4):
-    img = Image.open(io.BytesIO(jpeg)).convert('RGB')
+# A frame bigger than this is also cut into overlapping TILE-sized pieces (source pixels), each run through the models on its own, so small
+# objects aren't lost when a 4K frame is squeezed to 640x640. 0 = off. Cost: one model pass per piece (a 1080p frame = 6, a 4K one = 15).
+TILE = int(os.environ.get('DETECT_TILE', '960'))
+TILE_OVERLAP = 0.2
+
+
+def _tiles(w, h):
+    """[(x, y, tw, th)] overlapping pieces covering a w x h frame, or [] when it is small enough for the one full pass."""
+    if not TILE or max(w, h) <= TILE * 1.5:
+        return []
+
+    def starts(n):
+        return [0] if n <= TILE else list(range(0, n - TILE, int(TILE * (1 - TILE_OVERLAP)))) + [n - TILE]
+    return [(x, y, min(TILE, w), min(TILE, h)) for y in starts(h) for x in starts(w)]
+
+
+def _merge(items, iou_thr=0.5, inside=0.8):
+    """One box per object after the full pass and the pieces all reported it: a lower-scored box of the same label is dropped when it
+    overlaps a kept one (IoU) or lies mostly inside it - a piece's edge cuts objects, and the half box is inside the whole one.
+    ponytail: two people standing almost on top of each other can lose one; fine for counting presence."""
+    keep = []
+    for d in sorted(items, key=lambda d: -d['score']):
+        for k in keep:
+            if k['label'] != d['label']:
+                continue
+            a, b = k['box'], d['box']
+            inter = max(0.0, min(a[2], b[2]) - max(a[0], b[0])) * max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+            area = lambda r: max(1e-9, (r[2] - r[0]) * (r[3] - r[1]))
+            if inter / (area(a) + area(b) - inter) > iou_thr or inter / min(area(a), area(b)) > inside:
+                break
+        else:
+            keep.append(d)
+    return keep
+
+
+def _infer(img, min_score):
+    """COCO (+ custom) detections of one image, boxes as fractions of that image."""
     w, h = img.size
     ratio = min(SIZE / w, SIZE / h)
     img = img.resize((max(1, int(w * ratio)), max(1, int(h * ratio))))
@@ -106,4 +141,16 @@ def detect(jpeg, min_score=0.4):
         with open(CUSTOM_NAMES_PATH, encoding='utf-8') as fh:
             names = json.load(fh)
         res += decode(_get_session(CUSTOM_PATH).run(None, {'images': x})[0][0], ratio, w, h, min_score, names=names)
-    return sorted(res, key=lambda d: -d['score'])
+    return res
+
+
+def detect(jpeg, min_score=0.4):
+    img = Image.open(io.BytesIO(jpeg)).convert('RGB')
+    w, h = img.size
+    res = _infer(img, min_score)
+    for x, y, tw, th in _tiles(w, h):
+        for d in _infer(img.crop((x, y, x + tw, y + th)), min_score):
+            b = d['box']
+            d['box'] = [round(v, 4) for v in ((x + b[0] * tw) / w, (y + b[1] * th) / h, (x + b[2] * tw) / w, (y + b[3] * th) / h)]
+            res.append(d)
+    return _merge(res)

@@ -38,3 +38,37 @@ def test_custom_model_keeps_all_its_classes():
     raw[100, 0:2], raw[100, 2:4], raw[100, 4], raw[100, 6] = 0.5, np.log(10), 1.0, 0.9
     res = detection.decode(raw, 1.0, 640, 640, names=['кар', 'палет'])
     assert [r['label'] for r in res] == ['палет']
+
+
+def test_tiles_cover_the_frame_with_overlap():
+    assert detection._tiles(1280, 720) == []                                       # small enough: the full pass is enough
+    tiles = detection._tiles(1920, 1080)
+    assert len(tiles) == 6 and all(tw <= detection.TILE and th <= detection.TILE for _, _, tw, th in tiles)
+    assert max(x + tw for x, _, tw, _ in tiles) == 1920 and max(y + th for _, y, _, th in tiles) == 1080
+    assert len(detection._tiles(3840, 2160)) == 15
+
+
+def test_merge_drops_the_half_box_a_tile_edge_cut():
+    whole = {'label': 'човек', 'score': 0.9, 'box': [0.40, 0.30, 0.50, 0.60]}
+    half = {'label': 'човек', 'score': 0.7, 'box': [0.40, 0.30, 0.45, 0.60]}       # same person cut by a piece's border
+    other = {'label': 'човек', 'score': 0.6, 'box': [0.80, 0.30, 0.90, 0.60]}
+    car = {'label': 'кола', 'score': 0.5, 'box': [0.40, 0.30, 0.50, 0.60]}         # another label on the same spot stays
+    assert detection._merge([half, car, other, whole]) == [whole, other, car]
+
+
+def test_detect_maps_piece_boxes_back_to_the_frame(monkeypatch):
+    import io
+    from PIL import Image
+    seen = []
+
+    def fake(img, min_score):
+        seen.append(img.size)
+        # a person filling the middle of every image it is shown (the full pass and each piece)
+        return [{'label': 'човек', 'score': 0.9, 'box': [0.4, 0.4, 0.6, 0.6]}]
+    monkeypatch.setattr(detection, '_infer', fake)
+    buf = io.BytesIO()
+    Image.new('RGB', (1920, 1080)).save(buf, 'JPEG')
+    res = detection.detect(buf.getvalue())
+    assert len(seen) == 7 and seen[0] == (1920, 1080)                              # full pass + 6 pieces
+    assert any(abs(r['box'][0] - 0.4) < 1e-3 for r in res)                          # the full-pass box kept
+    assert len(res) > 1                                                             # pieces found their own, different spots
