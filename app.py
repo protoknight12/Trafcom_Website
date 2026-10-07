@@ -7093,7 +7093,13 @@ def admin_hall_file_upload(machine_id):
     category = request.form.get('category') if request.form.get('category') in HALL_FILE_CATEGORIES else 'other'
     note = (request.form.get('note') or '').strip()[:255] or None
     folder = os.path.join(app.config['MACHINE_FILES_FOLDER'], str(m.id))
-    os.makedirs(folder, exist_ok=True)
+    try:
+        os.makedirs(folder, exist_ok=True)
+        if not os.access(folder, os.W_OK):
+            raise PermissionError(folder)
+    except OSError as e:
+        app.logger.error('machine_files not writable: %s', e)
+        return _dossier_back(m.id, 'Папката за файлове не е записваема за сървъра (права на machine_files).', 'danger')
     saved = 0
     for f in request.files.getlist('files'):
         if not f or not f.filename:
