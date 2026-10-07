@@ -18044,10 +18044,10 @@ def _camera_frame_jpeg(cam):
 @role_required('admin')
 @limiter.exempt
 def admin_camera_snapshot(cam_id):
-    """Live frame (JPEG) for the 3D info panel / cameras page; polled every few seconds."""
+    """Live frame (JPEG) for the 3D info panel / cameras page; polled every few seconds. ?full=1: the biggest frame the camera gives (calibration)."""
     cam = Camera.query.get_or_404(cam_id)
     try:
-        data = _camera_frame_jpeg(cam)
+        data = _detection_frame(cam) if request.args.get('full') else _camera_frame_jpeg(cam)
     except Exception as exc:
         return jsonify({'error': f'Камерата не отговаря: {exc}'}), 502
     return app.response_class(data, mimetype='image/jpeg', headers={'Cache-Control': 'no-store'})

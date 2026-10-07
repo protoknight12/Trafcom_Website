@@ -9,7 +9,8 @@
     <style>
         .cal { display: grid; grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); gap: 16px; }
         @media (max-width: 900px) { .cal { grid-template-columns: 1fr; } }
-        #calWrap { position: relative; background: #000; border-radius: 6px; cursor: crosshair; line-height: 0; }
+        #calWrap { position: relative; background: #000; border-radius: 6px; cursor: crosshair; line-height: 0; overflow: hidden; touch-action: none; }
+        #calZoom { position: relative; transform-origin: 0 0; }
         #calImg { width: 100%; display: block; }
         #calCv { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
         #lmList { width: 100%; height: 170px; }
@@ -29,12 +30,17 @@
         <b>1.</b> Кликнете върху кадъра точка, чиято позиция знаете (ъгъл на машина, стена, врата...). <b>2.</b> Изберете същата точка от списъка. <b>3.</b> „Добави“. Повторете за 5 и повече точки на различни места и височини, после „Изчисли“.</p>
     <div class="cal">
         <div>
-            <div id="calWrap"><img id="calImg" alt="" src="{{ url_for('admin_camera_snapshot', cam_id=cam.id) }}?t=0"><canvas id="calCv"></canvas></div>
+            <div id="calWrap"><div id="calZoom"><img id="calImg" alt="" src="{{ url_for('admin_camera_snapshot', cam_id=cam.id) }}?full=1&t=0"><canvas id="calCv"></canvas></div></div>
             <p style="margin-top:6px"><button type="button" class="btn-secondary" id="calReload">↻ Нов кадър</button>
+                <button type="button" class="btn-secondary" id="calZin" title="Увеличи">＋</button> <button type="button" class="btn-secondary" id="calZout" title="Намали">−</button> <button type="button" class="btn-secondary" id="calZ0" title="Целият кадър">⟲</button>
+                <span class="text-small text-muted" id="calSize"></span>
+                <span class="text-small text-muted">колелце = увеличение, влачене = преместване</span><br>
                 <span class="text-small text-muted">червено = вашият клик, зелено = къде пада точката при изчислената поза</span></p>
         </div>
         <div>
-            <svg id="lmPlan" style="width:100%;height:240px;background:var(--bg-secondary,#f3f4f6);border:1px solid var(--border-color);border-radius:6px"></svg>
+            <div style="margin-bottom:4px"><button type="button" class="btn-secondary" id="plZin" title="Увеличи плана">＋</button> <button type="button" class="btn-secondary" id="plZout" title="Намали плана">−</button> <button type="button" class="btn-secondary" id="plZ0" title="Целият план">⟲</button>
+                <span class="text-small text-muted">колелце = увеличение, влачене = преместване</span></div>
+            <svg id="lmPlan" style="touch-action:none;width:100%;height:360px;background:var(--bg-secondary,#f3f4f6);border:1px solid var(--border-color);border-radius:6px"></svg>
             <p class="text-small text-muted" style="margin:2px 0 8px">Кликнете обект на плана - в списъка остават само ъглите му; ъгъл от списъка се отбелязва на плана.
                 <a href="#" id="lmAll">Покажи всички</a></p>
             <div class="form-group"><label>Търси обект</label><input type="text" id="lmFilter" placeholder="напр. машина 3, стена, врата"></div>
@@ -65,17 +71,18 @@ function fillList() {
     drawPlan();
 }
 // mini plan (top view, metres): one rectangle per plan object, built from its corner landmarks
-let selObj = null;
+let selObj = null, PB = null, PV = null, planMoved = false;      // PB = the whole plan, PV = the part shown (zoom / pan)
 const OBJ = new Map(); LM.forEach(m => { const o = OBJ.get(m.obj) || OBJ.set(m.obj, { id: m.obj, name: m.name, x0: 1e9, x1: -1e9, z0: 1e9, z1: -1e9 }).get(m.obj); o.x0 = Math.min(o.x0, m.x); o.x1 = Math.max(o.x1, m.x); o.z0 = Math.min(o.z0, m.z); o.z1 = Math.max(o.z1, m.z); });
 const CAM = { x: {{ pos[0]|tojson }}, z: {{ pos[2]|tojson }} };
 function drawPlan() {
     const svg = $('lmPlan'), NS = 'http://www.w3.org/2000/svg', os = [...OBJ.values()];
     const x0 = Math.min(0, CAM.x, ...os.map(o => o.x0)) - 1, x1 = Math.max(56, CAM.x, ...os.map(o => o.x1)) + 1, z0 = Math.min(0, CAM.z, ...os.map(o => o.z0)) - 1, z1 = Math.max(12, CAM.z, ...os.map(o => o.z1)) + 1;
-    svg.setAttribute('viewBox', `${x0} ${z0} ${x1 - x0} ${z1 - z0}`); svg.innerHTML = '';
-    const mk = (t, a) => { const e = document.createElementNS(NS, t); for (const k in a) e.setAttribute(k, a[k]); svg.append(e); return e; }, px = (x1 - x0) / 700;
+    PB = { x: x0, y: z0, w: x1 - x0, h: z1 - z0 }; if (!PV) PV = { ...PB };
+    svg.setAttribute('viewBox', `${PV.x} ${PV.y} ${PV.w} ${PV.h}`); svg.innerHTML = '';
+    const mk = (t, a) => { const e = document.createElementNS(NS, t); for (const k in a) e.setAttribute(k, a[k]); svg.append(e); return e; }, px = PV.w / 700;      // marker sizes follow the zoom, so they stay the same on screen
     os.sort((a, b) => (b.x1 - b.x0) * (b.z1 - b.z0) - (a.x1 - a.x0) * (a.z1 - a.z0)).forEach(o => {      // big first, so small objects stay clickable on top
         const sel = o.id === selObj, r = mk('rect', { x: o.x0, y: o.z0, width: Math.max(o.x1 - o.x0, px * 3), height: Math.max(o.z1 - o.z0, px * 3), fill: sel ? 'rgba(250,204,21,.55)' : 'rgba(59,130,246,.15)', stroke: sel ? '#ca8a04' : '#3b82f6', 'stroke-width': px * (sel ? 2.5 : 1), style: 'cursor:pointer' });
-        const t = document.createElementNS(NS, 'title'); t.textContent = o.name; r.append(t); r.onclick = () => { selObj = sel ? null : o.id; fillList(); };
+        const t = document.createElementNS(NS, 'title'); t.textContent = o.name; r.append(t); r.onclick = () => { if (planMoved) return; selObj = sel ? null : o.id; fillList(); };
     });
     mk('circle', { cx: CAM.x, cy: CAM.z, r: px * 6, fill: '#dc2626' });
     const hp = hiPair !== null && pairs[hiPair] && LM[pairs[hiPair].lm];
@@ -87,19 +94,20 @@ function drawPlan() {
             const p = LM[ix[0]], on = m && ix.includes(Number($('lmList').value));
             const c = mk('circle', { cx: p.x, cy: p.z, r: px * 7, fill: on ? '#16a34a' : '#fff', stroke: '#16a34a', 'stroke-width': px * 2.5, style: 'cursor:pointer' });
             const t = document.createElementNS(NS, 'title'); t.textContent = ix.map(i => LM[i].label).join('\n'); c.append(t);
-            c.onclick = ev => { ev.stopPropagation(); const cur = ix.indexOf(Number($('lmList').value)); $('lmList').value = ix[(cur + 1) % ix.length]; $('lmList').onchange(); $('lmList').selectedOptions[0]?.scrollIntoView({ block: 'nearest' }); };
+            c.onclick = ev => { ev.stopPropagation(); if (planMoved) return; const cur = ix.indexOf(Number($('lmList').value)); $('lmList').value = ix[(cur + 1) % ix.length]; $('lmList').onchange(); $('lmList').selectedOptions[0]?.scrollIntoView({ block: 'nearest' }); };
         });
     } else if (m) mk('circle', { cx: m.x, cy: m.z, r: px * 6, fill: 'none', stroke: '#16a34a', 'stroke-width': px * 3 });
 }
 function draw() {
     const w = img.naturalWidth || 1280, h = img.naturalHeight || 720; cv.width = w; cv.height = h;
-    const c = cv.getContext('2d'); c.clearRect(0, 0, w, h); c.lineWidth = Math.max(2, w / 400); c.font = Math.round(w / 55) + 'px sans-serif';
-    const cross = (u, v, col, txt) => { const x = u * w, y = v * h, s = w / 90; c.strokeStyle = col; c.beginPath(); c.moveTo(x - s, y); c.lineTo(x + s, y); c.moveTo(x, y - s); c.lineTo(x, y + s); c.stroke(); if (txt) { c.fillStyle = col; c.fillText(txt, x + s, y - s / 2); } };
+    const f = 1 / Z.k;                                       // marks keep their size on screen while the picture is magnified
+    const c = cv.getContext('2d'); c.clearRect(0, 0, w, h); c.lineWidth = Math.max(2, w / 400) * f; c.font = Math.round(w / 55 * f) + 'px sans-serif';
+    const cross = (u, v, col, txt) => { const x = u * w, y = v * h, s = w / 90 * f; c.strokeStyle = col; c.beginPath(); c.moveTo(x - s, y); c.lineTo(x + s, y); c.moveTo(x, y - s); c.lineTo(x, y + s); c.stroke(); if (txt) { c.fillStyle = col; c.fillText(txt, x + s, y - s / 2); } };
     pairs.forEach((p, i) => {
         cross(p.u, p.v, i === hiPair ? '#22d3ee' : '#ff3c3c', String(i + 1));
-        if (i === hiPair) { c.strokeStyle = '#22d3ee'; c.beginPath(); c.arc(p.u * w, p.v * h, w / 45, 0, 7); c.stroke(); }
+        if (i === hiPair) { c.strokeStyle = '#22d3ee'; c.beginPath(); c.arc(p.u * w, p.v * h, w / 45 * f, 0, 7); c.stroke(); }
         const q = pose && pose.projected[i];
-        if (q) { c.strokeStyle = '#22c55e'; c.beginPath(); c.arc(q[0] * w, q[1] * h, w / 90, 0, 7); c.moveTo(p.u * w, p.v * h); c.lineTo(q[0] * w, q[1] * h); c.stroke(); }
+        if (q) { c.strokeStyle = '#22c55e'; c.beginPath(); c.arc(q[0] * w, q[1] * h, w / 90 * f, 0, 7); c.moveTo(p.u * w, p.v * h); c.lineTo(q[0] * w, q[1] * h); c.stroke(); }
     });
     if (pending) cross(pending.u, pending.v, '#facc15');
 }
@@ -109,8 +117,30 @@ function drawPairs() {
         const x = Object.assign(document.createElement('button'), { type: 'button', textContent: '✕', className: 'btn-delete' }); x.onclick = () => { pairs.splice(i, 1); hiPair = null; pose = null; $('calSave').disabled = true; drawPairs(); draw(); }; d.append(x); box.append(d); });
     draw();
 }
-img.addEventListener('load', draw);
+img.addEventListener('load', () => { $('calSize').textContent = img.naturalWidth + '×' + img.naturalHeight + ' px'; draw(); });
+// magnify the frame: wheel around the cursor, drag to move (a drag is not a click)
+const Z = { k: 1, x: 0, y: 0 }, wrap = $('calWrap');
+let dragMoved = false;
+function applyZoom() { $('calZoom').style.transform = `translate(${Z.x}px, ${Z.y}px) scale(${Z.k})`; draw(); }
+function zoomImg(factor, px, py) {
+    const k = Math.min(16, Math.max(1, Z.k * factor)), r = k / Z.k, W = wrap.clientWidth, H = wrap.clientHeight;
+    Z.x = Math.min(0, Math.max(W - W * k, px - (px - Z.x) * r)); Z.y = Math.min(0, Math.max(H - H * k, py - (py - Z.y) * r)); Z.k = k; applyZoom();
+}
+wrap.addEventListener('wheel', e => { e.preventDefault(); const r = wrap.getBoundingClientRect(); zoomImg(e.deltaY < 0 ? 1.25 : 0.8, e.clientX - r.left, e.clientY - r.top); }, { passive: false });
+wrap.addEventListener('pointerdown', e => {
+    let lx = e.clientX, ly = e.clientY, moved = 0;
+    const move = ev => {
+        moved += Math.abs(ev.clientX - lx) + Math.abs(ev.clientY - ly);
+        if (moved > 6 && Z.k > 1) { const W = wrap.clientWidth, H = wrap.clientHeight; Z.x = Math.min(0, Math.max(W - W * Z.k, Z.x + ev.clientX - lx)); Z.y = Math.min(0, Math.max(H - H * Z.k, Z.y + ev.clientY - ly)); applyZoom(); }
+        lx = ev.clientX; ly = ev.clientY;
+    }, up = () => { dragMoved = moved > 6; window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+});
+$('calZin').onclick = () => zoomImg(1.5, wrap.clientWidth / 2, wrap.clientHeight / 2);
+$('calZout').onclick = () => zoomImg(1 / 1.5, wrap.clientWidth / 2, wrap.clientHeight / 2);
+$('calZ0').onclick = () => { Z.k = 1; Z.x = Z.y = 0; applyZoom(); };
 $('calWrap').addEventListener('click', e => {
+    if (dragMoved) { dragMoved = false; return; }
     const r = img.getBoundingClientRect(); pending = { u: (e.clientX - r.left) / r.width, v: (e.clientY - r.top) / r.height };
     $('calPending').textContent = 'Точка избрана - изберете обекта от списъка.'; $('calAdd').disabled = !$('lmList').value; draw();
 });
@@ -122,7 +152,7 @@ $('calAdd').onclick = () => {
     pairs.push({ lm: Number($('lmList').value), label: m.label, u: pending.u, v: pending.v }); pending = null; pose = null; $('calSave').disabled = true;
     $('calPending').textContent = 'Кликнете следващата точка.'; $('calAdd').disabled = true; drawPairs();
 };
-$('calReload').onclick = () => { img.src = "{{ url_for('admin_camera_snapshot', cam_id=cam.id) }}?t=" + Date.now(); };
+$('calReload').onclick = () => { img.src = "{{ url_for('admin_camera_snapshot', cam_id=cam.id) }}?full=1&t=" + Date.now(); };
 $('calSolve').onclick = async () => {
         $('calRes').textContent = 'Смятам...';
     const [ok, d] = await post("{{ url_for('admin_camera_calibrate_solve', cam_id=cam.id) }}", { w: img.naturalWidth, h: img.naturalHeight, distortion: $('calK1').checked, move: $('calMove').checked,
@@ -137,6 +167,29 @@ $('calSave').onclick = async () => {
     const [ok, d] = await post("{{ url_for('admin_camera_calibrate_save', cam_id=cam.id) }}", { yaw: pose.yaw, tilt: pose.tilt, roll: pose.roll, fov: pose.fov, pos: $('calMove').checked ? pose.pos : null, pairs });
     $('calRes').innerHTML += ok ? '<br><b style="color:#16a34a">Запазено.</b> Планът и 3D картата ще я покажат след презареждане.' : '<br>' + (d.error || 'Грешка при запис.');
 };
+// magnify the plan the same way (the viewBox shrinks around the cursor)
+const plan = $('lmPlan');
+function zoomPlan(factor, cx, cy) {
+    const w = Math.min(PB.w, Math.max(PB.w / 40, PV.w / factor)), r = w / PV.w;
+    PV = { x: cx - (cx - PV.x) * r, y: cy - (cy - PV.y) * r, w, h: PV.h * r };
+    if (w >= PB.w) PV = { ...PB };
+    drawPlan();
+}
+const toSvg = (cx, cy) => { const p = plan.createSVGPoint(); p.x = cx; p.y = cy; return p.matrixTransform(plan.getScreenCTM().inverse()); };
+plan.addEventListener('wheel', e => { e.preventDefault(); const p = toSvg(e.clientX, e.clientY); zoomPlan(e.deltaY < 0 ? 1.3 : 1 / 1.3, p.x, p.y); }, { passive: false });
+plan.addEventListener('pointerdown', e => {
+    let lx = e.clientX, ly = e.clientY, moved = 0; planMoved = false;
+    const move = ev => {
+        moved += Math.abs(ev.clientX - lx) + Math.abs(ev.clientY - ly);
+        if (moved > 6) { planMoved = true; const s = plan.getScreenCTM().a; PV.x -= (ev.clientX - lx) / s; PV.y -= (ev.clientY - ly) / s; plan.setAttribute('viewBox', `${PV.x} ${PV.y} ${PV.w} ${PV.h}`); }
+        lx = ev.clientX; ly = ev.clientY;
+    }, up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); setTimeout(() => { planMoved = false; }, 0); };
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+});
+const mid = () => ({ x: PV.x + PV.w / 2, y: PV.y + PV.h / 2 });
+$('plZin').onclick = () => zoomPlan(1.5, mid().x, mid().y);
+$('plZout').onclick = () => zoomPlan(1 / 1.5, mid().x, mid().y);
+$('plZ0').onclick = () => { PV = { ...PB }; drawPlan(); };
 fillList(); drawPairs();
 </script>
 {% endif %}
