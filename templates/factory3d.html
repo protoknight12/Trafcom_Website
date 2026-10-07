@@ -335,8 +335,8 @@ tgt = layer('roomair');
     const fl = box(s.x, s.x + s.width, s.z, s.z + s.depth, y0 + 0.02, y0 + 0.08, new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0, depthWrite: false }));   // floor, more opaque: visible from above
     m.visible = fl.visible = false; m.userData.floor = fl; ROOMAIR[s.id] = m;
 });
-// temperature -> colour gradient (shared with the plan): cold blue, comfortable green, warm yellow, hot red
-const TEMP_STOPS = [[14, [59, 130, 246]], [19, [34, 211, 238]], [22, [34, 197, 94]], [25, [250, 204, 21]], [30, [239, 68, 68]]];
+// temperature -> colour gradient (shared with the plan): blue at 16 °C and below, red at 28 °C and above, blended in between
+const TEMP_STOPS = [[16, [37, 99, 235]], [28, [239, 68, 68]]];
 window.hallTempRgb = t => {
     if (t <= TEMP_STOPS[0][0]) return TEMP_STOPS[0][1];
     for (let i = 1; i < TEMP_STOPS.length; i++) if (t <= TEMP_STOPS[i][0]) {

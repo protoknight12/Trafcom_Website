@@ -417,6 +417,18 @@ def test_auto_place_devices_by_room_position(admin_client):
     db.session.add(TemperatureReading(sensor_id=TemperatureSensor.query.filter_by(mqtt_topic='t/9').one().id, ts=1, temperature=19.0))
     db.session.commit()
     assert set(admin_client.get('/admin/hall/live').get_json()['rooms'].values()) == {19.0}
+    # an office standing above the kitchen (same footprint): a sensor with no room link belongs to the room at its own height
+    from app import HallShape
+    kit = HallShape(kind='room', name='Кухня', x=100, z=100, width=5, depth=5, height=2.5, elevation=0, floors=1)
+    off = HallShape(kind='room', name='Офис', x=100, z=100, width=5, depth=5, height=2.5, elevation=2.5, floors=1)
+    sn = TemperatureSensor.query.filter_by(mqtt_topic='t/9').one()
+    sn.room_id = None
+    db.session.add_all([kit, off])
+    db.session.flush()
+    eq = HallEquipment.query.filter_by(kind='sensor', ref_id=sn.id).one()
+    eq.x, eq.z, eq.elevation, eq.height = 101, 101, 4.0, 0.1
+    db.session.commit()
+    assert list(admin_client.get('/admin/hall/live').get_json()['rooms']) == [str(off.id)]
 
 
 def test_sun_endpoint_and_solar_strings_admin_only(admin_client):
