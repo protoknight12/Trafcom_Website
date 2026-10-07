@@ -18,15 +18,20 @@ from sqlalchemy import text
 from app import app, db
 
 with app.app_context():
+    # the backfill must run only when the column is created: deploy/update.sh re-runs every migration on each release,
+    # and a repeat would flip meters an admin switched back to IP (with an old mqtt_topic left) to MQTT again
+    fresh = not db.session.execute(text(
+        "SELECT 1 FROM information_schema.columns WHERE table_name = 'shelly_device' AND column_name = 'connection_type'")).first()
     db.session.execute(text('''
         ALTER TABLE shelly_device ADD COLUMN IF NOT EXISTS connection_type VARCHAR(20) NOT NULL DEFAULT 'ip'
     '''))
     db.session.execute(text('''
         ALTER TABLE shelly_device ADD COLUMN IF NOT EXISTS mqtt_topic VARCHAR(150)
     '''))
-    db.session.execute(text('''
-        UPDATE shelly_device SET connection_type = 'mqtt' WHERE mqtt_topic IS NOT NULL
-    '''))
+    if fresh:
+        db.session.execute(text('''
+            UPDATE shelly_device SET connection_type = 'mqtt' WHERE mqtt_topic IS NOT NULL
+        '''))
     db.session.commit()
 
 print("shelly_device.connection_type added and backfilled (or already existed).")
