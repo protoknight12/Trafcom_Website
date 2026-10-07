@@ -15205,15 +15205,46 @@ def _heatpump_tariff(ts, cfg):
     return cfg['price_night'] if night else cfg['price_day']
 
 
-def _heatpump_cost(energy_rows, pump_rows, cfg):
+def _grid_share_rows(since):
+    """[(ts, grid_share 0..1)] of the building's consumption that came from the grid, one per minute of the Solis log.
+
+    The bus load is grid import (the external CT, read through the grid-meter device's source inverter) plus what every
+    inverter puts on the AC side (negative while one charges its battery); the rest of it comes from the sun, battery
+    included (it is charged by the sun first). ponytail: one pro-rata share for every consumer on the bus - an electron
+    can't be traced; reads the CT inverter's JSON, so a month costs a second or two."""
+    grid = ModbusDevice.query.filter_by(device_type='solis_grid_meter').first()
+    invs = {d.id for d in ModbusDevice.query.filter_by(device_type='solis_s6')}
+    if not grid or grid.source_device_id not in invs:
+        return []
+    ac = {i: [] for i in invs}
+    for r in SolisReadingLog.query.filter(SolisReadingLog.device_id.in_(invs), SolisReadingLog.ts >= since - HEATPUMP_COST_GAP)             .order_by(SolisReadingLog.ts):
+        ac[r.device_id].append(r)
+
+    stamps = {i: [x.ts for x in rows] for i, rows in ac.items()}
+
+    def near(i, ts):
+        k = bisect_right(stamps[i], ts) - 1
+        return ac[i][k].ac_power if k >= 0 and ts - stamps[i][k] <= HEATPUMP_COST_GAP and ac[i][k].ac_power is not None else 0.0
+    out = []
+    for r in ac[grid.source_device_id]:
+        m3 = json.loads(r.snapshot_json).get('meter_3p') or {}
+        imp = abs(m3.get('active_power') or 0.0) if m3.get('direction') == 'import' else 0.0
+        load = imp + sum(near(i, r.ts) for i in invs)
+        if load > 0:
+            out.append((r.ts, min(imp / load, 1.0)))
+    return out
+
+
+def _heatpump_cost(energy_rows, pump_rows, cfg, share_rows=()):
     """Split the meter's energy into heating / cooling / standby (compressor off) and price it.
 
     energy_rows: [(ts, cumulative_kwh)], pump_rows: [(ts, reading dict)], both ascending. Each energy
     interval takes the pump state sampled just before its end.
     ponytail: the pump is sampled once a minute, so a compressor that cycles inside one minute is
     attributed to whatever state the sample caught - fine over days, noisy over minutes."""
-    out = {k: {'kwh': 0.0, 'cost': 0.0} for k in ('heating', 'cooling', 'standby', 'unknown')}
+    out = {k: {'kwh': 0.0, 'cost': 0.0} for k in ('heating', 'cooling', 'standby', 'unknown', 'grid', 'solar', 'src_unknown')}
     stamps = [t for t, _ in pump_rows]
+    share_stamps = [t for t, _ in share_rows]
     for (t0, e0), (t1, e1) in zip(energy_rows, energy_rows[1:]):
         delta = e1 - e0
         if delta < 0:  # meter reset
@@ -15228,6 +15259,15 @@ def _heatpump_cost(energy_rows, pump_rows, cfg):
             cat = 'cooling' if pump_rows[i][1].get('Betriebsart') == HEATPUMP_COOLING_MODE else 'heating'
         out[cat]['kwh'] += delta
         out[cat]['cost'] += delta * _heatpump_tariff(t1, cfg)
+        # where it came from: the grid part is paid at the tariff, the sun's part is free
+        j = bisect_right(share_stamps, t1) - 1
+        if j < 0 or t1 - share_stamps[j] > HEATPUMP_COST_GAP:
+            out['src_unknown']['kwh'] += delta
+        else:
+            g = share_rows[j][1]
+            out['grid']['kwh'] += delta * g
+            out['grid']['cost'] += delta * g * _heatpump_tariff(t1, cfg)
+            out['solar']['kwh'] += delta * (1 - g)
     return out
 
 
@@ -15273,7 +15313,7 @@ def admin_heatpump_cost():
     energy = _heatpump_energy_series(logs)
     pump = [(r.ts, json.loads(r.data_json)) for r in HeatPumpReading.query
             .filter(HeatPumpReading.ts >= since - HEATPUMP_COST_GAP).order_by(HeatPumpReading.ts)]
-    res = _heatpump_cost(energy, pump, cfg)
+    res = _heatpump_cost(energy, pump, cfg, _grid_share_rows(since))
     return jsonify(configured=True, categories={k: {m: round(v, 3 if m == 'kwh' else 2) for m, v in d.items()}
                                                 for k, d in res.items()},
                    since=since, first_data=pump[0][0] if pump else None)

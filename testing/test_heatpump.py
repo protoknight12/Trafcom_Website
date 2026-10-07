@@ -158,7 +158,18 @@ def test_cost_split_by_pump_state():
     assert round(r['heating']['cost'], 4) == round(0.2 * 0.20, 4)
     # a hole in the meter log keeps its (real) energy as 'unknown'; a counter reset adds nothing negative
     gap = appmod._heatpump_cost([(t0, 100), (t0 + 3600, 105), (t0 + 3660, 1)], pump, _cfg())
-    assert gap['unknown']['kwh'] == 5 and sum(v['kwh'] for v in gap.values()) == 5
+    assert gap['unknown']['kwh'] == 5 and sum(gap[k]['kwh'] for k in ('heating', 'cooling', 'standby', 'unknown')) == 5
+
+
+def test_cost_split_grid_vs_solar():
+    t0 = 1_000_000
+    energy = [(t0 + 60 * i, 0.1 * i) for i in range(4)] + [(t0 + 60 * 3 + 600, 0.3 + 0.1)]   # last step: 10 min after any sample
+    pump = [(t0 + 60 * i, {'Verdichter': True, 'Betriebsart': 1}) for i in range(4)] + [(t0 + 60 * 3 + 600, {'Verdichter': True, 'Betriebsart': 1})]
+    shares = [(t0 + 60, 1.0), (t0 + 120, 0.25)]       # a share holds for HEATPUMP_COST_GAP after its sample
+    r = appmod._heatpump_cost(energy, pump, _cfg(), shares)
+    assert round(r['grid']['kwh'], 3) == 0.15 and round(r['solar']['kwh'], 3) == 0.15   # 0.1 + 0.025 + 0.025 / 0 + 0.075 + 0.075
+    assert round(r['src_unknown']['kwh'], 3) == 0.1                                    # the step after the long hole
+    assert round(r['grid']['cost'], 4) == round(0.15 * 0.20, 4)                        # all in the day tariff
 
 
 def test_energy_series_falls_back_to_power():
