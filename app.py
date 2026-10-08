@@ -15023,7 +15023,13 @@ def _shelly_history_poll_tick():
     snapshots += [_dtsu666_snapshot(d) for d in ModbusDevice.query.filter_by(device_type='dtsu666').order_by(ModbusDevice.id)]
     now_ts = int(datetime.now().timestamp())
     _temp_log_tick()
-    _convector_log_tick()
+    try:
+        _convector_log_tick()
+    except Exception:                       # e.g. ConvectorLog table not created yet - must not cost the other logs their commit
+        db.session.rollback()
+        app.logger.exception('convector log tick failed')
+        _temp_logged.clear()                # rollback dropped the pending temperature rows; re-write them on this tick
+        _temp_log_tick()
     for snap in snapshots:
         if snap['online']:
             db.session.add(ShellyReadingLog(
