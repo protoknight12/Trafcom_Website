@@ -15433,13 +15433,9 @@ def _billing_period(reading_day, today, back=0):
     return reading(today.year, m), reading(today.year, m + 1)
 
 
-@app.route('/admin/heatpump/cost')
-@limiter.exempt
-@role_required('admin')
-def admin_heatpump_cost():
-    cfg = _heatpump_cost_cfg()
-    if not cfg['meter']:
-        return jsonify(configured=False)
+def _cost_window(cfg):
+    """(since, until) unix seconds for the request's ?period= (today / 7d / 30d / month / billing / billing_prev / custom with from & to),
+    or a Bulgarian error string for a bad custom range. Shared by the heat pump cost and the per-meter energy report."""
     now = datetime.now()
     midnight = lambda d: datetime(d.year, d.month, d.day)
     period, end = request.args.get('period'), now
@@ -15453,11 +15449,24 @@ def admin_heatpump_cost():
         try:
             a, b = (datetime.strptime(request.args.get(k, ''), '%Y-%m-%d') for k in ('from', 'to'))
         except ValueError:
-            return jsonify(configured=True, error='Избери начална и крайна дата.')
+            return 'Избери начална и крайна дата.'
         if b < a:
-            return jsonify(configured=True, error='Началната дата е след крайната.')
+            return 'Началната дата е след крайната.'
         start, end = a, b + timedelta(days=1)
-    since, until = int(start.timestamp()), int(end.timestamp())
+    return int(start.timestamp()), int(end.timestamp())
+
+
+@app.route('/admin/heatpump/cost')
+@limiter.exempt
+@role_required('admin')
+def admin_heatpump_cost():
+    cfg = _heatpump_cost_cfg()
+    if not cfg['meter']:
+        return jsonify(configured=False)
+    window = _cost_window(cfg)
+    if isinstance(window, str):
+        return jsonify(configured=True, error=window)
+    since, until = window
     logs = ShellyReadingLog.query.filter(ShellyReadingLog.host == cfg['meter'], ShellyReadingLog.ts >= since, ShellyReadingLog.ts <= until)         .order_by(ShellyReadingLog.ts).all()
     energy = _heatpump_energy_series(logs)
     pump = [(r.ts, json.loads(r.data_json)) for r in HeatPumpReading.query
@@ -15466,6 +15475,49 @@ def admin_heatpump_cost():
     return jsonify(configured=True, categories={k: {m: round(v, 3 if m == 'kwh' else 2) for m, v in d.items()}
                                                 for k, d in res.items()},
                    since=since, until=until, first_data=pump[0][0] if pump else None)
+
+
+def _meter_log_keys(kind, ident):
+    """(device, [ShellyReadingLog.host keys]) of one consuming meter; a Shelly moved IP <-> MQTT has rows under both keys."""
+    if kind == 'shelly':
+        d = ShellyDevice.query.get_or_404(ident)
+        return d, list(dict.fromkeys(k for k in (d.mqtt_topic, d.host) if k))
+    d = ModbusDevice.query.get_or_404(ident)
+    if d.device_type != 'dtsu666':
+        abort(404)
+    return d, [f'{d.host}:{d.port}']
+
+
+@app.route('/admin/energy-report')
+@limiter.exempt
+@role_required('admin')
+def admin_energy_report():
+    """Chart series + cost/saving of one consuming meter: ?kind=shelly|modbus&id=&period= (see _cost_window()).
+    Prices are the heat pump page's day/night tariff (one tariff for the whole site). The sun's share of the energy
+    (solar + battery) is what the grid would have charged: the saving - same rule as the heat pump cost."""
+    cfg = _heatpump_cost_cfg()
+    window = _cost_window(cfg)
+    if isinstance(window, str):
+        return jsonify(error=window)
+    since, until = window
+    _, keys = _meter_log_keys(request.args.get('kind', ''), request.args.get('id', type=int))
+    logs = ShellyReadingLog.query.filter(ShellyReadingLog.host.in_(keys), ShellyReadingLog.ts >= since, ShellyReadingLog.ts <= until)         .order_by(ShellyReadingLog.ts).all()
+    cost = _heatpump_cost(_heatpump_energy_series(logs), [], cfg, _grid_share_rows(since))
+    total = {'kwh': cost['unknown']['kwh'], 'cost': cost['unknown']['cost']}       # no pump rows: everything lands in 'unknown'
+    thin = logs[::max(1, len(logs) // 600)]
+    series = {'power': [], 'voltage': [], 'current': []}
+    for r in thin:
+        try:
+            ch = json.loads(r.channels_json or '[]')
+        except ValueError:
+            ch = []
+        volts = [c['voltage'] for c in ch if c.get('voltage')]
+        amps = [c['current'] for c in ch if c.get('current') is not None]
+        series['power'].append([r.ts, None if r.total_power is None else round(r.total_power)])
+        series['voltage'].append([r.ts, round(sum(volts) / len(volts), 1) if volts else None])
+        series['current'].append([r.ts, round(sum(amps), 2) if amps else None])
+    return jsonify(series=series, since=since, until=until, priced=bool(cfg['price_day'] or cfg['price_night']),
+                   cost={'total': total, 'grid': cost['grid'], 'solar': cost['solar'], 'src_unknown': cost['src_unknown']})
 
 
 # ----- "Виж лог": the recorded rows of any device / machine, in a frame -----
@@ -15549,9 +15601,10 @@ def admin_device_log():
     kind, ident = request.args.get('kind', ''), request.args.get('id', type=int)
     limit = request.args.get('limit', 50, type=int)
     limit = limit if limit in DEVICE_LOG_LIMITS else 50
-    sections = []
+    sections, energy_devices = [], []
 
     def shelly(d):
+        energy_devices.append({'kind': 'shelly', 'id': d.id, 'name': d.name})
         return [_shelly_log_section(d.name, k, limit) for k in dict.fromkeys(k for k in (d.mqtt_topic, d.host) if k)]     # a meter moved IP <-> MQTT has rows under both keys
     if kind == 'shelly':
         d = ShellyDevice.query.get_or_404(ident)
@@ -15559,6 +15612,7 @@ def admin_device_log():
     elif kind == 'modbus':
         d = ModbusDevice.query.get_or_404(ident)
         title, sections = d.name, _modbus_log_sections(d, limit)
+        energy_devices += [{'kind': 'modbus', 'id': d.id, 'name': d.name}] if d.device_type == 'dtsu666' else []
     elif kind == 'machine':
         m = Machine.query.get_or_404(ident)
         title = m.name
@@ -15566,6 +15620,7 @@ def admin_device_log():
             sections += shelly(d)
         for d in m.modbus_devices:
             sections += _modbus_log_sections(d, limit)
+            energy_devices += [{'kind': 'modbus', 'id': d.id, 'name': d.name}] if d.device_type == 'dtsu666' else []
     elif kind == 'sensor':
         s = TemperatureSensor.query.get_or_404(ident)
         title, sections = s.name, [_sensor_log_section(s, limit)]
@@ -15577,7 +15632,7 @@ def admin_device_log():
     else:
         abort(404)
     return render_template('admin_device_log.html', title=title, sections=sections, limit=limit, limits=DEVICE_LOG_LIMITS,
-                           kind=kind, ident=ident)
+                           kind=kind, ident=ident, energy_devices=energy_devices)
 
 
 @app.route('/admin/heatpump/cost-settings', methods=['POST'])

@@ -130,6 +130,18 @@ def test_convector_log_only_on_change(client):
     assert 'Включен' in page and 'Изключен' in page and 'показани 2 от 2' in page
 
 
+def test_energy_report(client):
+    _, sh, dt, so = _seed()
+    _login(client, 'dl_admin')
+    j = client.get(f'/admin/energy-report?kind=shelly&id={sh}&period=custom&from=1970-01-05&to=2030-01-01').get_json()
+    assert len(j['series']['power']) > 0 and j['series']['power'][0][1] == 100 and 'solar' in j['cost']
+    assert j['cost']['total']['kwh'] > 0
+    assert client.get(f'/admin/energy-report?kind=modbus&id={dt}&period=today').get_json()['series']['power'] == []
+    assert client.get(f'/admin/energy-report?kind=modbus&id={so}').status_code == 404              # an inverter produces, it is not a consumer
+    assert 'error' in client.get(f'/admin/energy-report?kind=shelly&id={sh}&period=custom').get_json()
+    assert 'data-energy-panel' in client.get(f'/admin/device-log?kind=shelly&id={sh}').get_data(as_text=True)
+
+
 def test_log_access_and_missing(client):
     _, sh, _, _ = _seed()
     assert client.get(f'/admin/device-log?kind=shelly&id={sh}').status_code in (302, 401)       # anonymous -> login

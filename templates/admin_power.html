@@ -520,6 +520,15 @@
             </section>
             <div id="meters"></div>
 
+            {% for d in devices if not focus_host or d.host == focus_host %}
+            <section class="admin-card"><h3 style="margin-top: 0;">Консумация и разход: {{ d.name }}</h3>
+                <div data-energy-panel data-kind="shelly" data-id="{{ d.id }}" data-url="{{ url_for('admin_energy_report') }}"></div></section>
+            {% endfor %}
+            {% for d in modbus_devices if d.device_type == 'dtsu666' and (not focus_host or focus_host == d.host ~ ':' ~ d.port) %}
+            <section class="admin-card"><h3 style="margin-top: 0;">Консумация и разход: {{ d.name }}</h3>
+                <div data-energy-panel data-kind="modbus" data-id="{{ d.id }}" data-url="{{ url_for('admin_energy_report') }}"></div></section>
+            {% endfor %}
+
             {% if focus_host and focus_is_shelly %}
             <section class="admin-card" id="historySection">
                 <h3 style="margin-top: 0;">История за период</h3>
@@ -1121,5 +1130,6 @@
     })();
 </script>
 {% endif %}
+<script src="{{ url_for('static', filename='js/energy_panel.js') }}"></script>
 </body>
 </html>
