@@ -15492,6 +15492,54 @@ def _meter_log_keys(key):
     abort(404)
 
 
+def _solis_report(dev, cfg, since, until):
+    """energy-report for a Solis inverter (AC / PV power, AC voltage + current, temperature; the PV energy valued at the tariff = what the
+    sun saves) or for the grid smart meter (the inverter's external CT: power with + = export, voltage, current; imported energy priced
+    at the tariff = what the grid charges). Both read the inverter's minute log (SolisReadingLog)."""
+    grid = dev.device_type == 'solis_grid_meter'
+    src = dev.source_device if grid else dev
+    rows = SolisReadingLog.query.filter(SolisReadingLog.device_id == (src.id if src else 0), SolisReadingLog.ts >= since,
+                                        SolisReadingLog.ts <= until).order_by(SolisReadingLog.ts).all()
+    series = {k: [] for k in ('power', 'pv', 'voltage', 'current', 'temp')}
+    kwh = {'imp': 0.0, 'exp': 0.0, 'pv': 0.0}
+    cost = {'imp': 0.0, 'pv': 0.0}
+    prev = None
+    step = max(1, len(rows) // 600)
+    for i, r in enumerate(rows):
+        try:
+            snap = json.loads(r.snapshot_json or '{}')
+        except ValueError:
+            snap = {}
+        src_part = (snap.get('meter_3p') or {}) if grid else (snap.get('ac') or {})
+        p = src_part.get('active_power') if grid else r.ac_power
+        if prev and r.ts - prev[0] <= HEATPUMP_COST_GAP:
+            dt, price = r.ts - prev[0], _heatpump_tariff(r.ts, cfg)
+            if grid and p is not None and prev[1] is not None:
+                e = (p + prev[1]) / 2 * dt / 3_600_000          # + = export, - = import
+                kwh['exp' if e > 0 else 'imp'] += abs(e)
+                cost['imp'] += -e * price if e < 0 else 0.0
+            elif not grid and r.pv_power is not None and prev[2] is not None:
+                e = (r.pv_power + prev[2]) / 2 * dt / 3_600_000
+                kwh['pv'] += e
+                cost['pv'] += e * price
+        prev = (r.ts, p, r.pv_power)
+        if i % step:
+            continue
+        ph = 'abc'
+        v = [src_part.get(f'voltage_{x}') for x in ph if src_part.get(f'voltage_{x}')]
+        a = [src_part.get(f'current_{x}') for x in ph if src_part.get(f'current_{x}') is not None]
+        series['power'].append([r.ts, None if p is None else round(p)])
+        series['pv'].append([r.ts, None if grid or r.pv_power is None else round(r.pv_power)])
+        series['voltage'].append([r.ts, round(sum(v) / len(v), 1) if v else None])
+        series['current'].append([r.ts, round(sum(a), 2) if a else None])
+        series['temp'].append([r.ts, None if grid else r.temperature])
+    tip_pv = 'Произведената от PV енергия за периода и колко би струвала от мрежата по дневна/нощна тарифа - спестената сума.'
+    cards = ([{'label': 'Внос от мрежата (плащаш)', 'tip': 'Енергия, взета от мрежата през външния CT, и цената ѝ по дневна/нощна тарифа.', 'kwh': kwh['imp'], 'cost': cost['imp']},
+              {'label': 'Износ към мрежата', 'tip': 'Енергия, върната в мрежата. Изкупна цена не е зададена, затова без сума.', 'kwh': kwh['exp'], 'cost': None}]
+             if grid else [{'label': 'Произведено от PV (спестено)', 'tip': tip_pv, 'kwh': kwh['pv'], 'cost': cost['pv']}])
+    return jsonify(series=series, since=since, until=until, priced=bool(cfg['price_day'] or cfg['price_night']), cost=None, cards=cards)
+
+
 def _battery_report(device_id, since, until):
     """energy-report for the batteries of one Solis inverter ('battery:<device id>'): same series as a meter plus the state of charge, no cost
     (a battery stores, it doesn't consume). Both BMS ports combined like the page's battery card: power/current sum, voltage/SOC average.
@@ -15530,6 +15578,10 @@ def admin_energy_report():
     key = request.args.get('key', '')
     if key.startswith('battery:'):
         return _battery_report(key[8:], since, until)
+    modbus = next((m for m in ModbusDevice.query.filter(ModbusDevice.device_type.in_(('solis_s6', 'solis_grid_meter')))
+                   if f'{m.host}:{m.port}' == key), None)
+    if modbus:
+        return _solis_report(modbus, cfg, since, until)
     keys = _meter_log_keys(key)
     logs = ShellyReadingLog.query.filter(ShellyReadingLog.host.in_(keys), ShellyReadingLog.ts >= since, ShellyReadingLog.ts <= until)         .order_by(ShellyReadingLog.ts).all()
     cost = _heatpump_cost(_heatpump_energy_series(logs), [], cfg, _grid_share_rows(since))

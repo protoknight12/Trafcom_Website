@@ -138,7 +138,8 @@ def test_energy_report(client):
     assert len(j['series']['power']) > 0 and j['series']['power'][0][1] == 100 and 'solar' in j['cost']
     assert j['cost']['total']['kwh'] > 0
     assert rep('10.0.0.9:26').get_json()['series']['power'][0][1] == 7000                              # DTSU, keyed host:port
-    assert rep('10.0.0.7:502').status_code == 404                                                      # an inverter is not a consumer
+    inv = rep('10.0.0.7:502').get_json()                                                               # inverter: AC/PV power series + PV value card
+    assert inv['series']['power'][0][1] == 500 and inv['cards'][0]['label'].startswith('Произведено')
     assert client.get('/admin/energy-report?key=10.0.0.5&period=custom').get_json()['error']
     assert 'data-energy-panel' in client.get(f'/admin/device-log?kind=shelly&id={sh}').get_data(as_text=True)
 
@@ -167,6 +168,21 @@ def test_convector_power_and_battery_report(client):
     j = client.get(f'/admin/energy-report?key=battery:{so}&period=custom&from=1970-01-05&to=2030-01-01').get_json()
     row = [p for p in j['series']['power'] if p[1] == 400]
     assert row and j['cost'] is None and [p[1] for p in j['series']['soc']].count(60.0) == 1
+
+
+def test_grid_meter_report(client):
+    _, _, _, so = _seed()
+    with flask_app.app_context():
+        g = ModbusDevice(name='Смарт метър', host='10.0.0.7', port=503, unit_id=2, device_type='solis_grid_meter', source_device_id=so)
+        db.session.add(g)
+        db.session.add(SolisReadingLog(device_id=so, ts=1_000_060, ac_power=0, pv_power=0, snapshot_json=json.dumps(
+            {'meter_3p': {'active_power': -3600.0, 'voltage_a': 230.0, 'current_a': 5.0}})))
+        db.session.add(SolisReadingLog(device_id=so, ts=1_000_120, ac_power=0, pv_power=0, snapshot_json=json.dumps(
+            {'meter_3p': {'active_power': -3600.0, 'voltage_a': 230.0, 'current_a': 5.0}})))
+        db.session.commit()
+    _login(client, 'dl_admin')
+    j = client.get('/admin/energy-report?key=10.0.0.7:503&period=custom&from=1970-01-05&to=2030-01-01').get_json()
+    assert j['cards'][0]['kwh'] > 0.05 and j['series']['voltage'][-1][1] == 230.0 and j['series']['power'][-1][1] == -3600
 
 
 def test_log_access_and_missing(client):

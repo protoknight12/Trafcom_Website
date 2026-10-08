@@ -6,7 +6,7 @@
 var EnergyPanel = (function () {
     var PERIODS = [['today', 'Днес'], ['7d', '7 дни'], ['30d', '30 дни'], ['month', 'Този месец'],
                    ['billing', 'Текущ период (отчет)'], ['billing_prev', 'Предишен период (отчет)'], ['custom', 'От-до']];
-    var CHARTS = [['power', 'Мощност', 'W', '#b07cff'], ['soc', 'Заряд на батерията', '%', '#10b981'], ['voltage', 'Напрежение (средно)', 'V', '#3fa7ff'], ['current', 'Ток (сума по фази)', 'A', '#ffb02e']];
+    var CHARTS = [['power', 'Мощност', 'W', '#b07cff'], ['pv', 'PV мощност', 'W', '#f5c518'], ['soc', 'Заряд на батерията', '%', '#10b981'], ['voltage', 'Напрежение (средно)', 'V', '#3fa7ff'], ['current', 'Ток (сума по фази)', 'A', '#ffb02e'], ['temp', 'Температура', '°C', '#ff6b6b']];
     var TIPS = {
         total: 'Консумирана електроенергия за периода и цената ѝ по дневна/нощна тарифа (цените се задават в страницата на термопомпата).',
         grid: 'Част от енергията, взета от мрежата (внос на външния CT на Solis спрямо цялото потребление на шината). Цената е само за този дял.',
@@ -28,8 +28,8 @@ var EnergyPanel = (function () {
     document.head.appendChild(st);
 
     function card(label, tip, cost, kwh) {
-        return '<div class="ep-card" title="' + tip + '"><div class="text-muted text-small">' + label + '</div><strong>' + cost.toFixed(2) +
-            ' <small>€</small></strong><div class="text-muted text-small">' + kwh.toFixed(2) + ' kWh</div></div>';
+        return '<div class="ep-card" title="' + tip + '"><div class="text-muted text-small">' + label + '</div><strong>' + (cost == null ? kwh.toFixed(2) + ' <small>kWh</small>' : cost.toFixed(2) +
+            ' <small>€</small>') + '</strong><div class="text-muted text-small">' + kwh.toFixed(2) + ' kWh</div></div>';
     }
 
     function available(series) {
@@ -125,7 +125,9 @@ var EnergyPanel = (function () {
             var j = S.data;
             if (!j) { q('.ep-note').textContent = 'Зареждане…'; return; }
             if (j.error) { q('.ep-grid').innerHTML = ''; q('.ep-note').textContent = j.error; layout = null; draw(q('canvas'), {}); legend(); return; }
-            if (!j.cost) { q('.ep-grid').innerHTML = ''; q('.ep-note').textContent = ''; layout = draw(q('canvas'), j.series, S.hidden); legend(); return; }
+            if (!j.cost) {
+                q('.ep-grid').innerHTML = (j.cards || []).map(function (k) { return card(k.label, k.tip, k.cost, k.kwh); }).join('');
+                q('.ep-note').textContent = j.cards && !j.priced ? 'Цените на тока не са зададени - задай ги в страницата на термопомпата.' : ''; layout = draw(q('canvas'), j.series, S.hidden); legend(); return; }
             var C = j.cost, rows = [card('Консумация', TIPS.total, C.total.cost, C.total.kwh),
                 card('От мрежата', TIPS.grid, C.grid.cost, C.grid.kwh),
                 card('Спестено от слънцето (и батерията)', TIPS.solar, C.solar.cost, C.solar.kwh)];

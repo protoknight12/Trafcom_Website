@@ -899,7 +899,7 @@
                 <div class="device-hero-body">${state}</div>
             </div>
             ${body}
-            ${d.kind === 'solis' || d.kind === 'solis_grid_meter' ? '' : `<div data-energy-panel data-key="${d.host}" data-url="{{ url_for('admin_energy_report') }}"></div>`}
+            ${`<div data-energy-panel data-key="${d.host}" data-url="{{ url_for('admin_energy_report') }}"></div>`}
         </section>`;
     }
 
