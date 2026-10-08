@@ -109,6 +109,27 @@ def test_temperature_sensor_log(client):
     assert '18.5 °C' in page and 'показани 2 от 2' in page
 
 
+def test_convector_log_only_on_change(client):
+    from app import Convector, ConvectorLog
+    states = iter([True, True, False, None, False])                          # None = offline: neither logged nor treated as a change
+    orig = appmod._shelly_convector_status
+    appmod._shelly_convector_status = lambda c: {'online': True, 'is_on': next(states), 'power_w': 1500.0, 'error': None}
+    try:
+        with flask_app.app_context():
+            c = Convector(name='Офис', host='10.0.0.77')
+            db.session.add(c)
+            db.session.commit()
+            cid = c.id
+            for _ in range(5):
+                appmod._convector_log_tick(); db.session.commit()
+            assert [r.is_on for r in ConvectorLog.query.filter_by(convector_id=cid).order_by(ConvectorLog.id)] == [True, False]
+    finally:
+        appmod._shelly_convector_status = orig
+    _login(client, 'dl_admin')
+    page = client.get(f'/admin/device-log?kind=convector&id={cid}').get_data(as_text=True)
+    assert 'Включен' in page and 'Изключен' in page and 'показани 2 от 2' in page
+
+
 def test_log_access_and_missing(client):
     _, sh, _, _ = _seed()
     assert client.get(f'/admin/device-log?kind=shelly&id={sh}').status_code in (302, 401)       # anonymous -> login

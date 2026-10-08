@@ -3277,6 +3277,16 @@ class TemperatureReading(db.Model):
     battery = db.Column(db.Float)
 
 
+class ConvectorLog(db.Model):
+    """One row per observed on/off change of a Convector (written by _convector_log_tick(), so it also catches a wall switch or a Shelly
+    schedule, not only this app's toggle). `ts` is unix seconds; convector_id is a plain number so a deleted convector's history stays."""
+    id = db.Column(db.Integer, primary_key=True)
+    convector_id = db.Column(db.Integer, nullable=False, index=True)
+    ts = db.Column(db.Integer, nullable=False, index=True)
+    is_on = db.Column(db.Boolean, nullable=False)
+    power_w = db.Column(db.Float)
+
+
 class QualitySample(db.Model):
     """One sample's reading for a QualityMeasurement dimension row - sample_index
     is 1-based, matching the paper form's numbered sample columns (1..sample_size)."""
@@ -14981,6 +14991,23 @@ def _temp_log_tick():
                                               humidity=state.get('humidity'), battery=state.get('battery')))
 
 
+def _convector_log_tick():
+    """Writes a ConvectorLog row for every convector whose on/off state differs from its last logged one (no commit: the caller's tick
+    commits). An offline convector (is_on None) is skipped, so a reboot is not logged as a switch."""
+    convs = Convector.query.all()
+    if not convs:
+        return
+    with ThreadPoolExecutor(max_workers=len(convs)) as pool:
+        statuses = list(pool.map(_shelly_convector_status, convs))
+    now_ts = int(datetime.now().timestamp())
+    for c, st in zip(convs, statuses):
+        if st['is_on'] is None:
+            continue
+        last = ConvectorLog.query.filter_by(convector_id=c.id).order_by(ConvectorLog.ts.desc(), ConvectorLog.id.desc()).first()
+        if last is None or last.is_on != st['is_on']:
+            db.session.add(ConvectorLog(convector_id=c.id, ts=now_ts, is_on=st['is_on'], power_w=st['power_w']))
+
+
 def _shelly_history_poll_tick():
     """
     One poll-and-log cycle: snapshot every configured meter, write a
@@ -14996,6 +15023,7 @@ def _shelly_history_poll_tick():
     snapshots += [_dtsu666_snapshot(d) for d in ModbusDevice.query.filter_by(device_type='dtsu666').order_by(ModbusDevice.id)]
     now_ts = int(datetime.now().timestamp())
     _temp_log_tick()
+    _convector_log_tick()
     for snap in snapshots:
         if snap['online']:
             db.session.add(ShellyReadingLog(
@@ -15483,6 +15511,13 @@ def _sensor_log_section(s, limit):
     return {'title': f'{s.name} · {s.mqtt_topic}', 'head': ['Време', 'Температура', 'Влажност', 'Батерия'], 'rows': rows, 'total': q.count()}
 
 
+def _convector_log_section(c, limit):
+    q = ConvectorLog.query.filter_by(convector_id=c.id)
+    rows = [[_log_time(r.ts), 'Включен' if r.is_on else 'Изключен', _num(r.power_w, 0, ' W')]
+            for r in q.order_by(ConvectorLog.ts.desc(), ConvectorLog.id.desc()).limit(limit)]
+    return {'title': c.name, 'head': ['Време', 'Състояние', 'Мощност'], 'rows': rows, 'total': q.count()}
+
+
 def _heatpump_log_section(limit):
     q = HeatPumpReading.query
     keys = ('Temp. Aussen', 'Temp. Vorlauf', 'Temp. Ruecklauf', 'Verdichter', 'Betriebsart')
@@ -15528,6 +15563,9 @@ def admin_device_log():
     elif kind == 'sensor':
         s = TemperatureSensor.query.get_or_404(ident)
         title, sections = s.name, [_sensor_log_section(s, limit)]
+    elif kind == 'convector':
+        c = Convector.query.get_or_404(ident)
+        title, sections = c.name, [_convector_log_section(c, limit)]
     elif kind == 'heatpump':
         title, sections = 'Термопомпа', [_heatpump_log_section(limit)]
     else:

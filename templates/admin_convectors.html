@@ -119,6 +119,7 @@
                         </form>
                     </td>
                     <td class="text-right">
+                        {% if current_user.role == 'admin' %}<a href="{{ url_for('admin_device_log', kind='convector', id=c.id) }}" data-frame="stay" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Виж лог</a>{% endif %}
                         <a href="{{ url_for('edit_convector_window', conv_id=c.id) }}" data-frame class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a>
                     </td>
                     <td class="text-right">
