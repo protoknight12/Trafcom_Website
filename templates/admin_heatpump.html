@@ -159,8 +159,14 @@
         ['BSZ Verdichter Betriebsst. WW', 'От тях за БГВ', function (v) { return v + ' ч'; }],
         ['BSZ Verdichter Betriebsst. HKR', 'От тях за отопление', function (v) { return v + ' ч'; }]
     ];
-    var COLORS = {'Temp. Aussen': '#4aa3ff', 'Temp. Vorlauf': '#ff6b4a', 'Temp. Ruecklauf': '#f0b429', 'Temp. Brauchwasser': '#3ccf91'};
-    var NAMES = {'Temp. Aussen': 'Външна', 'Temp. Vorlauf': 'Подаване', 'Temp. Ruecklauf': 'Връщане', 'Temp. Brauchwasser': 'Бойлер'};
+    var COLORS = {'Temp. Aussen': '#4aa3ff', 'Temp. Vorlauf': '#ff6b4a', 'Temp. Ruecklauf': '#f0b429', 'Temp. Brauchwasser': '#3ccf91',
+        'Temp. Aussen verzoegert': '#7dd3fc', 'HKR_Sollwert': '#fdba74', 'Temp. Frischwasser_Istwert': '#6ee7b7', 'Temp. EQ_Eintritt': '#a78bfa',
+        'Temp. EQ_Austritt': '#c4b5fd', 'Temp. Sauggas': '#f9a8d4', 'Temp. Heissgas': '#ef4444', 'Temp. Verdampfung': '#22d3ee', 'Temp. Kondensation': '#fb923c'};
+    var NAMES = {'Temp. Aussen': 'Външна', 'Temp. Vorlauf': 'Подаване', 'Temp. Ruecklauf': 'Връщане', 'Temp. Brauchwasser': 'Бойлер',
+        'Temp. Aussen verzoegert': 'Външна (забавена)', 'HKR_Sollwert': 'Зададена от кривата', 'Temp. Frischwasser_Istwert': 'Прясна вода',
+        'Temp. EQ_Eintritt': 'Източник вход', 'Temp. EQ_Austritt': 'Източник изход', 'Temp. Sauggas': 'Сауг газ', 'Temp. Heissgas': 'Горещ газ',
+        'Temp. Verdampfung': 'Изпарение', 'Temp. Kondensation': 'Кондензация'};
+    var HP_DEFAULT_ON = ['Temp. Aussen', 'Temp. Vorlauf', 'Temp. Ruecklauf', 'Temp. Brauchwasser'];
 
     // Обяснения (по общата документация на Heliotherm) - показват се като подсказка при посочване.
     var TIPS = {
@@ -333,14 +339,27 @@
             cv.width = w * dpr; cv.height = h * dpr;
             var c = cv.getContext('2d'); c.scale(dpr, dpr); c.clearRect(0, 0, w, h);
             var power = series.Power || []; delete series.Power;
-            var pts = [], keys = Object.keys(series);
-            keys.forEach(function (k) { series[k].forEach(function (p) { if (p[1] != null) pts.push(p); }); });
-            if (!pts.length) { c.fillStyle = '#888'; c.fillText('Още няма записана история.', 14, 24); return; }
+            var keys = Object.keys(series);
+            keys.forEach(function (k) { if (!(k in hpHidden)) hpHidden[k] = HP_DEFAULT_ON.indexOf(k) < 0; });
+            var pts = [];
+            keys.forEach(function (k) { if (!hpHidden[k]) series[k].forEach(function (p) { if (p[1] != null) pts.push(p); }); });
+            if (!pts.length) { c.fillStyle = '#888'; c.fillText(keys.length ? 'Всички линии са изключени - включи от легендата.' : 'Още няма записана история.', 14, 24); }
+            if (!pts.length) { legendHtml(); return; }
+            function legendHtml() {
+                var lg = document.getElementById('legend');
+                lg.innerHTML = keys.map(function (k) {
+                    return '<span data-k="' + k + '" style="cursor:pointer;' + (hpHidden[k] ? 'opacity:.4;text-decoration:line-through' : '') + '"><i style="background:' + COLORS[k] + '"></i>' + NAMES[k] + '</span>';
+                }).join('') + (power.length ? '<span data-k="Power" style="cursor:pointer;' + (hpHidden.Power ? 'opacity:.4;text-decoration:line-through' : '') + '"><i style="background:#b07cff"></i>Консумация</span>' : '');
+                lg.querySelectorAll('span').forEach(function (sp) {
+                    sp.onclick = function () { hpHidden[sp.dataset.k] = !hpHidden[sp.dataset.k]; drawChart(); };
+                });
+            }
+
             var t0 = Math.min.apply(null, pts.map(function (p) { return p[0]; })), t1 = Math.max.apply(null, pts.map(function (p) { return p[0]; }));
             var lo = Math.min.apply(null, pts.map(function (p) { return p[1]; })), hi = Math.max.apply(null, pts.map(function (p) { return p[1]; }));
             lo = Math.floor(lo - 1); hi = Math.ceil(hi + 1);
             var L = 38, B = 20, T = 8, R = power.length ? 44 : 8;
-            chartHover = {series: series, power: power, keys: keys, t0: t0, t1: t1, L: L, R: R, w: w};
+            chartHover = {series: series, power: hpHidden.Power ? [] : power, keys: keys.filter(function (k) { return !hpHidden[k]; }), t0: t0, t1: t1, L: L, R: R, w: w};
             function X(t) { return L + (t - t0) / Math.max(1, t1 - t0) * (w - L - R); }
             function Y(v) { return T + (hi - v) / (hi - lo) * (h - T - B); }
             c.font = '11px sans-serif'; c.fillStyle = '#888'; c.strokeStyle = 'rgba(128,128,128,.25)';
@@ -370,13 +389,7 @@
                 power.forEach(function (p, i) { if (i) c.lineTo(X(p[0]), PY(p[1])); else c.moveTo(X(p[0]), PY(p[1])); });
                 c.stroke(); c.setLineDash([]);
             }
-            var lg = document.getElementById('legend');
-            lg.innerHTML = keys.map(function (k) {
-                return '<span data-k="' + k + '" style="cursor:pointer;' + (hpHidden[k] ? 'opacity:.4;text-decoration:line-through' : '') + '"><i style="background:' + COLORS[k] + '"></i>' + NAMES[k] + '</span>';
-            }).join('') + (power.length ? '<span data-k="Power" style="cursor:pointer;' + (hpHidden.Power ? 'opacity:.4;text-decoration:line-through' : '') + '"><i style="background:#b07cff"></i>Консумация</span>' : '');
-            lg.querySelectorAll('span').forEach(function (sp) {
-                sp.onclick = function () { hpHidden[sp.dataset.k] = !hpHidden[sp.dataset.k]; drawChart(); };
-            });
+            legendHtml();
         });
     }
 

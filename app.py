@@ -15435,6 +15435,32 @@ def _billing_period(reading_day, today, back=0):
     return reading(today.year, m), reading(today.year, m + 1)
 
 
+ENERGY_SERIES = ('power', 'p_a', 'p_b', 'p_c', 'aprt', 'react', 'pv', 'soc', 'voltage', 'v_a', 'v_b', 'v_c',
+                 'current', 'i_a', 'i_b', 'i_c', 'pf', 'freq', 'temp')
+
+
+def _energy_point(series, ts, power=None, pv=None, soc=None, temp=None, phases=(), aprt=None, react=None, pf=None, freq=None,
+                  voltage=None, current=None):
+    """Appends one aligned sample to every series of an energy report (None where this device has no such reading - the chart's legend only
+    offers the lines that have data). phases: up to 3 dicts {voltage, current, power}; the totals default to avg V / sum A of the phases."""
+    ph = list(phases)[:3]
+    v = [x['voltage'] for x in ph if x.get('voltage')]
+    a = [x['current'] for x in ph if x.get('current') is not None]
+    row = {'power': power, 'pv': pv, 'soc': soc, 'temp': temp, 'aprt': aprt, 'react': react, 'pf': pf, 'freq': freq,
+           'voltage': voltage if voltage is not None else (round(sum(v) / len(v), 1) if v else None),
+           'current': current if current is not None else (round(sum(a), 2) if a else None)}
+    for i, k in enumerate('abc'):
+        x = ph[i] if i < len(ph) else {}
+        row['p_' + k], row['v_' + k], row['i_' + k] = x.get('power'), x.get('voltage'), x.get('current')
+    for k in ENERGY_SERIES:
+        series.setdefault(k, []).append([ts, row[k]])
+
+
+def _avg(vals):
+    vals = [x for x in vals if x is not None]
+    return round(sum(vals) / len(vals), 3) if vals else None
+
+
 def _cost_window(cfg):
     """(since, until) unix seconds for the request's ?period= (today / 7d / 30d / month / billing / billing_prev / custom with from & to),
     or a Bulgarian error string for a bad custom range. Shared by the heat pump cost and the per-meter energy report."""
@@ -15500,7 +15526,7 @@ def _solis_report(dev, cfg, since, until):
     src = dev.source_device if grid else dev
     rows = SolisReadingLog.query.filter(SolisReadingLog.device_id == (src.id if src else 0), SolisReadingLog.ts >= since,
                                         SolisReadingLog.ts <= until).order_by(SolisReadingLog.ts).all()
-    series = {k: [] for k in ('power', 'pv', 'voltage', 'current', 'temp')}
+    series = {}
     kwh = {'imp': 0.0, 'exp': 0.0, 'pv': 0.0}
     cost = {'imp': 0.0, 'pv': 0.0}
     prev = None
@@ -15525,14 +15551,11 @@ def _solis_report(dev, cfg, since, until):
         prev = (r.ts, p, r.pv_power)
         if i % step:
             continue
-        ph = 'abc'
-        v = [src_part.get(f'voltage_{x}') for x in ph if src_part.get(f'voltage_{x}')]
-        a = [src_part.get(f'current_{x}') for x in ph if src_part.get(f'current_{x}') is not None]
-        series['power'].append([r.ts, None if p is None else round(p)])
-        series['pv'].append([r.ts, None if grid or r.pv_power is None else round(r.pv_power)])
-        series['voltage'].append([r.ts, round(sum(v) / len(v), 1) if v else None])
-        series['current'].append([r.ts, round(sum(a), 2) if a else None])
-        series['temp'].append([r.ts, None if grid else r.temperature])
+        phases = [{'voltage': src_part.get(f'voltage_{x}'), 'current': src_part.get(f'current_{x}'),
+                   'power': src_part.get(f'active_power_{x}') if grid else None} for x in 'abc']
+        _energy_point(series, r.ts, power=None if p is None else round(p), pv=None if grid or r.pv_power is None else round(r.pv_power),
+                      temp=None if grid else r.temperature, phases=phases, aprt=src_part.get('apparent_power'),
+                      react=src_part.get('reactive_power'), pf=src_part.get('power_factor'), freq=src_part.get('frequency'))
     tip_pv = 'Произведената от PV енергия за периода и колко би струвала от мрежата по дневна/нощна тарифа - спестената сума.'
     cards = ([{'label': 'Внос от мрежата (плащаш)', 'tip': 'Енергия, взета от мрежата през външния CT, и цената ѝ по дневна/нощна тарифа.', 'kwh': kwh['imp'], 'cost': cost['imp']},
               {'label': 'Износ към мрежата', 'tip': 'Енергия, върната в мрежата. Изкупна цена не е зададена, затова без сума.', 'kwh': kwh['exp'], 'cost': None}]
@@ -15547,7 +15570,7 @@ def _battery_report(device_id, since, until):
     if not device_id.isdigit() or not db.session.get(ModbusDevice, int(device_id)):
         abort(404)
     rows = SolisReadingLog.query.filter(SolisReadingLog.device_id == int(device_id), SolisReadingLog.ts >= since, SolisReadingLog.ts <= until)         .order_by(SolisReadingLog.ts).all()
-    series = {k: [] for k in ('power', 'soc', 'voltage', 'current')}
+    series = {}
     for r in rows[::max(1, len(rows) // 600)]:
         try:
             snap = json.loads(r.snapshot_json or '{}')
@@ -15556,11 +15579,9 @@ def _battery_report(device_id, since, until):
         ports = [x for x in [snap.get('battery')] + (snap.get('battery_groups') or [])[1:2] if x and x.get('soc') is not None]
         avg = lambda k: round(sum(x[k] for x in ports) / len(ports), 1) if ports and all(x.get(k) is not None for x in ports) else None
         tot = lambda k: round(sum(x[k] for x in ports), 2) if ports and all(x.get(k) is not None for x in ports) else None
-        series['power'].append([r.ts, tot('power')])
-        series['soc'].append([r.ts, avg('soc')])
-        series['voltage'].append([r.ts, avg('voltage')])
-        series['current'].append([r.ts, tot('current')])
-    return jsonify(series=series, since=since, until=until, priced=True, cost=None)
+        _energy_point(series, r.ts, power=tot('power'), soc=avg('soc'), voltage=avg('voltage'), current=tot('current'),
+                      temp=(snap.get('battery') or {}).get('temperature'), phases=[{'power': x.get('power'), 'voltage': x.get('voltage'), 'current': x.get('current')} for x in ports])
+    return jsonify(series=series, since=since, until=until, priced=True, cost=None, plabels={'a': 'порт 1', 'b': 'порт 2', 'c': ''})
 
 
 @app.route('/admin/energy-report')
@@ -15587,17 +15608,16 @@ def admin_energy_report():
     cost = _heatpump_cost(_heatpump_energy_series(logs), [], cfg, _grid_share_rows(since))
     total = {'kwh': cost['unknown']['kwh'], 'cost': cost['unknown']['cost']}       # no pump rows: everything lands in 'unknown'
     thin = logs[::max(1, len(logs) // 600)]
-    series = {'power': [], 'voltage': [], 'current': []}
+    series = {}
     for r in thin:
         try:
             ch = json.loads(r.channels_json or '[]')
         except ValueError:
             ch = []
-        volts = [c['voltage'] for c in ch if c.get('voltage')]
-        amps = [c['current'] for c in ch if c.get('current') is not None]
-        series['power'].append([r.ts, None if r.total_power is None else round(r.total_power)])
-        series['voltage'].append([r.ts, round(sum(volts) / len(volts), 1) if volts else None])
-        series['current'].append([r.ts, round(sum(amps), 2) if amps else None])
+        _energy_point(series, r.ts, power=None if r.total_power is None else round(r.total_power),
+                      phases=[{'voltage': c.get('voltage'), 'current': c.get('current'), 'power': c.get('act_power')} for c in ch],
+                      aprt=sum(c['aprt_power'] for c in ch if c.get('aprt_power') is not None) if any(c.get('aprt_power') is not None for c in ch) else None,
+                      pf=_avg(c.get('pf') for c in ch), freq=_avg(c.get('freq') for c in ch))
     return jsonify(series=series, since=since, until=until, priced=bool(cfg['price_day'] or cfg['price_night']),
                    cost={'total': total, 'grid': cost['grid'], 'solar': cost['solar'], 'src_unknown': cost['src_unknown']})
 
@@ -15795,12 +15815,14 @@ def admin_heatpump_history():
     rows = HeatPumpReading.query.filter(HeatPumpReading.ts >= int(time.time()) - hours * 3600) \
         .order_by(HeatPumpReading.ts).all()
     step = max(1, len(rows) // 600)
-    keys = ('Temp. Aussen', 'Temp. Vorlauf', 'Temp. Ruecklauf', 'Temp. Brauchwasser')
+    keys = ('Temp. Aussen', 'Temp. Vorlauf', 'Temp. Ruecklauf', 'Temp. Brauchwasser', 'Temp. Aussen verzoegert', 'HKR_Sollwert', 'Temp. Frischwasser_Istwert',
+            'Temp. EQ_Eintritt', 'Temp. EQ_Austritt', 'Temp. Sauggas', 'Temp. Heissgas', 'Temp. Verdampfung', 'Temp. Kondensation')
     series = {k: [] for k in keys}
     for r in rows[::step]:
         d = json.loads(r.data_json)
         for k in keys:
-            series[k].append([r.ts, d.get(k)])
+            series[k].append([r.ts, d.get(k) if isinstance(d.get(k), (int, float)) and d.get(k) > -50 else None])   # -50 = sensor not connected
+    series = {k: v for k, v in series.items() if k in keys[:4] or any(p[1] is not None for p in v)}          # the four main lines always, the rest only if this pump has them
     series['Power'] = []                                  # W from the chosen meter's local log (empty when no meter is chosen)
     host = get_text(_HP_PREFIX + 'meter', '')
     if host:

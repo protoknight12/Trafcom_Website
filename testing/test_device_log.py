@@ -113,7 +113,7 @@ def test_convector_log_only_on_change(client):
     from app import Convector, ConvectorLog
     states = iter([True, True, False, None, False])                          # None = offline: neither logged nor treated as a change
     orig = appmod._shelly_convector_status
-    appmod._shelly_convector_status = lambda c: {'online': True, 'is_on': next(states), 'power_w': 1500.0, 'error': None}
+    appmod._shelly_convector_status = lambda c: {'online': True, 'is_on': next(states) if c.name == 'Офис' else None, 'power_w': 1500.0, 'error': None}
     try:
         with flask_app.app_context():
             c = Convector(name='Офис', host='10.0.0.77')
