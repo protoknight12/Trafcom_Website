@@ -175,9 +175,9 @@ def test_grid_meter_report(client):
     with flask_app.app_context():
         g = ModbusDevice(name='Смарт метър', host='10.0.0.7', port=503, unit_id=2, device_type='solis_grid_meter', source_device_id=so)
         db.session.add(g)
-        db.session.add(SolisReadingLog(device_id=so, ts=1_000_060, ac_power=0, pv_power=0, snapshot_json=json.dumps(
+        db.session.add(SolisReadingLog(device_id=so, ts=2_000_060, ac_power=0, pv_power=0, snapshot_json=json.dumps(
             {'meter_3p': {'active_power': -3600.0, 'voltage_a': 230.0, 'current_a': 5.0}})))
-        db.session.add(SolisReadingLog(device_id=so, ts=1_000_120, ac_power=0, pv_power=0, snapshot_json=json.dumps(
+        db.session.add(SolisReadingLog(device_id=so, ts=2_000_120, ac_power=0, pv_power=0, snapshot_json=json.dumps(
             {'meter_3p': {'active_power': -3600.0, 'voltage_a': 230.0, 'current_a': 5.0}})))
         db.session.commit()
     _login(client, 'dl_admin')
