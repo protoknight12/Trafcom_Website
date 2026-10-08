@@ -120,6 +120,7 @@
                         </form>
                     </td>
                 </tr>
+                <tr><td colspan="9" style="padding-top: 0;"><div data-energy-panel data-title="Графика" data-key="sensor:{{ s.id }}" data-url="{{ url_for('admin_energy_report') }}"></div></td></tr>
                 {% endfor %}
                 </tbody>
             </table>
@@ -174,5 +175,6 @@
 })();
 </script>
 
+<script src="{{ url_for('static', filename='js/energy_panel.js') }}"></script>
 </body>
 </html>

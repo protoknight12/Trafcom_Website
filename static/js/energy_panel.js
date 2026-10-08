@@ -16,9 +16,9 @@ var EnergyPanel = (function () {
         ['v_c', 'Напрежение {C}', 'V', '#2dd4bf', 'v', 0],
         ['current', 'Ток (сума)', 'A', '#ffb02e', 'i', 1], ['i_a', 'Ток {A}', 'A', '#fb923c', 'i', 0], ['i_b', 'Ток {B}', 'A', '#fbbf24', 'i', 0], ['i_c', 'Ток {C}', 'A', '#f87171', 'i', 0],
         ['pf', 'Cos φ', '', '#a3e635', 'f', 0], ['freq', 'Честота', 'Hz', '#94a3b8', 'h', 0],
-        ['temp', 'Температура', '°C', '#ff6b6b', 't', 1]
+        ['temp', 'Температура', '°C', '#ff6b6b', 't', 1], ['hum', 'Влажност', '%', '#38bdf8', 'u', 1], ['bat', 'Батерия на сензора', '%', '#84cc16', 'b', 0]
     ];
-    var GROUPS = ['p', 's', 'v', 'i', 'f', 'h', 't'];
+    var GROUPS = ['p', 's', 'v', 'i', 'f', 'h', 't', 'u', 'b'];
     var TIPS = {
         total: 'Консумирана електроенергия за периода и цената ѝ по дневна/нощна тарифа (цените се задават в страницата на термопомпата).',
         grid: 'Част от енергията, взета от мрежата (внос на външния CT на Solis спрямо цялото потребление на шината). Цената е само за този дял.',
@@ -127,7 +127,7 @@ var EnergyPanel = (function () {
         S.from = S.from || today; S.to = S.to || today;
         el.classList.add('ep');
         el.innerHTML = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">' +
-            '<strong>Консумация и разход</strong><select class="ep-period">' + PERIODS.map(function (p) { return '<option value="' + p[0] + '">' + p[1] + '</option>'; }).join('') + '</select>' +
+            '<strong>' + (el.dataset.title || 'Консумация и разход') + '</strong><select class="ep-period">' + PERIODS.map(function (p) { return '<option value="' + p[0] + '">' + p[1] + '</option>'; }).join('') + '</select>' +
             '<span class="ep-range" style="display:none"><input type="date" class="ep-from"> – <input type="date" class="ep-to"></span></div>' +
             '<div class="ep-grid"></div><p class="text-muted text-small ep-note"></p><div class="ep-legend"></div>' +
             '<div class="ep-plate"><canvas></canvas><div class="ep-line"></div><div class="ep-tip"></div></div>';

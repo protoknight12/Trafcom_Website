@@ -185,6 +185,19 @@ def test_grid_meter_report(client):
     assert j['cards'][0]['kwh'] > 0.05 and j['series']['voltage'][-1][1] == 230.0 and j['series']['power'][-1][1] == -3600
 
 
+def test_sensor_report(client):
+    with flask_app.app_context():
+        s = TemperatureSensor.query.filter_by(mqtt_topic='shellies/ht1').first()
+        sid = s.id
+        db.session.add(TemperatureReading(sensor_id=sid, ts=3_000_000, temperature=21.0, humidity=40.0, battery=80.0))
+        db.session.commit()
+    _login(client, 'dl_admin')
+    j = client.get(f'/admin/energy-report?key=sensor:{sid}&period=custom&from=1970-01-05&to=2030-01-01').get_json()
+    assert 21.0 in [p[1] for p in j['series']['temp']] and 40.0 in [p[1] for p in j['series']['hum']] and j['cost'] is None
+    assert client.get('/admin/energy-report?key=sensor:99999').status_code == 404
+    assert 'data-energy-panel' in client.get('/admin/temperature-sensors').get_data(as_text=True)
+
+
 def test_log_access_and_missing(client):
     _, sh, _, _ = _seed()
     assert client.get(f'/admin/device-log?kind=shelly&id={sh}').status_code in (302, 401)       # anonymous -> login

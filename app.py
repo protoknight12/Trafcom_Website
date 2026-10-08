@@ -15563,6 +15563,20 @@ def _solis_report(dev, cfg, since, until):
     return jsonify(series=series, since=since, until=until, priced=bool(cfg['price_day'] or cfg['price_night']), cost=None, cards=cards)
 
 
+def _sensor_report(sensor_id, since, until):
+    """energy-report for a TemperatureSensor ('sensor:<id>'): temperature / humidity / battery from its TemperatureReading log, no cost."""
+    if not sensor_id.isdigit() or not db.session.get(TemperatureSensor, int(sensor_id)):
+        abort(404)
+    rows = TemperatureReading.query.filter(TemperatureReading.sensor_id == int(sensor_id), TemperatureReading.ts >= since,
+                                           TemperatureReading.ts <= until).order_by(TemperatureReading.ts).all()
+    series = {'temp': [], 'hum': [], 'bat': []}
+    for r in rows[::max(1, len(rows) // 600)]:
+        series['temp'].append([r.ts, r.temperature])
+        series['hum'].append([r.ts, r.humidity])
+        series['bat'].append([r.ts, r.battery])
+    return jsonify(series=series, since=since, until=until, priced=True, cost=None, cards=[])
+
+
 def _battery_report(device_id, since, until):
     """energy-report for the batteries of one Solis inverter ('battery:<device id>'): same series as a meter plus the state of charge, no cost
     (a battery stores, it doesn't consume). Both BMS ports combined like the page's battery card: power/current sum, voltage/SOC average.
@@ -15597,6 +15611,8 @@ def admin_energy_report():
         return jsonify(error=window)
     since, until = window
     key = request.args.get('key', '')
+    if key.startswith('sensor:'):
+        return _sensor_report(key[7:], since, until)
     if key.startswith('battery:'):
         return _battery_report(key[8:], since, until)
     modbus = next((m for m in ModbusDevice.query.filter(ModbusDevice.device_type.in_(('solis_s6', 'solis_grid_meter')))
@@ -15726,6 +15742,7 @@ def admin_device_log():
     elif kind == 'sensor':
         s = TemperatureSensor.query.get_or_404(ident)
         title, sections = s.name, [_sensor_log_section(s, limit)]
+        energy_devices.append({'key': f'sensor:{s.id}', 'name': s.name})
     elif kind == 'convector':
         c = Convector.query.get_or_404(ident)
         title, sections = c.name, [_convector_log_section(c, limit)]
