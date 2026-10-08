@@ -520,15 +520,6 @@
             </section>
             <div id="meters"></div>
 
-            {% for d in devices if not focus_host or d.host == focus_host %}
-            <section class="admin-card"><h3 style="margin-top: 0;">Консумация и разход: {{ d.name }}</h3>
-                <div data-energy-panel data-kind="shelly" data-id="{{ d.id }}" data-url="{{ url_for('admin_energy_report') }}"></div></section>
-            {% endfor %}
-            {% for d in modbus_devices if d.device_type == 'dtsu666' and (not focus_host or focus_host == d.host ~ ':' ~ d.port) %}
-            <section class="admin-card"><h3 style="margin-top: 0;">Консумация и разход: {{ d.name }}</h3>
-                <div data-energy-panel data-kind="modbus" data-id="{{ d.id }}" data-url="{{ url_for('admin_energy_report') }}"></div></section>
-            {% endfor %}
-
             {% if focus_host and focus_is_shelly %}
             <section class="admin-card" id="historySection">
                 <h3 style="margin-top: 0;">История за период</h3>
@@ -565,6 +556,7 @@
 </main>
 
 {% if devices or modbus_devices %}
+<script src="{{ url_for('static', filename='js/energy_panel.js') }}"></script>
 <script>
     // Poll the server-side feed; the meters themselves are never contacted
     // from the browser (they're LAN-only and have no auth). Interval is
@@ -813,6 +805,7 @@
                 <div class="solis-row">Разредено днес (БМС 1) <span>${fmt(b.today_discharge_kwh, 1)} kWh</span></div>
                 <div class="solis-row">Общо заредено/разредено (БМС 1) <span>${fmt(b.total_charge_kwh, 0)} / ${fmt(b.total_discharge_kwh, 0)} kWh</span></div>
                 ${groups && groups.length ? groups.map((g, idx) => renderBatteryGroup(g, idx, d.device_id, b)).join('') : ''}
+                <div data-energy-panel data-key="battery:${d.device_id}" data-url="{{ url_for('admin_energy_report') }}"></div>
             </div>`;
     }
     function renderBatteries(allDevices) {
@@ -821,6 +814,7 @@
         if (!solis.length) { card.style.display = 'none'; return; }
         card.style.display = '';
         document.getElementById('batteriesBody').innerHTML = solis.map(renderBatteryBlock).join('');
+        EnergyPanel.mountAll(document.getElementById('batteriesBody'));
     }
 
     function renderSolisBody(d) {
@@ -905,6 +899,7 @@
                 <div class="device-hero-body">${state}</div>
             </div>
             ${body}
+            ${d.kind === 'solis' || d.kind === 'solis_grid_meter' ? '' : `<div data-energy-panel data-key="${d.host}" data-url="{{ url_for('admin_energy_report') }}"></div>`}
         </section>`;
     }
 
@@ -922,6 +917,7 @@
 
         renderBatteries(payload.devices);
         container.innerHTML = payload.devices.map(renderMeter).join('');
+        EnergyPanel.mountAll(container);
         lastUpdate.textContent = '· обновено в ' + payload.ts;
 
         if (FOCUS_HOST) renderSidebar(payload.devices[0]);
@@ -1130,6 +1126,5 @@
     })();
 </script>
 {% endif %}
-<script src="{{ url_for('static', filename='js/energy_panel.js') }}"></script>
 </body>
 </html>

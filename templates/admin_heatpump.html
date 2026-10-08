@@ -295,7 +295,7 @@
         fetch('{{ url_for("admin_heatpump_data") }}').then(function (r) { return r.json(); }).then(render).catch(function () {});
     }
 
-    var chartHover = null;
+    var chartHover = null, hpHidden = {};
     (function () {
         var cv = document.getElementById('chart'), tip = document.getElementById('chartTip'), line = document.getElementById('chartLine');
         function hide() { tip.style.display = line.style.display = 'none'; }
@@ -351,6 +351,7 @@
                 c.fillText(new Date(t * 1000).toLocaleTimeString('bg-BG', {hour: '2-digit', minute: '2-digit'}), X(t) - 14, h - 5);
             }
             keys.forEach(function (k) {
+                if (hpHidden[k]) return;
                 c.strokeStyle = COLORS[k]; c.lineWidth = 1.8; c.beginPath();
                 var started = false;
                 series[k].forEach(function (p) {
@@ -359,7 +360,7 @@
                 });
                 c.stroke();
             });
-            if (power.length) {                                  // consumption: right axis in kW, drawn dashed
+            if (power.length && !hpHidden.Power) {               // consumption: right axis in kW, drawn dashed
                 var pmax = Math.max(0.5, Math.max.apply(null, power.map(function (p) { return p[1]; })) / 1000);
                 function PY(wv) { return T + (1 - wv / 1000 / pmax) * (h - T - B); }
                 c.fillStyle = '#b07cff'; c.textAlign = 'right';
@@ -369,9 +370,13 @@
                 power.forEach(function (p, i) { if (i) c.lineTo(X(p[0]), PY(p[1])); else c.moveTo(X(p[0]), PY(p[1])); });
                 c.stroke(); c.setLineDash([]);
             }
-            document.getElementById('legend').innerHTML = keys.map(function (k) {
-                return '<span><i style="background:' + COLORS[k] + '"></i>' + NAMES[k] + '</span>';
-            }).join('') + (power.length ? '<span><i style="background:#b07cff"></i>Консумация</span>' : '');
+            var lg = document.getElementById('legend');
+            lg.innerHTML = keys.map(function (k) {
+                return '<span data-k="' + k + '" style="cursor:pointer;' + (hpHidden[k] ? 'opacity:.4;text-decoration:line-through' : '') + '"><i style="background:' + COLORS[k] + '"></i>' + NAMES[k] + '</span>';
+            }).join('') + (power.length ? '<span data-k="Power" style="cursor:pointer;' + (hpHidden.Power ? 'opacity:.4;text-decoration:line-through' : '') + '"><i style="background:#b07cff"></i>Консумация</span>' : '');
+            lg.querySelectorAll('span').forEach(function (sp) {
+                sp.onclick = function () { hpHidden[sp.dataset.k] = !hpHidden[sp.dataset.k]; drawChart(); };
+            });
         });
     }
 

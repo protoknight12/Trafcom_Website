@@ -15006,6 +15006,8 @@ def _convector_log_tick():
         last = ConvectorLog.query.filter_by(convector_id=c.id).order_by(ConvectorLog.ts.desc(), ConvectorLog.id.desc()).first()
         if last is None or last.is_on != st['is_on']:
             db.session.add(ConvectorLog(convector_id=c.id, ts=now_ts, is_on=st['is_on'], power_w=st['power_w']))
+        if st['power_w'] is not None:           # a metering relay: its consumption goes into the shared meter log, same charts/cost as any meter
+            db.session.add(ShellyReadingLog(host=f'conv:{c.id}', ts=now_ts, total_power=st['power_w'], channels_json='[]'))
 
 
 def _shelly_history_poll_tick():
@@ -15477,22 +15479,47 @@ def admin_heatpump_cost():
                    since=since, until=until, first_data=pump[0][0] if pump else None)
 
 
-def _meter_log_keys(kind, ident):
-    """(device, [ShellyReadingLog.host keys]) of one consuming meter; a Shelly moved IP <-> MQTT has rows under both keys."""
-    if kind == 'shelly':
-        d = ShellyDevice.query.get_or_404(ident)
-        return d, list(dict.fromkeys(k for k in (d.mqtt_topic, d.host) if k))
-    d = ModbusDevice.query.get_or_404(ident)
-    if d.device_type != 'dtsu666':
+def _meter_log_keys(key):
+    """ShellyReadingLog.host keys of the consuming meter named by `key` (what the live feed calls its host: an IP / MQTT topic of a
+    Shelly - which may have rows under both -, "ip:port" of a DTSU Modbus meter, "conv:<id>" of a convector). 404 for anything else."""
+    d = _shelly_by_key(key)
+    if d:
+        return list(dict.fromkeys(k for k in (d.mqtt_topic, d.host) if k))
+    if key.startswith('conv:') and key[5:].isdigit() and db.session.get(Convector, int(key[5:])):
+        return [key]
+    if any(f'{m.host}:{m.port}' == key for m in ModbusDevice.query.filter_by(device_type='dtsu666')):
+        return [key]
+    abort(404)
+
+
+def _battery_report(device_id, since, until):
+    """energy-report for the batteries of one Solis inverter ('battery:<device id>'): same series as a meter plus the state of charge, no cost
+    (a battery stores, it doesn't consume). Both BMS ports combined like the page's battery card: power/current sum, voltage/SOC average.
+    Power is + while charging."""
+    if not device_id.isdigit() or not db.session.get(ModbusDevice, int(device_id)):
         abort(404)
-    return d, [f'{d.host}:{d.port}']
+    rows = SolisReadingLog.query.filter(SolisReadingLog.device_id == int(device_id), SolisReadingLog.ts >= since, SolisReadingLog.ts <= until)         .order_by(SolisReadingLog.ts).all()
+    series = {k: [] for k in ('power', 'soc', 'voltage', 'current')}
+    for r in rows[::max(1, len(rows) // 600)]:
+        try:
+            snap = json.loads(r.snapshot_json or '{}')
+        except ValueError:
+            snap = {}
+        ports = [x for x in [snap.get('battery')] + (snap.get('battery_groups') or [])[1:2] if x and x.get('soc') is not None]
+        avg = lambda k: round(sum(x[k] for x in ports) / len(ports), 1) if ports and all(x.get(k) is not None for x in ports) else None
+        tot = lambda k: round(sum(x[k] for x in ports), 2) if ports and all(x.get(k) is not None for x in ports) else None
+        series['power'].append([r.ts, tot('power')])
+        series['soc'].append([r.ts, avg('soc')])
+        series['voltage'].append([r.ts, avg('voltage')])
+        series['current'].append([r.ts, tot('current')])
+    return jsonify(series=series, since=since, until=until, priced=True, cost=None)
 
 
 @app.route('/admin/energy-report')
 @limiter.exempt
 @role_required('admin')
 def admin_energy_report():
-    """Chart series + cost/saving of one consuming meter: ?kind=shelly|modbus&id=&period= (see _cost_window()).
+    """Chart series + cost/saving of one consuming meter: ?key=(see _meter_log_keys())&period= (see _cost_window()).
     Prices are the heat pump page's day/night tariff (one tariff for the whole site). The sun's share of the energy
     (solar + battery) is what the grid would have charged: the saving - same rule as the heat pump cost."""
     cfg = _heatpump_cost_cfg()
@@ -15500,7 +15527,10 @@ def admin_energy_report():
     if isinstance(window, str):
         return jsonify(error=window)
     since, until = window
-    _, keys = _meter_log_keys(request.args.get('kind', ''), request.args.get('id', type=int))
+    key = request.args.get('key', '')
+    if key.startswith('battery:'):
+        return _battery_report(key[8:], since, until)
+    keys = _meter_log_keys(key)
     logs = ShellyReadingLog.query.filter(ShellyReadingLog.host.in_(keys), ShellyReadingLog.ts >= since, ShellyReadingLog.ts <= until)         .order_by(ShellyReadingLog.ts).all()
     cost = _heatpump_cost(_heatpump_energy_series(logs), [], cfg, _grid_share_rows(since))
     total = {'kwh': cost['unknown']['kwh'], 'cost': cost['unknown']['cost']}       # no pump rows: everything lands in 'unknown'
@@ -15604,7 +15634,7 @@ def admin_device_log():
     sections, energy_devices = [], []
 
     def shelly(d):
-        energy_devices.append({'kind': 'shelly', 'id': d.id, 'name': d.name})
+        energy_devices.append({'key': _shelly_key(d), 'name': d.name})
         return [_shelly_log_section(d.name, k, limit) for k in dict.fromkeys(k for k in (d.mqtt_topic, d.host) if k)]     # a meter moved IP <-> MQTT has rows under both keys
     if kind == 'shelly':
         d = ShellyDevice.query.get_or_404(ident)
@@ -15612,7 +15642,7 @@ def admin_device_log():
     elif kind == 'modbus':
         d = ModbusDevice.query.get_or_404(ident)
         title, sections = d.name, _modbus_log_sections(d, limit)
-        energy_devices += [{'kind': 'modbus', 'id': d.id, 'name': d.name}] if d.device_type == 'dtsu666' else []
+        energy_devices += [{'key': f'{d.host}:{d.port}', 'name': d.name}] if d.device_type == 'dtsu666' else []
     elif kind == 'machine':
         m = Machine.query.get_or_404(ident)
         title = m.name
@@ -15620,13 +15650,14 @@ def admin_device_log():
             sections += shelly(d)
         for d in m.modbus_devices:
             sections += _modbus_log_sections(d, limit)
-            energy_devices += [{'kind': 'modbus', 'id': d.id, 'name': d.name}] if d.device_type == 'dtsu666' else []
+            energy_devices += [{'key': f'{d.host}:{d.port}', 'name': d.name}] if d.device_type == 'dtsu666' else []
     elif kind == 'sensor':
         s = TemperatureSensor.query.get_or_404(ident)
         title, sections = s.name, [_sensor_log_section(s, limit)]
     elif kind == 'convector':
         c = Convector.query.get_or_404(ident)
         title, sections = c.name, [_convector_log_section(c, limit)]
+        energy_devices.append({'key': f'conv:{c.id}', 'name': c.name})
     elif kind == 'heatpump':
         title, sections = 'Термопомпа', [_heatpump_log_section(limit)]
     else:

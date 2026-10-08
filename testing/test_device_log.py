@@ -133,13 +133,40 @@ def test_convector_log_only_on_change(client):
 def test_energy_report(client):
     _, sh, dt, so = _seed()
     _login(client, 'dl_admin')
-    j = client.get(f'/admin/energy-report?kind=shelly&id={sh}&period=custom&from=1970-01-05&to=2030-01-01').get_json()
+    rep = lambda key, extra='': client.get(f'/admin/energy-report?key={key}&period=custom&from=1970-01-05&to=2030-01-01{extra}')
+    j = rep('10.0.0.5').get_json()
     assert len(j['series']['power']) > 0 and j['series']['power'][0][1] == 100 and 'solar' in j['cost']
     assert j['cost']['total']['kwh'] > 0
-    assert client.get(f'/admin/energy-report?kind=modbus&id={dt}&period=today').get_json()['series']['power'] == []
-    assert client.get(f'/admin/energy-report?kind=modbus&id={so}').status_code == 404              # an inverter produces, it is not a consumer
-    assert 'error' in client.get(f'/admin/energy-report?kind=shelly&id={sh}&period=custom').get_json()
+    assert rep('10.0.0.9:26').get_json()['series']['power'][0][1] == 7000                              # DTSU, keyed host:port
+    assert rep('10.0.0.7:502').status_code == 404                                                      # an inverter is not a consumer
+    assert client.get('/admin/energy-report?key=10.0.0.5&period=custom').get_json()['error']
     assert 'data-energy-panel' in client.get(f'/admin/device-log?kind=shelly&id={sh}').get_data(as_text=True)
+
+
+def test_convector_power_and_battery_report(client):
+    from app import Convector, ShellyReadingLog, SolisReadingLog
+    _, _, _, so = _seed()
+    orig = appmod._shelly_convector_status
+    appmod._shelly_convector_status = lambda c: {'online': True, 'is_on': True, 'power_w': 1200.0, 'error': None}
+    try:
+        with flask_app.app_context():
+            c = Convector(name='Склад', host='10.0.0.88')
+            db.session.add(c)
+            db.session.commit()
+            cid = c.id
+            appmod._convector_log_tick(); db.session.commit()
+            assert ShellyReadingLog.query.filter_by(host=f'conv:{cid}').one().total_power == 1200.0
+            db.session.add(SolisReadingLog(device_id=so, ts=1_000_100, battery_soc=50, battery_power=100, snapshot_json=json.dumps(
+                {'battery': {'soc': 50, 'power': 100, 'voltage': 50, 'current': 2}, 'battery_groups': [{}, {'soc': 70, 'power': 300, 'voltage': 52, 'current': 6}]})))
+            db.session.commit()
+    finally:
+        appmod._shelly_convector_status = orig
+    _login(client, 'dl_admin')
+    r = client.get(f'/admin/energy-report?key=conv:{cid}&period=today')
+    assert r.status_code == 200 and 'cost' in r.get_json()
+    j = client.get(f'/admin/energy-report?key=battery:{so}&period=custom&from=1970-01-05&to=2030-01-01').get_json()
+    row = [p for p in j['series']['power'] if p[1] == 400]
+    assert row and j['cost'] is None and [p[1] for p in j['series']['soc']].count(60.0) == 1
 
 
 def test_log_access_and_missing(client):

@@ -24,7 +24,7 @@
         записа, най-новите отгоре.</p>
     {% for d in energy_devices %}
     <h4 style="margin: 14px 0 4px;">Консумация и разход: {{ d.name }}</h4>
-    <div data-energy-panel data-kind="{{ d.kind }}" data-id="{{ d.id }}" data-url="{{ url_for('admin_energy_report') }}"></div>
+    <div data-energy-panel data-key="{{ d.key }}" data-url="{{ url_for('admin_energy_report') }}"></div>
     {% endfor %}
     {% for s in sections %}
     <h4 style="margin: 14px 0 4px;">{{ s.title }} <span class="text-muted text-small">· показани {{ s.rows|length }} от {{ s.total }}</span></h4>
