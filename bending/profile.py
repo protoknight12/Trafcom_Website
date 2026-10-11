@@ -485,14 +485,14 @@ def _step_geom(punch_pts, die_pts, v, thickness, fold_deg, left, right, overbend
     left, right = list(left) or dflt, list(right) or dflt
     flat_y = thickness / 2
     before_right = _chain((0.0, flat_y), (1.0, 0.0), right, True)
-    fx = max(p[0] for p in before_right)
+    fx = max(p[0] for p in _sample_part(before_right, thickness))   # the finger touches the WALL of the material (a flange stood up earlier is T/2 further than its centre line)
     return {'finger': [(fx, 0.0), (fx + FINGER['thickness'], 0.0), (fx + FINGER['thickness'], thickness + FINGER['height']), (fx, thickness + FINGER['height'])],
             'die': [(x, y - shoulder_y) for x, y in outline(die)],
             'punch': [(x, y + tip_y) for x, y in outline(punch_pts)],
             'clamp': [(x, y + tip_y) for x, y in clamp_polygon(outline(punch_pts))],
             'after': _chain(A, (-s, c), left, False)[::-1][:-1] + _chain(A, (s, c), right, True),   # front end ... apex ... back end
             'before_left': _chain((0.0, flat_y), (-1.0, 0.0), left, False), 'before_right': before_right,
-            'right_len': sum(leg for leg, _ in right), 'flat_y': flat_y, 'contacts': contacts, 'fold_eff': fold_eff,
+            'right_len': sum(leg for leg, _ in right), 'x_wall': fx, 'flat_y': flat_y, 'contacts': contacts, 'fold_eff': fold_eff,
             'inner_radius': 0.16 * v, 'left': left, 'right': right}
 
 
@@ -612,7 +612,7 @@ def step_svg(punch_pts, die_pts, v, thickness, fold_deg, label='', left=(), righ
     gcol = '#ff3b30' if any('преди' in h for h in hits) else '#e26a4a'
     finger = (f'<path d="{path(geo["finger"])}" fill="#4f9d69" stroke="#fff" stroke-width="0.25"/>'
               f'<path d="{line([(0, flat_y - 4 * fs / 3), (fx, flat_y - 4 * fs / 3)])}" stroke="#6fa8d6" stroke-width="{_f(fs / 12)}"/>'
-              f'<text x="{_f(fx / 2)}" y="{_f(-(flat_y - 4 * fs / 3) + fs * 1.1)}" font-size="{_f(fs)}" fill="#6fa8d6" text-anchor="middle" font-family="Arial">X {geo["right_len"]:g}</text>'
+              f'<text x="{_f(fx / 2)}" y="{_f(-(flat_y - 4 * fs / 3) + fs * 1.1)}" font-size="{_f(fs)}" fill="#6fa8d6" text-anchor="middle" font-family="Arial">X {geo["x_wall"]:g}</text>'
               f'<text x="{_f(fx + 2.5)}" y="{_f(-(flat_y + FINGER["height"]) - 1)}" font-size="{_f(fs * 0.8)}" fill="#4f9d69" text-anchor="middle" font-family="Arial">упор</text>')
     from bending.tools import outside_length
     dots = ''.join(f'<circle cx="{_f(x)}" cy="{_f(-y)}" r="{_f(max(0.5, fs / 6))}" fill="#ffd60a" stroke="#14171a" stroke-width="0.15"/>' for x, y in geo['contacts'])
@@ -641,3 +641,41 @@ def step_svg(punch_pts, die_pts, v, thickness, fold_deg, label='', left=(), righ
             f'<path d="{path(geo["punch"])}" fill="#cfd8e0" stroke="#e0a526" stroke-width="0.4" stroke-linejoin="round"/>'
             f'<path d="{line(ghost_l[::-1][:-1] + ghost_r)}" stroke="{gcol}" stroke-opacity="0.65" stroke-width="{_f(thickness)}" stroke-dasharray="2.5 1.5" stroke-linejoin="round" fill="none"/>'
             f'<path d="{line(pts)}" stroke="{col}" stroke-width="{_f(thickness)}" stroke-linejoin="round" fill="none"/>{dots}{finger}{fingers_back}{sizes}{txt}{warn}{note}</svg>')
+
+
+def step_frames(punch_pts, die_pts, v, thickness, fold_deg, left=(), right=(), overbend=0.0, n=12, lift=40.0):
+    """Animation of one bend for the 3D view (cross-section, mm, y up): punch raised -> down to the sheet -> folded to fold + overbend ->
+    springback to fold -> punch raised. The back-gauge finger is moved away from the retract angle on (as in step_trajectory).
+    The finger retracts when the punch reaches the sheet (only if it would be in the way later). -> {'die': [...], 'frames': [{'part': centre line, 'punch', 'clamp', 'finger', 'angle'}]}"""
+    final = min(fold_deg + overbend, 179.0)
+    retract = step_trajectory(punch_pts, die_pts, v, thickness, fold_deg, left, right, overbend=overbend)['retract_deg']
+    move = lambda poly, dx=0.0, dy=0.0: [(x + dx, y + dy) for x, y in poly]
+    frames = []
+
+    def add(a, dy=0.0, part_a=None, away=None):
+        g = _step_geom(punch_pts, die_pts, v, thickness, a, left, right, 0.0)
+        gp = g if part_a is None else _step_geom(punch_pts, die_pts, v, thickness, part_a, left, right, 0.0)
+        away = retract is not None if away is None else away   # a finger that is in the way is retracted from the moment the punch holds the sheet
+        frames.append({'angle': round(a, 2), 'part': gp['after'], 'punch': move(g['punch'], dy=dy), 'clamp': move(g['clamp'], dy=dy),
+                       'finger': move(g['finger'], dx=25.0 if away else 0.0)})
+        return g
+
+    first = add(0.5)
+    frames[0]['part'] = first['before_left'][::-1][:-1] + first['before_right']
+    frames[0]['punch'], frames[0]['clamp'] = move(first['punch'], dy=lift), move(first['clamp'], dy=lift)
+    frames[0]['finger'] = first['finger']
+    for away in ((False, True) if retract is not None else (False,)):   # the punch touches the flat sheet, then the finger moves back while the punch holds it (the part must not shift)
+        add(0.5, away=away)
+        frames[-1]['part'] = first['before_left'][::-1][:-1] + first['before_right']
+    for k in range(1, n + 1):
+        add(final * k / n)
+    if final > fold_deg + 1e-6:   # the punch lifts, the sheet springs back to the target angle
+        add(final, dy=lift / 2, part_a=fold_deg)
+    last = add(fold_deg if final > fold_deg + 1e-6 else final, dy=lift)
+    return {'die': first['die'], 'frames': frames, 'hits': step_trajectory(punch_pts, die_pts, v, thickness, fold_deg, left, right, overbend=overbend)['hits']}
+
+
+def step_x(punch_pts, die_pts, v, thickness, fold_deg, left=(), right=()):
+    """X of the back gauge for one bend: from the bend line to the wall the finger touches (differs from the developed length of the back leg when
+    flanges bent earlier stand up there - the wall of a flange is half a thickness beyond its centre line)."""
+    return round(_step_geom(punch_pts, die_pts, v, thickness, fold_deg, left, right)['x_wall'], 1)

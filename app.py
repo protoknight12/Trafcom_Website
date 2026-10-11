@@ -5637,9 +5637,20 @@ class PressBrakeConfig(db.Model):
     stroke_mm = db.Column(db.Float)
     daylight_mm = db.Column(db.Float)  # opening
     axes = db.Column(db.String(100))  # e.g. "X,R,Z1,Z2"
-    controller = db.Column(db.String(20))  # delem_da66t / durma_dt15
+    controller = db.Column(db.String(20))  # delem_da66t / delem_da69s / durma_dt15
     clamping = db.Column(db.String(50))  # European / Promecam ...
+    x_max_mm = db.Column(db.Float)  # back gauge travel on X (from the bend line)
+    r_max_mm = db.Column(db.Float)  # back gauge travel on R (height)
+    finger_count = db.Column(db.Integer)  # back-gauge fingers (default 2)
+    kinematics_json = db.Column(db.Text)  # {'y': [min, max], 'x': .., 'r': .., 'z1': .., 'z2': .., 'finger_width': mm, ...} from the controller's machine parameters
     machine = db.relationship('Machine', backref=db.backref('press_brake', uselist=False))
+
+    @property
+    def kinematics(self):
+        try:
+            return json.loads(self.kinematics_json) if self.kinematics_json else {}
+        except ValueError:
+            return {}
 
 
 class BendToolCatalog(db.Model):
@@ -5967,13 +5978,13 @@ def admin_bending_press():
         return redirect(url_for('admin_bending'))
     try:
         nums = {k: (_fnum(request.form[k], k) if request.form.get(k, '').strip() else None)
-                for k in ('working_length_mm', 'tonnage_t', 'stroke_mm', 'daylight_mm')}
+                for k in ('working_length_mm', 'tonnage_t', 'stroke_mm', 'daylight_mm', 'x_max_mm', 'r_max_mm', 'finger_count')}
     except ValueError as e:
         flash(str(e), 'danger')
         return redirect(url_for('admin_bending'))
     cfg = m.press_brake or PressBrakeConfig(machine=m)
     for k, v in nums.items():
-        setattr(cfg, k, v)
+        setattr(cfg, k, int(v) if k == 'finger_count' and v is not None else v)
     for k in ('axes', 'controller', 'clamping'):
         setattr(cfg, k, request.form.get(k, '').strip() or None)
     db.session.add(cfg)
@@ -6061,7 +6072,7 @@ def _program_checks(prog):
     for st in prog.steps:
         v = st.die_v_mm or (st.die.v_opening_mm if st.die else None)
         pos = next((p for p in st.die.positions if p['v'] == v), None) if st.die else None
-        warn, travel, retract = [], None, None
+        warn, travel, retract, x_wall = [], None, None, None
         if t and v and 0 < st.angle_deg < 180:
             ob = _overbend_fn(prog)(v, t)
             travel = air_bend_depth(v, t, min(st.angle_deg + ob, 179.0))[1]   # the tool goes `ob` further than the target angle (springback)
@@ -6069,16 +6080,19 @@ def _program_checks(prog):
                                stroke_mm=cfg.stroke_mm if cfg else None, punch_h=((st.punch.height_mm or 0) + CLAMP['height']) if st.punch else None,
                                die_h=st.die.height_mm if st.die else None, daylight_mm=cfg.daylight_mm if cfg else None)
         if _step_picture_ok(st):   # cross-section check of the whole part against the real punch outline
-            from bending.profile import step_trajectory
+            from bending.profile import step_trajectory, step_x
             left, right = _step_chains(st)
             try:
                 traj = step_trajectory(st.punch.profile, st.die.profile, v, t, st.angle_deg, left, right, overbend=_overbend_fn(prog)(v, t))
             except ValueError:
                 traj = {'hits': [], 'retract_deg': None}
             hits, retract = traj['hits'], traj['retract_deg']
+            x_wall = step_x(st.punch.profile, st.die.profile, v, t, st.angle_deg, left, right) if left or right else None
+            if x_wall is not None and cfg and cfg.x_max_mm and x_wall > cfg.x_max_mm:
+                warn.append(f'X {x_wall:g} mm е извън хода на задния упор ({cfg.x_max_mm:g} mm) - завъртете детайла или сменете реда.')
             if hits:
                 warn.append('КОЛИЗИЯ в разреза (' + '; '.join(hits) + ') - сменете реда, инструмента или завъртането.')
-        res[st.id] = {'travel': travel, 'warnings': warn, 'retract': retract}
+        res[st.id] = {'travel': travel, 'warnings': warn, 'retract': retract, 'x_wall': x_wall}
     return res
 
 
@@ -6356,6 +6370,30 @@ def bending_step_view(step_id):
     i = steps.index(st)
     return render_template('bending_step_view.html', st=st, svg=_step_picture_svg(st), total=len(st.program.steps),
                            prev_id=steps[i - 1].id if i else None, next_id=steps[i + 1].id if i + 1 < len(steps) else None)
+
+
+@app.route('/bending/programs/<int:prog_id>/sim')
+@role_required(['admin', 'worker'])
+def bending_program_sim(prog_id):
+    """3D simulation of the whole program: every step's stroke (punch, die, finger, part) animated in the browser (static/js/bend_sim.js)."""
+    from bending.profile import step_frames
+    prog = db.get_or_404(BendProgram, prog_id)
+    lines, lo, hi, _ = _read_detail_dxf(prog.detail)
+    vertical = lines and sum(abs(p1[0] - p0[0]) <= abs(p1[1] - p0[1]) for _, p0, p1 in lines) * 2 >= len(lines)
+    width = (hi[1 if vertical else 0] - lo[1 if vertical else 0]) if lines else (min(prog.detail.width or 0, prog.detail.height or 0) or 100.0)
+    t = _program_thickness(prog)
+    steps = []
+    for st in prog.steps:
+        if not _step_picture_ok(st):
+            continue
+        v = st.die_v_mm or st.die.v_opening_mm
+        left, right = _step_chains(st)
+        data = step_frames(st.punch.profile, st.die.profile, v, t, st.angle_deg, left, right, overbend=_overbend_fn(prog)(v, t))
+        steps.append({'seq': st.seq, 'angle': st.angle_deg, 'v': v, 'punch': st.punch.code, 'die': st.die.code, **data})
+    cfg = prog.machine.press_brake
+    return render_template('bending_sim.html', prog=prog, sim={'thickness': t, 'width': round(width, 1), 'fingers': (cfg.finger_count if cfg and cfg.finger_count else 2),
+                                         'finger_width': (cfg.kinematics.get('finger_width') if cfg else None) or 25, 'steps': steps}, skipped=len(prog.steps) - len(steps),
+                           active_page='admin_bending')
 
 
 @app.route('/admin/bending/programs/<int:prog_id>/generate', methods=['POST'])
