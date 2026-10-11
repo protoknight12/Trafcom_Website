@@ -14,7 +14,7 @@ if (!sim.steps.length) { view.textContent = 'Няма стъпки с инстр
 const ELEMENTS = [   // key, label, group, shown by default
     ['part', 'Детайл', 'Процес', 1], ['punch', 'Поансон + закрепване', 'Процес', 1], ['die', 'Матрица', 'Процес', 1], ['fingers', 'Упори (нива)', 'Процес', 1],
     ['ram', 'Горна греда (Y1/Y2)', 'Машина', 1], ['clamps', 'Скоби на горния инструмент', 'Машина', 1], ['dieholder', 'Държач на матрицата', 'Машина', 1],
-    ['crowning', 'Бомбиране', 'Машина', 1], ['bed', 'Долна маса', 'Машина', 1], ['frames', 'Странични рамки', 'Машина', 1],
+    ['clamp_parts', 'Скоби: планки, болтове, лостове', 'Машина', 1], ['holder_plates', 'Държач: свързващи планки', 'Машина', 1], ['crowning', 'Бомбиране', 'Машина', 1], ['bed', 'Долна маса', 'Машина', 1], ['frames', 'Странични рамки', 'Машина', 1],
     ['bg_beam', 'Заден упор: греда и колички', 'Заден упор', 1], ['bg_columns', 'Заден упор: колони R', 'Заден упор', 1], ['bg_rails', 'Заден упор: водачи X', 'Заден упор', 1],
     ['frontarms', 'Предни рамена', 'Околност', 1], ['panel', 'Пулт Delem', 'Околност', 1], ['floor', 'Под', 'Околност', 1],
 ];
@@ -74,8 +74,15 @@ const lerpPts = (a, b, f) => a.map((p, i) => [p[0] + (b[i][0] - p[0]) * f, p[1] 
     box('bed', mats.bed, 220, 300, WL, 0, -260, 0);   // rests on the plates' lower arms (b = 600), its top is the panel's flange
     box('crowning', mats.crowning, 232, 50, WL, 0, -140, 0);
     // die holder: the sections of the real holder (e.g. 550 + 1050 + 450)
+    // the holder is a U channel: the 60 mm base of the die sits in it, the walls hug the die's lower 20 mm; sections are joined by plates on both faces
+    const U = [[-90, -110], [90, -110], [90, -40], [30.5, -40], [30.5, -60], [-30.5, -60], [-30.5, -40], [-90, -40]];
     let z0 = -WL / 2;
-    for (const len of (M.die_holder || [WL])) { box('dieholder', mats.holder, 120, 50, len - 2, 0, -85, z0 + len / 2); z0 += len; }
+    for (const len of (M.die_holder || [WL])) {
+        const h = tag(shapeMesh(U, mats.holder, len - 2), 'dieholder');
+        h.position.z = z0 + len / 2; staticG.add(h);
+        if (z0 > -WL / 2 + 1) for (const sx of [-92, 92]) box('holder_plates', mats.rail, 4, 60, 160, sx, -75, z0);
+        z0 += len;
+    }
     // back gauge: X guides on both sides of the machine (the beam and the fingers move along them)
     const xr = (M.x_max || 650);
     for (const s of [-1, 1]) box('bg_rails', mats.rail, xr + 420, 40, 60, (xr + 420) / 2 + 60, -75, s * (BF / 2 - 90));
@@ -137,9 +144,22 @@ function draw(f) {
     add(tag(shapeMesh(clamp, mats.clamp, TOOL_W), 'punch'));
     // the upper beam and its tool clamps hang on the top of the punch's tang
     const top = Math.max(...clamp.map(p => p[1]));
-    add(box('ram', mats.ram, 90, 420, WL, 0, top + 110 + 210, 0, dynG));   // the upper table is a tall flat plate; its ends run in the guides of the plates
-    const n = M.clamps || 10, cl = WL / n;
-    for (let i = 0; i < n; i++) add(box('clamps', mats.clamp, 190, 110, cl - 20, 0, top + 55, -WL / 2 + cl * (i + 0.5), dynG));
+    const xl = Math.min(...clamp.map(p => p[0])), xr = Math.max(...clamp.map(p => p[0]));   // the tang the clamps wrap (13 mm)
+    const xc = (xl + xr) / 2, seat = top - 30;
+    add(box('ram', mats.ram, 90, 420, WL, xc, top + 90 + 210, 0, dynG));   // the upper table is a tall flat plate; its ends run in the guides of the plates
+    const n = M.clamps || 10, cl = WL / n, bl = cl - 20;
+    for (let i = 0; i < n; i++) {
+        const zc = -WL / 2 + cl * (i + 0.5);
+        add(box('clamps', mats.clamp, xr - xl + 64, 110, bl, xc, seat + 55, zc, dynG));                       // the clamp body round the tang
+        add(box('clamps', mats.clamp, xr - xl + 80, 12, bl, xc, seat + 116, zc, dynG));                       // the rail it hangs on
+        add(box('clamp_parts', mats.rail, 14, 90, bl * 0.65, xl - 32 - 7, seat + 60, zc, dynG));              // the clamping blade on the operator side
+        for (const dz of [-0.22, 0.22]) {                                                                      // its two M10 bolts
+            const b = tag(new THREE.Mesh(new THREE.CylinderGeometry(8, 8, 12, 12), mats.punch), 'clamp_parts');
+            b.rotation.z = Math.PI / 2; b.position.set(xl - 32 - 20, seat + 75, zc + dz * bl); add(b);
+        }
+        const lv = box('clamp_parts', mats.beam, 22, 14, 70, xl - 32 - 14, seat + 16, zc + bl * 0.3, dynG);   // the quick-release lever
+        lv.rotation.z = -0.6; add(lv);
+    }
     fingerMeshes(lerpPts(a.finger, b.finger, u), add);
     const line = lerpPts(a.part, b.part, u);
     for (let i = 0; i < line.length - 1; i++) {
