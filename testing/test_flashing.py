@@ -317,3 +317,12 @@ def test_flashing_program_from_profile(client):
     prog = BendProgram.query.one()
     assert prog.status == 'draft' and [(s.seq, s.flip) for s in prog.steps] == [(1, False), (2, True)]
     assert admin.post('/api/flashing/program', json={**body, 'thickness': -1}).status_code == 400
+    # saving the detail again (new version): a draft is refreshed, an approved program gets a new version of the same program - never a second program
+    r2 = admin.post('/api/flashing/program', json=body)
+    assert r2.status_code == 200 and BendProgram.query.count() == 1 and r2.get_json()['version'] == 1
+    prog.status = 'approved'
+    db.session.commit()
+    r3 = admin.post('/api/flashing/program', json=body).get_json()
+    progs = BendProgram.query.order_by(BendProgram.version).all()
+    assert [(p.version, p.status) for p in progs] == [(1, 'approved'), (2, 'draft')] and r3['version'] == 2 and progs[1].name == progs[0].name
+    assert len(progs[1].steps) == 2 and progs[1].steps[0].back_end

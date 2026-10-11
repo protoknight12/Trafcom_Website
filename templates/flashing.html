@@ -526,13 +526,17 @@
             Object.keys(presets).sort().map(n => `<option value="${n.replace(/"/g, '&quot;')}">${n.replace(/</g, '&lt;')}</option>`).join('');
         if (select && presets[select]) sel.value = select;
     }
-    $('btn-preset-save').addEventListener('click', async () => {
-        const name = $('preset-name').value.trim();
-        if (!name) return;
+    async function savePreset(name) {   // overwrite-by-name, own presets only (see /api/flashing-presets)
         const fd = new FormData();
         fd.append('csrf_token', window.CSRF_TOKEN); fd.append('name', name); fd.append('settings_json', JSON.stringify(collect()));
         const res = await fetch('/api/flashing-presets', { method: 'POST', body: fd });
-        if (res.ok) { $('preset-name').value = ''; loadPresets(name); }
+        if (res.ok) loadPresets(name);
+        return res.ok;
+    }
+    $('btn-preset-save').addEventListener('click', async () => {
+        const name = $('preset-name').value.trim();
+        if (!name) return;
+        if (await savePreset(name)) $('preset-name').value = '';
     });
     $('btn-preset-load').addEventListener('click', () => { const p = presets[$('preset-select').value]; if (p) { apply(p.settings); $('preset-name').value = p.name; } });
     $('btn-preset-delete').addEventListener('click', async () => {
@@ -555,15 +559,27 @@
             fd.append('csrf_token', window.CSRF_TOKEN); fd.append('name', name);
             fd.append('material', $('d-material').value); fd.append('service_id', $('d-service').value);
             fd.append('file', new File([r.blob], r.name, { type: 'application/dxf' }));
-            const res = await fetch('/api/quick-create-detail', { method: 'POST', body: fd });
-            const data = await res.json();
-            msg.textContent = res.ok ? `Записан детайл „${data.detail.name}“ - ${f2(data.detail.price)} лв.` : (data.message || 'Грешка');
+            fd.append('ask_duplicate', '1');
+            let res = await fetch('/api/quick-create-detail', { method: 'POST', body: fd });
+            let data = await res.json();
+            if (res.status === 409) {   // a Detail with this name exists: new version of it, or a separate new Detail
+                const version = confirm(`Вече има детайл „${data.detail.name}“.
+
+OK - нова версия на същия детайл (нов DXF, преизчислена цена).
+Отказ - след това ще попитам дали да създам нов детайл.`);
+                if (!version && !confirm('Да създам ли НОВ детайл със същото име?')) { msg.textContent = 'Не е записано.'; return; }
+                fd.set('on_duplicate', version ? 'version' : 'new');
+                res = await fetch('/api/quick-create-detail', { method: 'POST', body: fd });
+                data = await res.json();
+            }
+            msg.textContent = res.ok ? `${data.version ? 'Нова версия на детайл' : 'Записан детайл'} „${data.detail.name}“ - ${f2(data.detail.price)} лв.` : (data.message || 'Грешка');
+            if (res.ok && await savePreset(name)) msg.textContent += ' Запазен е и пресет със същото име.';
             const brake = $('d-brake');
             if (res.ok && brake && brake.value) {
                 const pr = await fetch('/api/flashing/program', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': window.CSRF_TOKEN },
                                                                   body: JSON.stringify({ ...collect(), detail_id: data.detail.id, machine_id: brake.value }) });
                 const pd = await pr.json();
-                msg.textContent += pr.ok ? ' Програма за огъване е създадена.' : ' Програмата не е създадена: ' + (pd.message || 'грешка');
+                msg.textContent += pr.ok ? ' ' + (pd.message || 'Програма за огъване е създадена') + '.' : ' Програмата не е създадена: ' + (pd.message || 'грешка');
             }
         } catch (e) { msg.textContent = e.message; }
     });

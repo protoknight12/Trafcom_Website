@@ -6061,13 +6061,24 @@ def _program_checks(prog):
     for st in prog.steps:
         v = st.die_v_mm or (st.die.v_opening_mm if st.die else None)
         pos = next((p for p in st.die.positions if p['v'] == v), None) if st.die else None
-        warn, travel = [], None
+        warn, travel, retract = [], None, None
         if t and v and 0 < st.angle_deg < 180:
-            travel = air_bend_depth(v, t, st.angle_deg)[1]
+            ob = _overbend_fn(prog)(v, t)
+            travel = air_bend_depth(v, t, min(st.angle_deg + ob, 179.0))[1]   # the tool goes `ob` further than the target angle (springback)
             warn = step_checks(st.angle_deg, t, v, punch_angle=st.punch.angle_deg if st.punch else None, die_angle=pos['angle'] if pos else None,
                                stroke_mm=cfg.stroke_mm if cfg else None, punch_h=((st.punch.height_mm or 0) + CLAMP['height']) if st.punch else None,
                                die_h=st.die.height_mm if st.die else None, daylight_mm=cfg.daylight_mm if cfg else None)
-        res[st.id] = {'travel': travel, 'warnings': warn}
+        if _step_picture_ok(st):   # cross-section check of the whole part against the real punch outline
+            from bending.profile import step_trajectory
+            left, right = _step_chains(st)
+            try:
+                traj = step_trajectory(st.punch.profile, st.die.profile, v, t, st.angle_deg, left, right, overbend=_overbend_fn(prog)(v, t))
+            except ValueError:
+                traj = {'hits': [], 'retract_deg': None}
+            hits, retract = traj['hits'], traj['retract_deg']
+            if hits:
+                warn.append('КОЛИЗИЯ в разреза (' + '; '.join(hits) + ') - сменете реда, инструмента или завъртането.')
+        res[st.id] = {'travel': travel, 'warnings': warn, 'retract': retract}
     return res
 
 
@@ -6076,7 +6087,7 @@ def _program_checks(prog):
 def bending_program_sheet(prog_id):
     """Printable operator sheet (browser print, like offer/protocol)."""
     prog = db.get_or_404(BendProgram, prog_id)
-    return render_template('bending_sheet.html', prog=prog, pictures={st.id: _step_picture_ok(st) for st in prog.steps})
+    return render_template('bending_sheet.html', prog=prog, pictures={st.id: _step_picture_ok(st) for st in prog.steps}, checks=_program_checks(prog))
 
 
 def _program_editable(prog):
@@ -6203,17 +6214,74 @@ def _detail_flat_length(detail):
     return hi[0 if vertical else 1] - lo[0 if vertical else 1]
 
 
+def _plan_program(prog):
+    """Search a collision-free order + tools for the bends of the program's Detail DXF. -> (list of step dicts incl. tool ids, None) or (None, why)."""
+    from bending.dxf_bends import bends_from_lines
+    from bending.planner import plan
+    from bending.sequence import steps_from_bends
+    t = _program_thickness(prog)
+    if not t:
+        return None, 'Детайлът няма дебелина.'
+    lines, lo, hi, why = _read_detail_dxf(prog.detail)
+    if not lines:
+        return None, why
+    bends, flat = bends_from_lines(lines, lo, hi)
+    lib = BendTool.query.filter_by(status='in_library').all()
+    punches = [{'id': x.id, 'angle': x.angle_deg, 'pts': x.profile} for x in lib if x.kind == 'punch']
+    dies = [{'id': x.id, 'v': pz['v'], 'angle': pz['angle'], 'pts': x.profile, 'multi': len(x.positions) > 1} for x in lib if x.kind == 'die' for pz in x.positions]
+    if not punches or not dies:
+        return None, 'В библиотеката няма поансон и матрица.'
+    res = plan(bends, flat, t, punches, dies, overbend=_overbend_fn(prog))
+    if not res['ok']:
+        k = len(res['done'])
+        return None, (f'Не е намерена последователност без колизии със сегашните инструменти: след {k} стъпки пречат ' +
+                      ', '.join(f"огъване на {bends[i]['pos']:g} mm" for i in res['blocked']) + '. Опитайте друг поансон (напр. по-тесен/с гърло) или друга дебелина.')
+    steps = steps_from_bends(bends, flat, order=[i for i, _, _ in res['order']])
+    for st, (_, pu, di) in zip(steps, res['order']):
+        st['punch_id'], st['die_id'], st['die_v_mm'] = pu['id'], di['id'], di['v'] if di['multi'] else None
+    return steps, None
+
+
 def _generate_program_steps(prog):
-    """Fill an empty draft program from its Detail's DXF and pick the tools. -> flash text."""
-    steps, why = _detail_bend_steps(prog.detail)
+    """Fill an empty draft program from its Detail's DXF: first a collision-free plan (order + tools), else the plain outside-in order. -> (text, category)."""
+    planned, why = _plan_program(prog)
+    if planned:
+        for st in planned:
+            db.session.add(BendStep(program=prog, **st))
+        db.session.flush()
+        db.session.expire(prog, ['steps'])
+        return f'Генерирани стъпки от DXF на детайла: {len(planned)}. Намерена е последователност без колизии в разреза (късата страна към упора).', 'success'
+    steps, why2 = _detail_bend_steps(prog.detail)
     if not steps:
-        return why, 'danger'
+        return why2, 'danger'
     for st in steps:
         db.session.add(BendStep(program=prog, **st))
     db.session.flush()
     db.session.expire(prog, ['steps'])
     n = _fill_program_tools(prog)
-    return f'Генерирани стъпки от DXF на детайла: {len(steps)}. ' + ('Инструментите са избрани автоматично - проверете ги.' if n else 'Инструменти не са избрани (липсва дебелина или подходящ инструмент).'), 'success'
+    return (f'Генерирани стъпки от DXF на детайла: {len(steps)}. ' + (f'ВНИМАНИЕ: {why} ' if why else '') +
+            ('Инструментите са избрани автоматично - проверете ги.' if n else 'Инструменти не са избрани (липсва дебелина или подходящ инструмент).')), ('warning' if why else 'success')
+
+
+@app.route('/admin/bending/programs/<int:prog_id>/plan', methods=['POST'])
+@role_required('admin')
+def admin_bending_plan(prog_id):
+    """Replace the steps of a draft program with a collision-free plan searched from the Detail's DXF."""
+    prog = db.get_or_404(BendProgram, prog_id)
+    if _program_editable(prog):
+        planned, why = _plan_program(prog)
+        if not planned:
+            flash(why, 'danger')
+        else:
+            for st in list(prog.steps):
+                db.session.delete(st)
+            db.session.flush()
+            for st in planned:
+                db.session.add(BendStep(program=prog, **st))
+            db.session.commit()
+            log_action(f'Търсене на последователност без колизии за програма "{prog.name}"', f'{len(planned)} стъпки')
+            flash(f'Намерена е последователност без колизии: {len(planned)} стъпки. Проверете реда и инструментите.', 'success')
+    return redirect(url_for('admin_bending_program', prog_id=prog.id))
 
 
 def _step_picture_ok(st):
@@ -6221,51 +6289,73 @@ def _step_picture_ok(st):
     return bool(st.punch and st.die and (st.die_v_mm or st.die.v_opening_mm) and 0 < st.angle_deg < 180 and _program_thickness(st.program))
 
 
+def _program_material_name(prog):
+    m = getattr(prog.detail, 'material', None)
+    return ' '.join(x for x in (getattr(m, 'display_name', None), getattr(m, 'brand', None), prog.detail.material_key) if x)
+
+
+def _overbend_fn(prog):
+    """(v, thickness) -> estimated springback in degrees for the program's material (bending.tools.springback_deg)."""
+    from bending.tools import springback_deg
+    name = _program_material_name(prog)
+    return lambda v, t: springback_deg(name, v, t)
+
+
 def _program_thickness(prog):
     return prog.detail.thickness_mm or getattr(getattr(prog.detail, 'material', None), 'thickness_mm', None)
 
 
-@app.route('/bending/steps/<int:step_id>/picture.svg')
-@role_required(['admin', 'worker'])
-def bending_step_picture(step_id):
-    """Cross-section of one bend: real die/punch outlines + the sheet bent to the step's angle."""
-    from bending.profile import step_svg
-    st = db.get_or_404(BendStep, step_id)
-    if not _step_picture_ok(st):
-        abort(404)
-    v = st.die_v_mm or st.die.v_opening_mm
+def _step_chains(st):
+    """Legs of the part around one bend: (left, right) = towards the operator / towards the back gauge, each [(length, curl towards the punch)]
+    with the flanges of the earlier steps already bent. ([], []) when the part's flat length is unknown."""
+    from bending.sequence import legs_around
     steps = st.program.steps
     k = steps.index(st)
     det = st.program.detail
     flat = _detail_flat_length(det)
     if flat is None and det.width and det.height:   # no DXF: the longer side of the part's box, if it covers every X
         flat = max(det.width, det.height)
-    left, right = [], []   # legs of the part from this bend to the operator (left) and to the back gauge (right): [(length, curl towards the punch)]
-    ends, dirs, cur = {}, {}, 'up'   # steps made by hand / before back_end existed: the old rule (gauge on the right end, direction flips with `flip`)
+    if flat is None or not all(x.x_mm is not None and 0 <= x.x_mm <= flat for x in steps):
+        return [], []
+    info, cur = [], 'up'   # steps made by hand / before back_end existed: the old rule (gauge on the right end, direction flips with `flip`)
     for x in steps:
         cur = ('down' if cur == 'up' else 'up') if x.flip else cur
-        ends[x.id], dirs[x.id] = x.back_end or 'right', x.bend_dir or cur
-    if flat is not None and all(x.x_mm is not None and 0 <= x.x_mm <= flat for x in steps):
-        pos = lambda x: x.x_mm if ends[x.id] == 'left' else flat - x.x_mm
-        here = pos(st)
-        done = [x for x in steps[:k]]
+        end = x.back_end or 'right'
+        info.append({'pos': x.x_mm if end == 'left' else flat - x.x_mm, 'angle': x.angle_deg, 'dir': x.bend_dir or cur, 'end': end})
+    return legs_around(info[k], info[:k], flat)
 
-        def legs(sign):   # sign -1: towards the left end of the flat, +1: towards the right end
-            end = 0.0 if sign < 0 else flat
-            ones = sorted((x for x in done if (pos(x) - here) * sign > 1e-6), key=lambda x: abs(pos(x) - here))
-            marks = [(abs(pos(x) - here), x) for x in ones] + [(abs(end - here), None)]
-            out, prev = [], 0.0
-            for dist, x in marks:
-                out.append([dist - prev, None])
-                if x is not None:
-                    out[-1][1] = x.angle_deg * (1 if dirs[x.id] == dirs[st.id] else -1)
-                prev = dist
-            return [tuple(o) for o in out]
-        back_sign = -1 if ends[st.id] == 'left' else 1
-        right, left = legs(back_sign), legs(-back_sign)
-    svg = step_svg(st.punch.profile, st.die.profile, v, _program_thickness(st.program), st.angle_deg,
-                   f'{st.seq}. {st.punch.code} / {st.die.code} V{v:g} / {_program_thickness(st.program):g} mm / {st.angle_deg:g}°', left=left, right=right)
-    return Response(svg, mimetype='image/svg+xml')
+
+def _step_picture_svg(st):
+    from bending.profile import step_svg
+    v = st.die_v_mm or st.die.v_opening_mm
+    t = _program_thickness(st.program)
+    left, right = _step_chains(st)
+    ob = _overbend_fn(st.program)(v, t)
+    return step_svg(st.punch.profile, st.die.profile, v, t, st.angle_deg,
+                    f'{st.seq}. {st.punch.code} / {st.die.code} V{v:g} / {t:g} mm / {st.angle_deg:g}° (+{ob:g}° пружиниране)', left=left, right=right, overbend=ob)
+
+
+@app.route('/bending/steps/<int:step_id>/picture.svg')
+@role_required(['admin', 'worker'])
+def bending_step_picture(step_id):
+    """Cross-section of one bend: real die/punch outlines, the whole part before (dashed) and after (solid) the bend."""
+    st = db.get_or_404(BendStep, step_id)
+    if not _step_picture_ok(st):
+        abort(404)
+    return Response(_step_picture_svg(st), mimetype='image/svg+xml')
+
+
+@app.route('/bending/steps/<int:step_id>/view')
+@role_required(['admin', 'worker'])
+def bending_step_view(step_id):
+    """The step's picture in a zoomable/pannable page (opened in a frame dialog from the program), with previous/next step."""
+    st = db.get_or_404(BendStep, step_id)
+    if not _step_picture_ok(st):
+        abort(404)
+    steps = [x for x in st.program.steps if _step_picture_ok(x)]
+    i = steps.index(st)
+    return render_template('bending_step_view.html', st=st, svg=_step_picture_svg(st), total=len(st.program.steps),
+                           prev_id=steps[i - 1].id if i else None, next_id=steps[i + 1].id if i + 1 < len(steps) else None)
 
 
 @app.route('/admin/bending/programs/<int:prog_id>/generate', methods=['POST'])
@@ -6330,12 +6420,29 @@ def api_flashing_program():
         steps = steps_from_unfold(_flashing_unfold(data))
     except ValueError as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
-    prog = BendProgram(detail=detail, machine=machine, name=detail.name, notes='Генерирана от /flashing (ред отляво надясно, без проверка за колизии).')
-    prog.steps = [BendStep(**st) for st in steps]
-    db.session.add(prog)
+    note = 'Генерирана от /flashing (късата страна към упора, без проверка за колизии).'
+    last = BendProgram.query.filter_by(detail_id=detail.id, machine_id=machine.id).order_by(BendProgram.version.desc(), BendProgram.id.desc()).first()
+    if last and last.status == 'draft':      # an unapproved draft of this detail: refresh it instead of piling up programs
+        for st in list(last.steps):
+            db.session.delete(st)
+        db.session.flush()
+        for st in steps:
+            db.session.add(BendStep(program=last, **st))
+        last.notes = note
+        prog, what = last, f'Обновена чернова на програмата (v{last.version})'
+    elif last:                               # approved/obsolete program exists: a NEW VERSION of it (same document), not another program
+        prog = BendProgram(detail=detail, machine=machine, name=last.name, notes=note, document_id=last.document_id, version=last.version + 1)
+        prog.steps = [BendStep(**st) for st in steps]
+        db.session.add(prog)
+        what = f'Нова версия v{prog.version} на програмата'
+    else:
+        prog = BendProgram(detail=detail, machine=machine, name=detail.name, notes=note)
+        prog.steps = [BendStep(**st) for st in steps]
+        db.session.add(prog)
+        what = 'Създадена е програма за огъване'
     db.session.commit()
-    log_action(f'Създадена програма за огъване "{prog.name}" от /flashing ({len(steps)} стъпки)')
-    return jsonify({'status': 'success', 'program_id': prog.id, 'url': url_for('admin_bending_program', prog_id=prog.id)})
+    log_action(f'{what} "{prog.name}" от /flashing ({len(steps)} стъпки)')
+    return jsonify({'status': 'success', 'program_id': prog.id, 'version': prog.version, 'message': what, 'url': url_for('admin_bending_program', prog_id=prog.id)})
 
 
 @app.route('/admin/bending/steps/<int:step_id>/delete', methods=['POST'])
@@ -14357,6 +14464,14 @@ def api_quick_create_detail():
     if not mat:
         return jsonify({'status': 'error', 'message': 'Невалиден избор на материал.'}), 400
 
+    # /flashing (ask_duplicate=1): a Detail with this name already exists -> the caller decides: new version of it, or a separate new Detail
+    dup_mode = request.form.get('on_duplicate')   # 'version' / 'new' / None
+    dup = next((d for d in Detail.query.order_by(Detail.id) if d.name.casefold() == name.casefold()), None) if request.form.get('ask_duplicate') else None   # Python-side: SQL lower() skips Cyrillic on some DBs
+    if dup and dup_mode not in ('version', 'new'):
+        return jsonify({'status': 'exists', 'message': f'Вече има детайл „{dup.name}“.', 'detail': {'id': dup.id, 'name': dup.name}}), 409
+    if dup_mode == 'version' and not (dup and request.files.get('file')):
+        return jsonify({'status': 'error', 'message': 'Няма детайл с това име, за който да се направи нова версия.'}), 400
+
     # A DXF is optional - mirrors admin_add_detail()'s bare-bones fallback
     # (manual price, width/height/total_length/pierce_count left at 0), same
     # shape _find_or_create_delivery_target already creates for a
@@ -14399,6 +14514,23 @@ def api_quick_create_detail():
             width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(temp_path)
             if width is None:
                 return jsonify({'status': 'error', 'message': 'Грешка при обработката на DXF файла.'}), 400
+
+            if dup_mode == 'version':   # new revision of the existing Detail: its own material/service/ERP stay, geometry and price follow the new DXF
+                dup.width, dup.height, dup.total_length, dup.pierce_count = width, height, total_length, pierce_count
+                dup.geometry_json = json.dumps(shapes)
+                dup.calculated_price = calculate_material_price(width, height, dup.material_key)
+                for op in dup.operations:
+                    if op.sequence == 0 and op.length_mm is not None and op.service_id == dup.cutting_service_id:
+                        op.length_mm = round(total_length, 2)   # the base cut follows the new length
+                stored_dxf = f"{uuid.uuid4().hex}_{secure_filename(file.filename)}"
+                shutil.copyfile(temp_path, os.path.join(app.config['DETAIL_DXF_FOLDER'], stored_dxf))
+                db.session.add(DetailDxfFile(detail_id=dup.id, filename=stored_dxf, original_filename=sanitize_display_filename(file.filename),
+                                             uploaded_by_id=current_user.id))
+                db.session.commit()
+                log_action(f'Нова версия на детайл "{dup.name}" (нов DXF, цена {dup.calculated_price:g} лв.)')
+                return jsonify({'status': 'success', 'version': True,
+                                'detail': {'id': dup.id, 'name': f"{dup.name} ({dup.material.display_name})" if getattr(dup, 'material', None) else dup.name,
+                                           'price': dup.total_price}})
 
             price = calculate_material_price(width, height, material_key)
             new_detail = Detail(

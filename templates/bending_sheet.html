@@ -31,6 +31,7 @@
             <td>{{ 'ОБРЪЩАНЕ' if st.flip else '' }}</td><td class="measured"></td>
         </tr>
         {% if pictures[st.id] %}<tr><td></td><td colspan="8"><img src="{{ url_for('bending_step_picture', step_id=st.id) }}" alt="" style="height:130px;background:#fff"></td></tr>{% endif %}
+        {% if checks[st.id].retract %}<tr><td></td><td colspan="8"><b>ОТМЕТНЕТЕ УПОРА (Retract) при ≈{{ '%g'|format(checks[st.id].retract) }}° от хода - пречи на детайла.</b></td></tr>{% endif %}
         {% if st.notes %}<tr><td></td><td colspan="8"><i>{{ st.notes }}</i></td></tr>{% endif %}
         {% endfor %}
         </tbody>

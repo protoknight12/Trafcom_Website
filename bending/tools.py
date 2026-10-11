@@ -79,3 +79,26 @@ def pick_tools(punches, dies, thickness, fold_deg):
     fit_d = [d for d in dies if d[2] is None or d[2] <= inner + 0.01]
     die = min(fit_d, key=lambda d: abs(d[1] - vrec)) if fit_d else None
     return punch, ((die[0], die[1]) if die else None)
+
+
+def springback_deg(material_name, v, thickness):
+    """Estimated springback of an air bend (degrees the sheet opens after the punch lifts), so the tool has to go that much further. Base value by
+    material from keywords of its name (stainless 3, aluminium 2.5, copper/brass 2, else steel 1.5), scaled with V/t (8 = the base). A rough
+    estimate - confirm with a test bend and then correct it in the program."""
+    name = (material_name or '').lower()
+    base = 1.5
+    if any(k in name for k in ('неръж', 'инокс', 'inox', 'aisi', 'stainless', '304', '316')):
+        base = 3.0
+    elif any(k in name for k in ('алум', 'alu')):
+        base = 2.5
+    elif any(k in name for k in ('мед', 'меси', 'copper', 'brass')):
+        base = 2.0
+    return round(base * max(0.5, min(2.0, (v / thickness) / 8)), 1)
+
+
+def outside_length(leg, fold_deg, inner_radius, thickness, k=0.33):
+    """Outside dimension of an end flange after the bend, from its developed length `leg` (bend line to the end, neutral fibre):
+    leg - BA/2 + OSSB, BA = fold*(r + k*t), OSSB = (r + t)*tan(fold/2). The same rule as bending.unfold."""
+    import math
+    th = math.radians(fold_deg)
+    return leg - th * (inner_radius + k * thickness) / 2 + (inner_radius + thickness) * math.tan(th / 2)

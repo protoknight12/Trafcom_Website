@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="bg" class="embedded">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Стъпка {{ st.seq }} - {{ st.program.name }}</title>
+    <style>
+        html, body { margin: 0; height: 100%; background: #14171a; color: #cfd8e0; font-family: Arial, sans-serif; }
+        .bar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: #1d2126; border-bottom: 1px solid #2c333a; flex-wrap: wrap; }
+        .bar a, .bar button { background: #2c333a; color: #e8eef3; border: 0; padding: 6px 12px; border-radius: 6px; text-decoration: none; cursor: pointer; font-size: 14px; }
+        .bar a:hover, .bar button:hover { background: #3a444d; }
+        .bar .off { opacity: .35; pointer-events: none; }
+        .bar .info { margin-left: auto; font-size: 13px; color: #9aa5b1; }
+        #stage { height: calc(100% - 46px); cursor: grab; touch-action: none; }
+        #stage svg { width: 100%; height: 100%; display: block; }
+        .legend { position: fixed; left: 12px; bottom: 10px; font-size: 13px; background: rgba(20,23,26,.85); padding: 6px 10px; border-radius: 6px; }
+        .legend i { display: inline-block; width: 22px; height: 0; border-top: 4px solid #e26a4a; vertical-align: middle; margin: 0 4px 0 8px; }
+        .legend i.d { border-top-style: dashed; opacity: .7; }
+    </style>
+</head>
+<body>
+    <div class="bar">
+        {% if prev_id %}<a href="{{ url_for('bending_step_view', step_id=prev_id) }}">&larr; Стъпка {{ st.seq - 1 }}</a>{% else %}<a class="off">&larr;</a>{% endif %}
+        {% if next_id %}<a href="{{ url_for('bending_step_view', step_id=next_id) }}">Стъпка {{ st.seq + 1 }} &rarr;</a>{% else %}<a class="off">&rarr;</a>{% endif %}
+        <button type="button" id="zin">+</button><button type="button" id="zout">&minus;</button><button type="button" id="zfit">Целият</button>
+        <span class="info">Стъпка {{ st.seq }} от {{ total }} · колело = мащаб, влачене = преместване, двоен клик = целият</span>
+    </div>
+    <div id="stage">{{ svg|safe }}</div>
+    <div class="legend"><i class="d"></i>преди огъването<i></i>след огъването</div>
+    <script>
+    (function () {
+        const stage = document.getElementById('stage'), svg = stage.querySelector('svg');
+        const home = svg.viewBox.baseVal;
+        let vb = { x: home.x, y: home.y, w: home.width, h: home.height };
+        const put = () => svg.setAttribute('viewBox', `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+        const reset = () => { vb = { x: home.x, y: home.y, w: home.width, h: home.height }; put(); };
+        function zoom(f, cx, cy) {   // cx, cy: svg point that stays put (default: centre)
+            cx = cx === undefined ? vb.x + vb.w / 2 : cx; cy = cy === undefined ? vb.y + vb.h / 2 : cy;
+            vb = { x: cx - (cx - vb.x) * f, y: cy - (cy - vb.y) * f, w: vb.w * f, h: vb.h * f }; put();
+        }
+        const pt = e => { const r = svg.getBoundingClientRect(), s = Math.min(r.width / vb.w, r.height / vb.h);
+            return { x: vb.x + vb.w / 2 + (e.clientX - r.left - r.width / 2) / s, y: vb.y + vb.h / 2 + (e.clientY - r.top - r.height / 2) / s, s }; };
+        stage.addEventListener('wheel', e => { e.preventDefault(); const p = pt(e); zoom(e.deltaY < 0 ? 0.8 : 1.25, p.x, p.y); }, { passive: false });
+        let drag = null;
+        stage.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY, vb: { ...vb } }; stage.setPointerCapture(e.pointerId); stage.style.cursor = 'grabbing'; });
+        stage.addEventListener('pointermove', e => { if (!drag) return; const s = pt(e).s; vb.x = drag.vb.x - (e.clientX - drag.x) / s; vb.y = drag.vb.y - (e.clientY - drag.y) / s; put(); });
+        const end = () => { drag = null; stage.style.cursor = 'grab'; };
+        stage.addEventListener('pointerup', end); stage.addEventListener('pointercancel', end);
+        stage.addEventListener('dblclick', reset);
+        document.getElementById('zin').onclick = () => zoom(0.8);
+        document.getElementById('zout').onclick = () => zoom(1.25);
+        document.getElementById('zfit').onclick = reset;
+    })();
+    </script>
+</body>
+</html>

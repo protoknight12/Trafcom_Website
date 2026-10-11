@@ -144,3 +144,32 @@ def test_quick_create_detail_without_dxf_requires_manual_price(client):
     assert res.get_json()['status'] == 'error'
     with flask_app.app_context():
         assert Detail.query.filter_by(name='QA No Price Detail').first() is None
+
+
+def _post_flashing(c, service_id, dxf_len, **extra):
+    doc = ezdxf.new()
+    doc.modelspace().add_line((0, 0), (dxf_len, 0))
+    buf = io.StringIO()
+    doc.write(buf)
+    data = {'name': 'Облицовка', 'material': 'qa_mat', 'service_id': str(service_id), 'ask_duplicate': '1',
+            'file': (io.BytesIO(buf.getvalue().encode('utf-8')), 'p.dxf'), **extra}
+    return c.post('/api/quick-create-detail', data=data, content_type='multipart/form-data')
+
+
+def test_duplicate_name_asks_then_makes_version_or_new_detail(client):
+    c, service_id = client
+    assert _post_flashing(c, service_id, 10).status_code == 200
+    r = _post_flashing(c, service_id, 20)               # same name: the server asks
+    assert r.status_code == 409 and r.get_json()['status'] == 'exists'
+    with flask_app.app_context():
+        assert Detail.query.count() == 1
+    r = _post_flashing(c, service_id, 20, on_duplicate='version')   # new version: same Detail, second DXF, new length
+    assert r.status_code == 200 and r.get_json()['version'] is True
+    with flask_app.app_context():
+        d = Detail.query.one()
+        assert d.width == 20 and len(DetailDxfFile.query.filter_by(detail_id=d.id).all()) == 2
+        assert [op.length_mm for op in d.operations] == [20.0]
+    r = _post_flashing(c, service_id, 30, on_duplicate='new')       # or a separate new Detail
+    assert r.status_code == 200 and not r.get_json().get('version')
+    with flask_app.app_context():
+        assert Detail.query.count() == 2

@@ -153,3 +153,41 @@ assert svg.count('<path') == 3 and '5 mm' in svg and '<title>P</title>' in svg
 assert polygon_svg(die, 'die').count('<path') == 1
 assert tool_svg('punch', 75, 0.8, 67.6, None).count('<path') == 3 and tool_svg('die', None, None, None, None).startswith('<svg')
 print('ok')
+
+# ---- collision of the whole part with the punch in the cross-section (real P.97.75.r08 + M460.r) ----
+import migration.seed_bend_tools_m460r as _m
+from bending.profile import step_collision, step_svg
+_off = tip_offset(75, 0.8)
+_P = [[x, y - _off, r, a] for x, y, r, a in _m.P97_PROFILE]
+_D = multi_v_die(_m.DIE_SIZE, _m.M460R_SIDES)
+assert step_collision(_P, _D, 16, 2, 90) == []                                   # a single bend: free
+assert step_collision(_P, _D, 16, 2, 90, left=[(40, 90), (80, None)]) != []      # a tall flange curling back towards the punch hits it
+assert 'КОЛИЗИЯ' in step_svg(_P, _D, 16, 2, 90, left=[(40, 90), (80, None)]) and 'КОЛИЗИЯ' not in step_svg(_P, _D, 16, 2, 90)
+assert step_svg(_P, _D, 16, 2, 90, right=[(30, None)]).count('stroke-dasharray="2.5 1.5"') == 1   # the part before the bend is dashed
+# every pair is checked: gauge finger against the punch (a very short flange), the part against the die (a long flange folding down), and so on
+assert step_collision(_P, _D, 16, 2, 90, right=[(5, None)]) == []   # a very short flange: the finger would meet the punch - it is retracted instead (see step_trajectory)
+assert 'детайл - матрица' in step_collision(_P, _D, 16, 2, 90, left=[(15, -90), (60, None)])
+assert 'детайл - поансон' in step_collision(_P, _D, 16, 2, 90, left=[(40, 90), (80, None)])
+print('ok pairs')
+# exact support: the sheet's bottom line is tangent to the die's shoulder circles; springback makes the tool go deeper
+from bending.profile import _step_geom
+g0 = _step_geom(_P, _D, 16, 2, 90, [], [])
+(cx, cy), = [g0['contacts'][1]]
+assert abs(cy - (-2 + 2 * math.sin(math.radians(45)))) < 1e-6 and 5 < cx < 10        # R2 shoulder, 90 deg sheet: contact point right next to V/2 = 8
+g1 = _step_geom(_P, _D, 16, 2, 90, [], [], overbend=3.0)
+assert min(y for _, y in g1['punch']) < min(y for _, y in g0['punch']) - 0.15          # 93 deg bent -> the punch goes deeper than for 90
+print('ok exact support')
+# the part as it lies on the die BEFORE the stroke is checked too: a flange hanging down right at the die's edge goes through the die
+assert 'детайл преди огъването - матрица' in step_collision(_P, _D, 16, 2, 90, left=[(25, -90), (100, None)])
+assert 'детайл преди огъването - матрица' not in step_collision(_P, _D, 16, 2, 90, left=[(60, -90), (100, None)])   # hangs free in front of the die
+print('ok before')
+# the whole bend is followed: a back flange curling up at the end of the part swings into the finger half way -> the finger has to be retracted
+from bending.profile import step_trajectory
+tr = step_trajectory(_P, _D, 16, 2, 90, left=[(60, None)], right=[(20, 90), (15, None)])
+assert tr['hits'] == [] and tr['retract_deg'] is not None and 6 <= tr['retract_deg'] < 90
+assert step_trajectory(_P, _D, 16, 2, 90, right=[(40, None)])['retract_deg'] is None     # a plain flat part leaves the finger by itself
+print('ok trajectory')
+# a retracted finger is drawn again, dashed, where it stands after the retract
+assert 'отдръпнат' in step_svg(_P, _D, 16, 2, 90, left=[(60, None)], right=[(20, 90), (15, None)])
+assert 'отдръпнат' not in step_svg(_P, _D, 16, 2, 90, right=[(40, None)])
+print('ok retract drawing')

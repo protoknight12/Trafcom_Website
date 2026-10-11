@@ -513,6 +513,12 @@ def test_program_steps_from_detail_dxf(ctx, tmp_path):
     assert all(s.punch and s.die for s in prog.steps)  # thickness 2 -> tools picked for both
     r = c.get(f'/bending/steps/{prog.steps[0].id}/picture.svg')
     assert r.status_code == 200 and r.mimetype == 'image/svg+xml' and 'упор' in r.get_data(as_text=True) and 'X 30' in r.get_data(as_text=True)
+    v = c.get(f'/bending/steps/{prog.steps[0].id}/view')
+    assert v.status_code == 200 and b'id="stage"' in v.data and b'<svg' in v.data
+    n = len(prog.steps)
+    assert c.post(f'/admin/bending/programs/{prog.id}/plan').status_code == 302   # re-plans from the DXF: same bends, tools chosen
+    db.session.expire_all()
+    assert len(prog.steps) == n and all(x.punch and x.die and x.back_end for x in prog.steps)
     assert c.get(f'/admin/bending/programs/{prog.id}').status_code == 200 and c.get(f'/admin/bending/programs/{prog.id}/sheet').status_code == 200
 
 

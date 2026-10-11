@@ -2,20 +2,24 @@
 
 Safety first: at every bend the LONG part of the sheet is on the operator's side and the SHORT part goes to the back gauge, so X is always
 the shorter distance from the bend line to an end of the flat (`back_end` says which end rests on the fingers). Bends are made from the
-outside in (shortest X first); the part is turned over when the fold direction changes and turned end-for-end when the gauge end changes.
-ponytail: developed lengths only, no collision check - real sequencing needs the 3D part and tool shapes (stage 3).
+outside in (shortest X first) unless a collision-free order is searched (bending.planner); the part is turned over when the fold direction
+changes and turned end-for-end when the gauge end changes.
+ponytail: developed lengths only - real sequencing with 3D collisions is stage 3.
 """
 
 END = {'left': 'ляв', 'right': 'десен'}
 
 
-def steps_from_bends(bends, flat):
-    """bends: [{pos (mm from the left end of the flat), angle, dir 'up'|'down', note (optional)}] -> [{seq, angle_deg, x_mm, flip, notes, back_end, bend_dir}]."""
-    rows = []
-    for b in bends:
-        left_first = b['pos'] <= flat - b['pos']
-        rows.append((min(b['pos'], flat - b['pos']), b['pos'], 'left' if left_first else 'right', b))
-    rows.sort(key=lambda r: (r[0], r[1]))
+def back_end_of(pos, flat):
+    """The SHORT side goes to the back gauge: 'left' when the bend line is nearer to the left end of the flat."""
+    return 'left' if pos <= flat - pos else 'right'
+
+
+def steps_from_bends(bends, flat, order=None):
+    """bends: [{pos (mm from the left end of the flat), angle, dir 'up'|'down', note (optional)}] -> [{seq, angle_deg, x_mm, flip, notes, back_end, bend_dir}].
+    `order` = indexes into bends (default: outside in, shortest X first)."""
+    rows = [(min(b['pos'], flat - b['pos']), b['pos'], back_end_of(b['pos'], flat), b) for b in bends]
+    rows = [rows[i] for i in order] if order is not None else sorted(rows, key=lambda r: (r[0], r[1]))
     steps, prev_dir, prev_end = [], None, None
     for i, (x, pos, end, b) in enumerate(rows, 1):
         notes = [b['note']] if b.get('note') else []
@@ -33,3 +37,19 @@ def steps_from_unfold(unfold):
     """flashing-style unfold dict -> steps (see steps_from_bends)."""
     return steps_from_bends([{'pos': b['line'], 'angle': b['angle'], 'dir': b['dir'], 'note': 'Подгъвка (затваряне на ръба)' if b['kind'] == 'hem' else None}
                              for b in unfold['bends']], unfold['flat_length'])
+
+
+def legs_around(here, done, flat):
+    """Legs of the part around the bend `here` with the bends in `done` already made. All are dicts {pos, angle, dir}; `here` also has `end` (the
+    gauge end). -> (front, back): legs towards the operator / the back gauge, each [(length, curl towards the punch or None)]."""
+    back_sign = -1 if here['end'] == 'left' else 1
+
+    def legs(sign):   # sign -1: towards the left end of the flat, +1: towards the right end
+        end = 0.0 if sign < 0 else flat
+        ones = sorted((b for b in done if (b['pos'] - here['pos']) * sign > 1e-6), key=lambda b: abs(b['pos'] - here['pos']))
+        out, prev = [], 0.0
+        for dist, b in [(abs(b['pos'] - here['pos']), b) for b in ones] + [(abs(end - here['pos']), None)]:
+            out.append((dist - prev, b['angle'] * (1 if b['dir'] == here['dir'] else -1) if b else None))
+            prev = dist
+        return out
+    return legs(-back_sign), legs(back_sign)

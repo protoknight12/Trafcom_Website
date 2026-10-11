@@ -441,12 +441,28 @@ def derived(points, kind, base_height=None):
     return res
 
 
-def step_svg(punch_pts, die_pts, v, thickness, fold_deg, label='', left=(), right=()):
-    """Cross-section of one bend with the WHOLE part: the die with the chosen V up, the punch at the bottom of its stroke, the sheet bent to
-    `fold_deg` (air bending, straight legs). left / right = [(leg length, turn)] going away from the bend towards the operator (left) and
-    the back gauge (right): the legs of the part with its already bent flanges, `turn` = angle (+ = curling towards the punch) to the next leg
-    (None for the last). The back (right) side is also drawn flat (dashed) on the die with the gauge fingers at its end - X is measured there.
-    The long part should be on the operator's side. y up in the maths, flipped for SVG."""
+# Back-gauge finger in the cross-section: a stop face against the end of the flat part, from the sheet's bottom plane up. ponytail: a plain block -
+# the real finger (ledge, step, arm) is not drawn yet; send its drawing/dimensions to make this exact.
+FINGER = {'thickness': 5.0, 'height': 9.0}
+
+
+def _chain(start, d, legs, ccw):
+    """Points of a part's centre line: from `start` along heading `d`, one leg after the other, turning by each leg's `turn` (+ = curl towards the
+    punch: counter-clockwise when heading right, clockwise when heading left)."""
+    q = [start]
+    for length, turn in legs:
+        q.append((q[-1][0] + d[0] * length, q[-1][1] + d[1] * length))
+        if turn:
+            a = math.radians(turn) * (1 if ccw else -1)
+            d = (d[0] * math.cos(a) - d[1] * math.sin(a), d[0] * math.sin(a) + d[1] * math.cos(a))
+    return q
+
+
+def _step_geom(punch_pts, die_pts, v, thickness, fold_deg, left, right, overbend=0.0):
+    """Layout of one bend at the bottom of the stroke. The sheet rests on the die's shoulders at exact points: its bottom surface is a straight
+    line tangent to each shoulder circle (radius R, centre cx = V/2 + R(1 - sin b)/cos b below the top plane, b = half the groove angle); the
+    punch tip (radius r) sits on the inner surface, its lowest point r/sin(g) - r above the inner apex. `overbend` = springback allowance:
+    the sheet is pressed to fold + overbend and opens back to fold when the punch lifts."""
     gs = grooves(die_pts)
     g = min(gs, key=lambda x: abs(x['v'] - v)) if gs else None
     die = rotated(die_pts, g['rotation']) if g else normalize(die_pts)
@@ -454,42 +470,174 @@ def step_svg(punch_pts, die_pts, v, thickness, fold_deg, label='', left=(), righ
     if g:  # the shoulder plane of the groove that now faces up
         n = len(die)
         shoulder_y = (die[(g['index'] - 2) % n][1] + die[g['index'] % n][1]) / 2
-    die_o = [(x, y - shoulder_y) for x, y in outline(die)]
-    inner = math.radians(180 - fold_deg)
-    s, c = math.sin(inner / 2), math.cos(inner / 2)
-    depth = v / 2 / math.tan(inner / 2) - thickness / s
-    A = (0.0, -depth - thickness / (2 * s))   # apex on the sheet's centre line
+    fold_eff = min(fold_deg + overbend, 179.0)
+    gamma = math.radians(180 - fold_eff) / 2             # half the sheet's inner angle
+    s, c = math.sin(gamma), math.cos(gamma)
+    beta = math.radians(g['angle'] / 2) if g else math.radians(42.5)
+    R = (sum(g['shoulder_radii']) / 2 if g else 0.0) or 0.0
+    cx = v / 2 + R * (1 - math.sin(beta)) / math.cos(beta)
+    y_out = (R - c * cx) / s - R                          # outer apex of the sheet: its bottom line is tangent to the shoulder circle
+    contacts = [(-(cx - R * c), -R + R * s), (cx - R * c, -R + R * s)] if R else [(-v / 2, 0.0), (v / 2, 0.0)]
+    tip_r = (derived(punch_pts, 'punch').get('tip_radius') or 0.0)
+    A = (0.0, y_out + thickness / (2 * s))                # apex on the sheet's centre line
+    tip_y = y_out + thickness / s + tip_r / s - tip_r     # lowest point of the punch tip
     dflt = [(max(30.0, v * 0.9), None)]
+    left, right = list(left) or dflt, list(right) or dflt
+    flat_y = thickness / 2
+    before_right = _chain((0.0, flat_y), (1.0, 0.0), right, True)
+    fx = max(p[0] for p in before_right)
+    return {'finger': [(fx, 0.0), (fx + FINGER['thickness'], 0.0), (fx + FINGER['thickness'], thickness + FINGER['height']), (fx, thickness + FINGER['height'])],
+            'die': [(x, y - shoulder_y) for x, y in outline(die)],
+            'punch': [(x, y + tip_y) for x, y in outline(punch_pts)],
+            'clamp': [(x, y + tip_y) for x, y in clamp_polygon(outline(punch_pts))],
+            'after': _chain(A, (-s, c), left, False)[::-1][:-1] + _chain(A, (s, c), right, True),   # front end ... apex ... back end
+            'before_left': _chain((0.0, flat_y), (-1.0, 0.0), left, False), 'before_right': before_right,
+            'right_len': sum(leg for leg, _ in right), 'flat_y': flat_y, 'contacts': contacts, 'fold_eff': fold_eff,
+            'inner_radius': 0.16 * v, 'left': left, 'right': right}
 
-    def chain(d, legs, ccw):
-        q = [A]
-        for length, turn in legs or dflt:
-            q.append((q[-1][0] + d[0] * length, q[-1][1] + d[1] * length))
-            if turn:
-                a = math.radians(turn) * (1 if ccw else -1)
-                d = (d[0] * math.cos(a) - d[1] * math.sin(a), d[0] * math.sin(a) + d[1] * math.cos(a))
-        return q
 
-    pts = chain((-s, c), left, False)[::-1][:-1] + chain((s, c), right, True)
-    right_len = sum(leg for leg, _ in right) if right else dflt[0][0]
-    punch_o = [(x, y + A[1] + thickness / (2 * s)) for x, y in outline(punch_pts)]
-    cp = [(x, y + A[1] + thickness / (2 * s)) for x, y in clamp_polygon(outline(punch_pts))]
-    flat_y, fx = thickness / 2, right_len     # the flat leg resting on the die, its end against the fingers
-    ghost = [(0.0, flat_y), (fx, flat_y)]
-    allp = die_o + punch_o + cp + pts + [(fx + 8, flat_y + 12), (fx + 8, flat_y - 14)]
+def _inside(pt, poly):
+    x, y, inside = pt[0], pt[1], False
+    for i in range(len(poly)):
+        (x0, y0), (x1, y1) = poly[i - 1], poly[i]
+        if (y0 > y) != (y1 > y) and x < (x1 - x0) * (y - y0) / (y1 - y0) + x0:
+            inside = not inside
+    return inside
+
+
+def _dist_to_edges(pt, poly):
+    best = 1e9
+    for i in range(len(poly)):
+        (x0, y0), (x1, y1) = poly[i - 1], poly[i]
+        dx, dy = x1 - x0, y1 - y0
+        t = 0.0 if dx == dy == 0 else max(0.0, min(1.0, ((pt[0] - x0) * dx + (pt[1] - y0) * dy) / (dx * dx + dy * dy)))
+        best = min(best, math.hypot(pt[0] - x0 - t * dx, pt[1] - y0 - t * dy))
+    return best
+
+
+def _densify(poly, step=1.5):
+    out = []
+    for i in range(len(poly)):
+        (x0, y0), (x1, y1) = poly[i - 1], poly[i]
+        n = max(1, int(math.hypot(x1 - x0, y1 - y0) / step))
+        out += [(x0 + (x1 - x0) * k / n, y0 + (y1 - y0) * k / n) for k in range(n)]
+    return out
+
+
+def _overlap(pts, poly, tol):
+    x0, x1 = min(p[0] for p in poly), max(p[0] for p in poly)
+    y0, y1 = min(p[1] for p in poly), max(p[1] for p in poly)
+    return any(x0 < q[0] < x1 and y0 < q[1] < y1 and _inside(q, poly) and _dist_to_edges(q, poly) > tol for q in pts)
+
+
+def _sample_part(pts, thickness, step=1.5):
+    """Points of the sheet along a centre line: on it and on both surfaces."""
+    out = []
+    for i in range(len(pts) - 1):
+        (x0, y0), (x1, y1) = pts[i], pts[i + 1]
+        L = math.hypot(x1 - x0, y1 - y0) or 1.0
+        nx, ny = -(y1 - y0) / L, (x1 - x0) / L
+        for k in range(int(L / step) + 2):
+            f = min(1.0, k * step / L)
+            bx, by = x0 + (x1 - x0) * f, y0 + (y1 - y0) * f
+            out += [(bx + nx * off, by + ny * off) for off in (-thickness / 2, 0.0, thickness / 2)]
+    return out
+
+
+def _stage_pairs(geo, thickness, tol):
+    """Pairs of bodies that overlap at one moment of the stroke."""
+    bodies = {'детайл': (_sample_part(geo['after'], thickness), None), 'упор': (_densify(geo['finger']), geo['finger']),
+              'поансон': (_densify(geo['punch']), geo['punch']), 'закрепване': (_densify(geo['clamp']), geo['clamp']), 'матрица': (_densify(geo['die']), geo['die'])}
+    pairs = [('детайл', 'поансон', tol), ('детайл', 'закрепване', tol), ('детайл', 'матрица', 1.0), ('детайл', 'упор', 0.2),
+             ('упор', 'поансон', tol), ('упор', 'закрепване', tol), ('упор', 'матрица', tol), ('поансон', 'матрица', tol), ('закрепване', 'матрица', tol)]
+    hits = []
+    for a, b, tl in pairs:
+        pa, poly_a = bodies[a]
+        pb, poly_b = bodies[b]
+        if _overlap(pa, poly_b, tl) or (poly_a is not None and _overlap(pb, poly_a, tl)):
+            hits.append((a, b))
+    return hits
+
+
+def step_trajectory(punch_pts, die_pts, v, thickness, fold_deg, left=(), right=(), tol=0.4, overbend=0.0, step_deg=6.0):
+    """The whole bend, not only its end: the sheet is folded from a few degrees (clamped by the punch) up to fold + overbend, and at every stage
+    the punch, its clamp, the die, the part and the back-gauge finger are checked against each other in the cross-section (the profile swings
+    round, so a flange or the end of the part can reach the finger or the punch half way). Before the stroke the part rests flat on the die with
+    its short end touching the finger face - touching is fine, a flange hanging into the die is not.
+    A finger that gets in the way is simply retracted (every machine has that option) - not a collision, unless it sits in the die.
+    -> {'hits': ['part - punch', ...], 'retract_deg': angle up to which the finger may stay, or None}. Only the cross-section (3D: stage 3)."""
+    final = min(fold_deg + overbend, 179.0)
+    stages = sorted({float(a) for a in range(int(step_deg), int(final), int(step_deg))} | {final}) if final > step_deg else [final]
+    hits, first_finger = set(), None
+    geo = _step_geom(punch_pts, die_pts, v, thickness, final, left, right, 0.0)
+    before = _sample_part(geo['before_left'][::-1][:-1] + geo['before_right'], thickness)   # resting on the die before the stroke
+    if _overlap(before, geo['die'], 0.6):
+        hits.add('детайл преди огъването - матрица')
+    for i, a in enumerate(stages):
+        g = _step_geom(punch_pts, die_pts, v, thickness, a, left, right, 0.0)
+        for x, y in _stage_pairs(g, thickness, tol):
+            if 'упор' not in (x, y):
+                hits.add(f'{x} - {y}')
+            elif 'матрица' in (x, y):
+                hits.add(f'{x} - {y}')            # the finger itself stands in the die: retracting does not help
+            elif i > 0 and first_finger is None:  # the first stage = the punch clamping the sheet; the finger may be retracted from then on
+                first_finger = i
+    retract = None if first_finger is None else stages[first_finger - 1]
+    return {'hits': sorted(hits), 'retract_deg': retract}
+
+
+def step_collision(punch_pts, die_pts, v, thickness, fold_deg, left=(), right=(), tol=0.4, overbend=0.0):
+    """Collisions over the whole bend (see step_trajectory), the retractable back-gauge finger excluded. -> ['part - punch', ...] (empty = free)."""
+    return step_trajectory(punch_pts, die_pts, v, thickness, fold_deg, left, right, tol, overbend)['hits']
+
+
+def step_svg(punch_pts, die_pts, v, thickness, fold_deg, label='', left=(), right=(), overbend=0.0):
+    """Cross-section of one bend with the WHOLE part. Dashed: the part as it is BEFORE this bend (earlier flanges already bent, this bend still
+    flat, resting on the die with its short end against the gauge fingers - X is measured there). Solid: the part after the bend. left / right =
+    [(leg length, turn)] going away from the bend towards the operator (left, the long part) and the back gauge (right): `turn` = angle to the
+    next leg (+ = curling towards the punch), None for the last. A part that runs into the punch is drawn red. y up in the maths, flipped for SVG."""
+    geo = _step_geom(punch_pts, die_pts, v, thickness, fold_deg, left, right, overbend)
+    traj = step_trajectory(punch_pts, die_pts, v, thickness, fold_deg, left, right, overbend=overbend)
+    hits, retract = traj['hits'], traj['retract_deg']
+    pts, flat_y = geo['after'], geo['flat_y']
+    ghost_l, ghost_r = geo['before_left'], geo['before_right']
+    fx = max(p[0] for p in ghost_r)
+    allp = geo['die'] + geo['punch'] + geo['clamp'] + pts + ghost_l + ghost_r + geo['finger']
     x0, x1 = min(p[0] for p in allp) - 4, max(p[0] for p in allp) + 6
     y1, y0 = -min(p[1] for p in allp) + 4, -max(p[1] for p in allp) - 4   # svg y is flipped
     path = lambda q: 'M ' + ' L '.join(f'{_f(x)} {_f(-y)}' for x, y in q) + ' Z'
     line = lambda q: 'M ' + ' L '.join(f'{_f(x)} {_f(-y)}' for x, y in q)
     fs = max(3.0, (x1 - x0) / 38)
-    finger = (f'<path d="{path([(fx, flat_y + 9), (fx + 5, flat_y + 9), (fx + 5, flat_y - 8), (fx, flat_y - 8)])}" fill="#4f9d69" stroke="#fff" stroke-width="0.25"/>'
+    col = '#ff3b30' if hits else '#e26a4a'
+    gcol = '#ff3b30' if any('преди' in h for h in hits) else '#e26a4a'
+    finger = (f'<path d="{path(geo["finger"])}" fill="#4f9d69" stroke="#fff" stroke-width="0.25"/>'
               f'<path d="{line([(0, flat_y - 4 * fs / 3), (fx, flat_y - 4 * fs / 3)])}" stroke="#6fa8d6" stroke-width="{_f(fs / 12)}"/>'
-              f'<text x="{_f(fx / 2)}" y="{_f(-(flat_y - 4 * fs / 3) + fs * 1.1)}" font-size="{_f(fs)}" fill="#6fa8d6" text-anchor="middle" font-family="Arial">X {right_len:g}</text>'
-              f'<text x="{_f(fx + 2.5)}" y="{_f(-(flat_y + 9) - 1)}" font-size="{_f(fs * 0.8)}" fill="#4f9d69" text-anchor="middle" font-family="Arial">упор</text>')
+              f'<text x="{_f(fx / 2)}" y="{_f(-(flat_y - 4 * fs / 3) + fs * 1.1)}" font-size="{_f(fs)}" fill="#6fa8d6" text-anchor="middle" font-family="Arial">X {geo["right_len"]:g}</text>'
+              f'<text x="{_f(fx + 2.5)}" y="{_f(-(flat_y + FINGER["height"]) - 1)}" font-size="{_f(fs * 0.8)}" fill="#4f9d69" text-anchor="middle" font-family="Arial">упор</text>')
+    from bending.tools import outside_length
+    dots = ''.join(f'<circle cx="{_f(x)}" cy="{_f(-y)}" r="{_f(max(0.5, fs / 6))}" fill="#ffd60a" stroke="#14171a" stroke-width="0.15"/>' for x, y in geo['contacts'])
+    sizes = ''
+    for end_pt, legs in ((pts[0], geo['left']), (pts[-1], geo['right'])):   # outside size of each end flange after the bend
+        if legs and legs[-1][1] is None and len(legs) == 1 or (legs and legs[-1][1] is None):
+            out = outside_length(legs[-1][0], fold_deg, geo['inner_radius'], thickness)
+            sizes += f'<text x="{_f(end_pt[0])}" y="{_f(-end_pt[1] - fs * 0.5)}" font-size="{_f(fs * 0.85)}" fill="#ffd60a" text-anchor="middle" font-family="Arial">{legs[-1][0]:g} → {out:.1f}</text>'
+    if retract:   # the finger drawn again, dashed, where it stands after being retracted (moved back), with an arrow
+        d = 25.0
+        moved = [(x + d, y) for x, y in geo['finger']]
+        ymid = thickness + FINGER['height'] / 2
+        fingers_back = (f'<path d="{path(moved)}" fill="none" stroke="#4f9d69" stroke-width="{_f(max(0.4, fs / 8))}" stroke-dasharray="1.8 1.2"/>'
+                        f'<path d="{line([(fx + FINGER["thickness"] + 1, ymid), (fx + d - 1, ymid)])}" stroke="#4f9d69" stroke-width="{_f(max(0.3, fs / 12))}" stroke-dasharray="1.8 1.2" fill="none"/>'
+                        f'<path d="M {_f(fx + d - 1)} {_f(-ymid)} l {_f(-fs * 0.7)} {_f(-fs * 0.35)} l 0 {_f(fs * 0.7)} Z" fill="#4f9d69"/>'
+                        f'<text x="{_f(fx + d / 2 + 2.5)}" y="{_f(-ymid - fs * 0.6)}" font-size="{_f(fs * 0.8)}" fill="#4f9d69" text-anchor="middle" font-family="Arial">отдръпнат</text>')
+        x1 = max(x1, fx + d + FINGER['thickness'] + 4)
+    else:
+        fingers_back = ''
     txt = f'<text x="{_f(x0 + 2)}" y="{_f(y0 + fs * 1.3)}" font-size="{_f(fs)}" fill="#9aa5b1" font-family="Arial">{label}</text>' if label else ''
+    note = f'<text x="{_f(x0 + 2)}" y="{_f(y0 + fs * 4.1)}" font-size="{_f(fs)}" fill="#ffb340" font-family="Arial">Упорът се отдръпва при ≈{retract:g}° (опция Retract)</text>' if retract else ''
+    warn = f'<text x="{_f(x0 + 2)}" y="{_f(y0 + fs * 2.7)}" font-size="{_f(fs)}" fill="#ff3b30" font-family="Arial" font-weight="bold">КОЛИЗИЯ: {"; ".join(hits)}</text>' if hits else ''
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{_f(x0)} {_f(y0)} {_f(x1 - x0)} {_f(y1 - y0)}"><title>{label}</title>'
-            f'<path d="{path(die_o)}" fill="#8fa0b0" stroke="#e0a526" stroke-width="0.4" stroke-linejoin="round"/>'
-            f'<path d="{path(cp)}" fill="#7d8a97" fill-opacity="0.7" stroke="#e0a526" stroke-opacity="0.5" stroke-width="0.3" stroke-dasharray="1.2 0.8"/>'
-            f'<path d="{path(punch_o)}" fill="#cfd8e0" stroke="#e0a526" stroke-width="0.4" stroke-linejoin="round"/>'
-            f'<path d="{line(ghost)}" stroke="#e26a4a" stroke-opacity="0.6" stroke-width="{_f(thickness)}" stroke-dasharray="2 1.5" fill="none"/>'
-            f'<path d="{line(pts)}" stroke="#e26a4a" stroke-width="{_f(thickness)}" stroke-linejoin="round" fill="none"/>{finger}{txt}</svg>')
+            f'<path d="{path(geo["die"])}" fill="#8fa0b0" stroke="#e0a526" stroke-width="0.4" stroke-linejoin="round"/>'
+            f'<path d="{path(geo["clamp"])}" fill="#7d8a97" fill-opacity="0.7" stroke="#e0a526" stroke-opacity="0.5" stroke-width="0.3" stroke-dasharray="1.2 0.8"/>'
+            f'<path d="{path(geo["punch"])}" fill="#cfd8e0" stroke="#e0a526" stroke-width="0.4" stroke-linejoin="round"/>'
+            f'<path d="{line(ghost_l[::-1][:-1] + ghost_r)}" stroke="{gcol}" stroke-opacity="0.65" stroke-width="{_f(thickness)}" stroke-dasharray="2.5 1.5" stroke-linejoin="round" fill="none"/>'
+            f'<path d="{line(pts)}" stroke="{col}" stroke-width="{_f(thickness)}" stroke-linejoin="round" fill="none"/>{dots}{finger}{fingers_back}{sizes}{txt}{warn}{note}</svg>')
