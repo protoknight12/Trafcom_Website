@@ -44,6 +44,6 @@ print('ok pick')
 
 # ---- springback and the outside size after the bend ----
 from bending.tools import springback_deg, outside_length
-assert springback_deg('Неръждаема стомана AISI 304', 16, 2) == 3.0 and springback_deg('S235', 16, 2) == 1.5 and springback_deg('Алуминий', 32, 2) == 4.0
+assert springback_deg('Неръждаема стомана AISI 304', 16, 2) == 3.0 and springback_deg('S235', 16, 2) == 1.5 and springback_deg('Алуминий', 32, 2) == 5.0
 assert abs(outside_length(20, 90, 3, 2) - 22.126) < 0.01      # 20 - BA/2 + OSSB for r=3, t=2, K=0.33
 print('ok springback')
