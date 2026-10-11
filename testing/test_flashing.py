@@ -271,3 +271,27 @@ def test_calc_endpoint_error_and_presets(client):
     assert len(presets) == 1 and presets[0]['settings'] == {'x': 2}
     assert client.post(f"/api/flashing-presets/{presets[0]['id']}/delete").status_code == 200
     assert client.get('/api/flashing-presets').get_json()['presets'] == []
+
+
+def test_bd_table_replaces_k_factor_with_fallback(client):
+    from app import BendDeduction
+    db.session.add(BendDeduction(material_type='sheets', thickness_mm=2, radius_mm=2, angle_deg=90, deduction_mm=3.0))
+    db.session.commit()
+    u = _flashing_unfold({**BASE, 'bd_material': 'sheets'})
+    assert u['bends'][0]['deduction'] == pytest.approx(3.0) and u['flat_length'] == pytest.approx(80 - 3.0, abs=1e-3)
+    assert u['warnings'] == []
+    # no row for 45 deg -> K-factor result + warning
+    f = _flashing_unfold({**BASE, 'bd_material': 'sheets', 'angles': [45]})
+    assert f['bends'][0]['deduction'] == _flashing_unfold({**BASE, 'angles': [45]})['bends'][0]['deduction']
+    assert f['warnings'] and '45' in f['warnings'][0]
+    # other material: nothing matches -> pure K-factor
+    assert _flashing_unfold({**BASE, 'bd_material': 'rods'})['flat_length'] == _flashing_unfold(BASE)['flat_length']
+
+
+def test_flashing_page_offers_bd_select_only_when_table_has_rows(client):
+    from app import BendDeduction, seed_material_types
+    seed_material_types()
+    assert b'id="f-bd"' not in client.get('/flashing').data
+    db.session.add(BendDeduction(material_type='sheets', thickness_mm=2, radius_mm=2, angle_deg=90, deduction_mm=3.0))
+    db.session.commit()
+    assert b'id="f-bd"' in client.get('/flashing').data

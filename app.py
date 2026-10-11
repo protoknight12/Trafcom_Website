@@ -37,7 +37,7 @@ from flask_wtf.csrf import CSRFProtect, CSRFError
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import ezdxf
-from bending.unfold import unfold_section, k_factor
+from bending.unfold import unfold_section, k_factor, bd_table
 from ezdxf import bbox
 from ezdxf.math import bulge_to_arc
 import random
@@ -5922,8 +5922,22 @@ def _flashing_section(p, outs):
         labels[0] = '1п'
     if p.get('hem_end'):
         labels[-1] = f'{count}п'
-    return unfold_section(outs, angles, radii, kinds, signs, t, k_factor(k), labels, [lab.endswith('п') for lab in labels],
+    strategy, missing = k_factor(k), []
+    if p.get('bd_material'):
+        # Measured/entered bend deductions for this material + thickness; a bend with no row falls back to the K-factor.
+        rows = BendDeduction.query.filter_by(material_type=p['bd_material'], thickness_mm=t).all()
+        bd = bd_table(lambda a, r_, t_: next((x.deduction_mm for x in rows if abs(x.radius_mm - r_) < 1e-6 and abs(x.angle_deg - a) < 1e-6), None))
+
+        def strategy(angle, r_, t_, setback):
+            try:
+                return bd(angle, r_, t_, setback)
+            except ValueError:
+                missing.append(f'{angle:g}\u00b0 R{r_:g}')
+                return k_factor(k)(angle, r_, t_, setback)
+    sec = unfold_section(outs, angles, radii, kinds, signs, t, strategy, labels, [lab.endswith('п') for lab in labels],
                           inside=p.get('dim_mode') == 'inside', hem_sign_ends=(signs[0], signs[n - 2]))
+    sec['bd_missing'] = sorted(set(missing))
+    return sec
 
 
 def _flashing_unfold(p):
@@ -6097,6 +6111,8 @@ def _flashing_unfold(p):
 
     holes, warnings = [], []
     n = len(flanges)
+    if a['bd_missing'] or b['bd_missing']:
+        warnings.append('Няма BD в таблицата за: ' + ', '.join(sorted(set(a['bd_missing'] + b['bd_missing']))) + ' - ползван е K-факторът.')
     for i, h in enumerate(p.get('holes') or [], 1):
         try:
             j = int(h.get('flange')) - 1
@@ -6158,7 +6174,9 @@ def _flashing_dxf(u):
 def flashing():
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     services = allowed_only('services', Service.query.order_by(Service.name).all())
-    return render_template('flashing.html', materials=materials, services=services, active_page='flashing')
+    bd_keys = [k for (k,) in db.session.query(BendDeduction.material_type).distinct()]
+    bd_materials = MaterialType.query.filter(MaterialType.key.in_(bd_keys)).all() if bd_keys else []
+    return render_template('flashing.html', materials=materials, services=services, bd_materials=bd_materials, active_page='flashing')
 
 
 def _hall_admin_info(m):

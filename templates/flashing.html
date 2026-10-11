@@ -69,6 +69,9 @@
                 <div><label>{{ _('Дебелина, мм') }}</label><input type="number" id="f-thickness" value="1" min="0.1" step="0.1"></div>
                 <div><label>{{ _('Вътрешен радиус, мм') }}</label><input type="number" id="f-radius" value="1" min="0" step="0.1"></div>
                 <div><label>{{ _('K-фактор') }}</label><input type="number" id="f-k" value="0.4" min="0" max="1" step="0.01"></div>
+                {% if bd_materials %}
+                <div><label>{{ _('BD таблица') }}</label><select id="f-bd"><option value="">{{ _('K-фактор') }}</option>{% for m in bd_materials %}<option value="{{ m.key }}">{{ m.label }}</option>{% endfor %}</select></div>
+                {% endif %}
                 <div><label>{{ _('Дължина, мм') }}</label><input type="number" id="f-length" value="1000" min="1" step="1"></div>
             </div>
 
@@ -322,14 +325,14 @@
         el.querySelector('.c-bend').addEventListener('change', e => { el.dataset.bend = e.target.value; });
     });
     ['f-hem-start', 'f-hem-end'].forEach(id => $(id).addEventListener('change', () => { relabel(); refreshHoleFlanges(); schedule(); }));
-    document.querySelectorAll('#f-thickness,#f-radius,#f-k,#f-length,#f-hem-length,#f-hem-radius,#f-hem-angle,#f-relief,#f-relief-w,#f-relief-d')
+    document.querySelectorAll('#f-bd,#f-thickness,#f-radius,#f-k,#f-length,#f-hem-length,#f-hem-radius,#f-hem-angle,#f-relief,#f-relief-w,#f-relief-d')
         .forEach(e => e.addEventListener('input', schedule));
 
     // ---- settings <-> form ----
     function collect() {
         return {
             profile,
-            thickness: num('f-thickness'), radius: num('f-radius'), k_factor: num('f-k'), length: num('f-length'),
+            thickness: num('f-thickness'), radius: num('f-radius'), k_factor: num('f-k'), bd_material: $('f-bd') ? $('f-bd').value : '', length: num('f-length'),
             flanges: [...document.querySelectorAll('.in-flange')].map(i => parseFloat(i.value)),
             flanges_end: $('f-taper').checked ? [...document.querySelectorAll('.in-flange-end')].map(i => parseFloat(i.value)) : null,
             dim_mode: $('f-dim-mode').value,
@@ -353,7 +356,7 @@
         };
     }
     function apply(s) {
-        $('f-thickness').value = s.thickness; $('f-radius').value = s.radius; $('f-k').value = s.k_factor; $('f-length').value = s.length;
+        $('f-thickness').value = s.thickness; $('f-radius').value = s.radius; $('f-k').value = s.k_factor; if ($('f-bd')) $('f-bd').value = s.bd_material || ''; $('f-length').value = s.length;
         $('f-hem-start').checked = !!s.hem_start; $('f-hem-end').checked = !!s.hem_end;
         $('f-hem-length').value = s.hem_length ?? 8; $('f-hem-radius').value = s.hem_radius ?? 0; $('f-hem-angle').value = s.hem_angle ?? 180;
         $('f-relief').checked = !!s.relief; $('f-relief-w').value = s.relief_width ?? 3; $('f-relief-d').value = s.relief_depth ?? 3;
