@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Абкант - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card" data-dialog-section="+ Нов инструмент">
+        <h3>Добавяне на инструмент</h3>
+        <form action="{{ url_for('admin_bending_add_tool') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group"><label for="bt_code">Код *</label><input type="text" id="bt_code" name="code" required></div>
+            <div class="form-group"><label for="bt_kind">Тип *</label>
+                <select id="bt_kind" name="kind" required><option value="punch">Поансон</option><option value="die">Матрица</option></select></div>
+            <div class="form-group"><label for="bt_h">Височина (mm)</label><input type="number" step="any" min="0" id="bt_h" name="height_mm"></div>
+            <div class="form-group"><label for="bt_a">Ъгъл (°)</label><input type="number" step="any" min="0" id="bt_a" name="angle_deg"></div>
+            <div class="form-group"><label for="bt_r">Радиус (mm)</label><input type="number" step="any" min="0" id="bt_r" name="radius_mm"></div>
+            <div class="form-group"><label for="bt_v">V-отвор (mm)</label><input type="number" step="any" min="0" id="bt_v" name="v_opening_mm"></div>
+            <div class="form-group"><label for="bt_kn">Макс. сила (kN/m)</label><input type="number" step="any" min="0" id="bt_kn" name="max_kn_per_m"></div>
+            <button type="submit" class="btn-submit">Добави</button>
+        </form>
+    </section>
+
+    <section class="admin-card" data-dialog-section="+ Импорт на каталог (CSV)">
+        <h3>Импорт на инструменти от CSV</h3>
+        <p class="section-subtitle">Колони: code, kind (punch/die), height_mm, angle_deg, radius_mm, v_opening_mm, max_kn_per_m. Импортираните са „new“ до одобрение.</p>
+        <form action="{{ url_for('admin_bending_import_tools') }}" method="POST" enctype="multipart/form-data" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group"><label for="imp_m">Производител *</label><input type="text" id="imp_m" name="manufacturer" placeholder="напр. EURAM" required></div>
+            <div class="form-group"><label for="imp_f">Файл *</label><input type="file" id="imp_f" name="file" accept=".csv" required></div>
+            <button type="submit" class="btn-submit">Импортирай</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Инструменти</h3>
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead><tr><th>Код</th><th>Тип</th><th>Височина</th><th>Ъгъл</th><th>Радиус</th><th>V</th><th>kN/m</th><th>Статус</th><th>Сегменти</th><th></th></tr></thead>
+                <tbody>
+                {% for t in tools %}
+                <tr>
+                    <td>{{ t.code }}</td><td>{{ 'Поансон' if t.kind == 'punch' else 'Матрица' }}</td>
+                    <td>{{ t.height_mm if t.height_mm is not none else '-' }}</td><td>{{ t.angle_deg if t.angle_deg is not none else '-' }}</td>
+                    <td>{{ t.radius_mm if t.radius_mm is not none else '-' }}</td><td>{{ t.v_opening_mm if t.v_opening_mm is not none else '-' }}</td>
+                    <td>{{ t.max_kn_per_m if t.max_kn_per_m is not none else '-' }}</td><td>{{ t.status }}</td><td>{{ t.segments|length }}</td>
+                    <td>{% if t.status != 'in_library' %}<form action="{{ url_for('admin_bending_approve_tool', tool_id=t.id) }}" method="POST" style="display:inline">
+                        {% include 'partials/csrf_field.html' %}<button type="submit" class="btn-submit">Одобри</button></form>{% endif %}
+                        <form action="{{ url_for('admin_bending_delete_tool', tool_id=t.id) }}" method="POST" onsubmit="return confirm('Изтриване на инструмента?')">
+                        {% include 'partials/csrf_field.html' %}<button type="submit" class="btn-delete">Изтрий</button></form></td>
+                </tr>
+                {% else %}
+                <tr><td colspan="10">Няма инструменти.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="admin-card" data-dialog-section="+ Ново място">
+        <h3>Добавяне на място за съхранение</h3>
+        <form action="{{ url_for('admin_bending_add_location') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group"><label for="loc_z">Зона *</label><input type="text" id="loc_z" name="zone" required></div>
+            <div class="form-group"><label for="loc_c">Шкаф</label><input type="text" id="loc_c" name="cabinet"></div>
+            <div class="form-group"><label for="loc_s">Рафт</label><input type="text" id="loc_s" name="shelf"></div>
+            <div class="form-group"><label for="loc_p">Позиция</label><input type="text" id="loc_p" name="position"></div>
+            <button type="submit" class="btn-submit">Добави</button>
+        </form>
+    </section>
+
+    <section class="admin-card" data-dialog-section="+ Нов сегмент">
+        <h3>Добавяне на сегмент (получава ERP №)</h3>
+        <form action="{{ url_for('admin_bending_add_segment') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group"><label for="sg_t">Инструмент *</label>
+                <select id="sg_t" name="tool_id" required>{% for t in tools %}<option value="{{ t.id }}">{{ t.code }}</option>{% endfor %}</select></div>
+            <div class="form-group"><label for="sg_l">Дължина (mm) *</label><input type="number" step="any" min="0" id="sg_l" name="length_mm" required></div>
+            <div class="form-group"><label for="sg_loc">Място</label>
+                <select id="sg_loc" name="location_id"><option value="">-</option>{% for l in locations %}<option value="{{ l.id }}">{{ l.zone }}{% if l.cabinet %} / {{ l.cabinet }}{% endif %}{% if l.shelf %} / {{ l.shelf }}{% endif %}{% if l.position %} / {{ l.position }}{% endif %}</option>{% endfor %}</select></div>
+            <button type="submit" class="btn-submit">Добави</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Сегменти</h3>
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead><tr><th>ERP №</th><th>Инструмент</th><th>Дължина</th><th>Място</th><th>Статус</th><th>Огъвания</th><th></th></tr></thead>
+                <tbody>
+                {% for s in segments %}
+                <tr>
+                    <td>{{ s.erp_number }}</td><td>{{ s.tool.code }}</td><td>{{ s.length_mm }}</td>
+                    <td>{% if s.location %}{{ s.location.zone }}{% if s.location.cabinet %} / {{ s.location.cabinet }}{% endif %}{% if s.location.shelf %} / {{ s.location.shelf }}{% endif %}{% if s.location.position %} / {{ s.location.position }}{% endif %}{% else %}-{% endif %}</td>
+                    <td>{{ s.status }}</td><td>{{ s.bend_count }}</td>
+                    <td><form action="{{ url_for('admin_bending_delete_segment', seg_id=s.id) }}" method="POST" onsubmit="return confirm('Изтриване на сегмента?')">
+                        {% include 'partials/csrf_field.html' %}<button type="submit" class="btn-delete">Изтрий</button></form></td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7">Няма сегменти.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="admin-card" data-dialog-section="+ Нова BD стойност">
+        <h3>Добавяне на BD (bend deduction)</h3>
+        <form action="{{ url_for('admin_bending_add_deduction') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group"><label for="bd_m">Материал *</label>
+                <select id="bd_m" name="material_type" required>{% for m in material_types %}<option value="{{ m.key }}">{{ m.label }}</option>{% endfor %}</select></div>
+            <div class="form-group"><label for="bd_t">Дебелина (mm) *</label><input type="number" step="any" min="0" id="bd_t" name="thickness_mm" required></div>
+            <div class="form-group"><label for="bd_v">V-отвор (mm)</label><input type="number" step="any" min="0" id="bd_v" name="v_opening_mm"></div>
+            <div class="form-group"><label for="bd_r">Радиус (mm) *</label><input type="number" step="any" min="0" id="bd_r" name="radius_mm" required></div>
+            <div class="form-group"><label for="bd_a">Ъгъл (°) *</label><input type="number" step="any" min="0" max="180" id="bd_a" name="angle_deg" required></div>
+            <div class="form-group"><label for="bd_d">BD (mm) *</label><input type="number" step="any" id="bd_d" name="deduction_mm" required></div>
+            <button type="submit" class="btn-submit">Добави</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>BD таблица</h3>
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead><tr><th>Материал</th><th>Дебелина</th><th>V</th><th>Радиус</th><th>Ъгъл</th><th>BD</th><th>Източник</th><th></th></tr></thead>
+                <tbody>
+                {% for d in deductions %}
+                <tr>
+                    <td>{{ d.material_type }}</td><td>{{ d.thickness_mm }}</td><td>{{ d.v_opening_mm if d.v_opening_mm is not none else '-' }}</td>
+                    <td>{{ d.radius_mm }}</td><td>{{ d.angle_deg }}</td><td>{{ d.deduction_mm }}</td><td>{{ d.source }}</td>
+                    <td><form action="{{ url_for('admin_bending_delete_deduction', row_id=d.id) }}" method="POST" onsubmit="return confirm('Изтриване?')">
+                        {% include 'partials/csrf_field.html' %}<button type="submit" class="btn-delete">Изтрий</button></form></td>
+                </tr>
+                {% else %}
+                <tr><td colspan="8">Няма записи.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</main>
+</body>
+</html>

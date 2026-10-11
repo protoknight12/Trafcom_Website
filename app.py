@@ -5620,6 +5620,255 @@ FLASHING_PROFILES = {  # key -> (flange count, bend signs, +1 = up / CCW)
 }
 
 
+# ----------------- АБКАНТ / ОГЪВАНЕ -----------------
+# Spec: docs/BENDING_MODULE.md. Geometry lives in the Flask-free bending/ package.
+
+class PressBrakeConfig(db.Model):
+    """Press-brake parameters of a Machine (1:1)."""
+    id = db.Column(db.Integer, primary_key=True)
+    machine_id = db.Column(db.Integer, db.ForeignKey('machine.id'), unique=True, nullable=False)
+    working_length_mm = db.Column(db.Float)
+    tonnage_t = db.Column(db.Float)
+    stroke_mm = db.Column(db.Float)
+    daylight_mm = db.Column(db.Float)  # opening
+    axes = db.Column(db.String(100))  # e.g. "X,R,Z1,Z2"
+    controller = db.Column(db.String(20))  # delem_da66t / durma_dt15
+    clamping = db.Column(db.String(50))  # European / Promecam ...
+    machine = db.relationship('Machine', backref=db.backref('press_brake', uselist=False))
+
+
+class BendToolCatalog(db.Model):
+    """An imported tool catalogue (EURAM ...)."""
+    id = db.Column(db.Integer, primary_key=True)
+    manufacturer = db.Column(db.String(100), nullable=False)
+    clamping = db.Column(db.String(50))
+    version = db.Column(db.String(50))
+    source_file = db.Column(db.String(255))
+
+
+class ToolStorageLocation(db.Model):
+    """Zone -> cabinet -> shelf -> position."""
+    id = db.Column(db.Integer, primary_key=True)
+    zone = db.Column(db.String(50), nullable=False)
+    cabinet = db.Column(db.String(50))
+    shelf = db.Column(db.String(50))
+    position = db.Column(db.String(50))
+
+
+class BendTool(db.Model):
+    """A punch or die profile."""
+    id = db.Column(db.Integer, primary_key=True)
+    catalog_id = db.Column(db.Integer, db.ForeignKey('bend_tool_catalog.id'))
+    code = db.Column(db.String(100), nullable=False)
+    kind = db.Column(db.String(10), nullable=False)  # punch / die
+    profile_dxf = db.Column(db.String(255))
+    height_mm = db.Column(db.Float)
+    angle_deg = db.Column(db.Float)
+    radius_mm = db.Column(db.Float)
+    v_opening_mm = db.Column(db.Float)
+    max_kn_per_m = db.Column(db.Float)
+    status = db.Column(db.String(20), default='new', nullable=False)  # new / reviewed / in_library
+    catalog = db.relationship('BendToolCatalog', backref='tools')
+
+
+class BendToolSegment(db.Model):
+    """A physical piece of a tool."""
+    id = db.Column(db.Integer, primary_key=True)
+    tool_id = db.Column(db.Integer, db.ForeignKey('bend_tool.id'), nullable=False)
+    length_mm = db.Column(db.Float, nullable=False)
+    erp_number = db.Column(db.Integer, unique=True)
+    location_id = db.Column(db.Integer, db.ForeignKey('tool_storage_location.id'))
+    status = db.Column(db.String(20), default='in_stock', nullable=False)  # in_stock / on_machine / reserved / check / scrap
+    bend_count = db.Column(db.Integer, default=0, nullable=False)
+    tool = db.relationship('BendTool', backref='segments')
+    location = db.relationship('ToolStorageLocation')
+
+
+class BendDeduction(db.Model):
+    """Bend deduction (mm) for material x thickness x V x radius x angle; usable as bending.unfold.bd_table()."""
+    id = db.Column(db.Integer, primary_key=True)
+    material_type = db.Column(db.String(50), nullable=False)  # MaterialType.key (MaterialPrice.type)
+    thickness_mm = db.Column(db.Float, nullable=False)
+    v_opening_mm = db.Column(db.Float)
+    radius_mm = db.Column(db.Float, nullable=False)
+    angle_deg = db.Column(db.Float, nullable=False)
+    deduction_mm = db.Column(db.Float, nullable=False)
+    source = db.Column(db.String(10), default='manual', nullable=False)  # manual / measured
+
+
+@app.route('/admin/bending')
+@role_required('admin')
+def admin_bending():
+    return render_template('admin_bending.html', tools=BendTool.query.order_by(BendTool.code).all(),
+                           deductions=BendDeduction.query.order_by(BendDeduction.material_type, BendDeduction.thickness_mm,
+                                                                   BendDeduction.radius_mm, BendDeduction.angle_deg).all(),
+                           material_types=MaterialType.query.order_by(MaterialType.id).all(),
+                           segments=BendToolSegment.query.order_by(BendToolSegment.erp_number).all(),
+                           locations=ToolStorageLocation.query.order_by(ToolStorageLocation.zone, ToolStorageLocation.cabinet).all(),
+                           active_page='admin_bending')
+
+
+@app.route('/admin/bending/tools/add', methods=['POST'])
+@role_required('admin')
+def admin_bending_add_tool():
+    code = request.form.get('code', '').strip()
+    kind = request.form.get('kind')
+    if not code or kind not in ('punch', 'die'):
+        flash('Въведете код и тип (поансон/матрица).', 'danger')
+        return redirect(url_for('admin_bending'))
+    try:
+        vals = {f: (_fnum(request.form[f], f, allow_lo=True) if request.form.get(f, '').strip() else None)
+                for f in ('height_mm', 'angle_deg', 'radius_mm', 'v_opening_mm', 'max_kn_per_m')}
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return redirect(url_for('admin_bending'))
+    db.session.add(BendTool(code=code, kind=kind, **vals))
+    db.session.commit()
+    log_action(f'Добавен инструмент за абкант "{code}"')
+    return redirect(url_for('admin_bending'))
+
+
+BEND_TOOL_CSV_COLUMNS = ('height_mm', 'angle_deg', 'radius_mm', 'v_opening_mm', 'max_kn_per_m')
+
+
+def _parse_bend_tool_csv(text):
+    """CSV (header: code,kind,height_mm,angle_deg,radius_mm,v_opening_mm,max_kn_per_m; kind = punch/die, numbers optional)
+    -> list of BendTool kwargs. Any bad row raises ValueError naming its line - nothing is half-imported."""
+    rows = list(csv.DictReader(io.StringIO(text.lstrip('\ufeff'))))
+    if not rows or 'code' not in rows[0] or 'kind' not in rows[0]:
+        raise ValueError('CSV трябва да има колони code и kind.')
+    out = []
+    for n, r in enumerate(rows, 2):
+        code, kind = (r.get('code') or '').strip(), (r.get('kind') or '').strip()
+        if not code or kind not in ('punch', 'die'):
+            raise ValueError(f'Ред {n}: невалиден код или тип (punch/die).')
+        try:
+            vals = {c: (_fnum(r[c], c, allow_lo=True) if (r.get(c) or '').strip() else None) for c in BEND_TOOL_CSV_COLUMNS}
+        except ValueError as e:
+            raise ValueError(f'Ред {n}: {e}')
+        out.append({'code': code, 'kind': kind, **vals})
+    return out
+
+
+@app.route('/admin/bending/tools/import', methods=['POST'])
+@role_required('admin')
+def admin_bending_import_tools():
+    """Imported tools land as status 'new' in a fresh catalogue; nothing counts as library until approved."""
+    f = request.files.get('file')
+    maker = request.form.get('manufacturer', '').strip()
+    try:
+        if not f or not maker:
+            raise ValueError('Изберете файл и въведете производител.')
+        rows = _parse_bend_tool_csv(f.read().decode('utf-8', errors='replace'))
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return redirect(url_for('admin_bending'))
+    cat = BendToolCatalog(manufacturer=maker, source_file=secure_filename(f.filename) or None)
+    db.session.add(cat)
+    db.session.add_all(BendTool(catalog=cat, **r) for r in rows)
+    db.session.commit()
+    log_action(f'Импорт на {len(rows)} инструмента за абкант ({maker})')
+    flash(f'Импортирани {len(rows)} инструмента - прегледайте и одобрете.', 'success')
+    return redirect(url_for('admin_bending'))
+
+
+@app.route('/admin/bending/tools/<int:tool_id>/approve', methods=['POST'])
+@role_required('admin')
+def admin_bending_approve_tool(tool_id):
+    tool = db.get_or_404(BendTool, tool_id)
+    tool.status = 'in_library'
+    db.session.commit()
+    log_action(f'Одобрен инструмент за абкант "{tool.code}"')
+    return redirect(url_for('admin_bending'))
+
+
+@app.route('/admin/bending/tools/<int:tool_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_bending_delete_tool(tool_id):
+    tool = db.get_or_404(BendTool, tool_id)
+    if tool.segments:
+        flash('Инструментът има сегменти - първо ги премахнете.', 'danger')
+    else:
+        db.session.delete(tool)
+        db.session.commit()
+        log_action(f'Изтрит инструмент за абкант "{tool.code}"')
+    return redirect(url_for('admin_bending'))
+
+
+@app.route('/admin/bending/locations/add', methods=['POST'])
+@role_required('admin')
+def admin_bending_add_location():
+    zone = request.form.get('zone', '').strip()
+    if not zone:
+        flash('Въведете зона.', 'danger')
+        return redirect(url_for('admin_bending'))
+    db.session.add(ToolStorageLocation(zone=zone, **{k: request.form.get(k, '').strip() or None for k in ('cabinet', 'shelf', 'position')}))
+    db.session.commit()
+    log_action(f'Добавено място за инструменти "{zone}"')
+    return redirect(url_for('admin_bending'))
+
+
+@app.route('/admin/bending/segments/add', methods=['POST'])
+@role_required('admin')
+def admin_bending_add_segment():
+    tool = db.session.get(BendTool, request.form.get('tool_id', type=int) or 0)
+    loc_id = request.form.get('location_id', type=int)
+    try:
+        if not tool:
+            raise ValueError('Невалиден инструмент.')
+        length = _fnum(request.form.get('length_mm'), 'дължина')
+        if loc_id and not db.session.get(ToolStorageLocation, loc_id):
+            raise ValueError('Невалидно място.')
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return redirect(url_for('admin_bending'))
+    seg = BendToolSegment(tool=tool, length_mm=length, location_id=loc_id or None, erp_number=_next_erp_number())
+    db.session.add(seg)
+    db.session.commit()
+    log_action(f'Добавен сегмент {length:g} mm на "{tool.code}" (ERP № {seg.erp_number})')
+    return redirect(url_for('admin_bending'))
+
+
+@app.route('/admin/bending/segments/<int:seg_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_bending_delete_segment(seg_id):
+    seg = db.get_or_404(BendToolSegment, seg_id)
+    db.session.delete(seg)
+    db.session.commit()
+    log_action(f'Изтрит сегмент ERP № {seg.erp_number}')
+    return redirect(url_for('admin_bending'))
+
+
+@app.route('/admin/bending/deductions/add', methods=['POST'])
+@role_required('admin')
+def admin_bending_add_deduction():
+    f = request.form
+    try:
+        if not MaterialType.query.filter_by(key=f.get('material_type')).first():
+            raise ValueError('Невалиден тип материал.')
+        row = BendDeduction(
+            material_type=f['material_type'], thickness_mm=_fnum(f.get('thickness_mm'), 'дебелина'),
+            radius_mm=_fnum(f.get('radius_mm'), 'радиус', allow_lo=True), angle_deg=_fnum(f.get('angle_deg'), 'ъгъл', hi=180.0),
+            deduction_mm=_fnum(f.get('deduction_mm'), 'BD', lo=-1000.0, allow_lo=True),
+            v_opening_mm=_fnum(f['v_opening_mm'], 'V-отвор') if f.get('v_opening_mm', '').strip() else None)
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return redirect(url_for('admin_bending'))
+    db.session.add(row)
+    db.session.commit()
+    log_action(f'Добавена BD стойност {row.deduction_mm} mm ({row.material_type}, s{row.thickness_mm}, R{row.radius_mm}, {row.angle_deg}°)')
+    return redirect(url_for('admin_bending'))
+
+
+@app.route('/admin/bending/deductions/<int:row_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_bending_delete_deduction(row_id):
+    db.session.delete(db.get_or_404(BendDeduction, row_id))
+    db.session.commit()
+    log_action('Изтрита BD стойност')
+    return redirect(url_for('admin_bending'))
+
+
 class FlashingPreset(db.Model):
     """A user's saved /flashing parameter set (one row per user+name)."""
     id = db.Column(db.Integer, primary_key=True)
@@ -9607,6 +9856,7 @@ def _next_erp_number():
         db.session.query(db.func.max(Detail.erp_number)).scalar(),
         db.session.query(db.func.max(Product.erp_number)).scalar(),
         db.session.query(db.func.max(MaterialPrice.erp_number)).scalar(),
+        db.session.query(db.func.max(BendToolSegment.erp_number)).scalar(),
     ]
     current_max = max((m for m in maxes if m is not None), default=100000)
     return current_max + 1
@@ -9679,6 +9929,9 @@ def _erp_number_conflict(erp_number, exclude_type=None, exclude_id=None):
     row = material_q.first()
     if row:
         return f'материал "{row.display_name}"'
+    seg = BendToolSegment.query.filter_by(erp_number=erp_number).first()
+    if seg:
+        return f'сегмент на инструмент "{seg.tool.code}"'
     return None
 
 
