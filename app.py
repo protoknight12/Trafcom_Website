@@ -5914,7 +5914,8 @@ def bending_program_execute(prog_id):
         flash('Само одобрена програма може да се изпълнява.', 'danger')
         return redirect(url_for('bending_program_sheet', prog_id=prog.id))
     if request.method == 'GET':
-        return render_template('bending_execute.html', prog=prog, active_page='admin_bending')
+        return render_template('bending_execute.html', prog=prog, instruments=MeasuringInstrument.query.order_by(MeasuringInstrument.name).all(),
+                               active_page='admin_bending')
     f = request.form
     try:
         tol = _fnum(f.get('tolerance') or 1.0, 'допуск', allow_lo=True)
@@ -5924,12 +5925,13 @@ def bending_program_execute(prog_id):
     except ValueError as e:
         flash(str(e), 'danger')
         return redirect(url_for('bending_program_execute', prog_id=prog.id))
+    instrument = db.session.get(MeasuringInstrument, f.get('instrument_id', type=int) or 0)
     check = QualityCheck(target_type='detail', target_id=prog.detail_id, inspector_id=current_user.id, sample_size=1,
                          order_no=f.get('order_no', '').strip() or None, notes=f'Огъване: програма "{prog.name}" v{prog.version}')
     for st, val in readings:
         sample = QualitySample(sample_index=1, value=val)
         check.measurements.append(QualityMeasurement(parameter_name=f'Огъване {st.seq}', measurement_type='Ъгъл', nominal_value=st.angle_deg,
-                                                     tolerance_plus=tol, tolerance_minus=tol, unit='\u00b0', samples=[sample]))
+                                                     tolerance_plus=tol, tolerance_minus=tol, unit='\u00b0', instrument=instrument, samples=[sample]))
     check.overall_result = 'pass' if all(m.is_within_tolerance for m in check.measurements) else 'fail'
     db.session.add(check)
     db.session.flush()

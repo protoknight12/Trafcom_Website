@@ -29,6 +29,8 @@
             {% include 'partials/csrf_field.html' %}
             <div class="form-group"><label for="ex_o">Поръчка №</label><input type="text" id="ex_o" name="order_no"></div>
             <div class="form-group"><label for="ex_t">Допуск на ъгъла (±°)</label><input type="number" step="any" min="0" id="ex_t" name="tolerance" value="1"></div>
+            <div class="form-group"><label for="ex_i">Уред (ъгломер)</label>
+                <select id="ex_i" name="instrument_id"><option value="">-</option>{% for i in instruments %}<option value="{{ i.id }}">{{ i.name }}</option>{% endfor %}</select></div>
             {% for st in prog.steps %}
             <div class="form-group"><label for="m{{ st.id }}">Огъване {{ st.seq }} - зададен {{ st.angle_deg }}° · измерен (°)</label>
                 <input type="number" step="any" min="0" id="m{{ st.id }}" name="m{{ st.id }}" inputmode="decimal"></div>

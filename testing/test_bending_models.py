@@ -187,13 +187,19 @@ def test_program_flow_and_sheet(ctx):
     prog, sid = v2, v2.steps[0].id
     ex = f'/bending/programs/{prog.id}/execute'
     assert c.get(ex).status_code == 200
-    c.post(ex, data={'order_no': 'PO-7', f'm{sid}': '45.5'})  # nominal 45, tol 1 -> pass
+    from app import MeasuringInstrument
+    inst = MeasuringInstrument(name='Ъгломер')
+    db.session.add(inst)
+    db.session.commit()
+    c.post(ex, data={'order_no': 'PO-7', f'm{sid}': '45.5', 'instrument_id': inst.id})  # nominal 45, tol 1 -> pass
     c.post(ex, data={f'm{sid}': '47'})  # out of tolerance -> fail
     c.post(ex, data={})  # nothing measured -> refused
     db.session.expire_all()
     from app import BendExecution, QualityCheck
     assert [(e.quality_check.overall_result, e.program_version) for e in BendExecution.query.order_by(BendExecution.id)] == [('pass', 2), ('fail', 2)]  # run on the approved v2
     q = QualityCheck.query.first()
+    assert q.measurements[0].instrument.name == 'Ъгломер'
+    assert 'годен'.encode() in c.get(f'/admin/bending/programs/{prog.id}').data and b'PO-7' in c.get(f'/admin/bending/programs/{prog.id}').data
     assert q.order_no == 'PO-7' and q.measurements[0].nominal_value == 45 and q.measurements[0].samples[0].value == 45.5
     sheet = c.get(f'/admin/bending/programs/{prog.id}/sheet')
     assert sheet.status_code == 200 and 'ОДОБРЕНА'.encode() in sheet.data and c.get('/admin/bending/programs').status_code == 200
