@@ -411,3 +411,41 @@ def test_multi_v_die_in_force_ranking_and_program_steps(ctx):
     # a 20 mm base on the bottom side runs into the V22 groove on the left side (it starts ~11 mm above the bottom): flagged
     tall = c.post(f'/admin/bending/tools/{die.id}/profile/outline', json={'points': _json.loads(die.profile_json), 'base_height_mm': 20}).get_json()
     assert any('канала' in w or 'канал' in w for w in tall['warnings'])
+
+
+def test_press_params_route(ctx):
+    from werkzeug.security import generate_password_hash
+    from app import User, limiter, Machine, PressBrakeConfig
+    app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
+    limiter.reset()
+    db.session.add(User(username='pp_admin', password=generate_password_hash('irrelevant123'), role='admin'))
+    m = Machine(name='AD-ES 2040')
+    db.session.add(m)
+    db.session.commit()
+    from flask import g
+    g.pop('_login_user', None)
+    c = app.test_client()
+    c.post('/login', data={'username': 'pp_admin', 'password': 'irrelevant123'})
+    d = {'machine_id': m.id, 'tonnage_t': '40', 'working_length_mm': '2050', 'stroke_mm': '200', 'daylight_mm': '440', 'axes': 'X,R,Z1,Z2', 'controller': 'delem_da66t'}
+    assert c.post('/admin/bending/press', data=d).status_code == 302
+    d['stroke_mm'] = '210'
+    c.post('/admin/bending/press', data=d)  # second save updates, not duplicates
+    cfg = PressBrakeConfig.query.filter_by(machine_id=m.id).one()
+    assert (cfg.tonnage_t, cfg.stroke_mm, cfg.daylight_mm, cfg.controller) == (40, 210, 440, 'delem_da66t')
+    c.post('/admin/bending/press', data={**d, 'stroke_mm': '-5'})
+    assert PressBrakeConfig.query.one().stroke_mm == 210  # invalid number refused
+    assert c.get('/admin/bending').status_code == 200
+
+
+def test_seed_press_brake_configs(ctx):
+    from app import Machine, PressBrakeConfig
+    from migration.seed_press_brake_configs import seed
+    a, b = Machine(name='Абкант DURMA AD-R 40175'), Machine(name='Абкант DURMA AD-ES 2040')
+    db.session.add_all([a, b])
+    db.session.commit()
+    b_cfg = PressBrakeConfig(machine=b, stroke_mm=210)
+    db.session.add(b_cfg)
+    db.session.commit()
+    assert seed() == 2
+    assert (a.press_brake.tonnage_t, a.press_brake.daylight_mm, a.press_brake.controller) == (175, 530, 'durma_dt15')
+    assert (b.press_brake.stroke_mm, b.press_brake.tonnage_t) == (210, 40)  # existing value kept, gaps filled

@@ -5744,6 +5744,7 @@ def admin_bending():
                            material_types=MaterialType.query.order_by(MaterialType.id).all(),
                            segments=BendToolSegment.query.order_by(BendToolSegment.erp_number).all(),
                            locations=ToolStorageLocation.query.order_by(ToolStorageLocation.zone, ToolStorageLocation.cabinet).all(),
+                           machines=Machine.query.order_by(Machine.name).all(),
                            program_count=BendProgram.query.count(), active_page='admin_bending')
 
 
@@ -5956,6 +5957,31 @@ def admin_bending_add_location():
     return redirect(url_for('admin_bending'))
 
 
+@app.route('/admin/bending/press', methods=['POST'])
+@role_required('admin')
+def admin_bending_press():
+    """Create or update the press-brake parameters of a Machine (stroke and daylight feed the program checks)."""
+    m = db.session.get(Machine, request.form.get('machine_id', type=int) or 0)
+    if not m:
+        flash('Изберете машина.', 'danger')
+        return redirect(url_for('admin_bending'))
+    try:
+        nums = {k: (_fnum(request.form[k], k) if request.form.get(k, '').strip() else None)
+                for k in ('working_length_mm', 'tonnage_t', 'stroke_mm', 'daylight_mm')}
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return redirect(url_for('admin_bending'))
+    cfg = m.press_brake or PressBrakeConfig(machine=m)
+    for k, v in nums.items():
+        setattr(cfg, k, v)
+    for k in ('axes', 'controller', 'clamping'):
+        setattr(cfg, k, request.form.get(k, '').strip() or None)
+    db.session.add(cfg)
+    db.session.commit()
+    log_action(f'Параметри на абкант "{m.name}"')
+    return redirect(url_for('admin_bending'))
+
+
 @app.route('/admin/bending/segments/add', methods=['POST'])
 @role_required('admin')
 def admin_bending_add_segment():
@@ -6017,7 +6043,28 @@ def admin_bending_program(prog_id):
     tools = BendTool.query.order_by(BendTool.code).all()
     die_options = [{'value': f'{t.id}|{p["v"]:g}' if len(t.positions) > 1 else str(t.id), 'label': f'{t.code} · {p["label"]}' if len(t.positions) > 1 else t.code}
                    for t in tools if t.kind == 'die' for p in (t.positions if len(t.positions) > 1 else [None])]
-    return render_template('admin_bending_program.html', prog=db.get_or_404(BendProgram, prog_id), tools=tools, die_options=die_options, active_page='admin_bending')
+    prog = db.get_or_404(BendProgram, prog_id)
+    return render_template('admin_bending_program.html', prog=prog, tools=tools, die_options=die_options, checks=_program_checks(prog), active_page='admin_bending')
+
+
+def _program_checks(prog):
+    """{step.id: {'travel': mm or None, 'warnings': [...]}} - air-bend travel and tool/press checks from the tools' real numbers."""
+    from bending.profile import CLAMP
+    from bending.tools import air_bend_depth, step_checks
+    t = prog.detail.thickness_mm or getattr(getattr(prog.detail, 'material', None), 'thickness_mm', None)
+    cfg = prog.machine.press_brake
+    res = {}
+    for st in prog.steps:
+        v = st.die_v_mm or (st.die.v_opening_mm if st.die else None)
+        pos = next((p for p in st.die.positions if p['v'] == v), None) if st.die else None
+        warn, travel = [], None
+        if t and v and 0 < st.angle_deg < 180:
+            travel = air_bend_depth(v, t, st.angle_deg)[1]
+            warn = step_checks(st.angle_deg, t, v, punch_angle=st.punch.angle_deg if st.punch else None, die_angle=pos['angle'] if pos else None,
+                               stroke_mm=cfg.stroke_mm if cfg else None, punch_h=((st.punch.height_mm or 0) + CLAMP['height']) if st.punch else None,
+                               die_h=st.die.height_mm if st.die else None, daylight_mm=cfg.daylight_mm if cfg else None)
+        res[st.id] = {'travel': travel, 'warnings': warn}
+    return res
 
 
 @app.route('/admin/bending/programs/<int:prog_id>/sheet')

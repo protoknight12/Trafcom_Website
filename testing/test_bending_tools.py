@@ -24,3 +24,13 @@ for bad in ((0, 2, 16), (400, 0, 16), (400, 2, 0)):
     except ValueError:
         pass
 print('ok')
+
+# ---- air-bend depth / step checks ----
+from bending.tools import air_bend_depth, step_checks
+d, tr = air_bend_depth(16, 2, 90)   # 90 deg: depth = V/2 - t*sqrt(2) = 8 - 2.83
+assert abs(d - 5.17) < 0.01 and abs(tr - 7.17) < 0.01
+assert step_checks(90, 2, 16, punch_angle=75, die_angle=85) == []
+assert 'поансонът' in step_checks(90, 2, 16, punch_angle=95)[0]
+assert 'Нужен ход' in step_checks(90, 2, 16, stroke_mm=5)[0]
+assert 'отварянето' in step_checks(90, 2, 16, punch_h=97, die_h=60, daylight_mm=150)[0]
+print('ok air bend')

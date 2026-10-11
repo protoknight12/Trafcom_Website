@@ -114,18 +114,18 @@
         <h3>Стъпки</h3>
         <div class="table-responsive">
             <table class="users-table">
-                <thead><tr><th>№</th><th>Ъгъл</th><th>X</th><th>R</th><th>kN</th><th>Поансон</th><th>Матрица</th><th>Обръщане</th><th>Бележка</th><th></th></tr></thead>
+                <thead><tr><th>№</th><th>Ъгъл</th><th>X</th><th>R</th><th>kN</th><th>Поансон</th><th>Матрица</th><th>Обръщане</th><th>Ход</th><th>Бележка</th><th></th></tr></thead>
                 <tbody>
                 {% for st in prog.steps %}
                 <tr>
                     <td>{{ st.seq }}</td><td>{{ st.angle_deg }}°</td><td>{{ st.x_mm if st.x_mm is not none else '-' }}</td><td>{{ st.r_mm if st.r_mm is not none else '-' }}</td>
                     <td>{{ st.force_kn if st.force_kn is not none else '-' }}</td><td>{{ st.punch.code if st.punch else '-' }}</td><td>{{ (st.die.code ~ (' · V%g' % st.die_v_mm if st.die_v_mm else '')) if st.die else '-' }}</td>
-                    <td>{{ 'да' if st.flip else '' }}</td><td>{{ st.notes or '' }}</td>
+                    <td>{{ 'да' if st.flip else '' }}</td><td>{% set c = checks[st.id] %}{% if c.travel is not none %}{{ c.travel }} mm{% else %}-{% endif %}{% for w in c.warnings %}<div style="color:#e0a030;font-size:.8em">⚠ {{ w }}</div>{% endfor %}</td><td>{{ st.notes or '' }}</td>
                     <td>{% if prog.status != 'approved' %}<form action="{{ url_for('admin_bending_delete_step', step_id=st.id) }}" method="POST" onsubmit="return confirm('Изтриване на стъпката?')">
                         {% include 'partials/csrf_field.html' %}<button type="submit" class="btn-delete">Изтрий</button></form>{% endif %}</td>
                 </tr>
                 {% else %}
-                <tr><td colspan="10">Няма стъпки.</td></tr>
+                <tr><td colspan="11">Няма стъпки.</td></tr>
                 {% endfor %}
                 </tbody>
             </table>

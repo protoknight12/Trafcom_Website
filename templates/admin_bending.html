@@ -106,6 +106,22 @@
             </form>
         </section>
 
+        <section class="admin-card" data-dialog-section="Параметри на абкант">
+            <h3>Параметри на абкант пресата</h3>
+            <form action="{{ url_for('admin_bending_press') }}" method="POST" class="admin-form">
+                {% include 'partials/csrf_field.html' %}
+                <div class="form-group"><label for="pb_m">Машина *</label><select id="pb_m" name="machine_id" required>{% for m in machines %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}</select></div>
+                <div class="form-group"><label for="pb_t">Усилие (t)</label><input type="number" step="any" id="pb_t" name="tonnage_t"></div>
+                <div class="form-group"><label for="pb_l">Дължина на огъване (mm)</label><input type="number" step="any" id="pb_l" name="working_length_mm"></div>
+                <div class="form-group"><label for="pb_s">Ход на гредата (mm)</label><input type="number" step="any" id="pb_s" name="stroke_mm"></div>
+                <div class="form-group"><label for="pb_d">Светъл отвор (mm)</label><input type="number" step="any" id="pb_d" name="daylight_mm"></div>
+                <div class="form-group"><label for="pb_a">Оси</label><input type="text" id="pb_a" name="axes" placeholder="X,R,Z1,Z2"></div>
+                <div class="form-group"><label for="pb_c">Контролер</label><select id="pb_c" name="controller"><option value="delem_da66t">Delem DA-66T</option><option value="durma_dt15">Durma DT-15</option></select></div>
+                <div class="form-group"><label for="pb_k">Закрепване</label><input type="text" id="pb_k" name="clamping" value="European"></div>
+                <button type="submit" class="btn-submit">Запази</button>
+            </form>
+        </section>
+
         <section class="admin-card" data-dialog-section="+ Ново място">
             <h3>Добавяне на място за съхранение</h3>
             <form action="{{ url_for('admin_bending_add_location') }}" method="POST" class="admin-form">
