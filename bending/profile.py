@@ -441,6 +441,36 @@ def derived(points, kind, base_height=None):
     return res
 
 
+# The rest of the machine in the cross-section (mm; x from the bend line, y up from the die's top plane). One source for the collision check and the 3D view.
+# Upper clamp (10 per machine): a body round the 13 mm tang + the rail it hangs on + the clamping blade on the operator side; the ram is a flat plate above it.
+# Lower: the U channel of the die holder (the die's 60 mm base sits in it) and the bed with the crowning strip. Back gauge: the carriage beam and the R column behind the finger.
+# ponytail: schematic sizes read off the exploded drawings (no dimensions there) - replace with the sections of the real clamp / holder.
+HOLDER = {'side': 20.0, 'height': 110.0, 'rail': 12.0, 'rail_side': 28.0, 'blade': (34.0, 20.0, 15.0, 105.0), 'ram': (90.0, 90.0, 510.0)}   # ram: thickness, from, to above the seat
+DIE_HOLDER_U = [(-90.0, -110.0), (90.0, -110.0), (90.0, -40.0), (30.5, -40.0), (30.5, -60.0), (-30.5, -60.0), (-30.5, -40.0), (-90.0, -40.0)]
+BED = [(-110.0, -410.0), (110.0, -410.0), (110.0, -110.0), (-110.0, -110.0)]
+CROWNING = [(-116.0, -160.0), (116.0, -160.0), (116.0, -110.0), (-116.0, -110.0)]
+BG_BEAM = (465.0, 575.0, -40.0, 120.0)     # x from the finger's nose, y from the finger's base
+BG_COLUMN = (445.0, 495.0, -10.0, 290.0)
+
+
+def _rect(x0, y0, x1, y1):
+    return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+
+
+def machine_env(clamp, finger):
+    """Bodies of the machine round one stroke position: holder_body / holder_rail / holder_blade / ram (move with the punch), bg_beam / bg_column (with the finger)."""
+    xl, xr, seat = min(p[0] for p in clamp), max(p[0] for p in clamp), min(p[1] for p in clamp)
+    h, side = HOLDER['height'], HOLDER['side']
+    bx0, bx1, by0, by1 = HOLDER['blade']
+    nose, base = min(p[0] for p in finger), min(p[1] for p in finger)
+    rt, r0, r1 = HOLDER['ram']
+    xc = (xl + xr) / 2
+    return {'holder_body': _rect(xl - side, seat, xr + side, seat + h), 'holder_rail': _rect(xl - HOLDER['rail_side'], seat + h, xr + HOLDER['rail_side'], seat + h + HOLDER['rail']),
+            'holder_blade': _rect(xl - bx0, seat + by0, xl - bx1, seat + by1), 'ram': _rect(xc - rt / 2, seat + r0, xc + rt / 2, seat + r1),
+            'bg_beam': _rect(nose + BG_BEAM[0], base + BG_BEAM[2], nose + BG_BEAM[1], base + BG_BEAM[3]),
+            'bg_column': _rect(nose + BG_COLUMN[0], base + BG_COLUMN[2], nose + BG_COLUMN[1], base + BG_COLUMN[3])}
+
+
 # Back-gauge finger in the cross-section: a stop face against the end of the flat part, from the sheet's bottom plane up. ponytail: a plain block -
 # the real finger (ledge, step, arm) is not drawn yet; send its drawing/dimensions to make this exact.
 FINGER = {'thickness': 5.0, 'height': 9.0}
@@ -505,7 +535,8 @@ def _step_geom(punch_pts, die_pts, v, thickness, fold_deg, left, right, overbend
     before_right = _chain((0.0, flat_y), (1.0, 0.0), right, True)
     fx = max(p[0] for p in _sample_part(before_right, thickness))   # the finger touches the WALL of the material (a flange stood up earlier is T/2 further than its centre line)
     finger, axis_x, opt = finger_section(fx, die_half)
-    return {'finger': finger, 'axis_x': axis_x, 'finger_option': opt,
+    clamp_poly = [(x, y + tip_y) for x, y in clamp_polygon(outline(punch_pts))]
+    return {'finger': finger, 'axis_x': axis_x, 'finger_option': opt, 'env': machine_env(clamp_poly, finger),
             'die': [(x, y - shoulder_y) for x, y in outline(die)],
             'punch': [(x, y + tip_y) for x, y in outline(punch_pts)],
             'clamp': [(x, y + tip_y) for x, y in clamp_polygon(outline(punch_pts))],
@@ -565,15 +596,21 @@ def _sample_part(pts, thickness, step=1.5):
 
 def _stage_pairs(geo, thickness, tol):
     """Pairs of bodies that overlap at one moment of the stroke."""
-    bodies = {'детайл': (_sample_part(geo['after'], thickness), None), 'упор': (_densify(geo['finger']), geo['finger']),
-              'поансон': (_densify(geo['punch']), geo['punch']), 'закрепване': (_densify(geo['clamp']), geo['clamp']), 'матрица': (_densify(geo['die']), geo['die'])}
+    env = geo['env']
+    polys = {'упор': [geo['finger']], 'поансон': [geo['punch']], 'закрепване': [geo['clamp']], 'матрица': [geo['die']],
+             'скоба': [env['holder_body'], env['holder_rail'], env['holder_blade']], 'греда': [env['ram']], 'държач': [DIE_HOLDER_U], 'маса': [BED, CROWNING],
+             'греда на упора': [env['bg_beam'], env['bg_column']]}
+    bodies = {name: ([q for poly in ps for q in _densify(poly)], ps) for name, ps in polys.items()}
+    bodies['детайл'] = (_sample_part(geo['after'], thickness), None)
     pairs = [('детайл', 'поансон', tol), ('детайл', 'закрепване', tol), ('детайл', 'матрица', 1.0), ('детайл', 'упор', 0.2),
-             ('упор', 'поансон', tol), ('упор', 'закрепване', tol), ('упор', 'матрица', tol), ('поансон', 'матрица', tol), ('закрепване', 'матрица', tol)]
+             ('упор', 'поансон', tol), ('упор', 'закрепване', tol), ('упор', 'матрица', tol), ('поансон', 'матрица', tol), ('закрепване', 'матрица', tol),
+             ('детайл', 'скоба', tol), ('детайл', 'греда', tol), ('детайл', 'държач', 1.0), ('детайл', 'маса', 1.0), ('детайл', 'греда на упора', 0.2),
+             ('упор', 'скоба', tol), ('упор', 'греда', tol), ('скоба', 'матрица', tol), ('греда', 'матрица', tol)]
     hits = []
     for a, b, tl in pairs:
-        pa, poly_a = bodies[a]
-        pb, poly_b = bodies[b]
-        if _overlap(pa, poly_b, tl) or (poly_a is not None and _overlap(pb, poly_a, tl)):
+        pa, polys_a = bodies[a]
+        pb, polys_b = bodies[b]
+        if any(_overlap(pa, q, tl) for q in polys_b) or (polys_a and any(_overlap(pb, q, tl) for q in polys_a)):
             hits.append((a, b))
     return hits
 
@@ -675,14 +712,16 @@ def step_frames(punch_pts, die_pts, v, thickness, fold_deg, left=(), right=(), o
         g = _step_geom(punch_pts, die_pts, v, thickness, a, left, right, 0.0)
         gp = g if part_a is None else _step_geom(punch_pts, die_pts, v, thickness, part_a, left, right, 0.0)
         away = retract is not None if away is None else away   # a finger that is in the way is retracted from the moment the punch holds the sheet
-        frames.append({'angle': round(a, 2), 'part': gp['after'], 'punch': move(g['punch'], dy=dy), 'clamp': move(g['clamp'], dy=dy),
-                       'finger': move(g['finger'], dx=25.0 if away else 0.0)})
+        fin = move(g['finger'], dx=25.0 if away else 0.0)
+        cl = move(g['clamp'], dy=dy)
+        frames.append({'angle': round(a, 2), 'part': gp['after'], 'punch': move(g['punch'], dy=dy), 'clamp': cl, 'finger': fin, 'env': machine_env(cl, fin)})
         return g
 
     first = add(0.5)
     frames[0]['part'] = first['before_left'][::-1][:-1] + first['before_right']
     frames[0]['punch'], frames[0]['clamp'] = move(first['punch'], dy=lift), move(first['clamp'], dy=lift)
     frames[0]['finger'] = first['finger']
+    frames[0]['env'] = machine_env(frames[0]['clamp'], first['finger'])
     for away in ((False, True) if retract is not None else (False,)):   # the punch touches the flat sheet, then the finger moves back while the punch holds it (the part must not shift)
         add(0.5, away=away)
         frames[-1]['part'] = first['before_left'][::-1][:-1] + first['before_right']
@@ -691,7 +730,7 @@ def step_frames(punch_pts, die_pts, v, thickness, fold_deg, left=(), right=(), o
     if final > fold_deg + 1e-6:   # the punch lifts, the sheet springs back to the target angle
         add(final, dy=lift / 2, part_a=fold_deg)
     last = add(fold_deg if final > fold_deg + 1e-6 else final, dy=lift)
-    return {'die': first['die'], 'frames': frames, 'hits': step_trajectory(punch_pts, die_pts, v, thickness, fold_deg, left, right, overbend=overbend)['hits']}
+    return {'die': first['die'], 'frames': frames, 'static': {'die_holder': DIE_HOLDER_U, 'bed': BED, 'crowning': CROWNING}, 'hits': step_trajectory(punch_pts, die_pts, v, thickness, fold_deg, left, right, overbend=overbend)['hits']}
 
 
 def step_x(punch_pts, die_pts, v, thickness, fold_deg, left=(), right=()):
@@ -704,3 +743,13 @@ def step_axis_x(punch_pts, die_pts, v, thickness, fold_deg, left=(), right=()):
     """(axis X for the controller, 'ledge'|'face') - see finger_section."""
     g = _step_geom(punch_pts, die_pts, v, thickness, fold_deg, left, right)
     return round(g['axis_x'], 1), g['finger_option']
+
+
+def step_part_points(punch_pts, die_pts, v, thickness, fold_deg, left=(), right=(), overbend=0.0):
+    """Points of the sheet (both surfaces and the centre line) before the stroke and at the bottom of it - for checks against things outside the cross-section."""
+    g = _step_geom(punch_pts, die_pts, v, thickness, min(fold_deg + overbend, 179.0), left, right, 0.0)
+    return _sample_part(g['before_left'][::-1][:-1] + g['before_right'], thickness, 10.0) + _sample_part(g['after'], thickness, 10.0)
+
+
+def inside_polygon(pt, poly):
+    return _inside(pt, poly)

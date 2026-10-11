@@ -6062,6 +6062,44 @@ def admin_bending_program(prog_id):
                            pictures={st.id: _step_picture_ok(st) for st in prog.steps}, active_page='admin_bending')
 
 
+def _detail_bend_width(detail):
+    """Length of the bend lines = the part's extent ALONG the bends (from the DXF), else the smaller side of the part's box; None when unknown."""
+    lines, lo, hi, _ = _read_detail_dxf(detail)
+    if lines:
+        vertical = sum(abs(p1[0] - p0[0]) <= abs(p1[1] - p0[1]) for _, p0, p1 in lines) * 2 >= len(lines)
+        return hi[1 if vertical else 0] - lo[1 if vertical else 0]
+    return (min(detail.width or 0, detail.height or 0) or None)
+
+
+def _plate_hits(cfg, width, punch, die, v, t, angle, left, right, overbend):
+    """A part wider than the 1730 mm between the side plates sticks out through the throat; where the plate is solid (the back column, below the lower arm, above the guide
+    arm) it hits it. Checks the sheet's points before and at the bottom of the stroke against the plate's profile. -> ['детайл - странична плоча'] or []."""
+    from bending.profile import inside_polygon, step_part_points
+    k = cfg.kinematics if cfg else {}
+    fr = k.get('frame')
+    if not fr or not width or width <= (k.get('between_frames_mm') or 1e9):
+        return []
+    plate = [(fr['a_die'] - a, b - fr['b_die']) for a, b in fr['profile']]
+    pts = step_part_points(punch, die, v, t, angle, left, right, overbend)
+    return ['детайл - странична плоча'] if any(inside_polygon(p, plate) for p in pts) else []
+
+
+def _step_layout(st, length, working_length=None):
+    """Segments to mount for one step so the tool covers `length` (bending.tools.pick_segments): the lengths the punch AND the die both have in stock
+    (on the machine counts too). -> the pick_segments dict, or None."""
+    from bending.tools import pick_segments
+    if not (st.punch_id and st.die_id and length):
+        return None
+    have = {}
+    for tid in (st.punch_id, st.die_id):
+        c = {}
+        for sg in BendToolSegment.query.filter(BendToolSegment.tool_id == tid, BendToolSegment.status.in_(('in_stock', 'on_machine'))).all():
+            c[sg.length_mm] = c.get(sg.length_mm, 0) + 1
+        have[tid] = c
+    avail = {l: min(n, have[st.die_id].get(l, 0)) for l, n in have[st.punch_id].items()}
+    return pick_segments(length, avail, working_length)
+
+
 def _program_checks(prog):
     """{step.id: {'travel': mm or None, 'warnings': [...]}} - air-bend travel and tool/press checks from the tools' real numbers."""
     from bending.profile import CLAMP
@@ -6069,6 +6107,7 @@ def _program_checks(prog):
     t = prog.detail.thickness_mm or getattr(getattr(prog.detail, 'material', None), 'thickness_mm', None)
     cfg = prog.machine.press_brake
     res = {}
+    bend_len = _detail_bend_width(prog.detail)
     for st in prog.steps:
         v = st.die_v_mm or (st.die.v_opening_mm if st.die else None)
         pos = next((p for p in st.die.positions if p['v'] == v), None) if st.die else None
@@ -6089,11 +6128,16 @@ def _program_checks(prog):
             hits, retract = traj['hits'], traj['retract_deg']
             x_wall = step_x(st.punch.profile, st.die.profile, v, t, st.angle_deg, left, right) if left or right else None
             x_axis, finger_opt = step_axis_x(st.punch.profile, st.die.profile, v, t, st.angle_deg, left, right) if x_wall is not None else (None, None)
+            for h in _plate_hits(cfg, bend_len, st.punch.profile, st.die.profile, v, t, st.angle_deg, left, right, _overbend_fn(prog)(v, t)):
+                hits = list(hits) + [h]
             if x_axis is not None and cfg and cfg.x_max_mm and x_axis > cfg.x_max_mm:
                 warn.append(f'Ос X {x_axis:g} mm е извън хода на задния упор ({cfg.x_max_mm:g} mm) - завъртете детайла или сменете реда.')
             if hits:
                 warn.append('КОЛИЗИЯ в разреза (' + '; '.join(hits) + ') - сменете реда, инструмента или завъртането.')
-        res[st.id] = {'travel': travel, 'warnings': warn, 'retract': retract, 'x_wall': x_wall, 'x_axis': x_axis, 'finger_opt': finger_opt}
+        layout = _step_layout(st, bend_len, cfg.working_length_mm if cfg else None) if bend_len else None
+        if bend_len and st.punch_id and st.die_id and not layout:
+            warn.append(f'Няма комплект сегменти за дължина {bend_len:g} mm (еднакви дължини на поансона и матрицата в наличност).')
+        res[st.id] = {'layout': layout, 'travel': travel, 'warnings': warn, 'retract': retract, 'x_wall': x_wall, 'x_axis': x_axis, 'finger_opt': finger_opt}
     return res
 
 
@@ -6246,7 +6290,10 @@ def _plan_program(prog):
     dies = [{'id': x.id, 'v': pz['v'], 'angle': pz['angle'], 'pts': x.profile, 'multi': len(x.positions) > 1} for x in lib if x.kind == 'die' for pz in x.positions]
     if not punches or not dies:
         return None, 'В библиотеката няма поансон и матрица.'
-    res = plan(bends, flat, t, punches, dies, overbend=_overbend_fn(prog))
+    cfg = prog.machine.press_brake
+    width = _detail_bend_width(prog.detail)
+    res = plan(bends, flat, t, punches, dies, overbend=_overbend_fn(prog),
+               extra=lambda pp, dp, v, th, ang, fr, bk, ob: bool(_plate_hits(cfg, width, pp, dp, v, th, ang, fr, bk, ob)))
     if not res['ok']:
         k = len(res['done'])
         return None, (f'Не е намерена последователност без колизии със сегашните инструменти: след {k} стъпки пречат ' +
@@ -6400,9 +6447,8 @@ def bending_program_sim(prog_id):
     """3D simulation of the whole program: every step's stroke (punch, die, finger, part) animated in the browser (static/js/bend_sim.js)."""
     from bending.profile import step_frames
     prog = db.get_or_404(BendProgram, prog_id)
-    lines, lo, hi, _ = _read_detail_dxf(prog.detail)
-    vertical = lines and sum(abs(p1[0] - p0[0]) <= abs(p1[1] - p0[1]) for _, p0, p1 in lines) * 2 >= len(lines)
-    width = (hi[1 if vertical else 0] - lo[1 if vertical else 0]) if lines else (min(prog.detail.width or 0, prog.detail.height or 0) or 100.0)
+    width = _detail_bend_width(prog.detail) or 100.0
+    cfg = prog.machine.press_brake
     t = _program_thickness(prog)
     steps = []
     for st in prog.steps:
@@ -6411,7 +6457,8 @@ def bending_program_sim(prog_id):
         v = st.die_v_mm or st.die.v_opening_mm
         left, right = _step_chains(st)
         data = step_frames(st.punch.profile, st.die.profile, v, t, st.angle_deg, left, right, overbend=_overbend_fn(prog)(v, t))
-        steps.append({'seq': st.seq, 'angle': st.angle_deg, 'v': v, 'punch': st.punch.code, 'die_code': st.die.code, **data})
+        data['hits'] = list(data['hits']) + _plate_hits(cfg, width, st.punch.profile, st.die.profile, v, t, st.angle_deg, left, right, _overbend_fn(prog)(v, t))
+        steps.append({'seq': st.seq, 'angle': st.angle_deg, 'v': v, 'punch': st.punch.code, 'die_code': st.die.code, 'layout': _step_layout(st, width, cfg.working_length_mm if cfg else None), **data})
     return render_template('bending_sim.html', prog=prog, sim={'thickness': t, 'width': round(width, 1), 'machine': _machine_spec(prog.machine, width), 'steps': steps}, skipped=len(prog.steps) - len(steps),
                            active_page='admin_bending')
 

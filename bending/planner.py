@@ -15,8 +15,9 @@ def _combos(angle, thickness, punches, dies, limit=6):
     return [(p, d) for d in ds[:3] for p in ps[:2]][:limit]
 
 
-def plan(bends, flat, thickness, punches, dies, max_nodes=30000, overbend=None):
-    """overbend(v, thickness) -> springback degrees (default 0).
+def plan(bends, flat, thickness, punches, dies, max_nodes=30000, overbend=None, extra=None):
+    """overbend(v, thickness) -> springback degrees (default 0). extra(punch pts, die pts, v, thickness, angle, front, back, overbend) -> True when something outside the
+    cross-section is hit (the machine's side plates ...).
     bends: [{pos, angle, dir}]; punches: [{id, angle, pts}]; dies: [{id, v, angle, pts}].
     -> {'ok': True, 'order': [(bend index, punch, die)]} or {'ok': False, 'done': deepest partial order, 'blocked': [bend indexes with no free tool now]}"""
     here = [{**b, 'end': back_end_of(b['pos'], flat)} for b in bends]
@@ -32,8 +33,9 @@ def plan(bends, flat, thickness, punches, dies, max_nodes=30000, overbend=None):
                 cache[key] = True
             else:
                 front, back = legs_around(here[i], [bends[j] for j in done], flat)
-                cache[key] = not step_collision(p['pts'], d['pts'], d['v'], thickness, bends[i]['angle'], front, back,
-                                                overbend=overbend(d['v'], thickness) if overbend else 0.0)
+                ob = overbend(d['v'], thickness) if overbend else 0.0
+                cache[key] = not step_collision(p['pts'], d['pts'], d['v'], thickness, bends[i]['angle'], front, back, overbend=ob) and not (
+                    extra and extra(p['pts'], d['pts'], d['v'], thickness, bends[i]['angle'], front, back, ob))
         return cache[key]
 
     def dfs(done, prev):

@@ -102,3 +102,30 @@ def outside_length(leg, fold_deg, inner_radius, thickness, k=0.33):
     import math
     th = math.radians(fold_deg)
     return leg - th * (inner_radius + k * thickness) / 2 + (inner_radius + thickness) * math.tan(th / 2)
+
+
+def pick_segments(length, avail, max_total=None):
+    """Which tool segments to mount for a bend `length` mm long. avail: {segment length: how many pieces are available (the same length on the punch and
+    on the die)}. The tool must cover the whole bend: the smallest total >= length (least overhang), then the fewest pieces; the pieces are laid out
+    symmetrically about the middle, the longest in the centre. -> {'total', 'excess', 'segments': [lengths left to right]} or None when it cannot be covered.
+    ponytail: all pieces cut at multiples of 5 mm (the real set is 10/15/20/40/50/100/200/370/415), the bend length = the part's width."""
+    step = 5
+    items = sorted((int(round(l)), n) for l, n in avail.items() if n > 0 and l > 0)
+    cap = int((max_total if max_total else sum(l * n for l, n in items)) // step)
+    need = int(-(-length // step))
+    best = {0: []}   # reachable total (in steps) -> the fewest pieces reaching it
+    for l, n in items:
+        for _ in range(int(n)):
+            for t, segs in sorted(best.items(), reverse=True):
+                u = t + l // step
+                if u <= cap and (u not in best or len(best[u]) > len(segs) + 1):
+                    best[u] = segs + [l]
+    fit = [t for t in best if t >= need]
+    if not fit:
+        return None
+    t = min(fit, key=lambda k: (k, len(best[k])))
+    segs = sorted(best[t], reverse=True)
+    left, right = [], []
+    for i, l in enumerate(segs):   # the longest in the centre, the others alternately outwards
+        (left if i % 2 else right).append(l)
+    return {'total': t * step, 'excess': round(t * step - length, 1), 'segments': left[::-1] + right}

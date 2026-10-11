@@ -181,13 +181,25 @@ print('ok exact support')
 assert 'детайл преди огъването - матрица' in step_collision(_P, _D, 16, 2, 90, left=[(25, -90), (100, None)])
 assert 'детайл преди огъването - матрица' not in step_collision(_P, _D, 16, 2, 90, left=[(60, -90), (100, None)])   # hangs free in front of the die
 print('ok before')
-# the whole bend is followed: a back flange curling up at the end of the part swings into the finger half way -> the finger has to be retracted
+# the whole bend is followed: a back flange hanging down at the end of the part swings into the finger's ledge half way -> the finger has to be retracted
 from bending.profile import step_trajectory
-tr = step_trajectory(_P, _D, 16, 2, 90, left=[(60, None)], right=[(20, 90), (15, None)])
+tr = step_trajectory(_P, _D, 16, 2, 90, left=[(60, None)], right=[(60, -90), (15, None)])
 assert tr['hits'] == [] and tr['retract_deg'] is not None and 6 <= tr['retract_deg'] < 90
 assert step_trajectory(_P, _D, 16, 2, 90, right=[(40, None)])['retract_deg'] is None     # a plain flat part leaves the finger by itself
 print('ok trajectory')
 # a retracted finger is drawn again, dashed, where it stands after the retract
-assert 'отдръпнат' in step_svg(_P, _D, 16, 2, 90, left=[(60, None)], right=[(20, 90), (15, None)])
+assert 'отдръпнат' in step_svg(_P, _D, 16, 2, 90, left=[(60, None)], right=[(60, -90), (15, None)])
 assert 'отдръпнат' not in step_svg(_P, _D, 16, 2, 90, right=[(40, None)])
 print('ok retract drawing')
+
+
+# ---- the rest of the machine takes part in the collision check ----
+from bending.profile import step_frames, step_trajectory
+import migration.seed_bend_tools_m460r as _m
+_off = tip_offset(75, 0.8)
+_P = [[x, y - _off, r, a] for x, y, r, a in _m.P97_PROFILE]
+_D = multi_v_die(_m.DIE_SIZE, _m.M460R_SIDES)
+assert 'детайл - греда' in step_trajectory(_P, _D, 16, 2, 90, [(300, None)], [(250, 100), (250, None)])['hits']   # a tall flange runs into the ram plate
+fr = step_frames(_P, _D, 16, 2, 90, [(60, None)], [(30, None)])
+assert {'holder_body', 'holder_rail', 'holder_blade', 'ram', 'bg_beam', 'bg_column'} <= set(fr['frames'][3]['env']) and {'die_holder', 'bed', 'crowning'} <= set(fr['static'])
+print('ok machine bodies')

@@ -47,3 +47,14 @@ from bending.tools import springback_deg, outside_length
 assert springback_deg('Неръждаема стомана AISI 304', 16, 2) == 3.0 and springback_deg('S235', 16, 2) == 1.5 and springback_deg('Алуминий', 32, 2) == 5.0
 assert abs(outside_length(20, 90, 3, 2) - 22.126) < 0.01      # 20 - BA/2 + OSSB for r=3, t=2, K=0.33
 print('ok springback')
+
+# ---- choice of the tool segments by the bend length ----
+from bending.tools import pick_segments
+SET = {10: 3, 15: 3, 20: 3, 40: 3, 50: 3, 100: 3, 200: 3, 370: 3, 415: 3}
+assert pick_segments(100, SET)['segments'] == [100] and pick_segments(100, SET)['excess'] == 0
+r = pick_segments(137, SET)
+assert r['total'] == 140 and r['excess'] == 3 and sum(r['segments']) == 140        # covers the whole bend with the least overhang
+assert pick_segments(3000, SET, 2050) is None                                       # longer than the press
+assert pick_segments(100, {40: 1}) is None                                          # not enough pieces in stock
+assert sum(pick_segments(2050, SET, 2050)['segments']) == 2050
+print('ok segments')

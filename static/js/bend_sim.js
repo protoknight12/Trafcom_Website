@@ -71,16 +71,16 @@ const lerpPts = (a, b, f) => a.map((p, i) => [p[0] + (b[i][0] - p[0]) * f, p[1] 
     box('frames', mats.frame, 120, 180, BF, ax(120), by(2480), 0);   // the upper rear tie tube
     box('frames', mats.frame, 120, 180, BF, ax(560), by(2380), 0);   // the upper tube behind the guide arms
     box('floor', mats.floor, 3600, 4, 3000, 150, -F.b_die - 2, 0);
-    box('bed', mats.bed, 220, 300, WL, 0, -260, 0);   // rests on the plates' lower arms (b = 600), its top is the panel's flange
-    box('crowning', mats.crowning, 232, 50, WL, 0, -140, 0);
+    const ST = sim.steps[0].static;   // the bed / crowning / die-holder polygons of bending.profile (also what the collision check uses)
+    for (const [key, poly, m] of [['bed', ST.bed, mats.bed], ['crowning', ST.crowning, mats.crowning]]) staticG.add(tag(shapeMesh(poly, m, WL), key));
     // die holder: the sections of the real holder (e.g. 550 + 1050 + 450)
     // the holder is a U channel: the 60 mm base of the die sits in it, the walls hug the die's lower 20 mm; sections are joined by plates on both faces
-    const U = [[-90, -110], [90, -110], [90, -40], [30.5, -40], [30.5, -60], [-30.5, -60], [-30.5, -40], [-90, -40]];
+    const U = ST.die_holder;
     let z0 = -WL / 2;
     for (const len of (M.die_holder || [WL])) {
         const h = tag(shapeMesh(U, mats.holder, len - 2), 'dieholder');
         h.position.z = z0 + len / 2; staticG.add(h);
-        if (z0 > -WL / 2 + 1) for (const sx of [-92, 92]) box('holder_plates', mats.rail, 4, 60, 160, sx, -75, z0);
+        if (z0 > -WL / 2 + 1) for (const sx of [-92, 92]) box('holder_plates', mats.rail, 4, 60, 160, sx, -75, z0);   // plates on the faces of the U
         z0 += len;
     }
     // back gauge: X guides on both sides of the machine (the beam and the fingers move along them)
@@ -95,12 +95,19 @@ const lerpPts = (a, b, f) => a.map((p, i) => [p[0] + (b[i][0] - p[0]) * f, p[1] 
 
 // ---- the program ----
 let cur = 0, time = 0, playing = true, dynamic = [], stepStatic = [];
+// the tool as the pieces picked for this bend (bending.tools.pick_segments), left to right, centred on the part; without a set one piece as long as the part
+function segmentsOf(st) {
+    const L = st.layout;
+    if (!L) return [[0, TOOL_W]];
+    let z = -L.total / 2;
+    return L.segments.map(l => { const r = [z + l / 2, l - 0.8]; z += l; return r; });
+}
 function loadStep(i) {
     cur = i; time = 0; $('step').value = i;
     stepStatic.forEach(m => { staticG.remove(m); m.geometry.dispose(); });
     const st = sim.steps[i];
-    const die = tag(shapeMesh(st.die, mats.die, TOOL_W), 'die');
-    staticG.add(die); stepStatic = [die];
+    stepStatic = [];
+    for (const [z, len] of segmentsOf(st)) { const d = tag(shapeMesh(st.die, mats.die, len), 'die'); d.position.z = z; staticG.add(d); stepStatic.push(d); }
     const hit = st.hits.length > 0;
     $('warn').style.display = hit || (M.warn || []).length ? 'block' : 'none';
     $('warn').textContent = [hit ? 'КОЛИЗИЯ: ' + st.hits.join('; ') : '', ...(M.warn || [])].filter(Boolean).join(' · ');
@@ -125,12 +132,7 @@ function fingerMeshes(poly, add) {
             m.position.set(nose, base + lv.offset[2], zp);
             add(m);
         }
-        // the R column behind the finger
-        add(box('bg_columns', mats.beam, 50, 300, 70, nose + 470, base + 140, zp, dynG));
     });
-    // the X beam along z, carried by the guides, moves with the finger's axis X
-    add(box('bg_beam', mats.beam, 110, 160, 1450, nose + 520, base + 40, 0, dynG));
-    for (const s of [-1, 1]) add(box('bg_beam', mats.beam, 130, 90, 90, nose + 520, base - 20, s * (BF / 2 - 90), dynG));
 }
 
 function draw(f) {
@@ -140,26 +142,33 @@ function draw(f) {
     const k = Math.min(Math.floor(f), fr.length - 1), a = fr[k], b = fr[Math.min(k + 1, fr.length - 1)], u = f - k;
     const add = m => { if (m.parent !== dynG) dynG.add(m); dynamic.push(m); return m; };
     const punch = lerpPts(a.punch, b.punch, u), clamp = lerpPts(a.clamp, b.clamp, u);
-    add(tag(shapeMesh(punch, mats.punch, TOOL_W), 'punch'));
-    add(tag(shapeMesh(clamp, mats.clamp, TOOL_W), 'punch'));
+    for (const [z, len] of segmentsOf(st)) {
+        for (const [poly, m] of [[punch, mats.punch], [clamp, mats.clamp]]) { const t = tag(shapeMesh(poly, m, len), 'punch'); t.position.z = z; add(t); }
+    }
     // the upper beam and its tool clamps hang on the top of the punch's tang
-    const top = Math.max(...clamp.map(p => p[1]));
-    const xl = Math.min(...clamp.map(p => p[0])), xr = Math.max(...clamp.map(p => p[0]));   // the tang the clamps wrap (13 mm)
-    const xc = (xl + xr) / 2, seat = top - 30;
-    add(box('ram', mats.ram, 90, 420, WL, xc, top + 90 + 210, 0, dynG));   // the upper table is a tall flat plate; its ends run in the guides of the plates
+    // every body of the machine is drawn from the polygons the collision check uses (bending.profile.machine_env)
+    const env = {};
+    for (const k of Object.keys(a.env)) env[k] = lerpPts(a.env[k], b.env[k], u);
+    const at = (poly, key, m, depth, z) => { const o = tag(shapeMesh(poly, m, depth), key); o.position.z = z; return add(o); };
+    at(env.ram, 'ram', mats.ram, WL, 0);   // the upper table: a tall flat plate whose ends run in the guides of the plates
     const n = M.clamps || 10, cl = WL / n, bl = cl - 20;
+    const bx = env.holder_blade.map(p => p[0]), by = env.holder_blade.map(p => p[1]);
     for (let i = 0; i < n; i++) {
         const zc = -WL / 2 + cl * (i + 0.5);
-        add(box('clamps', mats.clamp, xr - xl + 64, 110, bl, xc, seat + 55, zc, dynG));                       // the clamp body round the tang
-        add(box('clamps', mats.clamp, xr - xl + 80, 12, bl, xc, seat + 116, zc, dynG));                       // the rail it hangs on
-        add(box('clamp_parts', mats.rail, 14, 90, bl * 0.65, xl - 32 - 7, seat + 60, zc, dynG));              // the clamping blade on the operator side
-        for (const dz of [-0.22, 0.22]) {                                                                      // its two M10 bolts
-            const b = tag(new THREE.Mesh(new THREE.CylinderGeometry(8, 8, 12, 12), mats.punch), 'clamp_parts');
-            b.rotation.z = Math.PI / 2; b.position.set(xl - 32 - 20, seat + 75, zc + dz * bl); add(b);
+        at(env.holder_body, 'clamps', mats.clamp, bl, zc);   // the clamp body round the 13 mm tang
+        at(env.holder_rail, 'clamps', mats.clamp, bl, zc);   // the rail it hangs on
+        at(env.holder_blade, 'clamp_parts', mats.rail, bl * 0.65, zc);   // the clamping blade on the operator side
+        for (const dz of [-0.22, 0.22]) {   // its two M10 bolts
+            const bolt = tag(new THREE.Mesh(new THREE.CylinderGeometry(8, 8, 12, 12), mats.punch), 'clamp_parts');
+            bolt.rotation.z = Math.PI / 2; bolt.position.set(Math.min(...bx) - 6, (Math.min(...by) + Math.max(...by)) / 2 + 12, zc + dz * bl); add(bolt);
         }
-        const lv = box('clamp_parts', mats.beam, 22, 14, 70, xl - 32 - 14, seat + 16, zc + bl * 0.3, dynG);   // the quick-release lever
+        const lv = box('clamp_parts', mats.beam, 22, 14, 70, Math.min(...bx) - 10, Math.min(...by) - 6, zc + bl * 0.3, dynG);   // the quick-release lever
         lv.rotation.z = -0.6; add(lv);
     }
+    (M.finger_z || [-60, 60]).forEach(zp => at(env.bg_column, 'bg_columns', mats.beam, 70, zp));   // the R columns behind the fingers
+    at(env.bg_beam, 'bg_beam', mats.beam, 1450, 0);                                                  // the X carriage beam
+    const bnose = Math.min(...env.bg_beam.map(p => p[0]));
+    for (const sgn of [-1, 1]) add(box('bg_beam', mats.beam, 130, 90, 90, bnose + 55, Math.min(...env.bg_beam.map(p => p[1])) + 20, sgn * (BF / 2 - 90), dynG));
     fingerMeshes(lerpPts(a.finger, b.finger, u), add);
     const line = lerpPts(a.part, b.part, u);
     for (let i = 0; i < line.length - 1; i++) {
