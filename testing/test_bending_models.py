@@ -251,10 +251,12 @@ def test_force_endpoint(ctx):
 
 def test_seed_m460r(ctx):
     from migration.seed_bend_tools_m460r import seed
-    assert seed() == (4, 96)
+    assert seed() == (5, 120)
     assert seed() == (0, 0)  # idempotent
     t = BendTool.query.filter_by(code='M460.r V50').one()
     assert (t.v_opening_mm, t.radius_mm, t.angle_deg, t.max_kn_per_m, t.status) == (50, 3, 85, 800, 'in_library')
     assert sorted(s.length_mm for s in t.segments) == sorted([10, 15, 20, 40, 50, 100, 200, 370] * 3)
     erps = [s.erp_number for s in BendToolSegment.query.all()]
-    assert len(set(erps)) == 96
+    assert len(set(erps)) == 120
+    p = BendTool.query.filter_by(code='P.97.75.r08').one()
+    assert (p.kind, p.height_mm, p.angle_deg, p.radius_mm, round(p.max_kn_per_m, 1), len(p.segments)) == ('punch', 67.6, 75, 0.8, 980.7, 24)
