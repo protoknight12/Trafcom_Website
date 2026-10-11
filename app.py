@@ -39,7 +39,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import ezdxf
 from bending.unfold import unfold_section, k_factor, bd_table
-from bending.profile import (tool_svg, validate_polygon, default_profile, polygon_from_dxf, clip_to_seat, tip_offset, CLAMP, DIE_CHANNEL,
+from bending.profile import (FINGER_ASM, tool_svg, validate_polygon, default_profile, polygon_from_dxf, clip_to_seat, tip_offset, CLAMP, DIE_CHANNEL,
                              normalize, outline, radii_report, derived)
 from bending.sequence import steps_from_unfold
 from bending.tools import force_kn_per_m, recommended_v, rank_dies, G as TONNE_KN
@@ -5759,6 +5759,157 @@ def admin_bending():
                            program_count=BendProgram.query.count(), active_page='admin_bending')
 
 
+STEP_IMPORT_MAX_BYTES = 200 * 1024 * 1024   # an assembly export is big; the global 16 MB cap stays for everything else
+NATIVE_CAD_HELP = ('.sldprt/.sldasm са затворен формат на SolidWorks - само той може да ги чете. В SolidWorks: Файл -> Запис като -> STEP (*.step, AP214), '
+                   'за сглобка с отметка "Всички компоненти" и запис като един файл. Листови детайли може да се изнесат и направо като DXF (Flat-Pattern -> Export).')
+
+
+def _step_path(token):
+    return os.path.join(app.config['UPLOAD_FOLDER'], f'step_{token}.step') if re.fullmatch(r'[0-9a-f]{32}', token or '') else None
+
+
+def _step_review(path):
+    """Read a STEP file -> one row per part for the review page: name, qty, sheet-metal verdict, thickness, bends, flat size or the reason it is not importable."""
+    from bending import step_import
+    rows = []
+    for i, p in enumerate(step_import.read_parts(path)):
+        row = {'i': i, 'name': p['name'], 'qty': p['qty'], 'ok': False, 'why': None, 'thickness': None, 'bends': 0, 'size': None}
+        info = step_import.analyze(p['shape'])
+        row.update(thickness=info['thickness'], bends=info['bends'], why=info['why'], bbox=info['bbox'])
+        if info['sheet']:
+            try:
+                flat = step_import.flat_pattern(p['shape'])
+                row.update(ok=True, size=(round(flat['size'][0], 1), round(flat['size'][1], 1)), bends=len(flat['bends']))
+            except ValueError as e:
+                row['why'] = str(e)
+        rows.append(row)
+    return rows
+
+
+def _step_material_choices(rows):
+    sheets = [m for m in MaterialPrice.query.order_by(MaterialPrice.display_name) if material_price_unit(m.type) == 'm2']
+    for r in rows:
+        r['materials'] = sorted(sheets, key=lambda m: abs((m.thickness_mm or 0) - (r['thickness'] or 0)))
+    return sheets
+
+
+@app.route('/admin/bending/step-import', methods=['GET', 'POST'])
+@role_required('admin')
+def admin_bending_step_import():
+    """SolidWorks STEP (a part or an assembly) -> review: which parts are sheet metal -> admin_bending_step_create()."""
+    if request.method == 'POST':
+        request.max_content_length = STEP_IMPORT_MAX_BYTES
+    rows, token = None, None
+    f = request.files.get('file') if request.method == 'POST' else None
+    try:
+        import bending.step_import  # noqa: F401 - needs cadquery-ocp
+    except ImportError:
+        flash('Липсва библиотеката cadquery-ocp (pip install -r requirements.txt) - STEP импортът не работи.', 'danger')
+        f = None
+    if f and f.filename:
+        ext = os.path.splitext(f.filename)[1].lower()
+        if ext in ('.sldprt', '.sldasm', '.slddrw'):
+            flash(NATIVE_CAD_HELP, 'danger')
+        elif ext not in ('.step', '.stp'):
+            flash('Приемат се само .step / .stp файлове.', 'danger')
+        else:
+            token = uuid.uuid4().hex
+            path = _step_path(token)
+            f.save(path)
+            try:
+                rows = _step_review(path)
+            except Exception as e:   # OpenCascade raises many kinds on a damaged file
+                os.remove(path)
+                token = None
+                flash(f'STEP файлът не може да се прочете: {e}', 'danger')
+    elif request.method == 'POST':
+        flash('Изберете файл.', 'danger')
+    materials = _step_material_choices(rows) if rows else []
+    return render_template('admin_bending_step_import.html', rows=rows, token=token, materials=materials, name=os.path.splitext(f.filename)[0] if rows else '',
+                           services=Service.query.order_by(Service.name).all(), active_page='admin_bending')
+
+
+def _attach_part_step(detail, name, shape):
+    """Keep the part's own STEP file with the Detail (its file list; shown in 3D by view_detail_step())."""
+    from bending import step_import
+    stored = f'{uuid.uuid4().hex}_{secure_filename(name) or "part"}.step'
+    step_import.write_part_step(shape, os.path.join(app.config['DETAIL_DXF_FOLDER'], stored))
+    db.session.add(DetailDxfFile(detail_id=detail.id, filename=stored, original_filename=sanitize_display_filename(f'{name}.step'), uploaded_by_id=current_user.id))
+
+
+@app.route('/admin/bending/step-import/create', methods=['POST'])
+@role_required('admin')
+def admin_bending_step_create():
+    """Create a Detail (flat pattern DXF with bend lines + material) for each ticked sheet-metal part, and optionally a Product from the assembly."""
+    from bending import step_import
+    path = _step_path(request.form.get('token'))
+    if not path or not os.path.exists(path):
+        flash('Файлът е изтекъл - качете го отново.', 'danger')
+        return redirect(url_for('admin_bending_step_import'))
+    service_id = request.form.get('service_id', type=int)
+    parts = step_import.read_parts(path)
+    created, existing, bom, errors = 0, 0, {}, []
+    for i in request.form.getlist('sel', type=int):
+        if not 0 <= i < len(parts):
+            continue
+        name = request.form.get(f'name_{i}', '').strip() or parts[i]['name']
+        mat = MaterialPrice.query.filter_by(key=request.form.get(f'material_{i}', '')).first()
+        if not mat:
+            errors.append(f'{name}: изберете материал.')
+            continue
+        dup = next((d for d in Detail.query.order_by(Detail.id) if d.name.casefold() == name.casefold()), None)
+        if dup:
+            existing += 1
+            bom[dup.id] = bom.get(dup.id, 0) + parts[i]['qty']
+            if not DetailDxfFile.query.filter(DetailDxfFile.detail_id == dup.id, DetailDxfFile.filename.ilike('%.step')).count():   # a detail made earlier gets its 3D model now
+                _attach_part_step(dup, name, parts[i]['shape'])
+                db.session.commit()
+            continue
+        temp = os.path.join(app.config['UPLOAD_FOLDER'], f'{uuid.uuid4().hex}_step.dxf')
+        try:
+            flat = step_import.flat_pattern(parts[i]['shape'])
+            step_import.write_dxf(flat, temp)
+            width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(temp)
+            if width is None:
+                raise ValueError('DXF развивката не може да се обработи.')
+            detail = Detail(name=name, material_key=mat.key, width=width, height=height, total_length=total_length, pierce_count=pierce_count,
+                            calculated_price=calculate_material_price(width, height, mat.key), geometry_json=json.dumps(shapes), thickness_mm=round(flat['thickness'], 2),
+                            erp_number=_next_erp_number(), cutting_service_id=service_id)
+            db.session.add(detail)
+            db.session.flush()
+            _add_cutting_operation(detail, service_id, total_length)
+            stored = f'{uuid.uuid4().hex}_{secure_filename(name) or "part"}.dxf'
+            shutil.copyfile(temp, os.path.join(app.config['DETAIL_DXF_FOLDER'], stored))
+            db.session.add(DetailDxfFile(detail_id=detail.id, filename=stored, original_filename=sanitize_display_filename(f'{name}.dxf'), uploaded_by_id=current_user.id))
+            _attach_part_step(detail, name, parts[i]['shape'])
+            db.session.commit()
+            created += 1
+            bom[detail.id] = bom.get(detail.id, 0) + parts[i]['qty']
+        except (ValueError, OSError) as e:
+            db.session.rollback()
+            errors.append(f'{name}: {e}')
+        finally:
+            if os.path.exists(temp):
+                os.remove(temp)
+    product_name = request.form.get('product_name', '').strip()
+    if product_name and bom:
+        product = Product(name=product_name, description='', markup_percent=0.0)
+        db.session.add(product)
+        db.session.flush()
+        for did, qty in bom.items():
+            db.session.add(ProductDetail(product_id=product.id, detail_id=did, quantity=qty))
+        db.session.commit()
+        flash(f'Създаден продукт "{product_name}" с {len(bom)} детайла.', 'success')
+    if created or existing:
+        log_action(f'STEP импорт: {created} нови детайла, {existing} вече съществуващи', '\n'.join(f'{db.session.get(Detail, d).name}: {q} бр.' for d, q in bom.items()))
+        flash(f'Създадени детайли: {created}' + (f' (още {existing} вече съществуват и са използвани)' if existing else '') + '. Развивките носят линии на огъване - от тях се прави програма за абканта.', 'success')
+    for e in errors:
+        flash(e, 'danger')
+    if not errors:
+        os.remove(path)
+    return redirect(url_for('admin_bending_step_import') if errors else url_for('admin_bending'))
+
+
 @app.route('/admin/bending/tools/add', methods=['POST'])
 @role_required('admin')
 def admin_bending_add_tool():
@@ -6051,6 +6202,59 @@ def admin_bending_add_program():
     return redirect(url_for('admin_bending_program', prog_id=prog.id))
 
 
+@app.route('/admin/bending/programs/<int:prog_id>/machine', methods=['POST'])
+@role_required('admin')
+def admin_bending_program_machine(prog_id):
+    """Move a (not approved) program to another press brake: its steps stay, but the limits (stroke, X/R travel, working length, finger, tool segments)
+    are those of the new machine, so the checks and the tool setups are recomputed from it."""
+    prog = db.get_or_404(BendProgram, prog_id)
+    machine = db.session.get(Machine, request.form.get('machine_id', type=int) or 0)
+    if _program_editable(prog):
+        if not machine:
+            flash('Изберете машина.', 'danger')
+        elif machine.id != prog.machine_id:
+            old = prog.machine.name
+            prog.machine = machine
+            db.session.commit()
+            log_action(f'Програма "{prog.name}": машината е сменена', f'{old} -> {machine.name}')
+            flash(f'Машината е сменена на {machine.name}. Проверете ходовете, инструментите и подреждането - те зависят от машината.', 'success')
+    return redirect(url_for('admin_bending_program', prog_id=prog.id))
+
+
+def _program_time(prog, tooling):
+    """Per-part time estimate of a program (bending.timing.estimate); the machine's own handling times (kinematics_json['timing']) win over the defaults."""
+    from bending.timing import estimate
+    cfg = prog.machine.press_brake
+    changes = sum(1 for info in tooling['step'].values() if info.get('change'))
+    return estimate(len(prog.steps), sum(1 for st in prog.steps if st.flip), changes, (cfg.kinematics.get('timing') if cfg else None))
+
+
+@app.route('/admin/bending/programs/<int:prog_id>/operation', methods=['POST'])
+@role_required('admin')
+def admin_bending_program_operation(prog_id):
+    """Bill the program's estimated time on the Detail: one Operation of the chosen (time-based) Service of the program's machine. Pressed again (or for a new
+    version of the same program) it updates that Operation instead of adding another."""
+    prog = db.get_or_404(BendProgram, prog_id)
+    service = db.session.get(Service, request.form.get('service_id', type=int) or 0)
+    minutes = _program_time(prog, _program_tooling(prog))['per_part_min']
+    if not service or service not in prog.machine.services or service.pricing_mode != 'time':
+        flash('Изберете услуга за времето (на машината, почасова).', 'danger')
+    elif minutes <= 0:
+        flash('Програма без стъпки няма време.', 'danger')
+    else:
+        mark = f'Огъване: програма "{prog.name}"'
+        op = next((o for o in prog.detail.operations if o.description == mark), None)
+        if op:
+            op.service_id, op.duration_minutes = service.id, minutes
+        else:
+            db.session.add(Operation(detail_id=prog.detail_id, service_id=service.id, duration_minutes=minutes, description=mark,
+                                     sequence=max((o.sequence for o in prog.detail.operations), default=-1) + 1))
+        db.session.commit()
+        log_action(f'Програма "{prog.name}": операция Огъване', f'{minutes:g} мин по {service.name}')
+        flash(f'Операция "Огъване" на детайла: {minutes:g} мин ({service.name}).', 'success')
+    return redirect(url_for('admin_bending_program', prog_id=prog.id))
+
+
 @app.route('/admin/bending/programs/<int:prog_id>')
 @role_required('admin')
 def admin_bending_program(prog_id):
@@ -6059,7 +6263,9 @@ def admin_bending_program(prog_id):
                    for t in tools if t.kind == 'die' for p in (t.positions if len(t.positions) > 1 else [None])]
     prog = db.get_or_404(BendProgram, prog_id)
     tool = _program_tooling(prog)
-    return render_template('admin_bending_program.html', prog=prog, tools=tools, die_options=die_options, checks=_program_checks(prog, tool), tooling=tool,
+    brakes = Machine.query.join(PressBrakeConfig).order_by(Machine.name).all()
+    return render_template('admin_bending_program.html', prog=prog, tools=tools, die_options=die_options, machines=brakes, checks=_program_checks(prog, tool), tooling=tool, timing=_program_time(prog, tool),
+                           time_services=[sv for sv in prog.machine.services if sv.pricing_mode == 'time'],
                            pictures={st.id: _step_picture_ok(st) for st in prog.steps}, active_page='admin_bending')
 
 
@@ -6513,7 +6719,7 @@ def _machine_spec(machine, part_width):
     return {'name': machine.name, 'work_length': wl, 'between_frames': k.get('between_frames_mm') or wl * 0.84, 'work_height': k.get('work_height_mm') or 1000,
             'overall': k.get('overall_mm') or [wl + 550, 1450, 2650], 'x_max': cfg.x_max_mm if cfg else None, 'r': k.get('r'), 'y': k.get('y'),
             'die_holder': k.get('die_holder_mm') or [wl], 'clamps': k.get('clamps') or 10, 'controller': k.get('controller'),
-            'finger': k.get('finger'), 'frame': k.get('frame'), 'finger_z': [-s, s], 'finger_machine_z': [round(z1), round(z2)], 'warn': warn}
+            'finger': k.get('finger'), 'finger_asm': FINGER_ASM if k.get('finger') else None, 'frame': k.get('frame'), 'finger_z': [-s, s], 'finger_machine_z': [round(z1), round(z2)], 'warn': warn}
 
 
 @app.route('/bending/programs/<int:prog_id>/sim')
@@ -6536,6 +6742,8 @@ def bending_program_sim(prog_id):
         left, right = _step_chains(st)
         data = step_frames(st.punch.profile, st.die.profile, v, t, st.angle_deg, left, right, overbend=_overbend_fn(prog)(v, t))
         data['hits'] = list(data['hits']) + _plate_hits(cfg, width, st.punch.profile, st.die.profile, v, t, st.angle_deg, left, right, _overbend_fn(prog)(v, t))
+        if not data['first_hit'] and data['hits'] != []:   # only the side plate (outside the cross-section): stop at the bottom of the stroke
+            data['first_hit'] = {'angle': st.angle_deg, 'pair': data['hits'][-1], 'at': None}
         steps.append({'seq': st.seq, 'angle': st.angle_deg, 'v': v, 'punch': st.punch.code, 'die_code': st.die.code, 'layout': ({'segments': su['row'], 'total': su['total']} if su and tl['window'] else None), 'bend_len': tl['length'] if tl else width, **data})
     return render_template('bending_sim.html', title=prog.name, sim={'thickness': t, 'width': round(width, 1), 'machine': _machine_spec(prog.machine, width), 'steps': steps}, skipped=len(prog.steps) - len(steps),
                            active_page='admin_bending')
@@ -11733,6 +11941,32 @@ def get_detail_dxf_geometry(file_id):
         return jsonify({'error': 'Грешка при обработката на DXF структурата.'}), 400
 
     return jsonify({'filename': dxf_file.original_filename, 'width': width, 'height': height, 'shapes': shapes})
+
+
+def _detail_step_file(file_id):
+    f = DetailDxfFile.query.get_or_404(file_id)
+    if not f.original_filename.lower().endswith(('.step', '.stp')):
+        abort(404)
+    return f
+
+
+@app.route('/details/files/<int:file_id>/view3d')
+@role_required('admin')
+def view_detail_step(file_id):
+    """3D view of a STEP file kept with a Detail (three.js; the mesh comes from view_detail_step_mesh())."""
+    f = _detail_step_file(file_id)
+    return render_template('step_view.html', title=f.original_filename, mesh_url=url_for('view_detail_step_mesh', file_id=f.id))
+
+
+@app.route('/details/files/<int:file_id>/mesh')
+@role_required('admin')
+def view_detail_step_mesh(file_id):
+    from bending import step_import
+    f = _detail_step_file(file_id)
+    try:
+        return jsonify(step_import.mesh(os.path.join(app.config['DETAIL_DXF_FOLDER'], f.filename)))
+    except (ValueError, RuntimeError) as e:
+        return jsonify({'error': f'STEP файлът не може да се визуализира: {e}'}), 400
 
 
 @app.route('/details/files/<int:file_id>/delete', methods=['POST'])
@@ -23155,6 +23389,45 @@ def get_machine_details(name: str) -> str:
 
 
 @anthropic.beta_tool
+def bending_program_info(detail_name: str) -> str:
+    """Само за служители: програмите за огъване (абкант) на детайл - статус, версия, машина, стъпки (ъгъл, инструменти) и приблизително време.
+
+    Args:
+        detail_name: Име или част от името на детайла.
+    """
+    if not current_user.is_staff:
+        return 'Тази информация е само за служители.'
+    detail = (_fuzzy_match(Detail.query.filter(Detail.id.in_(db.session.query(BendProgram.detail_id))).all(), lambda x: x.name, detail_name, limit=1) or [None])[0]
+    if not detail:
+        return f"Не намерих програма за огъване за детайл '{detail_name}'."
+    lines = []
+    for prog in BendProgram.query.filter_by(detail_id=detail.id).order_by(BendProgram.version.desc()).limit(3):
+        lines.append(f'{detail.name}: "{prog.name}" v{prog.version} ({prog.status}), машина {prog.machine.name}, {len(prog.steps)} огъвания, около {_program_time(prog, _program_tooling(prog))["per_part_min"]:g} мин на детайл')
+        lines += [f'  {st.seq}. {st.angle_deg:g}° поансон {st.punch.code if st.punch else "-"}, матрица {st.die.code if st.die else "-"}{", обръщане" if st.flip else ""}' for st in prog.steps]
+    return '\n'.join(lines)
+
+
+@anthropic.beta_tool
+def bend_tool_stock(query: str) -> str:
+    """Само за служители: наличност на инструменти за абкант (поансони/матрици) по код - секции, дължини, статус и място.
+
+    Args:
+        query: Код или част от кода на инструмента (напр. P.97 или M460).
+    """
+    if not current_user.is_staff:
+        return 'Тази информация е само за служители.'
+    tools = BendTool.query.filter(BendTool.code.ilike(f'%{query.strip()}%')).order_by(BendTool.code).limit(8).all()
+    if not tools:
+        return f"Не намерих инструмент с код '{query}'."
+    status = {'in_stock': 'на склад', 'on_machine': 'на машина', 'reserved': 'резервиран', 'check': 'за проверка', 'scrap': 'брак'}
+    out = []
+    for t in tools:
+        segs = ', '.join(f"{sg.length_mm:g} mm ({status.get(sg.status, sg.status)}{', ' + sg.location.zone if sg.location else ''})" for sg in t.segments) or 'няма секции'
+        out.append(f"{t.code} ({'поансон' if t.kind == 'punch' else 'матрица'}): {segs}")
+    return '\n'.join(out)
+
+
+@anthropic.beta_tool
 def list_material_types() -> str:
     """Връща възможните типове материали (за филтриране в list_materials)."""
     return '\n'.join(f'{key} - {label}' for key, label in material_type_labels().items())
@@ -23228,6 +23501,7 @@ CHATBOT_TOOLS = [
     my_orders, order_status, order_missing_stock,
     list_service_prices, get_machine_details, list_material_types,
     my_uploads, get_upload_details, my_profile, get_contact_info,
+    bending_program_info, bend_tool_stock,
     # Server-side tool - runs in Anthropic's own sandbox, not on this server,
     # so it never touches the DB/filesystem. Pure computation only (see rule
     # 4 in CHATBOT_SYSTEM_PROMPT) - unrelated to the read-only site tools above.

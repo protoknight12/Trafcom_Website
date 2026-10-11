@@ -27,7 +27,16 @@
 
     <section class="admin-card">
         <h3>{{ prog.name }} <small>v{{ prog.version }} · {{ prog.status }}</small></h3>
-        <p>Детайл: {{ prog.detail.name }} · Машина: {{ prog.machine.name }}</p>
+        <p>Детайл: {{ prog.detail.name }} · Машина:
+        {% if prog.status != 'approved' %}
+        <form action="{{ url_for('admin_bending_program_machine', prog_id=prog.id) }}" method="POST" style="display:inline" onsubmit="return confirm('Смяна на машината? Ходовете, инструментите и подреждането трябва да се проверят наново.')">
+            {% include 'partials/csrf_field.html' %}
+            <select name="machine_id" onchange="if (this.value != '{{ prog.machine_id }}') this.form.requestSubmit()" aria-label="Машина">
+                {% for m in machines %}<option value="{{ m.id }}" {{ 'selected' if m.id == prog.machine_id }}>{{ m.name }}</option>{% endfor %}
+                {% if prog.machine not in machines %}<option value="{{ prog.machine_id }}" selected>{{ prog.machine.name }}</option>{% endif %}
+            </select>
+        </form>
+        {% else %}<b>{{ prog.machine.name }}</b>{% endif %}</p>
         <form action="{{ url_for('admin_bending_program_status', prog_id=prog.id) }}" method="POST" style="display:inline">
             {% include 'partials/csrf_field.html' %}
             {% if prog.status == 'draft' %}<button name="status" value="approved" class="btn-submit">Одобри</button>
@@ -42,6 +51,21 @@
         <a href="{{ url_for('bending_program_sheet', prog_id=prog.id) }}" target="_blank">Лист за оператора</a>
         <a href="{{ url_for('bending_program_sim', prog_id=prog.id) }}" target="_blank">3D симулация</a>
     </section>
+
+    {% if prog.steps %}
+    <section class="admin-card">
+        <h3>Време и цена</h3>
+        <p>На детайл: <b>{{ timing.per_part_min }} мин</b> (огъвания {{ timing.bend_min }} · обръщане {{ timing.flip_min }} · зареждане {{ timing.load_min }} · смяна на инструмент {{ timing.change_min }}).
+        Подготовка на партидата: {{ timing.batch_setup_min }} мин (не е включена). Приблизително - времената са по подразбиране, не са засичани в цеха.</p>
+        {% if time_services %}
+        <form action="{{ url_for('admin_bending_program_operation', prog_id=prog.id) }}" method="POST" style="display:inline">
+            {% include 'partials/csrf_field.html' %}
+            <select name="service_id" aria-label="Услуга">{% for sv in time_services %}<option value="{{ sv.id }}">{{ sv.name }} ({{ sv.price_per_hour_eur }} EUR/ч)</option>{% endfor %}</select>
+            <button type="submit" class="btn-submit">Запиши като операция на детайла</button>
+        </form>
+        {% else %}<p><small>Свържете почасова услуга „Огъване“ с машината в /admin/services, за да се запише цената.</small></p>{% endif %}
+    </section>
+    {% endif %}
 
     {% if prog.status != 'approved' %}
     <section class="admin-card" data-dialog-section="+ Нова стъпка">

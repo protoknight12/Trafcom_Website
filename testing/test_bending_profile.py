@@ -203,3 +203,19 @@ assert 'детайл - греда' in step_trajectory(_P, _D, 16, 2, 90, [(300, 
 fr = step_frames(_P, _D, 16, 2, 90, [(60, None)], [(30, None)])
 assert {'holder_body', 'holder_rail', 'holder_blade', 'ram', 'bg_beam', 'bg_column'} <= set(fr['frames'][3]['env']) and {'die_holder', 'bed', 'crowning'} <= set(fr['static'])
 print('ok machine bodies')
+
+# a flange hanging down at the end: the finger is lowered, the flange rests on level 0's front face (not on level 1 above it)
+from bending.profile import finger_section
+fp, ax, opt = finger_section(200.0, 30.0, hang=True)
+assert opt == 'face' and ax == 200.0 and min(y for _, y in fp) == -14.0 and (200.0, -14.0) in fp and (200.0, 0.0) in fp
+assert finger_section(200.0, 30.0)[2] == 'face' and finger_section(200.0, 30.0)[1] == 200.0   # the front face is the first choice
+assert finger_section(200.0, 30.0, prefer='ledge')[2] == 'ledge' and finger_section(200.0, 30.0, prefer='ledge')[1] == 180.0   # the ledge only on request
+g = _step_geom(_P, _D, 16, 2, 90, [(60, None)], [(60, -90), (15, None)])
+assert min(y for _, y in g['finger']) == -14.0 and g['finger_option'] == 'face'
+print('ok hanging flange')
+
+# the earliest collision is reported with its stage angle and place (the 3D view stops there and focuses it)
+_tr = step_trajectory(_P, _D, 16, 2, 90, [(300, None)], [(250, 100), (250, None)])
+assert _tr['first_hit'] and _tr['first_hit']['pair'] in _tr['hits'] and len(_tr['first_hit']['at']) == 2 and _tr['first_hit']['angle'] >= 0
+assert step_trajectory(_P, _D, 16, 2, 90, right=[(40, None)])['first_hit'] is None
+print('ok first hit')

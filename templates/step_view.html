@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>3D - {{ title }}</title>
+    <style>
+        html, body { margin: 0; height: 100%; background: #14171a; color: #cfd8e0; font-family: Arial, sans-serif; overflow: hidden; }
+        .bar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: #1d2126; border-bottom: 1px solid #2c333a; flex-wrap: wrap; height: 30px; }
+        .bar button { background: #2c333a; color: #e8eef3; border: 0; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+        .bar button:hover { background: #3a444d; }
+        .bar label { font-size: 14px; cursor: pointer; }
+        .bar .info { margin-left: auto; font-size: 13px; color: #9aa5b1; }
+        #view { position: absolute; top: 46px; bottom: 0; left: 0; right: 0; }
+        #msg { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 15px; }
+    </style>
+    <script type="importmap">
+    { "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+    </script>
+</head>
+<body>
+    <div class="bar">
+        <strong>{{ title }}</strong>
+        <button type="button" id="v_iso">Изометрия</button><button type="button" id="v_front">Отпред</button><button type="button" id="v_side">Отстрани</button><button type="button" id="v_top">Отгоре</button>
+        <label><input type="checkbox" id="c_edges" checked> Ръбове</label>
+        <label><input type="checkbox" id="c_wire"> Мрежа</label>
+        <span class="info" id="size">влачене = въртене, колело = мащаб, дясно влачене = преместване</span>
+    </div>
+    <div id="view"></div>
+    <div id="msg">Зареждане...</div>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        const $ = id => document.getElementById(id);
+        const view = $('view');
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(devicePixelRatio);
+        view.appendChild(renderer.domElement);
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x14171a);
+        scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.1));
+        const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+        scene.add(sun, sun.target);
+        const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100000);
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        const resize = () => { const w = view.clientWidth, h = view.clientHeight; renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix(); };
+        addEventListener('resize', resize);
+        resize();
+
+        let solid, edges, wire, center = new THREE.Vector3(), size = 100;
+        const look = dir => { camera.position.copy(center).addScaledVector(dir.normalize(), size * 1.8); controls.target.copy(center); sun.position.copy(camera.position); sun.target.position.copy(center); controls.update(); };
+        // SolidWorks/STEP: Z is up (camera.up below), so the model needs no turning
+        const views = { v_iso: [1, -1, 0.8], v_front: [0, -1, 0], v_side: [1, 0, 0], v_top: [0, -0.001, 1] };
+        for (const [id, d] of Object.entries(views)) $(id).onclick = () => look(new THREE.Vector3(...d));
+
+        fetch({{ mesh_url|tojson }}).then(r => r.json()).then(m => {
+            if (m.error) { $('msg').textContent = m.error; return; }
+            $('msg').remove();
+            const g = new THREE.BufferGeometry();
+            g.setAttribute('position', new THREE.Float32BufferAttribute(m.positions, 3));
+            g.setIndex(m.indices);
+            g.computeVertexNormals();
+            solid = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0x9fb4c7, metalness: 0.35, roughness: 0.5, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }));
+            wire = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: 0x223344, wireframe: true }));
+            wire.visible = false;
+            edges = new THREE.Group();
+            const lm = new THREE.LineBasicMaterial({ color: 0x0b1620 });
+            for (const e of m.edges) edges.add(new THREE.Line(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(e, 3)), lm));
+            scene.add(solid, wire, edges);
+            const [lo, hi] = m.bbox.map(a => new THREE.Vector3(...a));
+            center = lo.clone().add(hi).multiplyScalar(0.5);
+            size = lo.distanceTo(hi);
+            $('size').textContent = `${(hi.x - lo.x).toFixed(1)} × ${(hi.y - lo.y).toFixed(1)} × ${(hi.z - lo.z).toFixed(1)} mm · влачене = въртене, колело = мащаб`;
+            camera.up.set(0, 0, 1);
+            look(new THREE.Vector3(...views.v_iso));
+        }).catch(() => { $('msg').textContent = 'Моделът не може да се зареди.'; });
+
+        $('c_edges').onchange = e => { if (edges) edges.visible = e.target.checked; };
+        $('c_wire').onchange = e => { if (wire) wire.visible = e.target.checked; };
+        renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+    </script>
+</body>
+</html>

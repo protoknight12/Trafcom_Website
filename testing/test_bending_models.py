@@ -552,3 +552,83 @@ def test_step_picture_shows_whole_part_without_dxf(ctx):
     svg = c.get(f'/bending/steps/{p.steps[1].id}/picture.svg').get_data(as_text=True)
     sheet = [m_ for m_ in re.findall(r'<path d="(M [^"]*)" stroke="#e26a4a" stroke-width="2"[^>]*stroke-linejoin', svg)]
     assert sheet and sheet[-1].count('L') == 3   # back leg + apex + front leg + the bent flange of step 1
+
+
+def test_change_program_machine(ctx):
+    from werkzeug.security import generate_password_hash
+    from app import User, limiter, Detail, BendProgram, MaterialPrice
+    app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
+    limiter.reset()
+    db.session.add_all([User(username='bq_mc', password=generate_password_hash('irrelevant123'), role='admin'), Machine(name='M1'), Machine(name='M2'),
+                        MaterialPrice(key='k', display_name='M', type='sheets', cost_per_m2=1)])
+    db.session.flush()
+    m1, m2 = Machine.query.filter_by(name='M1').one(), Machine.query.filter_by(name='M2').one()
+    db.session.add_all([PressBrakeConfig(machine=m1, working_length_mm=2050), PressBrakeConfig(machine=m2, working_length_mm=4050)])
+    d = Detail(name='D', material_key='k', width=1, height=1, total_length=1, pierce_count=1, calculated_price=1, geometry_json='[]')
+    db.session.add(d)
+    db.session.flush()
+    p = BendProgram(detail=d, machine=m1, name='P')
+    db.session.add(p)
+    db.session.commit()
+    c = app.test_client()
+    c.post('/login', data={'username': 'bq_mc', 'password': 'irrelevant123'})
+    assert b'M2' in c.get(f'/admin/bending/programs/{p.id}').data                       # offered in the program's machine select
+    c.post(f'/admin/bending/programs/{p.id}/machine', data={'machine_id': m2.id})
+    assert db.session.get(BendProgram, p.id).machine_id == m2.id
+    c.post(f'/admin/bending/programs/{p.id}/machine', data={'machine_id': 9999})        # unknown machine: unchanged
+    assert db.session.get(BendProgram, p.id).machine_id == m2.id
+    p.status = 'approved'
+    db.session.commit()
+    c.post(f'/admin/bending/programs/{p.id}/machine', data={'machine_id': m1.id})       # an approved program keeps its machine
+    assert db.session.get(BendProgram, p.id).machine_id == m2.id
+
+
+def test_program_time_operation(ctx):
+    from werkzeug.security import generate_password_hash
+    from app import User, limiter, Detail, BendProgram, BendStep, MaterialPrice, Service, Operation
+    app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
+    limiter.reset()
+    m = Machine(name='MT')
+    sv = Service(name='Огъване', price_per_hour_eur=60.0, machines=[m])
+    other = Service(name='Друга', price_per_hour_eur=10.0)
+    db.session.add_all([User(username='bq_tm', password=generate_password_hash('irrelevant123'), role='admin'), m, sv, other,
+                        MaterialPrice(key='k', display_name='M', type='sheets', cost_per_m2=1)])
+    db.session.flush()
+    db.session.add(PressBrakeConfig(machine=m, working_length_mm=2050))
+    d = Detail(name='D', material_key='k', width=1, height=1, total_length=1, pierce_count=1, calculated_price=1, geometry_json='[]')
+    db.session.add(d)
+    db.session.flush()
+    p = BendProgram(detail=d, machine=m, name='P', steps=[BendStep(seq=1, angle_deg=90), BendStep(seq=2, angle_deg=90, flip=True)])
+    db.session.add(p)
+    db.session.commit()
+    c = app.test_client()
+    c.post('/login', data={'username': 'bq_tm', 'password': 'irrelevant123'})
+    assert 'Време и цена'.encode() in c.get(f'/admin/bending/programs/{p.id}').data
+    c.post(f'/admin/bending/programs/{p.id}/operation', data={'service_id': other.id})   # not the machine's service: refused
+    assert Operation.query.count() == 0
+    c.post(f'/admin/bending/programs/{p.id}/operation', data={'service_id': sv.id})      # 2*25 + 10 + 20 s = 80 s
+    c.post(f'/admin/bending/programs/{p.id}/operation', data={'service_id': sv.id})      # again: updated, not duplicated
+    ops = Operation.query.all()
+    assert len(ops) == 1 and ops[0].duration_minutes == round(80 / 60, 2) and ops[0].service_id == sv.id
+
+
+def test_chatbot_bending_tools_staff_only(ctx):
+    from flask_login import login_user
+    from werkzeug.security import generate_password_hash
+    from app import User, Detail, BendProgram, BendStep, BendTool, BendToolSegment, MaterialPrice, bending_program_info, bend_tool_stock
+    m = Machine(name='MC')
+    staff = User(username='bq_cs', password=generate_password_hash('irrelevant123'), role='worker')
+    client = User(username='bq_cc', password=generate_password_hash('irrelevant123'), role='regular_user')
+    d = Detail(name='Конзола X', material_key='k', width=1, height=1, total_length=1, pierce_count=1, calculated_price=1, geometry_json='[]')
+    tool = BendTool(code='P.97.test', kind='punch')
+    db.session.add_all([m, staff, client, d, tool, MaterialPrice(key='k', display_name='M', type='sheets', cost_per_m2=1)])
+    db.session.flush()
+    db.session.add_all([PressBrakeConfig(machine=m, working_length_mm=2050), BendToolSegment(tool_id=tool.id, length_mm=500),
+                        BendProgram(detail=d, machine=m, name='P', steps=[BendStep(seq=1, angle_deg=90)])])
+    db.session.commit()
+    with app.test_request_context():
+        login_user(client)
+        assert 'само за служители' in bending_program_info.call({'detail_name': 'Конзола'}) and 'само за служители' in bend_tool_stock.call({'query': 'P.97'})
+        login_user(staff)
+        assert '1 огъвания' in bending_program_info.call({'detail_name': 'Конзола'})
+        assert '500 mm (на склад)' in bend_tool_stock.call({'query': 'P.97'})

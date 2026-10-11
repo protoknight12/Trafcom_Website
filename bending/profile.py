@@ -493,12 +493,31 @@ def _chain(start, d, legs, ccw):
 LEDGE = {'height': 14.0, 'offset': 20.0, 'wall': 10.0, 'length': 60.0}
 
 
-def finger_section(wall_x, die_half):
+# The body of the finger assembly "DAYAMA DILI KOMPLE" (Durma 731204910008/9, Polimeta order 73052521882, doc pages 32-33) behind the tongue, as boxes in mm.
+# The tongue itself (levels 14/10/5 mm, 85 wide, 20 mm ledge, 457 long) is drawn from the controller's parameters (kinematics_json['finger']) - those numbers win.
+# u from the nose (the controller's depth 0) towards the back gauge, h up from the bottom of level 0, w across (centred). The drawing is an isometric exploded
+# view at ~1 pt per mm along the axes (x 0.8165): scaled so the tongue is the controller's 85 mm wide, the Rexroth 25 carriage then comes out 82 (catalogue 83).
+# Lengths/sections are measured from the drawing, the offsets along u are estimated from the assembled view.
+FINGER_ASM = {'parts': [
+    {'key': 'bg_finger', 'name': 'Горен кизак (UST KIZAK)', 'box': [131.0, 457.0, 24.0, 57.0, -41.0, 41.0]},
+    {'key': 'bg_finger', 'name': 'Пръчка с ръчка (PARCASI)', 'box': [100.0, 534.0, 57.0, 97.0, -20.0, 20.0]},
+    {'key': 'bg_finger', 'name': 'Водеща количка 25 (Rexroth R162129420)', 'box': [215.0, 280.0, -38.0, 0.0, -41.0, 41.0]},
+    {'key': 'bg_finger', 'name': 'Водеща количка 25 (Rexroth R162129420)', 'box': [355.0, 420.0, -38.0, 0.0, -41.0, 41.0]},
+    {'key': 'bg_finger', 'name': 'Блок за ремъка (DELTA-X)', 'box': [290.0, 340.0, -45.0, 0.0, -54.0, 54.0]},
+]}
+
+
+def finger_section(wall_x, die_half, hang=False, prefer='face'):
     """(polygon, axis X, 'ledge'|'face'): with the wall far enough from the die the ledge slides under the sheet (its top = the sheet's bottom plane) and the
     sheet end touches level 1's face (axis X = wall - 20). Closer to the bend line the ledge would be in the die: the finger then stands above the die and the
-    sheet end touches the front face of level 0 (axis X = wall)."""
+    sheet end touches the front face of level 0 (axis X = wall). `hang`: the end of the part is a flange hanging DOWN below the sheet's bottom plane - the ledge
+    cannot go under the sheet through it, so the finger is lowered and the flange rests against level 0's front face (level 0 spans the plane down by its height,
+    level 1 above the plane); axis X = wall. `prefer`: 'face' (default, the first choice) always rests the sheet end on level 0's front face; 'ledge' puts the
+    ledge under the sheet whenever it fits (the old rule)."""
     h, off, wl, ln = LEDGE['height'], LEDGE['offset'], LEDGE['wall'], LEDGE['length']
-    if wall_x >= die_half + off + 1.0:
+    if hang:
+        return [(wall_x, -h), (wall_x + ln, -h), (wall_x + ln, wl), (wall_x + off, wl), (wall_x + off, 0.0), (wall_x, 0.0)], wall_x, 'face'
+    if prefer == 'ledge' and wall_x >= die_half + off + 1.0:
         return [(wall_x - off, -h), (wall_x + ln, -h), (wall_x + ln, wl), (wall_x, wl), (wall_x, 0.0), (wall_x - off, 0.0)], wall_x - off, 'ledge'
     return [(wall_x, 0.0), (wall_x + ln, 0.0), (wall_x + ln, h + wl), (wall_x + off, h + wl), (wall_x + off, h), (wall_x, h)], wall_x, 'face'
 
@@ -536,7 +555,8 @@ def _step_geom(punch_pts, die_pts, v, thickness, fold_deg, left, right, overbend
     die_half = max(abs(wd[0]), abs(wd[1])) if wd else 30.0
     before_right = _chain((0.0, flat_y), (1.0, 0.0), right, True)
     fx = max(p[0] for p in _sample_part(before_right, thickness))   # the finger touches the WALL of the material (a flange stood up earlier is T/2 further than its centre line)
-    finger, axis_x, opt = finger_section(fx, die_half)
+    hang = min(p[1] for p in _sample_part(before_right, thickness)) < -0.5   # a flange hanging down at the end of the part
+    finger, axis_x, opt = finger_section(fx, die_half, hang)
     clamp_poly = [(x, y + tip_y) for x, y in clamp_polygon(outline(punch_pts))]
     return {'finger': finger, 'axis_x': axis_x, 'finger_option': opt, 'env': machine_env(clamp_poly, finger),
             'die': [(x, y - shoulder_y) for x, y in outline(die)],
@@ -576,6 +596,13 @@ def _densify(poly, step=1.5):
     return out
 
 
+def _overlap_pts(pts, poly, tol):
+    """The points of `pts` that lie inside `poly` deeper than tol."""
+    x0, x1 = min(p[0] for p in poly), max(p[0] for p in poly)
+    y0, y1 = min(p[1] for p in poly), max(p[1] for p in poly)
+    return [q for q in pts if x0 < q[0] < x1 and y0 < q[1] < y1 and _inside(q, poly) and _dist_to_edges(q, poly) > tol]
+
+
 def _overlap(pts, poly, tol):
     x0, x1 = min(p[0] for p in poly), max(p[0] for p in poly)
     y0, y1 = min(p[1] for p in poly), max(p[1] for p in poly)
@@ -597,7 +624,7 @@ def _sample_part(pts, thickness, step=1.5):
 
 
 def _stage_pairs(geo, thickness, tol):
-    """Pairs of bodies that overlap at one moment of the stroke."""
+    """Pairs of bodies that overlap at one moment of the stroke -> [(a, b, (x, y) of the overlap)]."""
     env = geo['env']
     polys = {'упор': [geo['finger']], 'поансон': [geo['punch']], 'закрепване': [geo['clamp']], 'матрица': [geo['die']],
              'скоба': [env['holder_body'], env['holder_rail'], env['holder_blade']], 'греда': [env['ram']], 'държач': [DIE_HOLDER_U], 'маса': [BED, CROWNING],
@@ -612,8 +639,9 @@ def _stage_pairs(geo, thickness, tol):
     for a, b, tl in pairs:
         pa, polys_a = bodies[a]
         pb, polys_b = bodies[b]
-        if any(_overlap(pa, q, tl) for q in polys_b) or (polys_a and any(_overlap(pb, q, tl) for q in polys_a)):
-            hits.append((a, b))
+        pts = [q for poly in polys_b for q in _overlap_pts(pa, poly, tl)] + [q for poly in (polys_a or ()) for q in _overlap_pts(pb, poly, tl)]
+        if pts:
+            hits.append((a, b, (sum(q[0] for q in pts) / len(pts), sum(q[1] for q in pts) / len(pts))))   # where they overlap (the centre of the overlapping points)
     return hits
 
 
@@ -623,25 +651,27 @@ def step_trajectory(punch_pts, die_pts, v, thickness, fold_deg, left=(), right=(
     round, so a flange or the end of the part can reach the finger or the punch half way). Before the stroke the part rests flat on the die with
     its short end touching the finger face - touching is fine, a flange hanging into the die is not.
     A finger that gets in the way is simply retracted (every machine has that option) - not a collision, unless it sits in the die.
-    -> {'hits': ['part - punch', ...], 'retract_deg': angle up to which the finger may stay, or None}. Only the cross-section (3D: stage 3)."""
+    -> {'hits': ['part - punch', ...], 'retract_deg': angle up to which the finger may stay, or None, 'first_hit': {angle, pair, at: [x, y]} of the earliest collision or None}. Only the cross-section (3D: stage 3)."""
     final = min(fold_deg + overbend, 179.0)
     stages = sorted({float(a) for a in range(int(step_deg), int(final), int(step_deg))} | {final}) if final > step_deg else [final]
-    hits, first_finger = set(), None
+    hits, first_finger, first_hit = set(), None, None
     geo = _step_geom(punch_pts, die_pts, v, thickness, final, left, right, 0.0)
     before = _sample_part(geo['before_left'][::-1][:-1] + geo['before_right'], thickness)   # resting on the die before the stroke
     if _overlap(before, geo['die'], 0.6):
         hits.add('детайл преди огъването - матрица')
+        pts = _overlap_pts(before, geo['die'], 0.6)
+        first_hit = {'angle': 0.0, 'pair': 'детайл преди огъването - матрица', 'at': [sum(q[0] for q in pts) / len(pts), sum(q[1] for q in pts) / len(pts)]}
     for i, a in enumerate(stages):
         g = _step_geom(punch_pts, die_pts, v, thickness, a, left, right, 0.0)
-        for x, y in _stage_pairs(g, thickness, tol):
-            if 'упор' not in (x, y):
+        for x, y, at in _stage_pairs(g, thickness, tol):
+            if 'упор' not in (x, y) or 'матрица' in (x, y):   # a finger in the die: retracting does not help
                 hits.add(f'{x} - {y}')
-            elif 'матрица' in (x, y):
-                hits.add(f'{x} - {y}')            # the finger itself stands in the die: retracting does not help
+                if first_hit is None:
+                    first_hit = {'angle': a, 'pair': f'{x} - {y}', 'at': [at[0], at[1]]}
             elif i > 0 and first_finger is None:  # the first stage = the punch clamping the sheet; the finger may be retracted from then on
                 first_finger = i
     retract = None if first_finger is None else stages[first_finger - 1]
-    return {'hits': sorted(hits), 'retract_deg': retract}
+    return {'hits': sorted(hits), 'retract_deg': retract, 'first_hit': first_hit}
 
 
 def step_collision(punch_pts, die_pts, v, thickness, fold_deg, left=(), right=(), tol=0.4, overbend=0.0):
@@ -732,7 +762,9 @@ def step_frames(punch_pts, die_pts, v, thickness, fold_deg, left=(), right=(), o
     if final > fold_deg + 1e-6:   # the punch lifts, the sheet springs back to the target angle
         add(final, dy=lift / 2, part_a=fold_deg)
     last = add(fold_deg if final > fold_deg + 1e-6 else final, dy=lift)
-    return {'die': first['die'], 'inner_radius': first['inner_radius'], 'frames': frames, 'static': {'die_holder': DIE_HOLDER_U, 'bed': BED, 'crowning': CROWNING}, 'hits': step_trajectory(punch_pts, die_pts, v, thickness, fold_deg, left, right, overbend=overbend)['hits']}
+    traj = step_trajectory(punch_pts, die_pts, v, thickness, fold_deg, left, right, overbend=overbend)
+    return {'die': first['die'], 'inner_radius': first['inner_radius'], 'frames': frames, 'static': {'die_holder': DIE_HOLDER_U, 'bed': BED, 'crowning': CROWNING},
+            'hits': traj['hits'], 'first_hit': traj['first_hit']}
 
 
 def step_x(punch_pts, die_pts, v, thickness, fold_deg, left=(), right=()):

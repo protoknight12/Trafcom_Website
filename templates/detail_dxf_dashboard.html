@@ -150,6 +150,9 @@
                                     data-id="{{ f.id }}" data-filename="{{ f.original_filename }}" data-endpoint="/details/files/geometry/"
                                     style="padding: 6px 10px; font-size: 0.78rem;">Преглед</button>
                             {% endif %}
+                            {% if f.original_filename.lower().endswith(('.step', '.stp')) %}
+                            <a href="{{ url_for('view_detail_step', file_id=f.id) }}" target="_blank" class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;">3D</a>
+                            {% endif %}
                             <a href="{{ url_for('download_detail_dxf', file_id=f.id) }}" class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;">Изтегли</a>
                             <form action="{{ url_for('delete_detail_dxf', file_id=f.id) }}" method="POST" class="dxf-delete-form" data-filename="{{ f.original_filename }}" style="display: inline; margin: 0;">
                                 {% include 'partials/csrf_field.html' %}
