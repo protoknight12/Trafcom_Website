@@ -23,16 +23,12 @@ with app.app_context():
     db.session.execute(text('''
         ALTER TABLE convector ALTER COLUMN host DROP NOT NULL
     '''))
-    # mqtt_topic needs to be unique (mirrors ShellyDevice/TemperatureSensor)
-    # but only once, and IF NOT EXISTS isn't valid syntax for ADD CONSTRAINT -
-    # check pg_constraint first so re-running this script doesn't error.
-    exists = db.session.execute(text('''
-        SELECT 1 FROM pg_constraint WHERE conname = 'convector_mqtt_topic_key'
-    ''')).first()
-    if not exists:
-        db.session.execute(text('''
-            ALTER TABLE convector ADD CONSTRAINT convector_mqtt_topic_key UNIQUE (mqtt_topic)
-        '''))
+    # mqtt_topic is NOT unique: one Shelly with 2 outputs = 2 convectors, same
+    # topic, different relay_channel. Drop the constraint an earlier version of
+    # this script may have added.
+    db.session.execute(text('''
+        ALTER TABLE convector DROP CONSTRAINT IF EXISTS convector_mqtt_topic_key
+    '''))
     db.session.commit()
 
 print("convector.connection_type/mqtt_topic added, host relaxed to nullable (or already done).")
