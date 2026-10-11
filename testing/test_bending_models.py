@@ -134,3 +134,41 @@ def test_import_and_approve_route(ctx):
     assert t.status == 'new'
     c.post(f'/admin/bending/tools/{t.id}/approve')
     assert BendTool.query.filter_by(code='P1').one().status == 'in_library'
+
+
+def test_program_flow_and_sheet(ctx):
+    from werkzeug.security import generate_password_hash
+    from app import User, limiter, Detail, BendProgram, BendStep, MaterialPrice, seed_material_types
+    app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
+    limiter.reset()
+    db.session.add(User(username='bq_prog', password=generate_password_hash('irrelevant123'), role='admin'))
+    m = Machine(name='Durma')
+    db.session.add(m)
+    db.session.add(MaterialPrice(key='mat1', display_name='M', type='sheets', cost_per_m2=1))
+    db.session.flush()
+    d = Detail(name='Скоба', material_key='mat1', width=50, height=30, total_length=160, pierce_count=1, calculated_price=1, geometry_json='[]')
+    db.session.add(d)
+    db.session.commit()
+    c = app.test_client()
+    c.post('/login', data={'username': 'bq_prog', 'password': 'irrelevant123'})
+    r = c.post('/admin/bending/programs/add', data={'detail_id': d.id, 'machine_id': m.id})
+    prog = BendProgram.query.one()
+    assert prog.name == 'Скоба' and r.status_code == 302
+    c.post(f'/admin/bending/programs/{prog.id}/status', data={'status': 'approved'})
+    db.session.expire_all()
+    assert prog.status == 'draft'  # no steps -> refused
+    for a in ('90', '45', '200'):  # 200 is out of range
+        c.post(f'/admin/bending/programs/{prog.id}/steps/add', data={'angle_deg': a, 'x_mm': '30'})
+    db.session.expire_all()  # the test's copy of prog predates the requests' commits
+    assert [s.angle_deg for s in prog.steps] == [90, 45] and [s.seq for s in prog.steps] == [1, 2]
+    c.post(f'/admin/bending/steps/{prog.steps[0].id}/delete')
+    db.session.expire_all()
+    assert [(s.seq, s.angle_deg) for s in prog.steps] == [(1, 45)]
+    c.post(f'/admin/bending/programs/{prog.id}/status', data={'status': 'approved'})
+    db.session.expire_all()
+    assert prog.status == 'approved'
+    c.post(f'/admin/bending/programs/{prog.id}/steps/add', data={'angle_deg': '10'})
+    db.session.expire_all()
+    assert len(prog.steps) == 1  # approved program is frozen
+    sheet = c.get(f'/admin/bending/programs/{prog.id}/sheet')
+    assert sheet.status_code == 200 and 'ОДОБРЕНА'.encode() in sheet.data and c.get('/admin/bending/programs').status_code == 200

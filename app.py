@@ -5839,6 +5839,101 @@ def admin_bending_delete_segment(seg_id):
     return redirect(url_for('admin_bending'))
 
 
+@app.route('/admin/bending/programs')
+@role_required('admin')
+def admin_bending_programs():
+    brakes = Machine.query.join(PressBrakeConfig).order_by(Machine.name).all() or Machine.query.order_by(Machine.name).all()
+    return render_template('admin_bending_programs.html', programs=BendProgram.query.order_by(BendProgram.id.desc()).all(),
+                           details=Detail.query.order_by(Detail.name).all(), machines=brakes, active_page='admin_bending')
+
+
+@app.route('/admin/bending/programs/add', methods=['POST'])
+@role_required('admin')
+def admin_bending_add_program():
+    detail = db.session.get(Detail, request.form.get('detail_id', type=int) or 0)
+    machine = db.session.get(Machine, request.form.get('machine_id', type=int) or 0)
+    name = request.form.get('name', '').strip() or (detail.name if detail else '')
+    if not (detail and machine and name):
+        flash('Изберете детайл и машина.', 'danger')
+        return redirect(url_for('admin_bending_programs'))
+    prog = BendProgram(detail=detail, machine=machine, name=name)
+    db.session.add(prog)
+    db.session.commit()
+    log_action(f'Създадена програма за огъване "{name}"')
+    return redirect(url_for('admin_bending_program', prog_id=prog.id))
+
+
+@app.route('/admin/bending/programs/<int:prog_id>')
+@role_required('admin')
+def admin_bending_program(prog_id):
+    return render_template('admin_bending_program.html', prog=db.get_or_404(BendProgram, prog_id),
+                           tools=BendTool.query.order_by(BendTool.code).all(), active_page='admin_bending')
+
+
+@app.route('/admin/bending/programs/<int:prog_id>/sheet')
+@role_required(['admin', 'worker'])
+def bending_program_sheet(prog_id):
+    """Printable operator sheet (browser print, like offer/protocol)."""
+    return render_template('bending_sheet.html', prog=db.get_or_404(BendProgram, prog_id))
+
+
+def _program_editable(prog):
+    if prog.status == 'approved':
+        flash('Одобрената програма не се променя - направете нова версия.', 'danger')
+        return False
+    return True
+
+
+@app.route('/admin/bending/programs/<int:prog_id>/steps/add', methods=['POST'])
+@role_required('admin')
+def admin_bending_add_step(prog_id):
+    prog = db.get_or_404(BendProgram, prog_id)
+    f = request.form
+    if _program_editable(prog):
+        try:
+            opt = lambda k: _fnum(f[k], k, allow_lo=True) if f.get(k, '').strip() else None
+            tool = lambda k: (db.session.get(BendTool, f.get(k, type=int)) or None) if f.get(k, type=int) else None
+            step = BendStep(program=prog, seq=len(prog.steps) + 1, angle_deg=_fnum(f.get('angle_deg'), 'ъгъл', hi=180.0),
+                            x_mm=opt('x_mm'), r_mm=opt('r_mm'), force_kn=opt('force_kn'), flip=bool(f.get('flip')),
+                            punch=tool('punch_id'), die=tool('die_id'), notes=f.get('notes', '').strip() or None)
+        except ValueError as e:
+            flash(str(e), 'danger')
+        else:
+            db.session.add(step)  # SQLAlchemy 2: the backref alone doesn't put it in the session
+            db.session.commit()
+            log_action(f'Стъпка {step.seq} в програма "{prog.name}"')
+    return redirect(url_for('admin_bending_program', prog_id=prog.id))
+
+
+@app.route('/admin/bending/steps/<int:step_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_bending_delete_step(step_id):
+    step = db.get_or_404(BendStep, step_id)
+    prog = step.program
+    if _program_editable(prog):
+        db.session.delete(step)
+        db.session.flush()
+        db.session.expire(prog, ['steps'])
+        for n, st in enumerate(prog.steps, 1):  # keep seq 1..n
+            st.seq = n
+        db.session.commit()
+    return redirect(url_for('admin_bending_program', prog_id=prog.id))
+
+
+@app.route('/admin/bending/programs/<int:prog_id>/status', methods=['POST'])
+@role_required('admin')
+def admin_bending_program_status(prog_id):
+    prog = db.get_or_404(BendProgram, prog_id)
+    new = request.form.get('status')
+    if new == 'approved' and not prog.steps:
+        flash('Програма без стъпки не може да се одобри.', 'danger')
+    elif new in ('draft', 'approved', 'obsolete'):
+        prog.status = new
+        db.session.commit()
+        log_action(f'Програма "{prog.name}" -> {new}')
+    return redirect(url_for('admin_bending_program', prog_id=prog.id))
+
+
 @app.route('/admin/bending/deductions/add', methods=['POST'])
 @role_required('admin')
 def admin_bending_add_deduction():
@@ -5867,6 +5962,38 @@ def admin_bending_delete_deduction(row_id):
     db.session.commit()
     log_action('Изтрита BD стойност')
     return redirect(url_for('admin_bending'))
+
+
+class BendProgram(db.Model):
+    """A bending program for one Detail on one press brake (stage 2: manual programming + operator sheet)."""
+    id = db.Column(db.Integer, primary_key=True)
+    detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=False)
+    machine_id = db.Column(db.Integer, db.ForeignKey('machine.id'), nullable=False)
+    name = db.Column(db.String(150), nullable=False)
+    status = db.Column(db.String(10), default='draft', nullable=False)  # draft / approved / obsolete
+    version = db.Column(db.Integer, default=1, nullable=False)
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    detail = db.relationship('Detail')
+    machine = db.relationship('Machine')
+    steps = db.relationship('BendStep', backref='program', order_by='BendStep.seq', cascade='all, delete-orphan')
+
+
+class BendStep(db.Model):
+    """One bend of a program: angle, back-gauge, tool, force."""
+    id = db.Column(db.Integer, primary_key=True)
+    program_id = db.Column(db.Integer, db.ForeignKey('bend_program.id'), nullable=False)
+    seq = db.Column(db.Integer, nullable=False)
+    angle_deg = db.Column(db.Float, nullable=False)
+    x_mm = db.Column(db.Float)  # back-gauge X
+    r_mm = db.Column(db.Float)  # back-gauge R
+    force_kn = db.Column(db.Float)
+    flip = db.Column(db.Boolean, default=False, nullable=False)  # turn the part over before this bend
+    punch_id = db.Column(db.Integer, db.ForeignKey('bend_tool.id'))
+    die_id = db.Column(db.Integer, db.ForeignKey('bend_tool.id'))
+    notes = db.Column(db.String(255))
+    punch = db.relationship('BendTool', foreign_keys=[punch_id])
+    die = db.relationship('BendTool', foreign_keys=[die_id])
 
 
 class FlashingPreset(db.Model):

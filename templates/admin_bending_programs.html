@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Програми за огъване - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <p><a href="{{ url_for('admin_bending') }}">&larr; Инструменти и BD</a></p>
+
+    <section class="admin-card" data-dialog-section="+ Нова програма">
+        <h3>Нова програма за огъване</h3>
+        <form action="{{ url_for('admin_bending_add_program') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group"><label for="pg_d">Детайл *</label>
+                <select id="pg_d" name="detail_id" required>{% for d in details %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select></div>
+            <div class="form-group"><label for="pg_m">Абкант *</label>
+                <select id="pg_m" name="machine_id" required>{% for m in machines %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}</select></div>
+            <div class="form-group"><label for="pg_n">Име</label><input type="text" id="pg_n" name="name" placeholder="по подразбиране името на детайла"></div>
+            <button type="submit" class="btn-submit">Създай</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Програми</h3>
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead><tr><th>Име</th><th>Детайл</th><th>Машина</th><th>Версия</th><th>Статус</th><th>Стъпки</th><th></th></tr></thead>
+                <tbody>
+                {% for p in programs %}
+                <tr>
+                    <td>{{ p.name }}</td><td>{{ p.detail.name }}</td><td>{{ p.machine.name }}</td><td>{{ p.version }}</td><td>{{ p.status }}</td><td>{{ p.steps|length }}</td>
+                    <td><a href="{{ url_for('admin_bending_program', prog_id=p.id) }}">Отвори</a> · <a href="{{ url_for('bending_program_sheet', prog_id=p.id) }}" target="_blank">Лист</a></td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7">Няма програми.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Програма за огъване - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <p><a href="{{ url_for('admin_bending_programs') }}">&larr; Програми</a></p>
+
+    <section class="admin-card">
+        <h3>{{ prog.name }} <small>v{{ prog.version }} · {{ prog.status }}</small></h3>
+        <p>Детайл: {{ prog.detail.name }} · Машина: {{ prog.machine.name }}</p>
+        <form action="{{ url_for('admin_bending_program_status', prog_id=prog.id) }}" method="POST" style="display:inline">
+            {% include 'partials/csrf_field.html' %}
+            {% if prog.status == 'draft' %}<button name="status" value="approved" class="btn-submit">Одобри</button>
+            {% elif prog.status == 'approved' %}<button name="status" value="obsolete" class="btn-delete">Остаряла</button>{% endif %}
+        </form>
+        <a href="{{ url_for('bending_program_sheet', prog_id=prog.id) }}" target="_blank">Лист за оператора</a>
+    </section>
+
+    {% if prog.status != 'approved' %}
+    <section class="admin-card" data-dialog-section="+ Нова стъпка">
+        <h3>Нова стъпка (огъване {{ prog.steps|length + 1 }})</h3>
+        <form action="{{ url_for('admin_bending_add_step', prog_id=prog.id) }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group"><label for="st_a">Ъгъл (°) *</label><input type="number" step="any" min="0" max="180" id="st_a" name="angle_deg" required></div>
+            <div class="form-group"><label for="st_x">Задна опора X (mm)</label><input type="number" step="any" min="0" id="st_x" name="x_mm"></div>
+            <div class="form-group"><label for="st_r">R (mm)</label><input type="number" step="any" min="0" id="st_r" name="r_mm"></div>
+            <div class="form-group"><label for="st_f">Сила (kN)</label><input type="number" step="any" min="0" id="st_f" name="force_kn"></div>
+            <div class="form-group"><label for="st_p">Поансон</label>
+                <select id="st_p" name="punch_id"><option value="">-</option>{% for t in tools if t.kind == 'punch' %}<option value="{{ t.id }}">{{ t.code }}</option>{% endfor %}</select></div>
+            <div class="form-group"><label for="st_d">Матрица</label>
+                <select id="st_d" name="die_id"><option value="">-</option>{% for t in tools if t.kind == 'die' %}<option value="{{ t.id }}">{{ t.code }}</option>{% endfor %}</select></div>
+            <div class="form-group"><label><input type="checkbox" name="flip" value="1"> Обръщане на детайла</label></div>
+            <div class="form-group"><label for="st_n">Бележка</label><input type="text" id="st_n" name="notes"></div>
+            <button type="submit" class="btn-submit">Добави</button>
+        </form>
+    </section>
+    {% endif %}
+
+    <section class="admin-card">
+        <h3>Стъпки</h3>
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead><tr><th>№</th><th>Ъгъл</th><th>X</th><th>R</th><th>kN</th><th>Поансон</th><th>Матрица</th><th>Обръщане</th><th>Бележка</th><th></th></tr></thead>
+                <tbody>
+                {% for st in prog.steps %}
+                <tr>
+                    <td>{{ st.seq }}</td><td>{{ st.angle_deg }}°</td><td>{{ st.x_mm if st.x_mm is not none else '-' }}</td><td>{{ st.r_mm if st.r_mm is not none else '-' }}</td>
+                    <td>{{ st.force_kn if st.force_kn is not none else '-' }}</td><td>{{ st.punch.code if st.punch else '-' }}</td><td>{{ st.die.code if st.die else '-' }}</td>
+                    <td>{{ 'да' if st.flip else '' }}</td><td>{{ st.notes or '' }}</td>
+                    <td>{% if prog.status != 'approved' %}<form action="{{ url_for('admin_bending_delete_step', step_id=st.id) }}" method="POST" onsubmit="return confirm('Изтриване на стъпката?')">
+                        {% include 'partials/csrf_field.html' %}<button type="submit" class="btn-delete">Изтрий</button></form>{% endif %}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="10">Няма стъпки.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</main>
+</body>
+</html>
