@@ -16,7 +16,8 @@
     </style>
 </head>
 <body>
-    <p class="noprint"><button onclick="window.print()">Печат</button></p>
+    {% with messages = get_flashed_messages() %}{% for m in messages %}<p class="noprint"><b>{{ m }}</b></p>{% endfor %}{% endwith %}
+    <p class="noprint"><button onclick="window.print()">Печат</button>{% if prog.status == 'approved' %} <a href="{{ url_for('bending_program_execute', prog_id=prog.id) }}">Въведи измерени ъгли</a>{% endif %}</p>
     <h1>{{ prog.name }}</h1>
     <p class="meta">Детайл: <b>{{ prog.detail.name }}</b>{% if prog.detail.erp_number %} (ERP № {{ prog.detail.erp_number }}){% endif %} · Машина: <b>{{ prog.machine.name }}</b> · Версия {{ prog.version }} · {{ 'ОДОБРЕНА' if prog.status == 'approved' else prog.status }}</p>
     {% if prog.notes %}<p class="meta">{{ prog.notes }}</p>{% endif %}

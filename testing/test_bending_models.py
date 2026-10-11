@@ -170,5 +170,35 @@ def test_program_flow_and_sheet(ctx):
     c.post(f'/admin/bending/programs/{prog.id}/steps/add', data={'angle_deg': '10'})
     db.session.expire_all()
     assert len(prog.steps) == 1  # approved program is frozen
+    ex = f'/bending/programs/{prog.id}/execute'
+    assert c.get(ex).status_code == 200
+    sid = prog.steps[0].id
+    c.post(ex, data={'order_no': 'PO-7', f'm{sid}': '45.5'})  # nominal 45, tol 1 -> pass
+    c.post(ex, data={f'm{sid}': '47'})  # out of tolerance -> fail
+    c.post(ex, data={})  # nothing measured -> refused
+    db.session.expire_all()
+    from app import BendExecution, QualityCheck
+    assert [(e.quality_check.overall_result, e.program_version) for e in BendExecution.query.order_by(BendExecution.id)] == [('pass', 1), ('fail', 1)]
+    q = QualityCheck.query.first()
+    assert q.order_no == 'PO-7' and q.measurements[0].nominal_value == 45 and q.measurements[0].samples[0].value == 45.5
     sheet = c.get(f'/admin/bending/programs/{prog.id}/sheet')
     assert sheet.status_code == 200 and 'ОДОБРЕНА'.encode() in sheet.data and c.get('/admin/bending/programs').status_code == 200
+
+
+def test_cannot_execute_draft_program(ctx):
+    from werkzeug.security import generate_password_hash
+    from app import User, limiter, Detail, BendProgram, MaterialPrice
+    app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
+    limiter.reset()
+    db.session.add_all([User(username='bq_ex', password=generate_password_hash('irrelevant123'), role='worker'), Machine(name='M'),
+                        MaterialPrice(key='k', display_name='M', type='sheets', cost_per_m2=1)])
+    db.session.flush()
+    d = Detail(name='D', material_key='k', width=1, height=1, total_length=1, pierce_count=1, calculated_price=1, geometry_json='[]')
+    db.session.add(d)
+    db.session.flush()
+    p = BendProgram(detail=d, machine=Machine.query.one(), name='P')
+    db.session.add(p)
+    db.session.commit()
+    c = app.test_client()
+    c.post('/login', data={'username': 'bq_ex', 'password': 'irrelevant123'})
+    assert c.get(f'/bending/programs/{p.id}/execute').status_code == 302  # draft -> back to the sheet

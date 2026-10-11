@@ -5905,6 +5905,42 @@ def admin_bending_add_step(prog_id):
     return redirect(url_for('admin_bending_program', prog_id=prog.id))
 
 
+@app.route('/bending/programs/<int:prog_id>/execute', methods=['GET', 'POST'])
+@role_required(['admin', 'worker'])
+def bending_program_execute(prog_id):
+    """Operator enters the measured angle per step -> a QualityCheck with one angle measurement per step."""
+    prog = db.get_or_404(BendProgram, prog_id)
+    if prog.status != 'approved':
+        flash('Само одобрена програма може да се изпълнява.', 'danger')
+        return redirect(url_for('bending_program_sheet', prog_id=prog.id))
+    if request.method == 'GET':
+        return render_template('bending_execute.html', prog=prog, active_page='admin_bending')
+    f = request.form
+    try:
+        tol = _fnum(f.get('tolerance') or 1.0, 'допуск', allow_lo=True)
+        readings = [(st, _fnum(f[f'm{st.id}'], f'ъгъл {st.seq}', allow_lo=True)) for st in prog.steps if f.get(f'm{st.id}', '').strip()]
+        if not readings:
+            raise ValueError('Въведете поне един измерен ъгъл.')
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return redirect(url_for('bending_program_execute', prog_id=prog.id))
+    check = QualityCheck(target_type='detail', target_id=prog.detail_id, inspector_id=current_user.id, sample_size=1,
+                         order_no=f.get('order_no', '').strip() or None, notes=f'Огъване: програма "{prog.name}" v{prog.version}')
+    for st, val in readings:
+        sample = QualitySample(sample_index=1, value=val)
+        check.measurements.append(QualityMeasurement(parameter_name=f'Огъване {st.seq}', measurement_type='Ъгъл', nominal_value=st.angle_deg,
+                                                     tolerance_plus=tol, tolerance_minus=tol, unit='\u00b0', samples=[sample]))
+    check.overall_result = 'pass' if all(m.is_within_tolerance for m in check.measurements) else 'fail'
+    db.session.add(check)
+    db.session.flush()
+    db.session.add(BendExecution(program=prog, program_version=prog.version, user_id=current_user.id, quality_check_id=check.id, order_no=check.order_no))
+    db.session.commit()
+    log_action(f'Изпълнение на програма "{prog.name}": {check.overall_result}')
+    flash('Измерванията са записани в контрола на качеството - ' + ('годен.' if check.overall_result == 'pass' else 'НЕГОДЕН!'),
+          'success' if check.overall_result == 'pass' else 'danger')
+    return redirect(url_for('bending_program_sheet', prog_id=prog.id))
+
+
 @app.route('/admin/bending/steps/<int:step_id>/delete', methods=['POST'])
 @role_required('admin')
 def admin_bending_delete_step(step_id):
@@ -5994,6 +6030,20 @@ class BendStep(db.Model):
     notes = db.Column(db.String(255))
     punch = db.relationship('BendTool', foreign_keys=[punch_id])
     die = db.relationship('BendTool', foreign_keys=[die_id])
+
+
+class BendExecution(db.Model):
+    """A shop-floor run of an approved BendProgram; the measured angles live in the QualityCheck it created."""
+    id = db.Column(db.Integer, primary_key=True)
+    program_id = db.Column(db.Integer, db.ForeignKey('bend_program.id'), nullable=False)
+    program_version = db.Column(db.Integer, nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    quality_check_id = db.Column(db.Integer, db.ForeignKey('quality_check.id'))
+    order_no = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    program = db.relationship('BendProgram', backref='executions')
+    user = db.relationship('User')
+    quality_check = db.relationship('QualityCheck')
 
 
 class FlashingPreset(db.Model):
