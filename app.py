@@ -6072,7 +6072,7 @@ def _program_checks(prog):
     for st in prog.steps:
         v = st.die_v_mm or (st.die.v_opening_mm if st.die else None)
         pos = next((p for p in st.die.positions if p['v'] == v), None) if st.die else None
-        warn, travel, retract, x_wall = [], None, None, None
+        warn, travel, retract, x_wall, x_axis, finger_opt = [], None, None, None, None, None
         if t and v and 0 < st.angle_deg < 180:
             ob = _overbend_fn(prog)(v, t)
             travel = air_bend_depth(v, t, min(st.angle_deg + ob, 179.0))[1]   # the tool goes `ob` further than the target angle (springback)
@@ -6080,7 +6080,7 @@ def _program_checks(prog):
                                stroke_mm=cfg.stroke_mm if cfg else None, punch_h=((st.punch.height_mm or 0) + CLAMP['height']) if st.punch else None,
                                die_h=st.die.height_mm if st.die else None, daylight_mm=cfg.daylight_mm if cfg else None)
         if _step_picture_ok(st):   # cross-section check of the whole part against the real punch outline
-            from bending.profile import step_trajectory, step_x
+            from bending.profile import step_axis_x, step_trajectory, step_x
             left, right = _step_chains(st)
             try:
                 traj = step_trajectory(st.punch.profile, st.die.profile, v, t, st.angle_deg, left, right, overbend=_overbend_fn(prog)(v, t))
@@ -6088,11 +6088,12 @@ def _program_checks(prog):
                 traj = {'hits': [], 'retract_deg': None}
             hits, retract = traj['hits'], traj['retract_deg']
             x_wall = step_x(st.punch.profile, st.die.profile, v, t, st.angle_deg, left, right) if left or right else None
-            if x_wall is not None and cfg and cfg.x_max_mm and x_wall > cfg.x_max_mm:
-                warn.append(f'X {x_wall:g} mm е извън хода на задния упор ({cfg.x_max_mm:g} mm) - завъртете детайла или сменете реда.')
+            x_axis, finger_opt = step_axis_x(st.punch.profile, st.die.profile, v, t, st.angle_deg, left, right) if x_wall is not None else (None, None)
+            if x_axis is not None and cfg and cfg.x_max_mm and x_axis > cfg.x_max_mm:
+                warn.append(f'Ос X {x_axis:g} mm е извън хода на задния упор ({cfg.x_max_mm:g} mm) - завъртете детайла или сменете реда.')
             if hits:
                 warn.append('КОЛИЗИЯ в разреза (' + '; '.join(hits) + ') - сменете реда, инструмента или завъртането.')
-        res[st.id] = {'travel': travel, 'warnings': warn, 'retract': retract, 'x_wall': x_wall}
+        res[st.id] = {'travel': travel, 'warnings': warn, 'retract': retract, 'x_wall': x_wall, 'x_axis': x_axis, 'finger_opt': finger_opt}
     return res
 
 
@@ -6372,6 +6373,27 @@ def bending_step_view(step_id):
                            prev_id=steps[i - 1].id if i else None, next_id=steps[i + 1].id if i + 1 < len(steps) else None)
 
 
+def _machine_spec(machine, part_width):
+    """Machine data for the 3D view: the press brake's own numbers (PressBrakeConfig + kinematics_json from the controller) and where the two
+    fingers stand along Z for a part of this width (symmetric about its middle, at least the controller's minimum gap apart, inside the Z1/Z2 limits).
+    The frames, ram, bed ... are schematic boxes at the real overall dimensions."""
+    cfg = machine.press_brake
+    k = cfg.kinematics if cfg else {}
+    wl = (cfg.working_length_mm if cfg and cfg.working_length_mm else 2050.0)
+    half_gap = (k.get('z_min_gap_mm') or 90) / 2
+    s = max(half_gap, min(part_width * 0.3, part_width / 2 - 10 if part_width > 2 * half_gap + 20 else half_gap))
+    z1, z2 = wl / 2 - s, wl / 2 + s   # the controller's Z axes count from the left end of the machine
+    warn = []
+    for name, z in (('Z1', z1), ('Z2', z2)):
+        lo, hi = k.get(name.lower(), [None, None])
+        if lo is not None and not lo <= z <= hi:
+            warn.append(f'{name} = {z:g} mm е извън хода {lo:g}-{hi:g} mm')
+    return {'name': machine.name, 'work_length': wl, 'between_frames': k.get('between_frames_mm') or wl * 0.84, 'work_height': k.get('work_height_mm') or 1000,
+            'overall': k.get('overall_mm') or [wl + 550, 1450, 2650], 'x_max': cfg.x_max_mm if cfg else None, 'r': k.get('r'), 'y': k.get('y'),
+            'die_holder': k.get('die_holder_mm') or [wl], 'clamps': k.get('clamps') or 10, 'controller': k.get('controller'),
+            'finger': k.get('finger'), 'finger_z': [-s, s], 'finger_machine_z': [round(z1), round(z2)], 'warn': warn}
+
+
 @app.route('/bending/programs/<int:prog_id>/sim')
 @role_required(['admin', 'worker'])
 def bending_program_sim(prog_id):
@@ -6389,10 +6411,8 @@ def bending_program_sim(prog_id):
         v = st.die_v_mm or st.die.v_opening_mm
         left, right = _step_chains(st)
         data = step_frames(st.punch.profile, st.die.profile, v, t, st.angle_deg, left, right, overbend=_overbend_fn(prog)(v, t))
-        steps.append({'seq': st.seq, 'angle': st.angle_deg, 'v': v, 'punch': st.punch.code, 'die': st.die.code, **data})
-    cfg = prog.machine.press_brake
-    return render_template('bending_sim.html', prog=prog, sim={'thickness': t, 'width': round(width, 1), 'fingers': (cfg.finger_count if cfg and cfg.finger_count else 2),
-                                         'finger_width': (cfg.kinematics.get('finger_width') if cfg else None) or 25, 'steps': steps}, skipped=len(prog.steps) - len(steps),
+        steps.append({'seq': st.seq, 'angle': st.angle_deg, 'v': v, 'punch': st.punch.code, 'die_code': st.die.code, **data})
+    return render_template('bending_sim.html', prog=prog, sim={'thickness': t, 'width': round(width, 1), 'machine': _machine_spec(prog.machine, width), 'steps': steps}, skipped=len(prog.steps) - len(steps),
                            active_page='admin_bending')
 
 

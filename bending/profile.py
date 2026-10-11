@@ -458,6 +458,21 @@ def _chain(start, d, legs, ccw):
     return q
 
 
+# Back-gauge finger (Durma DrmFinger from the controller's gauge file), in the cross-section: level 0 = a 14 mm ledge that sticks out 20 mm in front of
+# level 1 (10 mm high), whose front face is the stop wall. The axis X (nose of the ledge) is what the controller is given, not the wall.
+LEDGE = {'height': 14.0, 'offset': 20.0, 'wall': 10.0, 'length': 60.0}
+
+
+def finger_section(wall_x, die_half):
+    """(polygon, axis X, 'ledge'|'face'): with the wall far enough from the die the ledge slides under the sheet (its top = the sheet's bottom plane) and the
+    sheet end touches level 1's face (axis X = wall - 20). Closer to the bend line the ledge would be in the die: the finger then stands above the die and the
+    sheet end touches the front face of level 0 (axis X = wall)."""
+    h, off, wl, ln = LEDGE['height'], LEDGE['offset'], LEDGE['wall'], LEDGE['length']
+    if wall_x >= die_half + off + 1.0:
+        return [(wall_x - off, -h), (wall_x + ln, -h), (wall_x + ln, wl), (wall_x, wl), (wall_x, 0.0), (wall_x - off, 0.0)], wall_x - off, 'ledge'
+    return [(wall_x, 0.0), (wall_x + ln, 0.0), (wall_x + ln, h + wl), (wall_x + off, h + wl), (wall_x + off, h), (wall_x, h)], wall_x, 'face'
+
+
 def _step_geom(punch_pts, die_pts, v, thickness, fold_deg, left, right, overbend=0.0):
     """Layout of one bend at the bottom of the stroke. The sheet rests on the die's shoulders at exact points: its bottom surface is a straight
     line tangent to each shoulder circle (radius R, centre cx = V/2 + R(1 - sin b)/cos b below the top plane, b = half the groove angle); the
@@ -484,9 +499,13 @@ def _step_geom(punch_pts, die_pts, v, thickness, fold_deg, left, right, overbend
     dflt = [(max(30.0, v * 0.9), None)]
     left, right = list(left) or dflt, list(right) or dflt
     flat_y = thickness / 2
+    dense_die = outline(die)
+    wd = width_at(dense_die, max(p[1] for p in dense_die) - 1.0)
+    die_half = max(abs(wd[0]), abs(wd[1])) if wd else 30.0
     before_right = _chain((0.0, flat_y), (1.0, 0.0), right, True)
     fx = max(p[0] for p in _sample_part(before_right, thickness))   # the finger touches the WALL of the material (a flange stood up earlier is T/2 further than its centre line)
-    return {'finger': [(fx, 0.0), (fx + FINGER['thickness'], 0.0), (fx + FINGER['thickness'], thickness + FINGER['height']), (fx, thickness + FINGER['height'])],
+    finger, axis_x, opt = finger_section(fx, die_half)
+    return {'finger': finger, 'axis_x': axis_x, 'finger_option': opt,
             'die': [(x, y - shoulder_y) for x, y in outline(die)],
             'punch': [(x, y + tip_y) for x, y in outline(punch_pts)],
             'clamp': [(x, y + tip_y) for x, y in clamp_polygon(outline(punch_pts))],
@@ -679,3 +698,9 @@ def step_x(punch_pts, die_pts, v, thickness, fold_deg, left=(), right=()):
     """X of the back gauge for one bend: from the bend line to the wall the finger touches (differs from the developed length of the back leg when
     flanges bent earlier stand up there - the wall of a flange is half a thickness beyond its centre line)."""
     return round(_step_geom(punch_pts, die_pts, v, thickness, fold_deg, left, right)['x_wall'], 1)
+
+
+def step_axis_x(punch_pts, die_pts, v, thickness, fold_deg, left=(), right=()):
+    """(axis X for the controller, 'ledge'|'face') - see finger_section."""
+    g = _step_geom(punch_pts, die_pts, v, thickness, fold_deg, left, right)
+    return round(g['axis_x'], 1), g['finger_option']

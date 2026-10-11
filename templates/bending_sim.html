@@ -12,6 +12,11 @@
         .bar .info { margin-left: auto; font-size: 13px; color: #9aa5b1; }
         #view { position: absolute; top: 46px; bottom: 0; left: 0; right: 0; }
         #warn { position: absolute; left: 12px; top: 58px; background: rgba(255,59,48,.9); color: #fff; padding: 6px 10px; border-radius: 6px; font-size: 14px; display: none; }
+        #elements { position: absolute; right: 8px; top: 58px; width: 230px; max-height: calc(100% - 80px); overflow: auto; background: rgba(29,33,38,.92); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+        #elements .grp { margin: 8px 0 3px; color: #9aa5b1; text-transform: uppercase; font-size: 11px; letter-spacing: .05em; }
+        #elements label { display: block; padding: 2px 0; cursor: pointer; }
+        #elements .row { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+        #elements .row button { background: #2c333a; color: #e8eef3; border: 0; padding: 4px 8px; border-radius: 5px; cursor: pointer; font-size: 12px; }
         #label { position: absolute; left: 12px; bottom: 10px; font-size: 14px; background: rgba(20,23,26,.85); padding: 6px 10px; border-radius: 6px; }
     </style>
     <script type="importmap">
@@ -30,6 +35,12 @@
         <span class="info">влачене = въртене, колело = мащаб, дясно влачене = преместване{% if skipped %} · пропуснати стъпки без инструменти: {{ skipped }}{% endif %}</span>
     </div>
     <div id="view"></div>
+    <div id="elements">
+        <div class="grp" style="margin-top:0">Изглед</div>
+        <div class="row"><button type="button" id="v_tool">Инструмент</button><button type="button" id="v_all">Машина</button><button type="button" id="v_front">Отпред</button><button type="button" id="v_side">Отстрани</button><button type="button" id="v_top">Отгоре</button></div>
+        <div class="grp">Показвай</div>
+        <div class="row"><button type="button" id="p_all">Всичко</button><button type="button" id="p_tools">Само процеса</button><button type="button" id="p_back">+ заден упор</button><button type="button" id="p_mach">Само машината</button></div>
+    </div>
     <div id="warn"></div>
     <div id="label"></div>
     <script type="application/json" id="simdata">{{ sim|tojson }}</script>

@@ -6,6 +6,9 @@ imported: the controller models every V of the M460.r block as a separate 80 mm 
 
     python -m migration.import_delem_tools "<folder with pun.*.dld>"
 
+Also reads the back-gauge finger (gau.DrmFinger 0/1.dld: the Durma finger of the AD-ES, two mirrored files = Z1 / Z2) into the AD-ES 2040 press
+config's kinematics_json['finger']: per level its height, offset and plan outline (mm, arcs sampled), used by the 3D view.
+
 Safe to run more than once.
 """
 import glob
@@ -43,6 +46,48 @@ def dld_to_doc(path):
     return doc, val('ToolName'), float(val('ToolHeight'))
 
 
+def _plan_outline(tokens):
+    """'1 Outline N seg...' (segments as in the cross-section: x1 y1 x2 y2 false | x1 y1 x2 y2 true cw cx cy) -> closed polyline [[x, y], ...]."""
+    f, i, pts = tokens[3:], 0, []
+    for _ in range(int(tokens[2])):
+        x1, y1, x2, y2 = map(float, f[i:i + 4])
+        if f[i + 4] == 'false':
+            i += 5
+            pts.append([x1, y1])
+            continue
+        cw, cx, cy = f[i + 5] == 'true', float(f[i + 6]), float(f[i + 7])
+        i += 8
+        a1, a2 = math.atan2(y1 - cy, x1 - cx), math.atan2(y2 - cy, x2 - cx)
+        sweep = (a1 - a2) % (2 * math.pi) * -1 if cw else (a2 - a1) % (2 * math.pi)
+        r = math.hypot(x1 - cx, y1 - cy)
+        pts += [[cx + r * math.cos(a1 + sweep * k / 6), cy + r * math.sin(a1 + sweep * k / 6)] for k in range(6)]
+    return [[round(x, 2), round(y, 2)] for x, y in pts]
+
+
+def read_finger(path):
+    root = ET.parse(path).getroot()
+    levels = []
+    for lv in root.iter('GaugeLevel'):
+        off = [float(x) for x in lv.find('GaugeLevelReferencePointOffset').get('value').split()[:3]]
+        levels.append({'height': float(lv.find('GaugeLevelHeight').get('value')), 'offset': off,
+                       'outline': _plan_outline(lv.find('GaugeLevelOutline').get('value').split())})
+    return {'name': root.find('.//GaugeFingerName').get('value'), 'width': float(root.find('.//GaugeFingerWidth').get('value')), 'levels': levels}
+
+
+def import_finger(folder, name='DrmFinger'):
+    """Z1 = file 0, Z2 = file 1 -> the AD-ES 2040 press config (needs seed_press_brake_configs first)."""
+    from app import Machine
+    m = Machine.query.filter(Machine.name.ilike('%AD-ES 2040%')).first()
+    cfg = m.press_brake if m else None
+    if not cfg:
+        print('AD-ES 2040: няма параметри на абкант - пуснете първо seed_press_brake_configs.')
+        return
+    k = cfg.kinematics
+    k['finger'] = {'z1': read_finger(os.path.join(folder, f'gau.{name} 0.dld')), 'z2': read_finger(os.path.join(folder, f'gau.{name} 1.dld'))}
+    cfg.kinematics_json = json.dumps(k)
+    print(f'Упор {name}: {len(k["finger"]["z1"]["levels"])} нива записани в {m.name}')
+
+
 def tip_arc_to_fillet(pts):
     """The controller draws the rounded tip as a short arc between the flanks; the library keeps it as a corner fillet (radius = data, not a drawing)."""
     n = len(pts)
@@ -77,6 +122,8 @@ def run(folder):
             db.session.add(tool)
         tool.profile_json = json.dumps(pts)
         print(f'{name}: {len(pts)} points, height {work_h}, tip {angle}/{radius}')
+    db.session.commit()
+    import_finger(folder)
     db.session.commit()
 
 
