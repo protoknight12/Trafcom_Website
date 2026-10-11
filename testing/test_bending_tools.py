@@ -34,3 +34,10 @@ assert 'поансонът' in step_checks(90, 2, 16, punch_angle=95)[0]
 assert 'Нужен ход' in step_checks(90, 2, 16, stroke_mm=5)[0]
 assert 'отварянето' in step_checks(90, 2, 16, punch_h=97, die_h=60, daylight_mm=150)[0]
 print('ok air bend')
+
+# ---- default tool choice ----
+from bending.tools import pick_tools
+assert pick_tools([(1, 75), (2, 88)], [(10, 16, 85), (10, 35, 85), (11, 12, 85)], 2, 90) == (2, (11, 12))  # V12 = 6s; punch 88 fits 90 inner
+assert pick_tools([(1, 75)], [(10, 16, 85)], 2, 120) == (None, None)    # a 60 deg inner angle: neither 75 nor 85 deg tool fits
+assert pick_tools([(1, 75)], [(10, 16, 85)], 2, 80) == (1, (10, 16))
+print('ok pick')

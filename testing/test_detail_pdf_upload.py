@@ -85,8 +85,7 @@ def test_quick_create_detail_with_pdf_attaches_file(client):
     assert body['status'] == 'success'
     with flask_app.app_context():
         files = DetailDxfFile.query.filter_by(detail_id=body['detail']['id']).all()
-        assert len(files) == 1
-        assert files[0].original_filename == 'spec.pdf'
+        assert sorted(f.original_filename for f in files) == ['part.dxf', 'spec.pdf']   # the DXF itself is kept too (bend lines for the press brake)
 
 
 def test_quick_create_detail_without_pdf_still_works(client):
@@ -99,7 +98,8 @@ def test_quick_create_detail_without_pdf_still_works(client):
     body = res.get_json()
     assert body['status'] == 'success'
     with flask_app.app_context():
-        assert DetailDxfFile.query.filter_by(detail_id=body['detail']['id']).count() == 0
+        files = DetailDxfFile.query.filter_by(detail_id=body['detail']['id']).all()
+        assert [f.original_filename for f in files] == ['part.dxf']
 
 
 def test_quick_create_detail_rejects_non_pdf_reference_file(client):

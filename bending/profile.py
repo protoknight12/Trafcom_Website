@@ -439,3 +439,57 @@ def derived(points, kind, base_height=None):
             g = min(gs, key=lambda x: abs(x['rotation']))
             res.update(valley_angle=g['angle'], valley_radius=g['valley_radius'], v_opening=g['v'], shoulder_radii=g['shoulder_radii'], groove_depth=g['depth'])
     return res
+
+
+def step_svg(punch_pts, die_pts, v, thickness, fold_deg, label='', left=(), right=()):
+    """Cross-section of one bend with the WHOLE part: the die with the chosen V up, the punch at the bottom of its stroke, the sheet bent to
+    `fold_deg` (air bending, straight legs). left / right = [(leg length, turn)] going away from the bend towards the operator (left) and
+    the back gauge (right): the legs of the part with its already bent flanges, `turn` = angle (+ = curling towards the punch) to the next leg
+    (None for the last). The back (right) side is also drawn flat (dashed) on the die with the gauge fingers at its end - X is measured there.
+    The long part should be on the operator's side. y up in the maths, flipped for SVG."""
+    gs = grooves(die_pts)
+    g = min(gs, key=lambda x: abs(x['v'] - v)) if gs else None
+    die = rotated(die_pts, g['rotation']) if g else normalize(die_pts)
+    shoulder_y = 0.0
+    if g:  # the shoulder plane of the groove that now faces up
+        n = len(die)
+        shoulder_y = (die[(g['index'] - 2) % n][1] + die[g['index'] % n][1]) / 2
+    die_o = [(x, y - shoulder_y) for x, y in outline(die)]
+    inner = math.radians(180 - fold_deg)
+    s, c = math.sin(inner / 2), math.cos(inner / 2)
+    depth = v / 2 / math.tan(inner / 2) - thickness / s
+    A = (0.0, -depth - thickness / (2 * s))   # apex on the sheet's centre line
+    dflt = [(max(30.0, v * 0.9), None)]
+
+    def chain(d, legs, ccw):
+        q = [A]
+        for length, turn in legs or dflt:
+            q.append((q[-1][0] + d[0] * length, q[-1][1] + d[1] * length))
+            if turn:
+                a = math.radians(turn) * (1 if ccw else -1)
+                d = (d[0] * math.cos(a) - d[1] * math.sin(a), d[0] * math.sin(a) + d[1] * math.cos(a))
+        return q
+
+    pts = chain((-s, c), left, False)[::-1][:-1] + chain((s, c), right, True)
+    right_len = sum(leg for leg, _ in right) if right else dflt[0][0]
+    punch_o = [(x, y + A[1] + thickness / (2 * s)) for x, y in outline(punch_pts)]
+    cp = [(x, y + A[1] + thickness / (2 * s)) for x, y in clamp_polygon(outline(punch_pts))]
+    flat_y, fx = thickness / 2, right_len     # the flat leg resting on the die, its end against the fingers
+    ghost = [(0.0, flat_y), (fx, flat_y)]
+    allp = die_o + punch_o + cp + pts + [(fx + 8, flat_y + 12), (fx + 8, flat_y - 14)]
+    x0, x1 = min(p[0] for p in allp) - 4, max(p[0] for p in allp) + 6
+    y1, y0 = -min(p[1] for p in allp) + 4, -max(p[1] for p in allp) - 4   # svg y is flipped
+    path = lambda q: 'M ' + ' L '.join(f'{_f(x)} {_f(-y)}' for x, y in q) + ' Z'
+    line = lambda q: 'M ' + ' L '.join(f'{_f(x)} {_f(-y)}' for x, y in q)
+    fs = max(3.0, (x1 - x0) / 38)
+    finger = (f'<path d="{path([(fx, flat_y + 9), (fx + 5, flat_y + 9), (fx + 5, flat_y - 8), (fx, flat_y - 8)])}" fill="#4f9d69" stroke="#fff" stroke-width="0.25"/>'
+              f'<path d="{line([(0, flat_y - 4 * fs / 3), (fx, flat_y - 4 * fs / 3)])}" stroke="#6fa8d6" stroke-width="{_f(fs / 12)}"/>'
+              f'<text x="{_f(fx / 2)}" y="{_f(-(flat_y - 4 * fs / 3) + fs * 1.1)}" font-size="{_f(fs)}" fill="#6fa8d6" text-anchor="middle" font-family="Arial">X {right_len:g}</text>'
+              f'<text x="{_f(fx + 2.5)}" y="{_f(-(flat_y + 9) - 1)}" font-size="{_f(fs * 0.8)}" fill="#4f9d69" text-anchor="middle" font-family="Arial">упор</text>')
+    txt = f'<text x="{_f(x0 + 2)}" y="{_f(y0 + fs * 1.3)}" font-size="{_f(fs)}" fill="#9aa5b1" font-family="Arial">{label}</text>' if label else ''
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{_f(x0)} {_f(y0)} {_f(x1 - x0)} {_f(y1 - y0)}"><title>{label}</title>'
+            f'<path d="{path(die_o)}" fill="#8fa0b0" stroke="#e0a526" stroke-width="0.4" stroke-linejoin="round"/>'
+            f'<path d="{path(cp)}" fill="#7d8a97" fill-opacity="0.7" stroke="#e0a526" stroke-opacity="0.5" stroke-width="0.3" stroke-dasharray="1.2 0.8"/>'
+            f'<path d="{path(punch_o)}" fill="#cfd8e0" stroke="#e0a526" stroke-width="0.4" stroke-linejoin="round"/>'
+            f'<path d="{line(ghost)}" stroke="#e26a4a" stroke-opacity="0.6" stroke-width="{_f(thickness)}" stroke-dasharray="2 1.5" fill="none"/>'
+            f'<path d="{line(pts)}" stroke="#e26a4a" stroke-width="{_f(thickness)}" stroke-linejoin="round" fill="none"/>{finger}{txt}</svg>')

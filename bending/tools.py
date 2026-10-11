@@ -66,3 +66,16 @@ def step_checks(fold_deg, thickness, v, punch_angle=None, die_angle=None, stroke
         if daylight_mm is not None and punch_h and die_h and punch_h + die_h > daylight_mm:
             out.append(f'Поансон + матрица ({punch_h + die_h:g} mm) са повече от отварянето на пресата ({daylight_mm:g} mm).')
     return out
+
+
+def pick_tools(punches, dies, thickness, fold_deg):
+    """Default tools for a bend. punches: [(id, angle_deg)], dies: [(id, v, angle_deg)] (one row per V of a multi-V die).
+    Punch: the sharpest-fitting one (largest angle that still fits the inner angle); die: V closest to the usual rule for the thickness
+    among those whose groove angle fits. -> (punch_id or None, (die_id, v) or None)"""
+    inner = 180 - fold_deg
+    fit_p = [p for p in punches if p[1] is None or p[1] <= inner + 0.01]
+    punch = max(fit_p, key=lambda p: p[1] or 0)[0] if fit_p else None
+    vrec = recommended_v(thickness)
+    fit_d = [d for d in dies if d[2] is None or d[2] <= inner + 0.01]
+    die = min(fit_d, key=lambda d: abs(d[1] - vrec)) if fit_d else None
+    return punch, ((die[0], die[1]) if die else None)

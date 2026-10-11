@@ -449,3 +449,98 @@ def test_seed_press_brake_configs(ctx):
     assert seed() == 2
     assert (a.press_brake.tonnage_t, a.press_brake.daylight_mm, a.press_brake.controller) == (175, 530, 'durma_dt15')
     assert (b.press_brake.stroke_mm, b.press_brake.tonnage_t) == (210, 40)  # existing value kept, gaps filled
+
+
+def test_auto_tools(ctx):
+    from werkzeug.security import generate_password_hash
+    from app import User, limiter, Detail, BendProgram, BendStep, MaterialPrice
+    from migration.seed_bend_tools_m460r import seed
+    app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
+    limiter.reset()
+    seed()
+    db.session.add(User(username='bq_auto', password=generate_password_hash('irrelevant123'), role='admin'))
+    m = Machine(name='Durma')
+    db.session.add(m)
+    db.session.add(MaterialPrice(key='mat2', display_name='M', type='sheets', cost_per_m2=1))
+    db.session.flush()
+    d = Detail(name='Скоба2', material_key='mat2', width=50, height=30, total_length=160, pierce_count=1, calculated_price=1, geometry_json='[]', thickness_mm=2)
+    db.session.add(d)
+    db.session.flush()
+    p = BendProgram(detail_id=d.id, machine_id=m.id, name='P')
+    db.session.add(p)
+    db.session.flush()
+    db.session.add(BendStep(program_id=p.id, seq=1, angle_deg=90))
+    db.session.commit()
+    c = app.test_client()
+    c.post('/login', data={'username': 'bq_auto', 'password': 'irrelevant123'})
+    c.post(f'/admin/bending/programs/{p.id}/auto-tools')
+    db.session.expire_all()
+    st = p.steps[0]
+    assert st.punch.code == 'P.97.75.r08' and st.die.code == 'M460.r' and st.die_v_mm == 16   # 2 mm -> V12 wanted, V16 is the nearest of 16/22/35/50
+    assert c.get(f'/admin/bending/programs/{p.id}').status_code == 200
+
+
+def test_program_steps_from_detail_dxf(ctx, tmp_path):
+    import ezdxf
+    from werkzeug.security import generate_password_hash
+    from app import User, limiter, Detail, BendProgram, MaterialPrice, DetailDxfFile
+    from migration.seed_bend_tools_m460r import seed
+    app.config.update(TESTING=True, WTF_CSRF_ENABLED=False, DETAIL_DXF_FOLDER=str(tmp_path))
+    limiter.reset()
+    seed()
+    doc = ezdxf.new()
+    doc.layers.add('BEND_UP')
+    msp = doc.modelspace()
+    msp.add_lwpolyline([(0, 0), (100, 0), (100, 30), (0, 30)], close=True, dxfattribs={'layer': 'CUT'})
+    msp.add_line((30, 0), (30, 30), dxfattribs={'layer': 'BEND_UP'})
+    msp.add_line((70, 0), (70, 30), dxfattribs={'layer': 'BEND_UP_45'})
+    doc.saveas(str(tmp_path / 'd.dxf'))
+    db.session.add(User(username='bq_gen', password=generate_password_hash('irrelevant123'), role='admin'))
+    m = Machine(name='Durma3')
+    db.session.add(m)
+    db.session.add(MaterialPrice(key='mat3', display_name='M', type='sheets', cost_per_m2=1))
+    db.session.flush()
+    d = Detail(name='Скоба3', material_key='mat3', width=100, height=30, total_length=160, pierce_count=1, calculated_price=1, geometry_json='[]', thickness_mm=2)
+    db.session.add(d)
+    db.session.flush()
+    db.session.add(DetailDxfFile(detail_id=d.id, filename='d.dxf', original_filename='d.dxf'))
+    db.session.commit()
+    c = app.test_client()
+    c.post('/login', data={'username': 'bq_gen', 'password': 'irrelevant123'})
+    c.post('/admin/bending/programs/add', data={'detail_id': d.id, 'machine_id': m.id})
+    prog = BendProgram.query.one()
+    assert [(s.angle_deg, s.x_mm) for s in prog.steps] == [(90, 30), (45, 30)]
+    assert all(s.punch and s.die for s in prog.steps)  # thickness 2 -> tools picked for both
+    r = c.get(f'/bending/steps/{prog.steps[0].id}/picture.svg')
+    assert r.status_code == 200 and r.mimetype == 'image/svg+xml' and 'упор' in r.get_data(as_text=True) and 'X 30' in r.get_data(as_text=True)
+    assert c.get(f'/admin/bending/programs/{prog.id}').status_code == 200 and c.get(f'/admin/bending/programs/{prog.id}/sheet').status_code == 200
+
+
+def test_step_picture_shows_whole_part_without_dxf(ctx):
+    import re
+    from werkzeug.security import generate_password_hash
+    from app import User, limiter, Detail, BendProgram, BendStep, MaterialPrice, BendTool
+    from migration.seed_bend_tools_m460r import seed
+    app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
+    limiter.reset()
+    seed()
+    db.session.add(User(username='bq_pic', password=generate_password_hash('irrelevant123'), role='admin'))
+    m = Machine(name='Durma4')
+    db.session.add(m)
+    db.session.add(MaterialPrice(key='mat4', display_name='M', type='sheets', cost_per_m2=1))
+    db.session.flush()
+    d = Detail(name='Z', material_key='mat4', width=100, height=30, total_length=160, pierce_count=1, calculated_price=1, geometry_json='[]', thickness_mm=2)
+    db.session.add(d)
+    db.session.flush()
+    p = BendProgram(detail_id=d.id, machine_id=m.id, name='Z')
+    db.session.add(p)
+    db.session.flush()
+    punch, die = BendTool.query.filter_by(code='P.97.75.r08').one(), BendTool.query.filter_by(code='M460.r').one()
+    for i, (x, flip) in enumerate([(80, False), (40, True)], 1):   # old style steps: no back_end / bend_dir
+        db.session.add(BendStep(program_id=p.id, seq=i, angle_deg=90, x_mm=x, flip=flip, punch_id=punch.id, die_id=die.id, die_v_mm=16))
+    db.session.commit()
+    c = app.test_client()
+    c.post('/login', data={'username': 'bq_pic', 'password': 'irrelevant123'})
+    svg = c.get(f'/bending/steps/{p.steps[1].id}/picture.svg').get_data(as_text=True)
+    sheet = [m_ for m_ in re.findall(r'<path d="(M [^"]*)" stroke="#e26a4a" stroke-width="2"[^>]*stroke-linejoin', svg)]
+    assert sheet and sheet[-1].count('L') == 3   # back leg + apex + front leg + the bent flange of step 1

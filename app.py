@@ -6032,7 +6032,10 @@ def admin_bending_add_program():
         return redirect(url_for('admin_bending_programs'))
     prog = BendProgram(detail=detail, machine=machine, name=name)
     db.session.add(prog)
+    db.session.flush()
+    msg, cat = _generate_program_steps(prog)
     db.session.commit()
+    flash(msg, cat)
     log_action(f'Създадена програма за огъване "{name}"')
     return redirect(url_for('admin_bending_program', prog_id=prog.id))
 
@@ -6044,7 +6047,8 @@ def admin_bending_program(prog_id):
     die_options = [{'value': f'{t.id}|{p["v"]:g}' if len(t.positions) > 1 else str(t.id), 'label': f'{t.code} · {p["label"]}' if len(t.positions) > 1 else t.code}
                    for t in tools if t.kind == 'die' for p in (t.positions if len(t.positions) > 1 else [None])]
     prog = db.get_or_404(BendProgram, prog_id)
-    return render_template('admin_bending_program.html', prog=prog, tools=tools, die_options=die_options, checks=_program_checks(prog), active_page='admin_bending')
+    return render_template('admin_bending_program.html', prog=prog, tools=tools, die_options=die_options, checks=_program_checks(prog),
+                           pictures={st.id: _step_picture_ok(st) for st in prog.steps}, active_page='admin_bending')
 
 
 def _program_checks(prog):
@@ -6071,7 +6075,8 @@ def _program_checks(prog):
 @role_required(['admin', 'worker'])
 def bending_program_sheet(prog_id):
     """Printable operator sheet (browser print, like offer/protocol)."""
-    return render_template('bending_sheet.html', prog=db.get_or_404(BendProgram, prog_id))
+    prog = db.get_or_404(BendProgram, prog_id)
+    return render_template('bending_sheet.html', prog=prog, pictures={st.id: _step_picture_ok(st) for st in prog.steps})
 
 
 def _program_editable(prog):
@@ -6139,6 +6144,160 @@ def bending_program_execute(prog_id):
     flash('Измерванията са записани в контрола на качеството - ' + ('годен.' if check.overall_result == 'pass' else 'НЕГОДЕН!'),
           'success' if check.overall_result == 'pass' else 'danger')
     return redirect(url_for('bending_program_sheet', prog_id=prog.id))
+
+
+def _fill_program_tools(prog):
+    """Punch/die for every step that has none, from the library (thickness rule + angles of the real profiles). -> number of fields filled,
+    or None when the detail has no thickness."""
+    from bending.tools import pick_tools
+    t = prog.detail.thickness_mm or getattr(getattr(prog.detail, 'material', None), 'thickness_mm', None)
+    if not t:
+        return None
+    lib = BendTool.query.filter_by(status='in_library').all()
+    punches = [(x.id, x.angle_deg) for x in lib if x.kind == 'punch']
+    dies = [(x.id, p['v'], p['angle']) for x in lib if x.kind == 'die' for p in x.positions]
+    n = 0
+    for st in prog.steps:
+        if (st.punch_id and st.die_id) or not 0 < st.angle_deg < 180:
+            continue
+        pid, die = pick_tools(punches, dies, t, st.angle_deg)
+        if not st.punch_id and pid:
+            st.punch_id, n = pid, n + 1
+        if not st.die_id and die:
+            st.die_id = die[0]
+            st.die_v_mm = die[1] if len(db.session.get(BendTool, die[0]).positions) > 1 else None
+            n += 1
+    return n
+
+
+def _read_detail_dxf(detail):
+    """(bend lines, outline min corner, max corner, None) from the Detail's newest DXF file, or (None, None, None, why)."""
+    from ezdxf import bbox
+    f = DetailDxfFile.query.filter(DetailDxfFile.detail_id == detail.id, DetailDxfFile.filename.ilike('%.dxf')).order_by(DetailDxfFile.uploaded_at.desc(), DetailDxfFile.id.desc()).first()
+    if not f:
+        return None, None, None, 'Детайлът няма запазен DXF файл.'
+    try:
+        msp = ezdxf.readfile(os.path.join(app.config['DETAIL_DXF_FOLDER'], f.filename)).modelspace()
+        lines = [(e.dxf.layer, tuple(e.dxf.start)[:2], tuple(e.dxf.end)[:2]) for e in msp if e.dxf.layer.upper().startswith('BEND') and e.dxftype() == 'LINE']
+        ext = bbox.extents([e for e in msp if not e.dxf.layer.upper().startswith('BEND')])
+    except (ezdxf.DXFError, OSError, ValueError) as e:
+        return None, None, None, f'DXF файлът не може да се прочете ({e}).'
+    if not lines or not ext.has_data:
+        return None, None, None, 'В DXF файла няма линии на огъване (слой BEND_UP / BEND_DOWN).'
+    return lines, tuple(ext.extmin)[:2], tuple(ext.extmax)[:2], None
+
+
+def _detail_bend_steps(detail):
+    """Steps from the bend lines (BEND* layers) of the Detail's newest DXF file. -> (steps, message when none)."""
+    from bending.dxf_bends import steps_from_bend_lines
+    lines, lo, hi, why = _read_detail_dxf(detail)
+    return (steps_from_bend_lines(lines, lo, hi), None) if lines else ([], why)
+
+
+def _detail_flat_length(detail):
+    """Length of the flat pattern across the bend lines (from the DXF), None if unknown."""
+    lines, lo, hi, _ = _read_detail_dxf(detail)
+    if not lines:
+        return None
+    vertical = sum(abs(p1[0] - p0[0]) <= abs(p1[1] - p0[1]) for _, p0, p1 in lines) * 2 >= len(lines)
+    return hi[0 if vertical else 1] - lo[0 if vertical else 1]
+
+
+def _generate_program_steps(prog):
+    """Fill an empty draft program from its Detail's DXF and pick the tools. -> flash text."""
+    steps, why = _detail_bend_steps(prog.detail)
+    if not steps:
+        return why, 'danger'
+    for st in steps:
+        db.session.add(BendStep(program=prog, **st))
+    db.session.flush()
+    db.session.expire(prog, ['steps'])
+    n = _fill_program_tools(prog)
+    return f'Генерирани стъпки от DXF на детайла: {len(steps)}. ' + ('Инструментите са избрани автоматично - проверете ги.' if n else 'Инструменти не са избрани (липсва дебелина или подходящ инструмент).'), 'success'
+
+
+def _step_picture_ok(st):
+    """True when the step has everything its picture needs (both tools, V and the detail's thickness)."""
+    return bool(st.punch and st.die and (st.die_v_mm or st.die.v_opening_mm) and 0 < st.angle_deg < 180 and _program_thickness(st.program))
+
+
+def _program_thickness(prog):
+    return prog.detail.thickness_mm or getattr(getattr(prog.detail, 'material', None), 'thickness_mm', None)
+
+
+@app.route('/bending/steps/<int:step_id>/picture.svg')
+@role_required(['admin', 'worker'])
+def bending_step_picture(step_id):
+    """Cross-section of one bend: real die/punch outlines + the sheet bent to the step's angle."""
+    from bending.profile import step_svg
+    st = db.get_or_404(BendStep, step_id)
+    if not _step_picture_ok(st):
+        abort(404)
+    v = st.die_v_mm or st.die.v_opening_mm
+    steps = st.program.steps
+    k = steps.index(st)
+    det = st.program.detail
+    flat = _detail_flat_length(det)
+    if flat is None and det.width and det.height:   # no DXF: the longer side of the part's box, if it covers every X
+        flat = max(det.width, det.height)
+    left, right = [], []   # legs of the part from this bend to the operator (left) and to the back gauge (right): [(length, curl towards the punch)]
+    ends, dirs, cur = {}, {}, 'up'   # steps made by hand / before back_end existed: the old rule (gauge on the right end, direction flips with `flip`)
+    for x in steps:
+        cur = ('down' if cur == 'up' else 'up') if x.flip else cur
+        ends[x.id], dirs[x.id] = x.back_end or 'right', x.bend_dir or cur
+    if flat is not None and all(x.x_mm is not None and 0 <= x.x_mm <= flat for x in steps):
+        pos = lambda x: x.x_mm if ends[x.id] == 'left' else flat - x.x_mm
+        here = pos(st)
+        done = [x for x in steps[:k]]
+
+        def legs(sign):   # sign -1: towards the left end of the flat, +1: towards the right end
+            end = 0.0 if sign < 0 else flat
+            ones = sorted((x for x in done if (pos(x) - here) * sign > 1e-6), key=lambda x: abs(pos(x) - here))
+            marks = [(abs(pos(x) - here), x) for x in ones] + [(abs(end - here), None)]
+            out, prev = [], 0.0
+            for dist, x in marks:
+                out.append([dist - prev, None])
+                if x is not None:
+                    out[-1][1] = x.angle_deg * (1 if dirs[x.id] == dirs[st.id] else -1)
+                prev = dist
+            return [tuple(o) for o in out]
+        back_sign = -1 if ends[st.id] == 'left' else 1
+        right, left = legs(back_sign), legs(-back_sign)
+    svg = step_svg(st.punch.profile, st.die.profile, v, _program_thickness(st.program), st.angle_deg,
+                   f'{st.seq}. {st.punch.code} / {st.die.code} V{v:g} / {_program_thickness(st.program):g} mm / {st.angle_deg:g}°', left=left, right=right)
+    return Response(svg, mimetype='image/svg+xml')
+
+
+@app.route('/admin/bending/programs/<int:prog_id>/generate', methods=['POST'])
+@role_required('admin')
+def admin_bending_generate_steps(prog_id):
+    prog = db.get_or_404(BendProgram, prog_id)
+    if _program_editable(prog):
+        if prog.steps:
+            flash('Програмата вече има стъпки.', 'danger')
+        else:
+            msg, cat = _generate_program_steps(prog)
+            db.session.commit()
+            flash(msg, cat)
+            log_action(f'Генерирани стъпки за програма "{prog.name}" от DXF')
+    return redirect(url_for('admin_bending_program', prog_id=prog.id))
+
+
+@app.route('/admin/bending/programs/<int:prog_id>/auto-tools', methods=['POST'])
+@role_required('admin')
+def admin_bending_auto_tools(prog_id):
+    """Fill the punch/die of every step that has none."""
+    prog = db.get_or_404(BendProgram, prog_id)
+    if not _program_editable(prog):
+        return redirect(url_for('admin_bending_program', prog_id=prog.id))
+    n = _fill_program_tools(prog)
+    if n is None:
+        flash('Детайлът няма дебелина - въведете я, за да се изберат инструменти.', 'danger')
+    else:
+        db.session.commit()
+        log_action(f'Автоматичен избор на инструменти за програма "{prog.name}"', f'{n} попълнени полета')
+        flash(f'Попълнени инструменти: {n}. Проверете ги и ходовете.' if n else 'Няма какво да се попълни.', 'success' if n else 'info')
+    return redirect(url_for('admin_bending_program', prog_id=prog.id))
 
 
 @app.route('/admin/bending/programs/<int:prog_id>/force')
@@ -6245,7 +6404,7 @@ def admin_bending_program_new_version(prog_id):
         return redirect(url_for('admin_bending_program', prog_id=old.id))
     new = BendProgram(detail=old.detail, machine=old.machine, name=old.name, notes=old.notes, document_id=old.document_id, version=old.version + 1)
     new.steps = [BendStep(seq=st.seq, angle_deg=st.angle_deg, x_mm=st.x_mm, r_mm=st.r_mm, force_kn=st.force_kn, flip=st.flip,
-                          punch_id=st.punch_id, die_id=st.die_id, die_v_mm=st.die_v_mm, notes=st.notes) for st in old.steps]
+                          punch_id=st.punch_id, die_id=st.die_id, die_v_mm=st.die_v_mm, back_end=st.back_end, bend_dir=st.bend_dir, notes=st.notes) for st in old.steps]
     db.session.add(new)
     db.session.commit()
     log_action(f'Нова версия {new.version} на програма "{new.name}"')
@@ -6312,6 +6471,8 @@ class BendStep(db.Model):
     punch_id = db.Column(db.Integer, db.ForeignKey('bend_tool.id'))
     die_id = db.Column(db.Integer, db.ForeignKey('bend_tool.id'))
     die_v_mm = db.Column(db.Float)  # which V of a multi-V die (e.g. M460.r) is up for this bend; None for a single-V die
+    back_end = db.Column(db.String(5))  # which end of the flat pattern rests on the back gauge ('left'/'right') - always the SHORT side
+    bend_dir = db.Column(db.String(4))  # 'up'/'down' fold direction of the bend line
     notes = db.Column(db.String(255))
     punch = db.relationship('BendTool', foreign_keys=[punch_id])
     die = db.relationship('BendTool', foreign_keys=[die_id])
@@ -14257,6 +14418,10 @@ def api_quick_create_detail():
         db.session.flush()  # assigns new_detail.id for the optional DetailDxfFile/Operation below
         if has_dxf:
             _add_cutting_operation(new_detail, service_id, total_length)
+            stored_dxf = f"{uuid.uuid4().hex}_{secure_filename(file.filename)}"   # keep the original (bend lines!) - bending programs read it
+            shutil.copyfile(temp_path, os.path.join(app.config['DETAIL_DXF_FOLDER'], stored_dxf))
+            db.session.add(DetailDxfFile(detail_id=new_detail.id, filename=stored_dxf, original_filename=sanitize_display_filename(file.filename),
+                                         uploaded_by_id=current_user.id))
         if pdf_file and pdf_file.filename:
             pdf_stored_filename = _save_upload(pdf_file, app.config['DETAIL_DXF_FOLDER'], allowed_extensions={'pdf'})
             db.session.add(DetailDxfFile(

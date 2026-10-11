@@ -14,6 +14,8 @@ with app.app_context():
     db.session.execute(text("ALTER TABLE bend_tool ADD COLUMN IF NOT EXISTS profile_json TEXT"))
     db.session.execute(text("ALTER TABLE bend_tool ADD COLUMN IF NOT EXISTS base_height_mm DOUBLE PRECISION"))
     db.session.execute(text("ALTER TABLE bend_step ADD COLUMN IF NOT EXISTS die_v_mm DOUBLE PRECISION"))
+    db.session.execute(text("ALTER TABLE bend_step ADD COLUMN IF NOT EXISTS back_end VARCHAR(5)"))
+    db.session.execute(text("ALTER TABLE bend_step ADD COLUMN IF NOT EXISTS bend_dir VARCHAR(4)"))
     db.session.commit()
 
-print("bend_tool.profile_json / base_height_mm and bend_step.die_v_mm added (or already existed).")
+print("bend_tool.profile_json / base_height_mm and bend_step.die_v_mm / back_end / bend_dir added (or already existed).")
