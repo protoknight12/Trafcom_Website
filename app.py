@@ -12,6 +12,7 @@ import subprocess
 import difflib
 import uuid
 import io
+import html
 import csv
 import webbrowser
 import threading
@@ -24,7 +25,7 @@ import urllib.error
 from html import escape as html_escape
 from html.parser import HTMLParser
 from concurrent.futures import ThreadPoolExecutor
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory, send_file, g, session, has_request_context, has_app_context, abort
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory, send_file, g, session, has_request_context, has_app_context, abort, Response
 from openpyxl import Workbook
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import inspect as sa_inspect
@@ -38,6 +39,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import ezdxf
 from bending.unfold import unfold_section, k_factor, bd_table
+from bending.profile import (tool_svg, validate_polygon, default_profile, polygon_from_dxf, clip_to_seat, tip_offset, CLAMP,
+                             normalize, outline, radii_report, derived)
 from bending.sequence import steps_from_unfold
 from bending.tools import force_kn_per_m, recommended_v, rank_dies, G as TONNE_KN
 from ezdxf import bbox
@@ -5664,6 +5667,7 @@ class BendTool(db.Model):
     code = db.Column(db.String(100), nullable=False)
     kind = db.Column(db.String(10), nullable=False)  # punch / die
     profile_dxf = db.Column(db.String(255))
+    profile_json = db.Column(db.Text)  # working-part outline: [[x, y, fillet r, arc a], ...] in mm, see bending/profile.py
     height_mm = db.Column(db.Float)
     angle_deg = db.Column(db.Float)
     radius_mm = db.Column(db.Float)
@@ -5671,6 +5675,14 @@ class BendTool(db.Model):
     max_kn_per_m = db.Column(db.Float)
     status = db.Column(db.String(20), default='new', nullable=False)  # new / reviewed / in_library
     catalog = db.relationship('BendToolCatalog', backref='tools')
+
+    @property
+    def profile(self):
+        """The saved outline as a list of [x, y] (None when the tool only has its numbers)."""
+        try:
+            return json.loads(self.profile_json) if self.profile_json else None
+        except ValueError:
+            return None
 
 
 class BendToolSegment(db.Model):
@@ -5701,13 +5713,20 @@ class BendDeduction(db.Model):
 @app.route('/admin/bending')
 @role_required('admin')
 def admin_bending():
-    return render_template('admin_bending.html', tools=BendTool.query.order_by(BendTool.code).all(),
+    tools = BendTool.query.order_by(BendTool.kind.desc(), BendTool.v_opening_mm, BendTool.code).all()
+    cards = []
+    for t in tools:
+        by_len = {}
+        for sg in t.segments:
+            by_len[sg.length_mm] = by_len.get(sg.length_mm, 0) + 1
+        cards.append({'tool': t, 'lengths': sorted(by_len.items()), 'count': len(t.segments), 'total_mm': sum(sg.length_mm for sg in t.segments)})
+    return render_template('admin_bending.html', cards=cards, tools=tools,
                            deductions=BendDeduction.query.order_by(BendDeduction.material_type, BendDeduction.thickness_mm,
                                                                    BendDeduction.radius_mm, BendDeduction.angle_deg).all(),
                            material_types=MaterialType.query.order_by(MaterialType.id).all(),
                            segments=BendToolSegment.query.order_by(BendToolSegment.erp_number).all(),
                            locations=ToolStorageLocation.query.order_by(ToolStorageLocation.zone, ToolStorageLocation.cabinet).all(),
-                           active_page='admin_bending')
+                           program_count=BendProgram.query.count(), active_page='admin_bending')
 
 
 @app.route('/admin/bending/tools/add', methods=['POST'])
@@ -5782,6 +5801,86 @@ def admin_bending_approve_tool(tool_id):
     db.session.commit()
     log_action(f'Одобрен инструмент за абкант "{tool.code}"')
     return redirect(url_for('admin_bending'))
+
+
+@app.route('/admin/bending/tools/<int:tool_id>/profile.svg')
+@role_required(['admin', 'worker'])
+def bending_tool_profile(tool_id):
+    """Schematic profile picture of a punch/die, drawn from its numbers (see bending/profile.py)."""
+    t = db.get_or_404(BendTool, tool_id)
+    return Response(tool_svg(t.kind, t.angle_deg, t.radius_mm, t.height_mm, t.v_opening_mm, html.escape(t.code), t.profile), mimetype='image/svg+xml')
+
+
+@app.route('/admin/bending/tools/<int:tool_id>/profile/edit')
+@role_required('admin')
+def admin_bending_profile_edit(tool_id):
+    t = db.get_or_404(BendTool, tool_id)
+    pts = normalize(t.profile) if t.profile else normalize(default_profile(t.kind, t.angle_deg, t.radius_mm, t.height_mm, t.v_opening_mm))
+    return render_template('admin_bending_profile.html', tool=t, points=pts, has_profile=bool(t.profile), clamp=CLAMP, active_page='admin_bending')
+
+
+def _profile_warnings(t, d):
+    """Where the outline disagrees with the tool's catalogue numbers (angle, radius, V) - these feed the force/collision maths."""
+    out = []
+    ref = d.get('tip_angle') if t.kind == 'punch' else d.get('valley_angle')
+    rad = d.get('tip_radius') if t.kind == 'punch' else d.get('valley_radius')
+    if t.angle_deg is not None and ref is not None and abs(ref - t.angle_deg) > 0.5:
+        out.append(f'Ъгълът по контура е {ref:g}°, а в данните на инструмента е {t.angle_deg:g}°.')
+    if t.radius_mm is not None and abs((rad or 0) - t.radius_mm) > 0.05:
+        out.append(f'Радиусът по контура е R{(rad or 0):g}, а в данните на инструмента е R{t.radius_mm:g}.')
+    if t.kind == 'die' and t.v_opening_mm is not None and d.get('v_opening') is not None and abs(d['v_opening'] - t.v_opening_mm) > 0.2:
+        out.append(f'V-отворът по контура е {d["v_opening"]:g} mm, а в данните на инструмента е {t.v_opening_mm:g} mm.')
+    return out
+
+
+@app.route('/admin/bending/tools/<int:tool_id>/profile/outline', methods=['POST'])
+@role_required('admin')
+def admin_bending_profile_outline(tool_id):
+    """Editor helper (single source of the radius maths): vertices -> dense outline, list of radii, derived numbers and warnings."""
+    t = db.get_or_404(BendTool, tool_id)
+    try:
+        pts = normalize((request.get_json(silent=True) or {}).get('points') or [])
+        d = derived(pts, t.kind)
+        return jsonify({'outline': outline(pts), 'radii': radii_report(pts), 'derived': d, 'warnings': _profile_warnings(t, d)})
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+
+
+@app.route('/admin/bending/tools/<int:tool_id>/profile', methods=['POST'])
+@role_required('admin')
+def admin_bending_profile_save(tool_id):
+    """JSON {points: [[x, y], ...]} from the editor, or {reset: true} to go back to the schematic picture."""
+    t = db.get_or_404(BendTool, tool_id)
+    data = request.get_json(silent=True) or {}
+    if data.get('reset'):
+        t.profile_json = None
+    else:
+        try:
+            t.profile_json = json.dumps(validate_polygon(data.get('points') or []))
+        except ValueError as e:
+            return jsonify({'status': 'error', 'message': str(e)}), 400
+    db.session.commit()
+    log_action(f'Профил на инструмент "{t.code}" ' + ('нулиран' if data.get('reset') else f'запазен ({len(t.profile)} точки)'))
+    return jsonify({'status': 'success'})
+
+
+@app.route('/admin/bending/tools/<int:tool_id>/profile/dxf', methods=['POST'])
+@role_required('admin')
+def admin_bending_profile_dxf(tool_id):
+    """Read the outline from an uploaded DXF (tip down); returns the points for the editor to review - nothing is saved yet."""
+    t = db.get_or_404(BendTool, tool_id)
+    f = request.files.get('file')
+    try:
+        if not f or not f.filename.lower().endswith('.dxf'):
+            raise ValueError('Изберете .dxf файл.')
+        doc = ezdxf.read(io.StringIO(f.read().decode('utf-8', errors='replace')))
+        pts = polygon_from_dxf(doc, t.kind)
+        if t.kind == 'punch' and t.height_mm:  # the clamping part above the seat is standard - keep only the working part
+            pts = clip_to_seat(pts, round(t.height_mm - tip_offset(t.angle_deg, t.radius_mm), 2))
+        pts = validate_polygon(pts)
+    except (ValueError, ezdxf.DXFError, OSError) as e:
+        return jsonify({'status': 'error', 'message': str(e) or 'Невалиден DXF файл.'}), 400
+    return jsonify({'status': 'success', 'points': pts})
 
 
 @app.route('/admin/bending/tools/<int:tool_id>/delete', methods=['POST'])

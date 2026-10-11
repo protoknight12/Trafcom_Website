@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Профил на {{ tool.code }} - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .pe-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 18px; align-items: start; }
+        @media (max-width: 1000px) { .pe-wrap { grid-template-columns: 1fr; } }
+        .pe-stage { background: #0c0d0f; border: 1px solid var(--border-color); border-radius: var(--border-radius-md); overflow: hidden; }
+        #pe-canvas { display: block; width: 100%; height: calc(100vh - 340px); min-height: 380px; touch-action: none; cursor: default; user-select: none; }
+        .pe-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; background: var(--bg-surface); border-bottom: 1px solid var(--border-color); }
+        .pe-bar .sep { width: 1px; align-self: stretch; background: var(--border-color); margin: 0 4px; }
+        .pe-bar button, .pe-bar label.btn { padding: 7px 12px; font-size: 0.88rem; }
+        .pe-bar select { width: auto; padding: 6px 8px; }
+        .pe-foot { display: flex; justify-content: space-between; gap: 12px; padding: 7px 12px; background: var(--bg-surface); border-top: 1px solid var(--border-color); color: var(--text-muted); font-size: 0.85rem; }
+        .pe-side { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 16px; }
+        .pe-side h3 { margin: 0 0 10px; font-size: 1.05rem; }
+        .pe-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 14px; }
+        .pe-stats div { background: var(--bg-base); border-radius: var(--border-radius-sm); padding: 7px 10px; }
+        .pe-stats dt { font-size: 0.72rem; color: var(--text-muted); margin: 0; }
+        .pe-stats dd { margin: 0; font-weight: 600; }
+        .pe-table-wrap { max-height: 34vh; min-height: 140px; overflow: auto; border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); }
+        .pe-table-wrap table { width: 100%; border-collapse: collapse; }
+        .pe-table-wrap th { position: sticky; top: 0; background: var(--bg-input); font-size: 0.78rem; padding: 6px; text-align: left; }
+        .pe-table-wrap td { padding: 3px 4px; }
+        .pe-table-wrap td input { width: 100%; padding: 4px 6px; }
+        .pe-table-wrap td .btn-delete { padding: 2px 9px; }
+        .pe-table-wrap tr.sel { background: rgba(var(--accent-rgb), 0.18); }
+        .pe-list { margin: 0 0 14px; padding-left: 18px; font-size: 0.9rem; line-height: 1.6; }
+        .pe-warnbox { background: var(--warning-bg); border: 1px solid var(--warning-border); color: var(--warning-text); border-radius: var(--border-radius-sm); padding: 8px 12px; margin-bottom: 14px; font-size: 0.9rem; }
+        .pe-warnbox .pe-list { margin: 4px 0 0; }
+        .pe-msg { margin-top: 10px; min-height: 1.3em; font-size: 0.9rem; }
+        .pe-msg.good { color: var(--success-text); } .pe-msg.bad { color: var(--danger-text); }
+        .pe-help { color: var(--text-muted); font-size: 0.85rem; margin: 10px 0 0; line-height: 1.5; }
+        .pe-help kbd { background: var(--bg-input); border-radius: 4px; padding: 0 5px; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+    <p><a href="{{ url_for('admin_bending') }}">&larr; Инструменти</a></p>
+    <h2 style="margin:0 0 4px">Профил на {{ tool.code }} <small style="color:var(--text-muted);font-weight:normal">· {{ 'поансон' if tool.kind == 'punch' else 'матрица' }}</small></h2>
+    <p class="hint" style="color:var(--text-muted);margin:0 0 14px">
+        Контурът е в mm, като {% if tool.kind == 'punch' %}върхът на поансона е в началото (0, 0){% else %}центърът на горния ръб на матрицата е в началото (0, 0){% endif %}.
+        Рисува се само работната част - закрепването към гредата е стандартно за пресата и се добавя автоматично (сивото отгоре). От контура ще се смятат височини, ходът на пресата и колизиите, затова го пазете точен.
+        {% if not has_profile %}Още няма запазен профил - показан е начален по числата на инструмента.{% endif %}
+    </p>
+
+    <div class="pe-wrap">
+        <div class="pe-stage">
+            <div class="pe-bar">
+                <button type="button" class="btn-submit" id="pe-save" title="Ctrl+S">Запази</button>
+                <span class="sep"></span>
+                <button type="button" class="btn-secondary" id="pe-undo" title="Ctrl+Z">↶ Отмяна</button>
+                <button type="button" class="btn-secondary" id="pe-redo" title="Ctrl+Y">↷ Повтори</button>
+                <span class="sep"></span>
+                <label>Стъпка
+                    <select id="pe-snap">
+                        <option value="0">свободно</option><option value="0.1">0.1 mm</option><option value="0.5" selected>0.5 mm</option>
+                        <option value="1">1 mm</option><option value="5">5 mm</option>
+                    </select>
+                </label>
+                {% if tool.kind == 'punch' %}<label><input type="checkbox" id="pe-raster" checked> Растер 5 mm</label>{% endif %}
+                <span class="sep"></span>
+                <button type="button" class="btn-secondary" id="pe-mirror" title="Огледално по X">⇋ Огледало</button>
+                <button type="button" class="btn-secondary" id="pe-zero" title="Премести контура така, че {{ 'върхът' if tool.kind == 'punch' else 'горният ръб' }} да е в 0,0">⌖ Нулирай</button>
+                <button type="button" class="btn-secondary" id="pe-fit">⤢ Побери</button>
+                <button type="button" class="btn-delete" id="pe-del">Изтрий точка</button>
+            </div>
+            <svg id="pe-canvas" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet"></svg>
+            <div class="pe-foot"><span id="pe-cursor">X -  Y - mm</span><span>колело = мащаб · влачене на фона = преместване</span></div>
+        </div>
+
+        <aside class="pe-side">
+            <h3>Размери</h3>
+            <dl class="pe-stats">
+                <div><dt>Ширина</dt><dd id="pe-width">-</dd></div>
+                <div><dt>Височина</dt><dd id="pe-height">-</dd></div>
+                <div><dt>Площ</dt><dd id="pe-area">-</dd></div>
+                <div><dt>Точки</dt><dd id="pe-count">-</dd></div>
+                {% if tool.kind == 'punch' %}<div style="grid-column: 1 / -1"><dt>Обща височина със закрепването</dt><dd id="pe-total">-</dd></div>{% endif %}
+            </dl>
+            <h3>Радиуси</h3>
+            <ul class="pe-list" id="pe-radii"></ul>
+            <h3>Измерено от контура</h3>
+            <ul class="pe-list" id="pe-derived"></ul>
+            <div class="pe-warnbox" style="display:none"><b>Внимание</b><ul class="pe-list" id="pe-warn"></ul></div>
+            <h3>Точки (mm)</h3>
+            <div class="pe-table-wrap">
+                <table><thead><tr><th>№</th><th>X</th><th>Y</th><th title="Радиус на закръгляване в ъгъла">R ъгъл</th><th title="Радиус на дъга вместо правия ръб към следващата точка (+ вдлъбната, − изпъкнала)">R дъга</th><th></th></tr></thead><tbody id="pe-rows"></tbody></table>
+            </div>
+            <p class="pe-msg" id="pe-msg"></p>
+            <p class="pe-help">
+                <b>Влачете</b> точка, за да я преместите. В таблицата задайте <b>R ъгъл</b> (закръгляване в ъгъла, напр. върха на поансона или рамото на матрицата) и <b>R дъга</b> (дъга вместо прав ръб, напр. изрязването). <b>Щракнете върху ръб</b>, за да добавите точка. Изберете точка и натиснете <kbd>Del</kbd>, за да я махнете.
+                Каталожен контур може да се зареди от DXF (затворен профил, поансонът с върха надолу; закрепването над седлото се отрязва автоматично) - след зареждането го прегледайте и запазете.
+            </p>
+            <p style="margin:12px 0 6px"><label class="btn-secondary" style="display:inline-block;cursor:pointer;padding:8px 14px;border-radius:8px">Зареди от DXF
+                <input type="file" id="pe-dxf" accept=".dxf" style="display:none"></label></p>
+            {% if has_profile %}<p style="margin:6px 0"><button type="button" class="btn-delete" id="pe-reset">Върни схематичната картинка</button></p>
+            {% else %}<button type="button" id="pe-reset" style="display:none"></button>{% endif %}
+        </aside>
+    </div>
+</main>
+
+<script>
+    window.BEND_PROFILE = {
+        kind: {{ tool.kind|tojson }},
+        points: {{ points|tojson }},
+        saveUrl: {{ url_for('admin_bending_profile_save', tool_id=tool.id)|tojson }},
+        outlineUrl: {{ url_for('admin_bending_profile_outline', tool_id=tool.id)|tojson }},
+        dxfUrl: {{ url_for('admin_bending_profile_dxf', tool_id=tool.id)|tojson }},
+        backUrl: {{ url_for('admin_bending')|tojson }},
+        clamp: {{ clamp|tojson }},   // standard clamping tang - drawn, never edited
+        diag: 60 * Math.SQRT2   // diagonal of the 12 x 5 mm raster square
+    };
+</script>
+<script src="{{ url_for('static', filename='js/bend_profile_editor.js') }}"></script>
+</body>
+</html>
