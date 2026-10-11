@@ -58,3 +58,15 @@ assert pick_segments(3000, SET, 2050) is None                                   
 assert pick_segments(100, {40: 1}) is None                                          # not enough pieces in stock
 assert sum(pick_segments(2050, SET, 2050)['segments']) == 2050
 print('ok segments')
+
+# ---- one row for several bend lengths ----
+from bending.tools import plan_row
+r = plan_row([40, 40, 130], SET, 2050)
+assert not r['missing'] and sum(r['row']) >= 130
+w0, w1 = r['windows']
+assert w0['need'] == 40 and w0['total'] == 40 and w1['need'] == 130 and w1['total'] >= 130
+assert w1['n'] == len(r['row']) or sum(r['row'][w1['start']:w1['start'] + w1['n']]) == w1['total']
+assert sum(r['row'][w0['start']:w0['start'] + w0['n']]) == w0['total']              # the short bend's window really is those pieces of the final row
+assert plan_row([100], SET)['row'] == [100] and plan_row([3000], SET, 2050)['missing'] == [3000]
+assert len(plan_row([50, 50], {50: 1})['windows']) == 1                      # the same length twice needs no second piece
+print('ok row')

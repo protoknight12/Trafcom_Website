@@ -170,15 +170,31 @@ function draw(f) {
     const bnose = Math.min(...env.bg_beam.map(p => p[0]));
     for (const sgn of [-1, 1]) add(box('bg_beam', mats.beam, 130, 90, 90, bnose + 55, Math.min(...env.bg_beam.map(p => p[1])) + 20, sgn * (BF / 2 - 90), dynG));
     fingerMeshes(lerpPts(a.finger, b.finger, u), add);
-    const line = lerpPts(a.part, b.part, u);
-    for (let i = 0; i < line.length - 1; i++) {
-        const [x0, y0] = line[i], [x1, y1] = line[i + 1], L = Math.hypot(x1 - x0, y1 - y0);
-        if (L < 1e-6) continue;
-        const m = tag(new THREE.Mesh(new THREE.BoxGeometry(L + (i > 0 ? T * 0.15 : 0) + (i < line.length - 2 ? T * 0.15 : 0), T, W), dynG.userData.hit ? mats.hit : mats.part), 'part');
-        m.position.set((x0 + x1) / 2, (y0 + y1) / 2, 0);   // free ends stay exactly on the centre-line end (the finger touches that wall)
-        m.rotation.z = Math.atan2(y1 - y0, x1 - x0);
-        add(m);
+    const strip = tag(shapeMesh(sheetOutline(lerpPts(a.part, b.part, u), T, st.inner_radius), dynG.userData.hit ? mats.hit : mats.part, st.bend_len || W), 'part');
+    add(strip);
+}
+
+// The sheet as ONE solid strip: the centre line with every bend rounded with the inner radius the calculation uses (bending.profile: 0.16 V), offset by +-T/2.
+// The outline is (left side) + (right side reversed). Free ends stay exactly on the centre-line ends (the finger touches that wall).
+// ponytail: one radius rule for every material (0.16 V; aluminium is a bit tighter, stainless a bit wider); a leg shorter than the arc needs gets a smaller radius.
+function sheetOutline(line, T, rIn) {
+    const p = line.filter((q, i) => !i || Math.hypot(q[0] - line[i - 1][0], q[1] - line[i - 1][1]) > 1e-6);
+    const dir = (a, b) => { const l = Math.hypot(b[0] - a[0], b[1] - a[1]); return [(b[0] - a[0]) / l, (b[1] - a[1]) / l]; };
+    const path = [p[0]];
+    for (let i = 1; i < p.length - 1; i++) {
+        const d0 = dir(p[i - 1], p[i]), d1 = dir(p[i], p[i + 1]);
+        const cross = d0[0] * d1[1] - d0[1] * d1[0], phi = Math.atan2(Math.abs(cross), d0[0] * d1[0] + d0[1] * d1[1]);
+        if (phi < 1e-3) { path.push(p[i]); continue; }
+        const l0 = Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]), l1 = Math.hypot(p[i + 1][0] - p[i][0], p[i + 1][1] - p[i][1]);
+        const tl = Math.min((rIn + T / 2) * Math.tan(phi / 2), 0.45 * l0, 0.45 * l1), R = tl / Math.tan(phi / 2), s = Math.sign(cross);
+        const A = [p[i][0] - d0[0] * tl, p[i][1] - d0[1] * tl], C = [A[0] - s * d0[1] * R, A[1] + s * d0[0] * R];   // the centre is on the inside of the turn
+        const a0 = Math.atan2(A[1] - C[1], A[0] - C[0]), N = Math.max(4, Math.ceil(phi / 0.15));
+        for (let k = 0; k <= N; k++) { const a = a0 + s * phi * k / N; path.push([C[0] + R * Math.cos(a), C[1] + R * Math.sin(a)]); }
     }
+    path.push(p[p.length - 1]);
+    const nrm = i => { const a = path[Math.max(i - 1, 0)], b = path[Math.min(i + 1, path.length - 1)], d = dir(a, b); return [-d[1], d[0]]; };
+    const side = sg => path.map((q, i) => { const n = nrm(i); return [q[0] + sg * n[0] * T / 2, q[1] + sg * n[1] * T / 2]; });
+    return side(1).concat(side(-1).reverse());
 }
 
 // ---- UI ----

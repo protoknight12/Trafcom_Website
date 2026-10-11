@@ -129,3 +129,38 @@ def pick_segments(length, avail, max_total=None):
     for i, l in enumerate(segs):   # the longest in the centre, the others alternately outwards
         (left if i % 2 else right).append(l)
     return {'total': t * step, 'excess': round(t * step - length, 1), 'segments': left[::-1] + right}
+
+
+def plan_row(lengths, avail, max_total=None):
+    """ONE row of tool pieces for several bend lengths, so they can all be bent without changing the tool. The row grows from the middle outwards in layers:
+    the shortest bend gets its tight set (pick_segments), every longer one adds pieces on both sides, so each bend has a centred window of whole pieces
+    (the part is always centred on the machine). avail: {piece length: how many}. -> {'row': [lengths left to right], 'windows': [{'need', 'total', 'n', 'start'}],
+    'missing': [bend lengths nothing in stock covers]}; a window = row[start:start + n] and is the least overhang that was possible.
+    ponytail: greedy by length, pieces added to the lighter side; no search over other arrangements."""
+    from collections import deque
+    left = {int(round(l)): n for l, n in avail.items()}
+    row, windows, missing, lcount = deque(), [], [], 0
+    lsum = rsum = 0
+    for need in sorted({int(round(x)) for x in lengths if x}):
+        total = sum(row)
+        if row and total >= need:
+            windows.append({'need': need, 'total': total, 'n': len(row), 'lcount': lcount})
+            continue
+        lay = pick_segments(need - total, left, (max_total - total) if max_total else None)
+        if not lay:
+            missing.append(need)
+            continue
+        for l in lay['segments']:
+            left[l] -= 1
+            if not row:
+                row.append(l)
+            elif lsum <= rsum:
+                row.appendleft(l); lsum += l; lcount += 1
+            else:
+                row.append(l); rsum += l
+        if len(row) == len(lay['segments']):   # the first layer: pick_segments already put the longest in the middle
+            lsum = rsum = sum(row) / 2
+        windows.append({'need': need, 'total': sum(row), 'n': len(row), 'lcount': lcount})
+    for w in windows:
+        w['start'] = lcount - w.pop('lcount')
+    return {'row': list(row), 'windows': windows, 'missing': missing}

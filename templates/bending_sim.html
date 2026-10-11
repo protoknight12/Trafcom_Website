@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>3D симулация - {{ prog.name }}</title>
+    <title>3D симулация - {{ title }}</title>
     <style>
         html, body { margin: 0; height: 100%; background: #14171a; color: #cfd8e0; font-family: Arial, sans-serif; overflow: hidden; }
         .bar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: #1d2126; border-bottom: 1px solid #2c333a; flex-wrap: wrap; height: 30px; }
@@ -41,7 +41,13 @@
         <div class="grp">Показвай</div>
         <div class="row"><button type="button" id="p_all">Всичко</button><button type="button" id="p_tools">Само процеса</button><button type="button" id="p_back">+ заден упор</button><button type="button" id="p_mach">Само машината</button></div>
     </div>
-    <div id="warn"></div>
+    {% if spec %}
+    <table id="spec" style="position:absolute;left:12px;top:58px;background:rgba(29,33,38,.92);border-radius:8px;padding:8px 10px;font-size:13px;border-collapse:collapse">
+        <tr><th colspan="2" style="text-align:left;padding-bottom:4px">{{ title }}</th></tr>
+        {% for a, b in spec %}<tr><td style="color:#9aa5b1;padding:2px 12px 2px 0">{{ a }}</td><td>{{ b }}</td></tr>{% endfor %}
+    </table>
+    {% endif %}
+    <div id="warn" {% if spec %}style="top:auto;bottom:50px"{% endif %}></div>
     <div id="label"></div>
     <script type="application/json" id="simdata">{{ sim|tojson }}</script>
     <script type="module" src="{{ url_for('static', filename='js/bend_sim.js') }}"></script>

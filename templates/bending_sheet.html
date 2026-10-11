@@ -1,3 +1,4 @@
+{% from 'partials/bend_tooling.html' import tooling_start, tooling_change, tooling_caption %}
 <!DOCTYPE html>
 <html lang="bg">
 <head>
@@ -21,12 +22,14 @@
     <h1>{{ prog.name }}</h1>
     <p class="meta">Детайл: <b>{{ prog.detail.name }}</b>{% if prog.detail.erp_number %} (ERP № {{ prog.detail.erp_number }}){% endif %} · Машина: <b>{{ prog.machine.name }}</b> · Версия {{ prog.version }} · {{ 'ОДОБРЕНА' if prog.status == 'approved' else prog.status }}</p>
     {% if prog.notes %}<p class="meta">{{ prog.notes }}</p>{% endif %}
+    {{ tooling_start(tooling) }}
     <table>
         <thead><tr><th>№</th><th>Ъгъл</th><th>Задна опора X</th><th>R</th><th>Сила kN</th><th>Поансон</th><th>Матрица</th><th>Обръщане</th><th>Измерен ъгъл</th></tr></thead>
         <tbody>
         {% for st in prog.steps %}
+        {% if tooling.step.get(st.id) and tooling.step[st.id].change %}<tr><td colspan="9">{{ tooling_change(tooling, st) }}</td></tr>{% endif %}
         <tr>
-            <td class="big">{{ st.seq }}</td><td class="big">{{ st.angle_deg }}&deg;</td><td>{{ st.x_mm if st.x_mm is not none else '' }}{% set xa = checks[st.id].x_axis if checks and st.id in checks else none %}{% if xa is not none %}<br><small>ос X: <b>{{ xa }}</b> ({{ 'опора върху ниво 0' if checks[st.id].finger_opt == 'ledge' else 'лице на ниво 0' }}, стена {{ checks[st.id].x_wall }})</small>{% endif %}{% set lo = checks[st.id].layout if checks and st.id in checks else none %}{% if lo %}<br><small>сегменти: <b>{{ lo.segments|join(' + ') }}</b> = {{ lo.total }} mm{% if lo.excess %} (+{{ lo.excess }}){% endif %}</small>{% endif %}{% if st.back_end %}<br><small>упор: {{ 'ляв' if st.back_end == 'left' else 'десен' }} край</small>{% endif %}</td><td>{{ st.r_mm if st.r_mm is not none else '' }}</td>
+            <td class="big">{{ st.seq }}</td><td class="big">{{ st.angle_deg }}&deg;</td><td>{{ st.x_mm if st.x_mm is not none else '' }}{% set xa = checks[st.id].x_axis if checks and st.id in checks else none %}{% if xa is not none %}<br><small>ос X: <b>{{ xa }}</b> ({{ 'опора върху ниво 0' if checks[st.id].finger_opt == 'ledge' else 'лице на ниво 0' }}, стена {{ checks[st.id].x_wall }})</small>{% endif %}{{ tooling_caption(tooling, st) }}{% if st.back_end %}<br><small>упор: {{ 'ляв' if st.back_end == 'left' else 'десен' }} край</small>{% endif %}</td><td>{{ st.r_mm if st.r_mm is not none else '' }}</td>
             <td>{{ st.force_kn if st.force_kn is not none else '' }}</td><td>{{ st.punch.code if st.punch else '' }}</td><td>{{ (st.die.code ~ (' · V%g' % st.die_v_mm if st.die_v_mm else '')) if st.die else '' }}</td>
             <td>{{ 'ОБРЪЩАНЕ' if st.flip else '' }}</td><td class="measured"></td>
         </tr>

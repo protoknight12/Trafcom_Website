@@ -1,3 +1,4 @@
+{% from 'partials/bend_tooling.html' import tooling_start, tooling_change, tooling_caption %}
 <!DOCTYPE html>
 <html lang="bg">
 <head>
@@ -48,6 +49,7 @@
         <form action="{{ url_for('admin_bending_add_step', prog_id=prog.id) }}" method="POST" class="admin-form">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group"><label for="st_a">Ъгъл (°) *</label><input type="number" step="any" min="0" max="180" id="st_a" name="angle_deg" required></div>
+            <div class="form-group"><label for="st_len">Дължина на огъването (mm, празно = цялата ширина)</label><input type="number" step="any" min="0" id="st_len" name="length_mm"></div>
             <div class="form-group"><label for="st_x">Задна опора X (mm)</label><input type="number" step="any" min="0" id="st_x" name="x_mm"></div>
             <div class="form-group"><label for="st_r">R (mm)</label><input type="number" step="any" min="0" id="st_r" name="r_mm"></div>
             <div class="form-group"><label for="st_f">Сила (kN)</label><input type="number" step="any" min="0" id="st_f" name="force_kn"></div>
@@ -128,13 +130,15 @@
             {% include 'partials/csrf_field.html' %}<button type="submit" class="btn-submit">Попълни инструментите автоматично</button>
         </form>
         {% endif %}
+        {{ tooling_start(tooling) }}
         <div class="table-responsive">
             <table class="users-table">
                 <thead><tr><th>№</th><th>Ъгъл</th><th>X</th><th>R</th><th>kN</th><th>Поансон</th><th>Матрица</th><th>Картинка</th><th>Обръщане</th><th>Ход</th><th>Бележка</th><th></th></tr></thead>
                 <tbody>
                 {% for st in prog.steps %}
+                {% if tooling.step.get(st.id) and tooling.step[st.id].change %}<tr><td colspan="12">{{ tooling_change(tooling, st) }}</td></tr>{% endif %}
                 <tr>
-                    <td>{{ st.seq }}</td><td>{{ st.angle_deg }}°</td><td>{{ st.x_mm if st.x_mm is not none else '-' }}{% set xa = checks[st.id].x_axis if checks and st.id in checks else none %}{% if xa is not none %}<br><small>ос X: <b>{{ xa }}</b> ({{ 'опора върху ниво 0' if checks[st.id].finger_opt == 'ledge' else 'лице на ниво 0' }}, стена {{ checks[st.id].x_wall }})</small>{% endif %}{% set lo = checks[st.id].layout if checks and st.id in checks else none %}{% if lo %}<br><small>сегменти: <b>{{ lo.segments|join(' + ') }}</b> = {{ lo.total }} mm{% if lo.excess %} (+{{ lo.excess }}){% endif %}</small>{% endif %}{% if st.back_end %}<br><small>упор: {{ 'ляв' if st.back_end == 'left' else 'десен' }} край</small>{% endif %}</td><td>{{ st.r_mm if st.r_mm is not none else '-' }}</td>
+                    <td>{{ st.seq }}</td><td>{{ st.angle_deg }}°</td><td>{{ st.x_mm if st.x_mm is not none else '-' }}{% set xa = checks[st.id].x_axis if checks and st.id in checks else none %}{% if xa is not none %}<br><small>ос X: <b>{{ xa }}</b> ({{ 'опора върху ниво 0' if checks[st.id].finger_opt == 'ledge' else 'лице на ниво 0' }}, стена {{ checks[st.id].x_wall }})</small>{% endif %}{{ tooling_caption(tooling, st) }}{% if st.back_end %}<br><small>упор: {{ 'ляв' if st.back_end == 'left' else 'десен' }} край</small>{% endif %}</td><td>{{ st.r_mm if st.r_mm is not none else '-' }}</td>
                     <td>{{ st.force_kn if st.force_kn is not none else '-' }}</td><td>{{ st.punch.code if st.punch else '-' }}</td><td>{{ (st.die.code ~ (' · V%g' % st.die_v_mm if st.die_v_mm else '')) if st.die else '-' }}</td>
                     <td>{% if pictures[st.id] %}<a data-frame="stay" href="{{ url_for('bending_step_view', step_id=st.id) }}" title="Отвори и увеличи"><img src="{{ url_for('bending_step_picture', step_id=st.id) }}" alt="стъпка {{ st.seq }}" style="width:190px;height:150px;background:#14171a;border-radius:6px;cursor:zoom-in"></a>{% else %}-{% endif %}</td><td>{{ 'да' if st.flip else '' }}</td><td>{% set c = checks[st.id] %}{% if c.travel is not none %}{{ c.travel }} mm{% else %}-{% endif %}{% if c.retract %}<div style="color:#ffb340;font-size:.8em">упор: отдръпване при ≈{{ '%g'|format(c.retract) }}°</div>{% endif %}{% for w in c.warnings %}<div style="color:#e0a030;font-size:.8em">⚠ {{ w }}</div>{% endfor %}</td><td>{{ st.notes or '' }}</td>
                     <td>{% if prog.status != 'approved' %}<form action="{{ url_for('admin_bending_delete_step', step_id=st.id) }}" method="POST" onsubmit="return confirm('Изтриване на стъпката?')">

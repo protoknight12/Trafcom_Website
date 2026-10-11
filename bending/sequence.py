@@ -16,7 +16,7 @@ def back_end_of(pos, flat):
 
 
 def steps_from_bends(bends, flat, order=None):
-    """bends: [{pos (mm from the left end of the flat), angle, dir 'up'|'down', note (optional)}] -> [{seq, angle_deg, x_mm, flip, notes, back_end, bend_dir}].
+    """bends: [{pos (mm from the left end of the flat), angle, dir 'up'|'down', note (optional)}] -> [{seq, angle_deg, x_mm, flip, notes, back_end, bend_dir, length_mm (when the bend has a 'length')}].
     `order` = indexes into bends (default: outside in, shortest X first)."""
     rows = [(min(b['pos'], flat - b['pos']), b['pos'], back_end_of(b['pos'], flat), b) for b in bends]
     rows = [rows[i] for i in order] if order is not None else sorted(rows, key=lambda r: (r[0], r[1]))
@@ -28,7 +28,7 @@ def steps_from_bends(bends, flat, order=None):
         elif end != prev_end:
             notes.append(f'Завъртете детайла на 180°: късата страна към упора ({END[end]} край)')
         steps.append({'seq': i, 'angle_deg': b['angle'], 'x_mm': round(x, 1), 'flip': prev_dir is not None and b['dir'] != prev_dir,
-                      'notes': '; '.join(notes) or None, 'back_end': end, 'bend_dir': b['dir']})
+                      'notes': '; '.join(notes) or None, 'back_end': end, 'bend_dir': b['dir'], **({'length_mm': b['length']} if b.get('length') else {})})
         prev_dir, prev_end = b['dir'], end
     return steps
 

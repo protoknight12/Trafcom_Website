@@ -56,6 +56,7 @@
 
             <div class="dz-panel">
                 <h2>Система: статус, ел. връзки и услуги</h2>
+                {% if machine and machine.press_brake %}<p><a class="btn" href="{{ url_for('bending_machine_3d', machine_id=machine.id) }}" target="_blank">📐 Кинематика и размери (3D)</a></p>{% endif %}
                 {% if machine %}
                 <form class="dz-form" method="post" action="{{ url_for('admin_hall_dossier_system', machine_id=m.id) }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

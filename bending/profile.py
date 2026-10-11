@@ -525,7 +525,9 @@ def _step_geom(punch_pts, die_pts, v, thickness, fold_deg, left, right, overbend
     contacts = [(-(cx - R * c), -R + R * s), (cx - R * c, -R + R * s)] if R else [(-v / 2, 0.0), (v / 2, 0.0)]
     tip_r = (derived(punch_pts, 'punch').get('tip_radius') or 0.0)
     A = (0.0, y_out + thickness / (2 * s))                # apex on the sheet's centre line
-    tip_y = y_out + thickness / s + tip_r / s - tip_r     # lowest point of the punch tip
+    inner_r = 0.16 * v                                    # air bend: the sheet forms its own inner radius (~0.16 V), see bending.tools.outside_length
+    r_eff = max(tip_r, inner_r)                           # the tip rests on the rounded inner surface (its lowest point), not in a sharp corner
+    tip_y = y_out + thickness / s + r_eff / s - r_eff     # lowest point of the punch tip
     dflt = [(max(30.0, v * 0.9), None)]
     left, right = list(left) or dflt, list(right) or dflt
     flat_y = thickness / 2
@@ -543,7 +545,7 @@ def _step_geom(punch_pts, die_pts, v, thickness, fold_deg, left, right, overbend
             'after': _chain(A, (-s, c), left, False)[::-1][:-1] + _chain(A, (s, c), right, True),   # front end ... apex ... back end
             'before_left': _chain((0.0, flat_y), (-1.0, 0.0), left, False), 'before_right': before_right,
             'right_len': sum(leg for leg, _ in right), 'x_wall': fx, 'flat_y': flat_y, 'contacts': contacts, 'fold_eff': fold_eff,
-            'inner_radius': 0.16 * v, 'left': left, 'right': right}
+            'inner_radius': inner_r, 'left': left, 'right': right}
 
 
 def _inside(pt, poly):
@@ -730,7 +732,7 @@ def step_frames(punch_pts, die_pts, v, thickness, fold_deg, left=(), right=(), o
     if final > fold_deg + 1e-6:   # the punch lifts, the sheet springs back to the target angle
         add(final, dy=lift / 2, part_a=fold_deg)
     last = add(fold_deg if final > fold_deg + 1e-6 else final, dy=lift)
-    return {'die': first['die'], 'frames': frames, 'static': {'die_holder': DIE_HOLDER_U, 'bed': BED, 'crowning': CROWNING}, 'hits': step_trajectory(punch_pts, die_pts, v, thickness, fold_deg, left, right, overbend=overbend)['hits']}
+    return {'die': first['die'], 'inner_radius': first['inner_radius'], 'frames': frames, 'static': {'die_holder': DIE_HOLDER_U, 'bed': BED, 'crowning': CROWNING}, 'hits': step_trajectory(punch_pts, die_pts, v, thickness, fold_deg, left, right, overbend=overbend)['hits']}
 
 
 def step_x(punch_pts, die_pts, v, thickness, fold_deg, left=(), right=()):

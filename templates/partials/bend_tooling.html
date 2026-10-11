@@ -1,0 +1,36 @@
+{# Tool setups of a bend program (app._program_tooling): the arrangement(s) at the start of a sheet, and the change banner before a step. #}
+{% macro tooling_start(tooling) %}
+{% if tooling and tooling.setups %}
+<div class="tool-setups" style="margin:14px 0">
+    <h3 style="margin:0 0 6px">Подреждане на инструментите{% if tooling.setups|length > 1 %} ({{ tooling.setups|length }} комплекта){% endif %}</h3>
+    {% for su in tooling.setups %}
+    <div style="margin-bottom:12px;break-inside:avoid">
+        <b>{% if tooling.setups|length > 1 %}Комплект {{ su.n }}: {% endif %}поансон {{ su.punch }} / матрица {{ su.die }}{% if su.v %} V{{ '%g'|format(su.v) }}{% endif %}</b>
+        <small>- за огъвания {{ su.steps|join(', ') }}</small>
+        {% if su.row %}<div>Секции отляво надясно: <b>{{ su.row|join(' + ') }}</b> = {{ '%g'|format(su.total) }} mm</div>{{ su.svg }}
+        {% for w in su.windows %}<small>огъване {{ '%g'|format(w.need) }} mm: {{ w.n }} {{ 'секция' if w.n == 1 else 'секции' }} в средата = {{ '%g'|format(w.total) }} mm</small>{% if not loop.last %}<br>{% endif %}{% endfor %}
+        {% endif %}
+        {% for m in su.missing %}<div style="color:#c0392b">Няма комплект секции за огъване {{ '%g'|format(m) }} mm в наличност.</div>{% endfor %}
+    </div>
+    {% endfor %}
+    {% if tooling.setups|length > 1 %}<small>Смяната на инструмента е отбелязана пред стъпката, за която е нужна.</small>{% endif %}
+</div>
+{% endif %}
+{% endmacro %}
+
+{% macro tooling_change(tooling, st) %}
+{% set t = tooling.step.get(st.id) if tooling else none %}
+{% if t and t.change %}
+{% set su = tooling.setups[t.setup - 1] %}
+<div style="border:2px solid #e0a030;border-radius:6px;padding:8px 10px;margin:8px 0;background:#fff8e6;color:#14171a;break-inside:avoid">
+    <b>СМЯНА НА ИНСТРУМЕНТ преди огъване {{ st.seq }}:</b> поансон {{ su.punch }} / матрица {{ su.die }}{% if su.v %} V{{ '%g'|format(su.v) }}{% endif %} - комплект {{ su.n }}
+    <div>Секции: <b>{{ su.row|join(' + ') }}</b> = {{ '%g'|format(su.total) }} mm{% if t.window %}; за това огъване ({{ '%g'|format(t.length) }} mm) ползвайте {{ t.window.n }} {{ 'секция' if t.window.n == 1 else 'секции' }} в средата ({{ '%g'|format(t.window.total) }} mm){% endif %}</div>
+    {{ t.svg }}
+</div>
+{% endif %}
+{% endmacro %}
+
+{% macro tooling_caption(tooling, st) %}
+{% set t = tooling.step.get(st.id) if tooling else none %}
+{% if t and t.window %}<br><small>секции: <b>{{ t.window.n }}</b> в средата = {{ '%g'|format(t.window.total) }} mm (комплект {{ t.setup }}){% if t.length %}, огъване {{ '%g'|format(t.length) }} mm{% endif %}</small>{% endif %}
+{% endmacro %}

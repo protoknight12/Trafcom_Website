@@ -65,7 +65,10 @@
             <h2>Абкант - инструменти и огъване</h2>
             <p>Библиотека с поансони и матрици, наличните сегменти, таблица за корекция на огъването (BD) и програми.</p>
         </div>
-        <a class="btn-submit" style="text-decoration:none" href="{{ url_for('admin_bending_programs') }}">Програми за огъване &rarr;</a>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+            {% for m in machines if m.press_brake %}<a class="btn-submit" style="text-decoration:none" target="_blank" href="{{ url_for('bending_machine_3d', machine_id=m.id) }}">3D: {{ m.name }}</a>{% endfor %}
+            <a class="btn-submit" style="text-decoration:none" href="{{ url_for('admin_bending_programs') }}">Програми за огъване &rarr;</a>
+        </div>
     </div>
 
     <div class="bend-stats">
