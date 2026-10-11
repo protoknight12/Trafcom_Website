@@ -37,9 +37,10 @@ const W = sim.width, TOOL_W = W + 20, T = sim.thickness;
 const WL = M.work_length || 2050, BF = M.between_frames || 1730, WH = M.work_height || 1000, OV = M.overall || [WL + 550, 1450, 2650];
 const mat = (c, o) => new THREE.MeshStandardMaterial({ color: c, metalness: 0.5, roughness: 0.45, transparent: o !== undefined, opacity: o === undefined ? 1 : o });
 const mats = { die: mat(0x8fa0b0), punch: mat(0xcfd8e0), clamp: mat(0x7d8a97), finger: mat(0x4f9d69), part: mat(0xe26a4a), hit: mat(0xff3b30),
-    frame: mat(0x6b829a, 0.28), ram: mat(0x56677a), bed: mat(0x4a5560), holder: mat(0x6b7886), crowning: mat(0xc9a227), rail: mat(0x9aa5b1), beam: mat(0x2f6f9f),
+    frame: mat(0x9db4cc, 0.5), ram: mat(0x6f8299), bed: mat(0x4a5560), holder: mat(0x6b7886), crowning: mat(0xc9a227), rail: mat(0x9aa5b1), beam: mat(0x2f6f9f),
     arm: mat(0x7d8a97), panel: mat(0x22262b), screen: mat(0x2f8fbf), floor: mat(0x1d2126) };
 
+const lineMat = new THREE.LineBasicMaterial({ color: 0xaab6c4 });
 const staticG = new THREE.Group(), dynG = new THREE.Group();
 scene.add(staticG, dynG);
 const tag = (m, key) => { m.userData.key = key; m.visible = !!vis[key]; return m; };
@@ -54,17 +55,24 @@ const lerpPts = (a, b, f) => a.map((p, i) => [p[0] + (b[i][0] - p[0]) * f, p[1] 
 // ---- the fixed machine (built once) ----
 (function buildMachine() {
     const top = OV[2] - WH;   // y of the top of the machine, the die's top plane is y = 0
-    // side frames: a C-shaped plate each, back column + top and bottom arms (schematic outline)
-    const C = [[-450, -WH], [750, -WH], [750, top], [-450, top], [-450, 950], [250, 950], [250, -330], [-450, -330]];
+    // side plates: the profile traced from the body drawing (the throat is open to the front so the tools run past the plates), x = a_die - a, y = b - b_die
+    const F = M.frame || { a_die: 1190, b_die: 1010, thickness: 100, profile: [[0, 0], [1300, 0], [1300, 600], [1020, 600], [811, 932], [811, 1500], [960, 1650], [1200, 1650], [1200, 2650], [0, 2650]] };
+    const plate = F.profile.map(([a, b]) => [F.a_die - a, b - F.b_die]);
     for (const s of [-1, 1]) {
-        const f = tag(shapeMesh(C, mats.frame, 120), 'frames');
-        f.position.z = s * (BF / 2 + 60);
+        const f = tag(shapeMesh(plate, mats.frame, F.thickness), 'frames');
+        f.position.z = s * (BF / 2 + F.thickness / 2);
         staticG.add(f);
+        const e = tag(new THREE.LineSegments(new THREE.EdgesGeometry(f.geometry), lineMat), 'frames');
+        e.position.copy(f.position);
+        staticG.add(e);
     }
-    box('frames', mats.frame, 50, OV[2], BF, 725, (top - WH) / 2, 0);   // the rear panel between the frames
-    box('floor', mats.floor, 3600, 4, 3000, 150, -WH - 2, 0);
-    box('bed', mats.bed, 220, 160, WL, 0, -250, 0);
-    box('crowning', mats.crowning, 200, 50, WL, 0, -145, 0);
+    const ax = a => F.a_die - a, by = b => b - F.b_die;
+    box('frames', mats.frame, 100, 900, BF, ax(1250), by(450), 0);   // the lower front cross panel between the plates; its top flange (b = 900) carries the die holder
+    box('frames', mats.frame, 120, 180, BF, ax(120), by(2480), 0);   // the upper rear tie tube
+    box('frames', mats.frame, 120, 180, BF, ax(560), by(2380), 0);   // the upper tube behind the guide arms
+    box('floor', mats.floor, 3600, 4, 3000, 150, -F.b_die - 2, 0);
+    box('bed', mats.bed, 220, 300, WL, 0, -260, 0);   // rests on the plates' lower arms (b = 600), its top is the panel's flange
+    box('crowning', mats.crowning, 232, 50, WL, 0, -140, 0);
     // die holder: the sections of the real holder (e.g. 550 + 1050 + 450)
     let z0 = -WL / 2;
     for (const len of (M.die_holder || [WL])) { box('dieholder', mats.holder, 120, 50, len - 2, 0, -85, z0 + len / 2); z0 += len; }
@@ -129,7 +137,7 @@ function draw(f) {
     add(tag(shapeMesh(clamp, mats.clamp, TOOL_W), 'punch'));
     // the upper beam and its tool clamps hang on the top of the punch's tang
     const top = Math.max(...clamp.map(p => p[1]));
-    add(box('ram', mats.ram, 240, 380, WL, 0, top + 110 + 190, 0, dynG));
+    add(box('ram', mats.ram, 90, 420, WL, 0, top + 110 + 210, 0, dynG));   // the upper table is a tall flat plate; its ends run in the guides of the plates
     const n = M.clamps || 10, cl = WL / n;
     for (let i = 0; i < n; i++) add(box('clamps', mats.clamp, 190, 110, cl - 20, 0, top + 55, -WL / 2 + cl * (i + 0.5), dynG));
     fingerMeshes(lerpPts(a.finger, b.finger, u), add);

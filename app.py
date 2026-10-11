@@ -6391,7 +6391,7 @@ def _machine_spec(machine, part_width):
     return {'name': machine.name, 'work_length': wl, 'between_frames': k.get('between_frames_mm') or wl * 0.84, 'work_height': k.get('work_height_mm') or 1000,
             'overall': k.get('overall_mm') or [wl + 550, 1450, 2650], 'x_max': cfg.x_max_mm if cfg else None, 'r': k.get('r'), 'y': k.get('y'),
             'die_holder': k.get('die_holder_mm') or [wl], 'clamps': k.get('clamps') or 10, 'controller': k.get('controller'),
-            'finger': k.get('finger'), 'finger_z': [-s, s], 'finger_machine_z': [round(z1), round(z2)], 'warn': warn}
+            'finger': k.get('finger'), 'frame': k.get('frame'), 'finger_z': [-s, s], 'finger_machine_z': [round(z1), round(z2)], 'warn': warn}
 
 
 @app.route('/bending/programs/<int:prog_id>/sim')
