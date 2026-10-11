@@ -61,6 +61,40 @@
     </section>
     {% endif %}
 
+    <section class="admin-card">
+        <h3>Сила и избор на матрица</h3>
+        <form id="forceForm" class="admin-form" onsubmit="return false">
+            <div class="form-group"><label for="fc_rm">Якост Rm (N/mm²)</label><input type="number" id="fc_rm" value="400" min="1" step="any"></div>
+            <div class="form-group"><label for="fc_t">Дебелина (mm)</label><input type="number" id="fc_t" value="2" min="0.1" step="any"></div>
+            <div class="form-group"><label for="fc_l">Дължина на огъване (mm)</label><input type="number" id="fc_l" value="1000" min="1" step="any"></div>
+            <button type="button" class="btn-submit" id="fcGo">Изчисли</button>
+        </form>
+        <div id="fcOut"></div>
+    </section>
+    <script>
+    document.getElementById('fcGo').addEventListener('click', async () => {
+        const q = new URLSearchParams({rm: fc_rm.value, t: fc_t.value, length: fc_l.value});
+        const r = await fetch("{{ url_for('admin_bending_program_force', prog_id=prog.id) }}?" + q);
+        const d = await r.json(), out = document.getElementById('fcOut');
+        out.textContent = '';
+        if (!r.ok) { out.textContent = d.message; return; }
+        const p = document.createElement('p');
+        p.textContent = 'Препоръчан V-отвор: ' + d.recommended_v + ' mm · сила при него: ' + d.force_at_recommended_v + ' kN/m' +
+            (d.machine_kn ? ' · тонаж на машината: ' + d.machine_kn.toFixed(0) + ' kN' : ' · няма въведен тонаж на машината');
+        out.appendChild(p);
+        const tb = document.createElement('table'); tb.className = 'users-table';
+        tb.innerHTML = '<thead><tr><th>Матрица</th><th>V</th><th>kN/m</th><th>Общо kN</th><th>Годна</th></tr></thead>';
+        const body = document.createElement('tbody');
+        d.dies.forEach(x => {
+            const tr = document.createElement('tr');
+            [x.code, x.v, x.force_kn_per_m, x.total_kn, x.ok ? 'да' : x.notes.join('; ')].forEach(v => { const td = document.createElement('td'); td.textContent = v; tr.appendChild(td); });
+            body.appendChild(tr);
+        });
+        if (!d.dies.length) { const tr = document.createElement('tr'); const td = document.createElement('td'); td.colSpan = 5; td.textContent = 'Няма одобрени матрици в библиотеката.'; tr.appendChild(td); body.appendChild(tr); }
+        tb.appendChild(body); out.appendChild(tb);
+    });
+    </script>
+
     {% if prog.executions %}
     <section class="admin-card">
         <h3>Изпълнения</h3>

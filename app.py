@@ -38,6 +38,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import ezdxf
 from bending.unfold import unfold_section, k_factor, bd_table
+from bending.sequence import steps_from_unfold
+from bending.tools import force_kn_per_m, recommended_v, rank_dies, G as TONNE_KN
 from ezdxf import bbox
 from ezdxf.math import bulge_to_arc
 import random
@@ -5943,6 +5945,43 @@ def bending_program_execute(prog_id):
     return redirect(url_for('bending_program_sheet', prog_id=prog.id))
 
 
+@app.route('/admin/bending/programs/<int:prog_id>/force')
+@role_required('admin')
+def admin_bending_program_force(prog_id):
+    """Bending force + library dies ranked for ?rm=<N/mm2>&t=<mm>&length=<mm> on this program's press brake."""
+    prog = db.get_or_404(BendProgram, prog_id)
+    try:
+        rm, t, length = (_fnum(request.args.get(k), n) for k, n in (('rm', 'якост'), ('t', 'дебелина'), ('length', 'дължина')))
+        cfg = prog.machine.press_brake
+        machine_kn = cfg.tonnage_t * TONNE_KN if cfg and cfg.tonnage_t else None
+        dies = [(d.code, d.v_opening_mm, d.max_kn_per_m) for d in BendTool.query.filter_by(kind='die', status='in_library')]
+        return jsonify({'recommended_v': recommended_v(t), 'machine_kn': machine_kn, 'dies': rank_dies(dies, rm, t, length, machine_kn),
+                        'force_at_recommended_v': round(force_kn_per_m(rm, t, recommended_v(t)), 1)})
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+
+
+@app.route('/api/flashing/program', methods=['POST'])
+@role_required('admin')
+def api_flashing_program():
+    """Draft BendProgram for an existing Detail from a flashing profile: bends left to right, back gauge from the unfold."""
+    data = request.get_json(silent=True) or {}
+    detail = db.session.get(Detail, int(data.get('detail_id') or 0))
+    machine = db.session.get(Machine, int(data.get('machine_id') or 0))
+    if not (detail and machine):
+        return jsonify({'status': 'error', 'message': 'Невалиден детайл или машина.'}), 400
+    try:
+        steps = steps_from_unfold(_flashing_unfold(data))
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    prog = BendProgram(detail=detail, machine=machine, name=detail.name, notes='Генерирана от /flashing (ред отляво надясно, без проверка за колизии).')
+    prog.steps = [BendStep(**st) for st in steps]
+    db.session.add(prog)
+    db.session.commit()
+    log_action(f'Създадена програма за огъване "{prog.name}" от /flashing ({len(steps)} стъпки)')
+    return jsonify({'status': 'success', 'program_id': prog.id, 'url': url_for('admin_bending_program', prog_id=prog.id)})
+
+
 @app.route('/admin/bending/steps/<int:step_id>/delete', methods=['POST'])
 @role_required('admin')
 def admin_bending_delete_step(step_id):
@@ -6401,7 +6440,8 @@ def flashing():
     services = allowed_only('services', Service.query.order_by(Service.name).all())
     bd_keys = [k for (k,) in db.session.query(BendDeduction.material_type).distinct()]
     bd_materials = MaterialType.query.filter(MaterialType.key.in_(bd_keys)).all() if bd_keys else []
-    return render_template('flashing.html', materials=materials, services=services, bd_materials=bd_materials, active_page='flashing')
+    return render_template('flashing.html', materials=materials, services=services, bd_materials=bd_materials,
+                           brakes=Machine.query.join(PressBrakeConfig).order_by(Machine.name).all() if current_user.is_admin else [], active_page='flashing')
 
 
 def _hall_admin_info(m):

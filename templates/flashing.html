@@ -145,6 +145,13 @@
                     {% for s in services %}<option value="{{ s.id }}">{{ localized(s, 'name') }}</option>{% endfor %}
                 </select>
             </div>
+            {% if brakes %}
+            <div class="fl-row">
+                <select id="d-brake"><option value="">-- {{ _('Без програма за огъване') }} --</option>
+                    {% for m in brakes %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}
+                </select>
+            </div>
+            {% endif %}
             <button type="button" class="btn-submit" id="btn-detail" style="width:100%;">{{ _('Запиши като Детайл') }}</button>
             <div id="d-msg" style="margin-top:6px; font-size:0.85rem;"></div>
             {% endif %}
@@ -551,6 +558,13 @@
             const res = await fetch('/api/quick-create-detail', { method: 'POST', body: fd });
             const data = await res.json();
             msg.textContent = res.ok ? `Записан детайл „${data.detail.name}“ - ${f2(data.detail.price)} лв.` : (data.message || 'Грешка');
+            const brake = $('d-brake');
+            if (res.ok && brake && brake.value) {
+                const pr = await fetch('/api/flashing/program', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': window.CSRF_TOKEN },
+                                                                  body: JSON.stringify({ ...collect(), detail_id: data.detail.id, machine_id: brake.value }) });
+                const pd = await pr.json();
+                msg.textContent += pr.ok ? ' Програма за огъване е създадена.' : ' Програмата не е създадена: ' + (pd.message || 'грешка');
+            }
         } catch (e) { msg.textContent = e.message; }
     });
 

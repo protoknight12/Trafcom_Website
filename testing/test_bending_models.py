@@ -222,3 +222,39 @@ def test_cannot_execute_draft_program(ctx):
     c = app.test_client()
     c.post('/login', data={'username': 'bq_ex', 'password': 'irrelevant123'})
     assert c.get(f'/bending/programs/{p.id}/execute').status_code == 302  # draft -> back to the sheet
+
+
+def test_force_endpoint(ctx):
+    from werkzeug.security import generate_password_hash
+    from app import User, limiter, Detail, BendProgram, MaterialPrice
+    app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
+    limiter.reset()
+    m = Machine(name='M')
+    db.session.add_all([User(username='bq_f', password=generate_password_hash('irrelevant123'), role='admin'), m,
+                        MaterialPrice(key='k', display_name='M', type='sheets', cost_per_m2=1)])
+    db.session.flush()
+    db.session.add(PressBrakeConfig(machine=m, tonnage_t=10))
+    d = Detail(name='D', material_key='k', width=1, height=1, total_length=1, pierce_count=1, calculated_price=1, geometry_json='[]')
+    db.session.add(d)
+    db.session.flush()
+    p = BendProgram(detail=d, machine=m, name='P')
+    db.session.add_all([p, BendTool(code='V12', kind='die', v_opening_mm=12, status='in_library'), BendTool(code='V16', kind='die', v_opening_mm=16, status='new')])
+    db.session.commit()
+    c = app.test_client()
+    c.post('/login', data={'username': 'bq_f', 'password': 'irrelevant123'})
+    j = c.get(f'/admin/bending/programs/{p.id}/force?rm=400&t=2&length=1000').get_json()
+    assert j['recommended_v'] == 12 and [d['code'] for d in j['dies']] == ['V12']  # unapproved V16 is not offered
+    assert j['dies'][0]['force_kn_per_m'] == 189.3 and j['machine_kn'] == pytest.approx(98.0665)
+    assert not j['dies'][0]['ok']  # 189 kN for 1 m > a 10 t machine
+    assert c.get(f'/admin/bending/programs/{p.id}/force?rm=0&t=2&length=1000').status_code == 400
+
+
+def test_seed_m460r(ctx):
+    from migration.seed_bend_tools_m460r import seed
+    assert seed() == (4, 96)
+    assert seed() == (0, 0)  # idempotent
+    t = BendTool.query.filter_by(code='M460.r V50').one()
+    assert (t.v_opening_mm, t.radius_mm, t.angle_deg, t.max_kn_per_m, t.status) == (50, 3, 85, 800, 'in_library')
+    assert sorted(s.length_mm for s in t.segments) == sorted([10, 15, 20, 40, 50, 100, 200, 370] * 3)
+    erps = [s.erp_number for s in BendToolSegment.query.all()]
+    assert len(set(erps)) == 96

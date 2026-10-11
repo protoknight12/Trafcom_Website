@@ -295,3 +295,25 @@ def test_flashing_page_offers_bd_select_only_when_table_has_rows(client):
     db.session.add(BendDeduction(material_type='sheets', thickness_mm=2, radius_mm=2, angle_deg=90, deduction_mm=3.0))
     db.session.commit()
     assert b'id="f-bd"' in client.get('/flashing').data
+
+
+def test_flashing_program_from_profile(client):
+    from app import Detail, Machine, BendProgram, MaterialPrice
+    db.session.add_all([Machine(name='Durma'), MaterialPrice(key='k', display_name='M', type='sheets', cost_per_m2=1),
+                        User(username='qa_adm', password=generate_password_hash('irrelevant123'), role='admin')])
+    db.session.flush()
+    d = Detail(name='Z-профил', material_key='k', width=1, height=1, total_length=1, pierce_count=1, calculated_price=1, geometry_json='[]')
+    db.session.add(d)
+    db.session.commit()
+    body = {**BASE, 'profile': 'Z', 'flanges': [20, 40, 20], 'angles': [90, 90], 'detail_id': d.id, 'machine_id': Machine.query.one().id}
+    assert client.post('/api/flashing/program', json=body).status_code in (302, 403)  # regular user: role_required redirects
+    from flask import g
+    g.pop('_login_user', None)  # the fixture's single app context would keep the regular user cached
+    admin = flask_app.test_client()
+    admin.post('/login', data={'username': 'qa_adm', 'password': 'irrelevant123'})
+    g.pop('_login_user', None)
+    r = admin.post('/api/flashing/program', json=body)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    prog = BendProgram.query.one()
+    assert prog.status == 'draft' and [(s.seq, s.flip) for s in prog.steps] == [(1, False), (2, True)]
+    assert admin.post('/api/flashing/program', json={**body, 'thickness': -1}).status_code == 400
