@@ -5956,6 +5956,32 @@ def admin_bending_delete_step(step_id):
     return redirect(url_for('admin_bending_program', prog_id=prog.id))
 
 
+def _bend_program_document(prog, new_status):
+    """Approved program = a controlled document (ISO 9001 7.5): first approval creates it, a later version adds a revision,
+    and approving a version retires the earlier versions of the same program."""
+    if new_status == 'approved':
+        label = f'{prog.version}'
+        if prog.document is None:
+            doc = ControlledDocument(document_no=f'BP-{prog.id}', title=f'Програма за огъване: {prog.name}', category='work_instruction',
+                                     status='active', current_revision=label, owner_id=current_user.id, approved_by=current_user.username,
+                                     effective_date=date.today())
+            db.session.add(doc)
+            db.session.flush()
+            prog.document = doc
+            change = 'Първоначално издаване'
+        else:
+            doc = prog.document
+            doc.status, doc.current_revision, doc.approved_by, doc.effective_date = 'active', label, current_user.username, date.today()
+            change = f'Нова версия {label} на програмата'
+        db.session.add(ControlledDocumentRevision(document_id=doc.id, revision_label=label, change_description=change,
+                                                  approved_by=current_user.username, revised_by_id=current_user.id))
+        for other in BendProgram.query.filter(BendProgram.document_id == doc.id, BendProgram.id != prog.id, BendProgram.status == 'approved'):
+            other.status = 'obsolete'
+    elif new_status == 'obsolete' and prog.document and not BendProgram.query.filter(
+            BendProgram.document_id == prog.document_id, BendProgram.id != prog.id, BendProgram.status == 'approved').count():
+        prog.document.status = 'obsolete'
+
+
 @app.route('/admin/bending/programs/<int:prog_id>/status', methods=['POST'])
 @role_required('admin')
 def admin_bending_program_status(prog_id):
@@ -5963,11 +5989,29 @@ def admin_bending_program_status(prog_id):
     new = request.form.get('status')
     if new == 'approved' and not prog.steps:
         flash('Програма без стъпки не може да се одобри.', 'danger')
-    elif new in ('draft', 'approved', 'obsolete'):
+    elif new in ('draft', 'approved', 'obsolete') and not (new == 'draft' and prog.status == 'approved'):
         prog.status = new
+        _bend_program_document(prog, new)
         db.session.commit()
         log_action(f'Програма "{prog.name}" -> {new}')
     return redirect(url_for('admin_bending_program', prog_id=prog.id))
+
+
+@app.route('/admin/bending/programs/<int:prog_id>/new-version', methods=['POST'])
+@role_required('admin')
+def admin_bending_program_new_version(prog_id):
+    """Copy an approved program into a draft with version + 1 (same document); the old one stays valid until the new is approved."""
+    old = db.get_or_404(BendProgram, prog_id)
+    if old.status != 'approved':
+        flash('Нова версия се прави само от одобрена програма.', 'danger')
+        return redirect(url_for('admin_bending_program', prog_id=old.id))
+    new = BendProgram(detail=old.detail, machine=old.machine, name=old.name, notes=old.notes, document_id=old.document_id, version=old.version + 1)
+    new.steps = [BendStep(seq=st.seq, angle_deg=st.angle_deg, x_mm=st.x_mm, r_mm=st.r_mm, force_kn=st.force_kn, flip=st.flip,
+                          punch_id=st.punch_id, die_id=st.die_id, notes=st.notes) for st in old.steps]
+    db.session.add(new)
+    db.session.commit()
+    log_action(f'Нова версия {new.version} на програма "{new.name}"')
+    return redirect(url_for('admin_bending_program', prog_id=new.id))
 
 
 @app.route('/admin/bending/deductions/add', methods=['POST'])
@@ -6009,9 +6053,11 @@ class BendProgram(db.Model):
     status = db.Column(db.String(10), default='draft', nullable=False)  # draft / approved / obsolete
     version = db.Column(db.Integer, default=1, nullable=False)
     notes = db.Column(db.Text)
+    document_id = db.Column(db.Integer, db.ForeignKey('controlled_document.id'))  # shared by every version of one program
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     detail = db.relationship('Detail')
     machine = db.relationship('Machine')
+    document = db.relationship('ControlledDocument')
     steps = db.relationship('BendStep', backref='program', order_by='BendStep.seq', cascade='all, delete-orphan')
 
 

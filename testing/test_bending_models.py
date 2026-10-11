@@ -170,15 +170,29 @@ def test_program_flow_and_sheet(ctx):
     c.post(f'/admin/bending/programs/{prog.id}/steps/add', data={'angle_deg': '10'})
     db.session.expire_all()
     assert len(prog.steps) == 1  # approved program is frozen
+    from app import ControlledDocument
+    doc = ControlledDocument.query.one()
+    assert doc.document_no == f'BP-{prog.id}' and doc.status == 'active' and doc.current_revision == '1' and prog.document_id == doc.id
+    # new version: draft copy sharing the document; approving it retires v1 and adds a revision
+    c.post(f'/admin/bending/programs/{prog.id}/new-version')
+    db.session.expire_all()
+    v2 = BendProgram.query.filter_by(version=2).one()
+    assert v2.status == 'draft' and v2.document_id == doc.id and [(s.seq, s.angle_deg) for s in v2.steps] == [(1, 45)] and prog.status == 'approved'
+    c.post(f'/admin/bending/programs/{v2.id}/status', data={'status': 'approved'})
+    db.session.expire_all()
+    assert prog.status == 'obsolete' and v2.status == 'approved' and doc.current_revision == '2' and len(doc.revisions) == 2
+    c.post(f'/admin/bending/programs/{v2.id}/status', data={'status': 'draft'})  # an approved program can't go back to draft
+    db.session.expire_all()
+    assert v2.status == 'approved'
+    prog, sid = v2, v2.steps[0].id
     ex = f'/bending/programs/{prog.id}/execute'
     assert c.get(ex).status_code == 200
-    sid = prog.steps[0].id
     c.post(ex, data={'order_no': 'PO-7', f'm{sid}': '45.5'})  # nominal 45, tol 1 -> pass
     c.post(ex, data={f'm{sid}': '47'})  # out of tolerance -> fail
     c.post(ex, data={})  # nothing measured -> refused
     db.session.expire_all()
     from app import BendExecution, QualityCheck
-    assert [(e.quality_check.overall_result, e.program_version) for e in BendExecution.query.order_by(BendExecution.id)] == [('pass', 1), ('fail', 1)]
+    assert [(e.quality_check.overall_result, e.program_version) for e in BendExecution.query.order_by(BendExecution.id)] == [('pass', 2), ('fail', 2)]  # run on the approved v2
     q = QualityCheck.query.first()
     assert q.order_no == 'PO-7' and q.measurements[0].nominal_value == 45 and q.measurements[0].samples[0].value == 45.5
     sheet = c.get(f'/admin/bending/programs/{prog.id}/sheet')

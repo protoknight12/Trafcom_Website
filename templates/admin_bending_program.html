@@ -32,6 +32,12 @@
             {% if prog.status == 'draft' %}<button name="status" value="approved" class="btn-submit">Одобри</button>
             {% elif prog.status == 'approved' %}<button name="status" value="obsolete" class="btn-delete">Остаряла</button>{% endif %}
         </form>
+        {% if prog.status == 'approved' %}
+        <form action="{{ url_for('admin_bending_program_new_version', prog_id=prog.id) }}" method="POST" style="display:inline">
+            {% include 'partials/csrf_field.html' %}<button type="submit" class="btn-submit">Нова версия</button>
+        </form>
+        {% endif %}
+        {% if prog.document %}<span>Документ {{ prog.document.document_no }} · рев. {{ prog.document.current_revision }}</span>{% endif %}
         <a href="{{ url_for('bending_program_sheet', prog_id=prog.id) }}" target="_blank">Лист за оператора</a>
     </section>
 
