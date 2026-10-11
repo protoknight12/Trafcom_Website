@@ -253,26 +253,54 @@ def test_force_endpoint(ctx):
 
 def test_seed_m460r(ctx):
     from migration.seed_bend_tools_m460r import seed
-    assert seed() == (5, 135)
+    from bending.profile import derived, radii_report
+    assert seed() == (2, 54)                      # the punch and ONE four-way die M460.r, 27 segments each (3 sets x 9 lengths)
     assert seed() == (0, 0)  # idempotent
     BendToolSegment.query.filter_by(length_mm=415).delete()  # as if seeded before 415 was added
     db.session.commit()
-    assert seed() == (0, 15) and BendToolSegment.query.count() == 135  # tops up only what's missing
-    t = BendTool.query.filter_by(code='M460.r V50').one()
-    assert (t.v_opening_mm, t.radius_mm, t.angle_deg, t.max_kn_per_m, t.status) == (50, 3, 85, 800, 'in_library')
-    assert sorted(s.length_mm for s in t.segments) == sorted([10, 15, 20, 40, 50, 100, 200, 370, 415] * 3)
-    erps = [s.erp_number for s in BendToolSegment.query.all()]
-    assert len(set(erps)) == 135
+    assert seed() == (0, 6) and BendToolSegment.query.count() == 54  # tops up only what's missing
     from app import BendTool as _T
-    pp = _T.query.filter_by(code='P.97.75.r08').one().profile
-    from bending.profile import derived, radii_report
+    p = _T.query.filter_by(code='P.97.75.r08').one()
+    assert (p.kind, p.height_mm, p.angle_deg, p.radius_mm, round(p.max_kn_per_m, 1), len(p.segments)) == ('punch', 67.6, 75, 0.8, 980.7, 27)
+    pp = p.profile
     dv = derived(pp, 'punch')
     assert abs(dv['tip_angle'] - 75.0) < 0.05 and dv['tip_radius'] == 0.8 and abs(dv['min_y']) < 0.02 and 66.9 < dv['max_y'] < 67.2  # real tip, seat at 67.09
     assert [(r['kind'], r['radius']) for r in radii_report(pp)] == [('fillet', 0.8), ('arc', 24.6)]  # tip radius and the relief are data, not a drawing
-    assert _T.query.filter_by(code='M460.r V16').one().profile is None
-    p = BendTool.query.filter_by(code='P.97.75.r08').one()
-    assert (p.kind, p.height_mm, p.angle_deg, p.radius_mm, round(p.max_kn_per_m, 1), len(p.segments)) == ('punch', 67.6, 75, 0.8, 980.7, 27)
+    d = _T.query.filter_by(code='M460.r').one()
+    assert d.kind == 'die' and d.max_kn_per_m == 800 and len(d.segments) == 27 and _T.query.filter(_T.code.like('M460.r V%')).count() == 0
+    dd = derived(d.profile, 'die')
+    assert (dd['width'], dd['height'], dd['base_width']) == (60, 60, 60)
+    assert [(g['v'], g['shoulder_radii'][0]) for g in d.positions and dd['grooves']] == [(16, 2.0), (22, 2.0), (35, 2.0), (50, 3.0)]
+    assert [p_['label'] for p_ in d.positions] == ['V16', 'V22', 'V35', 'V50']
+    assert len({s.erp_number for s in BendToolSegment.query.all()}) == 54
 
+
+def test_seed_merges_the_four_dies_an_earlier_seed_made(ctx):
+    from migration.seed_bend_tools_m460r import seed
+    from app import BendTool as _T
+    for v in (16, 22, 35, 50):  # what the first version created: four separate dies with their own segments
+        t = _T(code=f'M460.r V{v}', kind='die', v_opening_mm=v, radius_mm=2, angle_deg=85, status='in_library')
+        db.session.add(t)
+        db.session.add_all(BendToolSegment(tool=t, length_mm=10 * (i + 1), erp_number=500000 + v * 10 + i) for i in range(3))
+    db.session.commit()
+    seed()
+    d = _T.query.filter_by(code='M460.r').one()
+    assert _T.query.filter(_T.code.like('M460.r V%')).count() == 0 and d.v_opening_mm is None and len(d.positions) == 4
+    assert BendToolSegment.query.filter_by(tool_id=d.id, length_mm=10).count() == 3   # the kept die keeps its segments (and their ERP numbers)
+    assert any(s.erp_number == 500160 for s in d.segments) and BendToolSegment.query.filter(BendToolSegment.tool_id.is_(None)).count() == 0
+
+
+def test_seed_refuses_to_merge_a_used_die(ctx):
+    from migration.seed_bend_tools_m460r import seed
+    from app import BendTool as _T
+    for v in (16, 22):
+        t = _T(code=f'M460.r V{v}', kind='die', v_opening_mm=v, status='in_library')
+        db.session.add(t)
+        db.session.add(BendToolSegment(tool=t, length_mm=10, erp_number=600000 + v, status='on_machine' if v == 22 else 'in_stock'))
+    db.session.commit()
+    with pytest.raises(SystemExit):
+        seed()
+    assert _T.query.filter(_T.code.like('M460.r V%')).count() == 2   # nothing was touched
 
 def test_profile_editor_routes(ctx):
     import io as _io
@@ -287,15 +315,15 @@ def test_profile_editor_routes(ctx):
     db.session.commit()
     c = app.test_client()
     c.post('/login', data={'username': 'bq_pe', 'password': 'irrelevant123'})
-    tid = BendTool.query.one().id
+    tid = BendTool.query.filter_by(code='P1').one().id
     assert c.get(f'/admin/bending/tools/{tid}/profile/edit').status_code == 200  # starts from the numbers
-    assert BendTool.query.one().profile is None
+    assert BendTool.query.filter_by(code='P1').one().profile is None
     svg0 = c.get(f'/admin/bending/tools/{tid}/profile.svg').data
     assert svg0.count(b'<path') == 3  # a tool without a profile still gets a picture from its numbers (raster + clamp + outline)
     bad = c.post(f'/admin/bending/tools/{tid}/profile', json={'points': [[0, 0], [10, 0], [20, 0]]})
-    assert bad.status_code == 400 and BendTool.query.one().profile is None
+    assert bad.status_code == 400 and BendTool.query.filter_by(code='P1').one().profile is None
     ok = c.post(f'/admin/bending/tools/{tid}/profile', json={'points': [[0, 0], [8, 10], [8, 60], [-8, 60], [-8, 10]]})
-    assert ok.status_code == 200 and len(BendTool.query.one().profile) == 5 and BendTool.query.one().profile[0] == [0, 0, 0, 0]
+    assert ok.status_code == 200 and len(BendTool.query.filter_by(code='P1').one().profile) == 5 and BendTool.query.filter_by(code='P1').one().profile[0] == [0, 0, 0, 0]
     assert c.get(f'/admin/bending/tools/{tid}/profile.svg').data.count(b'<path') == 3  # real outline + 5 mm raster + the standard clamp
     assert b'8' in c.get(f'/admin/bending/tools/{tid}/profile/edit').data
     doc = _ezdxf.new()
@@ -305,7 +333,7 @@ def test_profile_editor_routes(ctx):
     doc.write(buf)
     up = c.post(f'/admin/bending/tools/{tid}/profile/dxf', data={'file': (_io.BytesIO(buf.getvalue().encode()), 'p.dxf')}, content_type='multipart/form-data')
     pts_up = up.get_json()['points']
-    assert up.status_code == 200 and max(p[1] for p in pts_up) == 67.09 and len(BendTool.query.one().profile) == 5  # tang cut off; review only, nothing saved
+    assert up.status_code == 200 and max(p[1] for p in pts_up) == 67.09 and len(BendTool.query.filter_by(code='P1').one().profile) == 5  # tang cut off; review only, nothing saved
     assert c.post(f'/admin/bending/tools/{tid}/profile/dxf', data={'file': (_io.BytesIO(b'x'), 'p.txt')}, content_type='multipart/form-data').status_code == 400
     # outline endpoint: radii in, outline + radius list + numbers read off the contour + warnings against the catalogue data out
     import math as _m
@@ -317,5 +345,69 @@ def test_profile_editor_routes(ctx):
     wrong = [[0, 0, 2.0, 0]] + good[1:]               # tip radius changed to R2 -> disagrees with the tool's R0.8
     assert any('R2' in w for w in c.post(f'/admin/bending/tools/{tid}/profile/outline', json={'points': wrong}).get_json()['warnings'])
     assert c.post(f'/admin/bending/tools/{tid}/profile/outline', json={'points': [[0, 0, 50, 0], [4, 0], [4, 4]]}).status_code == 400  # fillet does not fit
+    # a die whose base is not the 60 mm of the die channel is flagged; shoulder radii are compared with the die's own radius
+    from app import BendTool as _BT
+    from bending.profile import default_profile as _dp
+    db.session.add(_BT(code='D1', kind='die', angle_deg=85, radius_mm=2, v_opening_mm=16, height_mm=60))
+    db.session.commit()
+    did = _BT.query.filter_by(code='D1').one().id
+    ok_die = c.post(f'/admin/bending/tools/{did}/profile/outline', json={'points': _dp('die', 85, 2, 60, 16), 'base_height_mm': 20}).get_json()
+    assert ok_die['warnings'] == [] and ok_die['derived']['base_width'] == 60
+    assert any('височина на основата' in w for w in c.post(f'/admin/bending/tools/{did}/profile/outline', json={'points': _dp('die', 85, 2, 60, 16)}).get_json()['warnings'])
+    narrow = [[x * 50 / 60 if i not in (1, 2, 3) else x, y, r, a] for i, (x, y, r, a) in enumerate(_dp('die', 85, 2, 60, 16))]
+    assert any('канал' in w for w in c.post(f'/admin/bending/tools/{did}/profile/outline', json={'points': narrow, 'base_height_mm': 20}).get_json()['warnings'])
+    upper = [[-20, 0, 0, 0], [-8, 0, 2, 0], [0, -8.7, 0, 0], [8, 0, 2, 0], [20, 0, 0, 0], [20, -40, 0, 0], [30, -40, 0, 0], [30, -60, 0, 0], [-30, -60, 0, 0], [-30, -40, 0, 0], [-20, -40, 0, 0]]
+    chk = lambda bh: c.post(f'/admin/bending/tools/{did}/profile/outline', json={'points': upper, 'base_height_mm': bh}).get_json()['warnings']
+    assert not any('канал' in w for w in chk(20)) and any('канал' in w for w in chk(35))  # narrower above the base is fine; a taller base would include the narrow part
+    assert c.post(f'/admin/bending/tools/{did}/profile', json={'points': upper, 'base_height_mm': 20}).status_code == 200 and _BT.query.filter_by(code='D1').one().base_height_mm == 20
+    assert c.post(f'/admin/bending/tools/{did}/profile', json={'points': upper, 'base_height_mm': 99}).status_code == 400  # base taller than the die
+    r3 = [[x, y, 3 if r else 0, a] for x, y, r, a in _dp('die', 85, 2, 60, 16)]
+    assert any('R3' in w for w in c.post(f'/admin/bending/tools/{did}/profile/outline', json={'points': r3}).get_json()['warnings'])
     assert c.post(f'/admin/bending/tools/{tid}/profile', json={'points': [[0, 0, 5, 0], [4, 0], [4, 4]]}).status_code == 400
-    assert c.post(f'/admin/bending/tools/{tid}/profile', json={'reset': True}).status_code == 200 and BendTool.query.one().profile is None
+    assert c.post(f'/admin/bending/tools/{tid}/profile', json={'reset': True}).status_code == 200 and BendTool.query.filter_by(code='P1').one().profile is None
+
+
+def test_multi_v_die_in_force_ranking_and_program_steps(ctx):
+    import json as _json
+    from werkzeug.security import generate_password_hash
+    from app import User, limiter, Detail, BendProgram, BendStep, MaterialPrice
+    from bending.profile import multi_v_die
+    app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
+    limiter.reset()
+    m = Machine(name='M')
+    db.session.add_all([User(username='bq_mv', password=generate_password_hash('irrelevant123'), role='admin'), m,
+                        MaterialPrice(key='k', display_name='M', type='sheets', cost_per_m2=1)])
+    db.session.flush()
+    db.session.add(PressBrakeConfig(machine=m, tonnage_t=175))
+    d = Detail(name='D', material_key='k', width=1, height=1, total_length=1, pierce_count=1, calculated_price=1, geometry_json='[]')
+    die = BendTool(code='M460.r', kind='die', angle_deg=85, height_mm=60, max_kn_per_m=800, status='in_library',
+                   profile_json=_json.dumps(multi_v_die(60, [(50, 85, 3, 5), (16, 85, 2, 1), (35, 85, 2, 3), (22, 85, 2, 3)])))
+    db.session.add_all([d, die])
+    db.session.flush()
+    p = BendProgram(detail=d, machine=m, name='P')
+    db.session.add(p)
+    db.session.commit()
+    c = app.test_client()
+    c.post('/login', data={'username': 'bq_mv', 'password': 'irrelevant123'})
+    # every V of the die is offered by the force calculator, named after the die
+    j = c.get(f'/admin/bending/programs/{p.id}/force?rm=400&t=2&length=1000').get_json()
+    assert sorted(x['code'] for x in j['dies']) == ['M460.r · V16', 'M460.r · V22', 'M460.r · V35', 'M460.r · V50']
+    assert j['recommended_v'] == 12 and j['dies'][0]['code'] == 'M460.r · V16'   # closest to the recommended V12
+    # the step form picks the die AND which V is up; it is stored and printed on the operator sheet
+    page = c.get(f'/admin/bending/programs/{p.id}').get_data(as_text=True)
+    assert f'value="{die.id}|16"' in page and 'M460.r · V35' in page
+    c.post(f'/admin/bending/programs/{p.id}/steps/add', data={'angle_deg': '90', 'die_id': f'{die.id}|16'})
+    st = BendStep.query.one()
+    assert st.die_id == die.id and st.die_v_mm == 16
+    assert 'M460.r · V16' in c.get(f'/admin/bending/programs/{p.id}/sheet').get_data(as_text=True)
+    c.post(f'/admin/bending/programs/{p.id}/status', data={'status': 'approved'})
+    c.post(f'/admin/bending/programs/{p.id}/new-version')
+    assert BendStep.query.filter_by(die_v_mm=16).count() == 2   # a new version keeps which V was used
+    # four grooves of one die: no single V / radius is compared with the catalogue numbers, but each angle is
+    dd = c.get(f'/admin/bending/tools/{die.id}/profile/edit')
+    assert dd.status_code == 200
+    o = c.post(f'/admin/bending/tools/{die.id}/profile/outline', json={'points': _json.loads(die.profile_json), 'base_height_mm': 10}).get_json()
+    assert len(o['derived']['grooves']) == 4 and o['warnings'] == []
+    # a 20 mm base on the bottom side runs into the V22 groove on the left side (it starts ~11 mm above the bottom): flagged
+    tall = c.post(f'/admin/bending/tools/{die.id}/profile/outline', json={'points': _json.loads(die.profile_json), 'base_height_mm': 20}).get_json()
+    assert any('канала' in w or 'канал' in w for w in tall['warnings'])

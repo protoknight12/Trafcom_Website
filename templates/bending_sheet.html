@@ -27,7 +27,7 @@
         {% for st in prog.steps %}
         <tr>
             <td class="big">{{ st.seq }}</td><td class="big">{{ st.angle_deg }}&deg;</td><td>{{ st.x_mm if st.x_mm is not none else '' }}</td><td>{{ st.r_mm if st.r_mm is not none else '' }}</td>
-            <td>{{ st.force_kn if st.force_kn is not none else '' }}</td><td>{{ st.punch.code if st.punch else '' }}</td><td>{{ st.die.code if st.die else '' }}</td>
+            <td>{{ st.force_kn if st.force_kn is not none else '' }}</td><td>{{ st.punch.code if st.punch else '' }}</td><td>{{ (st.die.code ~ (' · V%g' % st.die_v_mm if st.die_v_mm else '')) if st.die else '' }}</td>
             <td>{{ 'ОБРЪЩАНЕ' if st.flip else '' }}</td><td class="measured"></td>
         </tr>
         {% if st.notes %}<tr><td></td><td colspan="8"><i>{{ st.notes }}</i></td></tr>{% endif %}

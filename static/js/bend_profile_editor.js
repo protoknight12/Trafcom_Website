@@ -11,6 +11,7 @@
     const SQ2 = Math.SQRT2, GRID = 5, CELLS = 12;
 
     let pts = cfg.points.map(p => [p[0], p[1], p[2] || 0, p[3] || 0]);
+    let info = null;   // last answer of the server (radii, grooves, numbers)
     let dense = pts.map(p => [p[0], p[1]]);   // last outline the server computed (fillets and arcs expanded)
     let sel = -1, snap = 0.5, dirty = false;
     const undoStack = [], redoStack = [];
@@ -38,12 +39,15 @@
     function redo() { if (redoStack.length) { undoStack.push(JSON.stringify(pts)); restore(redoStack.pop()); } }
 
     // ---- server: outline + radii -------------------------------------------------------------------------
+    const baseInput = $('pe-base');
+    const baseHeight = () => (baseInput && parseFloat(baseInput.value) > 0) ? parseFloat(baseInput.value) : null;
+    const payload = () => (baseInput ? { points: pts, base_height_mm: baseHeight() } : { points: pts });
     let busy = false, again = false;
     async function refresh() {
         if (busy) { again = true; return; }
         busy = true;
         try {
-            const r = await fetch(cfg.outlineUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': window.CSRF_TOKEN }, body: JSON.stringify({ points: pts }) });
+            const r = await fetch(cfg.outlineUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': window.CSRF_TOKEN }, body: JSON.stringify(payload()) });
             const d = await r.json();
             if (r.ok) { dense = d.outline; showInfo(d); toast(''); } else { toast(d.message || 'Невалиден контур.', true); }
             render();
@@ -70,7 +74,8 @@
         const top = Math.max(...ys) + (cfg.kind === 'punch' ? cfg.clamp.height : 0);
         const minx = Math.min(...xs, -half), maxx = Math.max(...xs, half), miny = Math.min(...ys, 0), maxy = Math.max(top, cfg.kind === 'punch' ? cfg.diag : 0);
         const r = svg.getBoundingClientRect(), aspect = r.height / r.width || 0.75;
-        view.w = Math.max((maxx - minx) + 12, ((maxy - miny) + 12) / aspect);
+        const room = $('pe-dims') && $('pe-dims').checked ? 46 : 12;
+        view.w = Math.max((maxx - minx) + room, ((maxy - miny) + room) / aspect);
         view.cx = (minx + maxx) / 2; view.cy = (miny + maxy) / 2;
         render();
     }
@@ -100,6 +105,84 @@
         return [[xl, seat], [xr, seat], [xr, top - k], [xr - k, top], [xl + k, top], [xl, top - k], [xl, n1], [xl + d, n1], [xl + d, n0], [xl, n0]];
     }
 
+
+    // ---- dimension lines (like a drawing): main sizes, angles and radii -------------------------------------------------------
+    const DIM = '#6fa8d6';
+    const sc = () => Math.min(view.w, viewBox().h * 1.6);   // sizes follow the smaller side of the visible area, so labels stay readable
+    function dimText(g, x, y, text, angleDeg) {
+        const fs = sc() / 42;
+        let a = angleDeg || 0;
+        if (a > 90) a -= 180; else if (a < -90) a += 180;   // keep the text readable
+        const t = el('text', { x: 0, y: 0, 'font-size': fs, fill: DIM, 'text-anchor': 'middle', transform: `translate(${x} ${-y}) rotate(${-a}) translate(0 ${-fs * 0.35})`,
+                               style: 'pointer-events:none;user-select:none', 'paint-order': 'stroke', stroke: '#0c0d0f', 'stroke-width': fs / 6 }, g);
+        t.textContent = text;
+    }
+    function arrow(g, tip, dir, size) {   // filled arrow head at `tip` pointing along `dir` (world units)
+        const nx = -dir[1], ny = dir[0], b = [tip[0] - dir[0] * size, tip[1] - dir[1] * size];
+        el('path', { d: `M${tip[0]} ${-tip[1]}L${b[0] + nx * size / 3} ${-(b[1] + ny * size / 3)}L${b[0] - nx * size / 3} ${-(b[1] - ny * size / 3)}Z`, fill: DIM, style: 'pointer-events:none' }, g);
+    }
+    // aligned dimension between A and B, the line pushed `off` mm along the unit normal n; text defaults to the length
+    function dimension(g, A, B, n, off, text) {
+        const lw = sc() / 900, sz = sc() / 60;
+        const dx = B[0] - A[0], dy = B[1] - A[1], len = Math.hypot(dx, dy);
+        if (len < 0.05) return;
+        const u = [dx / len, dy / len];
+        const A2 = [A[0] + n[0] * off, A[1] + n[1] * off], B2 = [B[0] + n[0] * off, B[1] + n[1] * off];
+        const ext = Math.sign(off) * sc() / 90;
+        const line = (p, q) => el('path', { d: `M${p[0]} ${-p[1]}L${q[0]} ${-q[1]}`, stroke: DIM, 'stroke-width': lw, fill: 'none', style: 'pointer-events:none' }, g);
+        line([A[0] + n[0] * Math.sign(off) * sc() / 150, A[1] + n[1] * Math.sign(off) * sc() / 150], [A2[0] + n[0] * ext, A2[1] + n[1] * ext]);
+        line([B[0] + n[0] * Math.sign(off) * sc() / 150, B[1] + n[1] * Math.sign(off) * sc() / 150], [B2[0] + n[0] * ext, B2[1] + n[1] * ext]);
+        line(A2, B2);
+        arrow(g, A2, [-u[0], -u[1]], sz); arrow(g, B2, u, sz);
+        const fs = sc() / 42, side = Math.sign(off) || 1;
+        dimText(g, (A2[0] + B2[0]) / 2 + n[0] * side * fs * 0.9, (A2[1] + B2[1]) / 2 + n[1] * side * fs * 0.9, text !== undefined ? text : String(round(len)), Math.atan2(dy, dx) * 180 / Math.PI);
+    }
+    function angleMark(g, P, q1, q2, text, r) {   // arc between the two edges leaving P (toward q1 and q2)
+        const u1 = norm([q1[0] - P[0], q1[1] - P[1]]), u2 = norm([q2[0] - P[0], q2[1] - P[1]]);
+        const a = [P[0] + u1[0] * r, P[1] + u1[1] * r], b = [P[0] + u2[0] * r, P[1] + u2[1] * r];
+        const sweep = (u1[0] * u2[1] - u1[1] * u2[0]) > 0 ? 1 : 0;
+        el('path', { d: `M${a[0]} ${-a[1]}A${r} ${r} 0 0 ${sweep} ${b[0]} ${-b[1]}`, stroke: DIM, 'stroke-width': sc() / 900, fill: 'none', style: 'pointer-events:none' }, g);
+        const m = norm([u1[0] + u2[0], u1[1] + u2[1]]);
+        dimText(g, P[0] + m[0] * (r + sc() / 28), P[1] + m[1] * (r + sc() / 28), text, 0);
+    }
+    const norm = v => { const l = Math.hypot(v[0], v[1]) || 1; return [v[0] / l, v[1] / l]; };
+    function radiusCallout(g, x, y, text) {   // leader from the corner outward + "R.." label
+        const cx = dense.reduce((s, p) => s + p[0], 0) / dense.length, cy = dense.reduce((s, p) => s + p[1], 0) / dense.length;
+        const d = norm([x - cx, y - cy]), L = sc() / 14;
+        const e = [x + d[0] * L, y + d[1] * L];
+        el('path', { d: `M${x} ${-y}L${e[0]} ${-e[1]}`, stroke: DIM, 'stroke-width': sc() / 1000, fill: 'none', style: 'pointer-events:none' }, g);
+        el('circle', { cx: x, cy: -y, r: sc() / 400, fill: DIM, style: 'pointer-events:none' }, g);
+        dimText(g, e[0] + d[0] * sc() / 40 + (d[0] >= 0 ? sc() / 28 : -sc() / 28), e[1] + d[1] * sc() / 40, text, 0);
+    }
+    function drawDims(g) {
+        if (!info || !dense.length) return;
+        const xs = dense.map(p => p[0]), ys = dense.map(p => p[1]);
+        const minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys), gap = sc() / 16;
+        if (cfg.kind === 'punch') {
+            dimension(g, [minx, miny], [minx, maxy], [-1, 0], gap, round(maxy - miny) + '');                       // working height to the seat
+            if (cfg.clamp) dimension(g, [minx, miny], [minx, maxy + cfg.clamp.height], [-1, 0], gap * 2, round(maxy - miny + cfg.clamp.height) + '');   // overall with the clamp
+            dimension(g, [minx, maxy], [maxx, maxy], [0, 1], gap * 0.7 + (cfg.clamp ? cfg.clamp.height : 0), round(maxx - minx) + '');   // width
+            let lo = 0;
+            pts.forEach((p, i) => { if (p[1] < pts[lo][1]) lo = i; });
+            const prev = pts[(lo - 1 + pts.length) % pts.length], next = pts[(lo + 1) % pts.length];
+            if (info.derived.tip_angle) angleMark(g, [pts[lo][0], pts[lo][1]], [prev[0], prev[1]], [next[0], next[1]], info.derived.tip_angle + '°', sc() / 16);
+        } else {
+            const multi = (info.derived.grooves || []).length > 1, og = multi ? gap * 2.3 : gap;                       // four V grooves: overall sizes go further out
+            dimension(g, [minx, miny], [maxx, miny], [0, -1], og, round(maxx - minx) + '');                         // overall width
+            dimension(g, [maxx, miny], [maxx, maxy], [1, 0], og, round(maxy - miny) + '');                           // overall height
+            const bh = baseHeight();
+            if (bh) dimension(g, [minx, miny], [minx, miny + bh], [-1, 0], gap, 'основа ' + round(bh));
+            (info.derived.grooves || []).forEach(gr => {                                                                // each V: its opening and angle
+                const k = gr.index - 1, n = pts.length, v = pts[k], a = pts[(k - 1 + n) % n], b = pts[(k + 1) % n];
+                const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], out = norm([mid[0] - v[0], mid[1] - v[1]]);
+                dimension(g, [a[0], a[1]], [b[0], b[1]], out, gap * 0.8, 'V' + gr.v);
+                angleMark(g, [v[0], v[1]], [a[0], a[1]], [b[0], b[1]], num(Math.round(gr.angle * 10) / 10) + '°', sc() / 18);
+            });
+        }
+        const gs = info.derived.grooves || [], valleys = new Set(gs.map(x => x.index));
+        (info.radii || []).forEach(r => { if (gs.length > 1 && r.kind === 'fillet' && valleys.has(r.index)) return; radiusCallout(g, r.x, r.y, 'R' + num(r.radius)); });   // valley radii: see the list on the right
+    }
+
     function render() {
         const vb = viewBox();
         svg.setAttribute('viewBox', `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
@@ -107,12 +190,25 @@
         const g = el('g', {}, svg);
         drawGrid(g, vb);
         if (cfg.kind === 'punch' && $('pe-raster').checked) drawRaster(g);
+        if (cfg.kind === 'die') {   // the die channel: the base of the die must be exactly this wide
+            const h = cfg.dieChannel / 2, ys = dense.map(p => p[1]);
+            el('path', { d: `M${-h} ${-Math.max(...ys) - 2}V${-Math.min(...ys) + 2}M${h} ${-Math.max(...ys) - 2}V${-Math.min(...ys) + 2}`, stroke: '#2f6f9f', 'stroke-width': view.w / 450,
+                         'stroke-dasharray': `${view.w / 60} ${view.w / 120}`, fill: 'none', style: 'pointer-events:none' }, g);
+            const t = el('text', { x: -h + view.w / 150, y: -Math.max(...ys) - 3, 'font-size': view.w / 45, fill: '#6fa8d6', style: 'pointer-events:none;user-select:none' }, g);
+            t.textContent = 'канал ' + cfg.dieChannel + ' mm';
+            const bh = baseHeight();
+            if (bh) {   // the base zone: shaded strip from the bottom of the die up to the base height
+                const y0 = Math.min(...ys);
+                el('rect', { x: -h, y: -(y0 + bh), width: cfg.dieChannel, height: bh, fill: '#2f6f9f', 'fill-opacity': 0.14, stroke: '#2f6f9f', 'stroke-width': view.w / 700, style: 'pointer-events:none' }, g);
+            }
+        }
         if (cfg.kind === 'punch' && dense.length) {
             const cp = clampPoly();
             el('path', { d: 'M' + cp.map(p => `${p[0]} ${-p[1]}`).join('L') + 'Z', fill: '#7d8a97', 'fill-opacity': 0.7, stroke: '#e0a526', 'stroke-opacity': 0.5,
                          'stroke-dasharray': `${view.w / 90} ${view.w / 140}`, 'stroke-width': view.w / 700, style: 'pointer-events:none' }, g);
         }
         el('path', { d: 'M' + dense.map(p => `${p[0]} ${-p[1]}`).join('L') + 'Z', fill: '#cfd8e0', 'fill-opacity': 0.9, stroke: '#e0a526', 'stroke-width': view.w / 450, 'stroke-linejoin': 'round' }, g);
+        if ($('pe-dims') && $('pe-dims').checked) drawDims(g);
         // the polygon of vertices (thin) shows where the sharp corners / chords are, behind the handles
         el('path', { d: 'M' + pts.map(p => `${p[0]} ${-p[1]}`).join('L') + 'Z', fill: 'none', stroke: '#5b6b7a', 'stroke-dasharray': `${view.w / 120} ${view.w / 160}`, 'stroke-width': view.w / 900, style: 'pointer-events:none' }, g);
         pts.forEach((p, i) => {   // edges: wide invisible hit-areas, click = insert a vertex
@@ -207,6 +303,7 @@
         [...$('pe-rows').children].forEach((r, i) => r.classList.toggle('sel', i === sel));
     }
     function showInfo(d) {
+        info = d;
         const x = d.derived;
         $('pe-width').textContent = x.width + ' mm';
         $('pe-height').textContent = x.height + ' mm';
@@ -226,9 +323,11 @@
         const add = (k, v) => { if (v === null || v === undefined) return; const li = document.createElement('li'); li.textContent = k + ': ' + v; D.appendChild(li); };
         if (cfg.kind === 'punch') { add('Ъгъл на върха', x.tip_angle + '°'); add('Радиус на върха', x.tip_radius ? 'R' + x.tip_radius : 'остър'); }
         else {
-            add('Ъгъл на V', x.valley_angle + '°'); add('V-отвор', x.v_opening + ' mm'); add('Дълбочина на канала', x.groove_depth + ' mm');
-            add('Радиус на дъното', x.valley_radius ? 'R' + x.valley_radius : 'остър');
-            add('Радиуси на раменете', (x.shoulder_radii || []).map(r => r ? 'R' + r : 'остър').join(' / '));
+            add('Основа (канал)', x.base_width === null ? '-' : (x.base_width === x.base_width_max ? x.base_width + ' mm' : x.base_width + '-' + x.base_width_max + ' mm'));
+            const gs = x.grooves || [];
+            gs.forEach(g => add('V' + g.v + (gs.length > 1 ? ' (завъртане ' + g.rotation + '°)' : ''),
+                g.angle + '°, дълбочина ' + g.depth + ' mm, рамене ' + g.shoulder_radii.map(r => r ? 'R' + r : 'остри').join('/') + ', дъно ' + (g.valley_radius ? 'R' + g.valley_radius : 'остро')));
+            if (!gs.length) add('V канал', 'не е намерен в контура');
         }
         const W = $('pe-warn');
         W.textContent = '';
@@ -246,7 +345,7 @@
         return { ok: r.ok, data: await r.json().catch(() => ({})) };
     }
     async function save() {
-        const r = await post(cfg.saveUrl, { points: pts });
+        const r = await post(cfg.saveUrl, payload());
         if (r.ok) { dirty = false; toast('Профилът е запазен.'); } else toast(r.data.message || 'Грешка при запис.', true);
     }
     async function reset() {
@@ -267,6 +366,8 @@
     // ---- wiring ----------------------------------------------------------------------------------------------------
     $('pe-snap').addEventListener('change', e => { snap = parseFloat(e.target.value); });
     if ($('pe-raster')) $('pe-raster').addEventListener('change', render);
+    $('pe-dims').addEventListener('change', render);
+    if (baseInput) baseInput.addEventListener('input', () => { dirty = true; render(); refresh(); });
     $('pe-undo').addEventListener('click', undo);
     $('pe-redo').addEventListener('click', redo);
     $('pe-mirror').addEventListener('click', mirror);

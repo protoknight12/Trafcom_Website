@@ -53,7 +53,7 @@
             <div class="form-group"><label for="st_p">Поансон</label>
                 <select id="st_p" name="punch_id"><option value="">-</option>{% for t in tools if t.kind == 'punch' %}<option value="{{ t.id }}">{{ t.code }}</option>{% endfor %}</select></div>
             <div class="form-group"><label for="st_d">Матрица</label>
-                <select id="st_d" name="die_id"><option value="">-</option>{% for t in tools if t.kind == 'die' %}<option value="{{ t.id }}">{{ t.code }}</option>{% endfor %}</select></div>
+                <select id="st_d" name="die_id"><option value="">-</option>{% for o in die_options %}<option value="{{ o.value }}">{{ o.label }}</option>{% endfor %}</select></div>
             <div class="form-group"><label><input type="checkbox" name="flip" value="1"> Обръщане на детайла</label></div>
             <div class="form-group"><label for="st_n">Бележка</label><input type="text" id="st_n" name="notes"></div>
             <button type="submit" class="btn-submit">Добави</button>
@@ -119,7 +119,7 @@
                 {% for st in prog.steps %}
                 <tr>
                     <td>{{ st.seq }}</td><td>{{ st.angle_deg }}°</td><td>{{ st.x_mm if st.x_mm is not none else '-' }}</td><td>{{ st.r_mm if st.r_mm is not none else '-' }}</td>
-                    <td>{{ st.force_kn if st.force_kn is not none else '-' }}</td><td>{{ st.punch.code if st.punch else '-' }}</td><td>{{ st.die.code if st.die else '-' }}</td>
+                    <td>{{ st.force_kn if st.force_kn is not none else '-' }}</td><td>{{ st.punch.code if st.punch else '-' }}</td><td>{{ (st.die.code ~ (' · V%g' % st.die_v_mm if st.die_v_mm else '')) if st.die else '-' }}</td>
                     <td>{{ 'да' if st.flip else '' }}</td><td>{{ st.notes or '' }}</td>
                     <td>{% if prog.status != 'approved' %}<form action="{{ url_for('admin_bending_delete_step', step_id=st.id) }}" method="POST" onsubmit="return confirm('Изтриване на стъпката?')">
                         {% include 'partials/csrf_field.html' %}<button type="submit" class="btn-delete">Изтрий</button></form>{% endif %}</td>

@@ -13,6 +13,22 @@ PUNCH_HALF_WIDTH = 7.0  # body half-width, mm
 CLAMP = {'name': 'european', 'width': 13.0, 'height': 30.0, 'chamfer': 0.86, 'notch_depth': 3.27, 'notch_from_seat': 4.65, 'notch_height': 8.27}
 
 
+# The die channel of the press brakes is 60 mm wide: the BASE of every die (its bottom `base_height` mm) is exactly that wide. The die above
+# the base may be narrower; the base height is a setting of the tool (BendTool.base_height_mm).
+DIE_CHANNEL = 60.0
+
+
+def width_at(dense, y):
+    """Horizontal extent [min x, max x] of the outline on the line at height y (None when the line misses it)."""
+    xs = []
+    n = len(dense)
+    for i in range(n):
+        a, b = dense[i], dense[(i + 1) % n]
+        if (a[1] - y) * (b[1] - y) <= 0 and a[1] != b[1]:
+            xs.append(a[0] + (y - a[1]) / (b[1] - a[1]) * (b[0] - a[0]))
+    return (min(xs), max(xs)) if xs else None
+
+
 def tip_offset(angle_deg, radius):
     """Height of the lowest point of a rounded tip above the theoretical sharp apex (catalogue heights are measured to the apex)."""
     if not angle_deg or not radius:
@@ -55,9 +71,9 @@ def _f(v):
     return f'{v:.2f}'.rstrip('0').rstrip('.')
 
 
-def tool_svg(kind, angle_deg, radius, height, v, code='', profile=None):
+def tool_svg(kind, angle_deg, radius, height, v, code='', profile=None, base_height=None):
     """Picture of a tool: its stored outline, or - for a tool without one yet - a starting outline built from its numbers."""
-    return polygon_svg(profile or default_profile(kind, angle_deg, radius, height, v), kind, code)
+    return polygon_svg(profile or default_profile(kind, angle_deg, radius, height, v), kind, code, base_height)
 
 
 # ---- real profiles (outline from a catalogue DXF) -------------------------------------------------------------
@@ -83,7 +99,7 @@ def _grid_svg():
     return f'<path d="{" ".join(out)}" fill="none" stroke="#6f7b87" stroke-width="0.25"/>'
 
 
-def polygon_svg(points, kind, code=''):
+def polygon_svg(points, kind, code='', base_height=None):
     """points: [[x, y], ...] in mm, y up, punch tip at the origin (die: top surface at y = 0, centred). A punch is drawn over the grid."""
     points = outline(points)  # fillets and arcs expanded
     xs, ys = [p[0] for p in points], [p[1] for p in points]
@@ -101,9 +117,13 @@ def polygon_svg(points, kind, code=''):
         y0, y1 = -max(max(ys), 2 * half) - 3, 4
     else:
         x0, x1, y0, y1 = min(xs) - 3, max(xs) + 3, -max(ys) - 3, -min(ys) + 3
+    base = ''
+    if kind == 'die' and base_height:  # the base zone: its top edge, dashed
+        yb = -(min(ys) + base_height)
+        base = (f'<path d="M {_f(-DIE_CHANNEL / 2 - 1)} {_f(yb)} L {_f(DIE_CHANNEL / 2 + 1)} {_f(yb)}" stroke="#6fa8d6" stroke-width="0.4" stroke-dasharray="1.5 1" fill="none"/>')
     label = f'<text x="{_f(x0 + 2)}" y="{_f(y1 - 1)}" font-size="3.2" fill="#9aa5b1" font-family="Arial">{GRID_MM:g} mm</text>' if grid else ''
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{_f(x0)} {_f(y0)} {_f(x1 - x0)} {_f(y1 - y0)}"><title>{code}</title>{grid}{clamp}'
-            f'<path d="{path}" fill="#cfd8e0" fill-opacity="0.95" stroke="#e0a526" stroke-width="0.5" stroke-linejoin="round"/>{label}</svg>')
+            f'<path d="{path}" fill="#cfd8e0" fill-opacity="0.95" stroke="#e0a526" stroke-width="0.5" stroke-linejoin="round"/>{base}{label}</svg>')
 
 
 def _bulge_arc(p, q, bulge):
@@ -194,8 +214,9 @@ def validate_polygon(points):
 
 
 def default_profile(kind, angle_deg=None, radius=None, height=None, v=None):
-    """A starting outline [[x, y, r, a], ...] (mm, y up, same origin rules as polygon_from_dxf) for the editor when a tool has none yet.
-    The tip / valley radius is the tool's own radius; shoulder radii are unknown here and start sharp (set them in the editor)."""
+    """A starting outline [[x, y, r, a], ...] (mm, y up, same origin rules as polygon_from_dxf) for the editor / the picture of a tool
+    without a stored profile. Punch: `radius` is the tip radius. Die: `radius` is the radius of both SHOULDERS (the edges of the V
+    opening); the valley is sharp unless the editor sets a radius. A die is DIE_CHANNEL wide (the press brake's die channel) and `height` tall."""
     if kind == 'punch':
         angle_deg, r, height = angle_deg or 90.0, max(radius or 0.0, 0.2), height or 60.0
         a, off = math.radians(angle_deg) / 2, tip_offset(angle_deg, max(radius or 0.0, 0.2))
@@ -204,10 +225,10 @@ def default_profile(kind, angle_deg=None, radius=None, height=None, v=None):
         yb = bx / math.tan(a) - off
         return [[0, -off, r, 0], [bx, yb, 0, 0], [bx, seat, 0, 0], [-bx, seat, 0, 0], [-bx, yb, 0, 0]]
     v = v or 16.0
-    r, a = max(radius or 0.0, 0.2), math.radians(angle_deg or 85.0) / 2
+    rs, a = max(radius or 0.0, 0.0), math.radians(angle_deg or 85.0) / 2
     depth = (v / 2) / math.tan(a)
-    w, body = v + 30, max(depth + 15, 30)
-    return [[-w / 2, 0, 0, 0], [-v / 2, 0, 0, 0], [0, -depth, r, 0], [v / 2, 0, 0, 0], [w / 2, 0, 0, 0], [w / 2, -body, 0, 0], [-w / 2, -body, 0, 0]]
+    w, body = DIE_CHANNEL, height or max(depth + 15, 30)
+    return [[-w / 2, 0, 0, 0], [-v / 2, 0, rs, 0], [0, -depth, 0, 0], [v / 2, 0, rs, 0], [w / 2, 0, 0, 0], [w / 2, -body, 0, 0], [-w / 2, -body, 0, 0]]
 
 
 # ---- outline with real radii ------------------------------------------------------------------------------------
@@ -277,7 +298,7 @@ def normalize(points):
             q = [float(p[0]), float(p[1]), float(p[2]) if len(p) > 2 else 0.0, float(p[3]) if len(p) > 3 else 0.0]
             if not all(math.isfinite(v) for v in q) or abs(q[0]) > 1000 or abs(q[1]) > 1000 or q[2] < 0 or abs(q[3]) > 5000:
                 raise ValueError
-            pts.append([round(q[0], 2), round(q[1], 2), round(q[2], 3), round(q[3], 3)])
+            pts.append([round(q[0], 2) + 0.0, round(q[1], 2) + 0.0, round(q[2], 3) + 0.0, round(q[3], 3) + 0.0])
     except (TypeError, ValueError, IndexError):
         raise ValueError('Невалидни координати или радиуси (радиусът на закръгляване не може да е отрицателен).')
     clean = []
@@ -345,7 +366,50 @@ def radii_report(points):
     return rep
 
 
-def derived(points, kind):
+def grooves(points):
+    """Every V groove of a die outline - a die like M460.r has one on each of its four sides. A groove is a reflex corner (the V valley)
+    between two shoulders. -> [{index, v, angle, depth, valley_radius, shoulder_radii, rotation}] sorted by opening; `rotation` is the turn
+    (degrees, counter-clockwise) that brings that groove to the top, i.e. the die as it stands on the press brake when that V is used."""
+    pts = normalize(points)
+    n, out = len(pts), []
+    for k in range(n):
+        prev, p, nxt = pts[k - 1], pts[k], pts[(k + 1) % n]
+        u, w = _sub(p[:2], prev[:2]), _sub(nxt[:2], p[:2])
+        if u[0] * w[1] - u[1] * w[0] >= -1e-9:  # a valley is a right turn on a counter-clockwise outline
+            continue
+        uu, ww = _unit(_sub(prev[:2], p[:2])), _unit(_sub(nxt[:2], p[:2]))
+        angle = math.degrees(math.acos(max(-1.0, min(1.0, uu[0] * ww[0] + uu[1] * ww[1]))))
+        if not 30 <= angle <= 120 or _len(u) < 2 or _len(w) < 2:
+            continue
+        mid = ((prev[0] + nxt[0]) / 2, (prev[1] + nxt[1]) / 2)
+        axis = _sub(mid, p[:2])
+        rot = (90 - math.degrees(math.atan2(axis[1], axis[0])) + 180) % 360 - 180
+        out.append({'index': k + 1, 'v': round(_len(_sub(nxt[:2], prev[:2])), 2), 'angle': round(angle, 2), 'depth': round(_len(axis), 2),
+                    'valley_radius': p[2] or None, 'shoulder_radii': [prev[2], nxt[2]], 'rotation': round(rot, 1)})
+    return sorted(out, key=lambda g: g['v'])
+
+
+def multi_v_die(size, sides):
+    """Outline of a square multi-V die (like M460.r): a size x size block with one V groove on each side. `sides` = four
+    (v_opening, angle_deg, shoulder_radius, valley_radius) tuples, clockwise starting with the top side. The V opening is measured
+    between the sharp shoulder corners on the face; the groove apex is at depth (v / 2) / tan(angle / 2) before the valley is rounded."""
+    h = size / 2
+    out = []
+    for i, (v, angle, rs, rv) in enumerate(sides):
+        depth = (v / 2) / math.tan(math.radians(angle) / 2)
+        top = [(-h, h, 0), (-v / 2, h, rs), (0, h - depth, rv), (v / 2, h, rs)]
+        c, s_ = math.cos(math.radians(-90 * i)), math.sin(math.radians(-90 * i))  # turn each following side a quarter clockwise
+        out += [[round(x * c - y * s_, 3) + 0.0, round(x * s_ + y * c, 3) + 0.0, r, 0] for x, y, r in top]
+    return out
+
+
+def rotated(points, degrees):
+    """The outline turned counter-clockwise about the origin (radii kept) - a multi-V die standing on the machine with another V up."""
+    c, s_ = math.cos(math.radians(degrees)), math.sin(math.radians(degrees))
+    return [[round(p[0] * c - p[1] * s_, 3), round(p[0] * s_ + p[1] * c, 3), p[2], p[3]] for p in normalize(points)]
+
+
+def derived(points, kind, base_height=None):
     """Numbers read off the outline itself, so the editor can warn when they disagree with the tool's catalogue data."""
     pts = normalize(points)
     dense = outline(pts)
@@ -362,10 +426,16 @@ def derived(points, kind):
         i = min(range(n), key=lambda k: pts[k][1])  # the tip corner = the lowest vertex
         res.update(tip_angle=corner(i), tip_radius=pts[i][2] or None)
     else:
-        valleys = [k for k in range(n) if pts[k - 1][1] > pts[k][1] and pts[(k + 1) % n][1] > pts[k][1]]
-        if valleys:
-            k = max(valleys, key=lambda j: min(pts[j - 1][1], pts[(j + 1) % n][1]) - pts[j][1])  # the deepest groove
-            a, b = pts[k - 1], pts[(k + 1) % n]
-            res.update(valley_angle=corner(k), valley_radius=pts[k][2] or None, v_opening=round(abs(b[0] - a[0]), 2),
-                       shoulder_radii=[q[2] for q in (a, b)], groove_depth=round(min(a[1], b[1]) - pts[k][1], 2))
+        # width of the base zone: sampled over its height (the bottom slice only while no base height is set)
+        low = min(ys)
+        zone = base_height if base_height else 0.0
+        ws = [width_at(dense, low + 0.02 + (zone - 0.04) * i / 4 if zone > 0.04 else low + 0.02) for i in range(5 if zone > 0.04 else 1)]
+        widths = [round(w[1] - w[0], 2) for w in ws if w]
+        res['base_width'] = min(widths) if widths else None
+        res['base_width_max'] = max(widths) if widths else None
+        gs = grooves(pts)
+        res['grooves'] = gs
+        if gs:  # the legacy single-groove numbers: the V that faces up as drawn (or the first one)
+            g = min(gs, key=lambda x: abs(x['rotation']))
+            res.update(valley_angle=g['angle'], valley_radius=g['valley_radius'], v_opening=g['v'], shoulder_radii=g['shoulder_radii'], groove_depth=g['depth'])
     return res

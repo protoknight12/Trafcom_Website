@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 
 import ezdxf
 
-from bending.profile import (CLAMP, clamp_polygon, clip_to_seat, default_profile, derived, normalize, outline, polygon_from_dxf,
+from bending.profile import (CLAMP, DIE_CHANNEL, clamp_polygon, clip_to_seat, default_profile, derived, normalize, outline, polygon_from_dxf,
                              polygon_svg, radii_report, tip_offset, tool_svg, validate_polygon)
 
 
@@ -62,12 +62,44 @@ close(derived(mirrored, 'punch')['tip_angle'], 75.0)
 assert [(r['kind'], r['concave']) for r in radii_report(mirrored) if r['kind'] == 'arc'] == [('arc', True)]
 close(derived(mirrored, 'punch')['area'], dv['area'], 0.05)
 
-# ---- die: V 16 mm, 85 deg, valley R2, shoulders R1 -> V opening, depth and radii come back from the outline ----
-die = default_profile('die', 85, 2, None, 16)
-die[1][2] = die[3][2] = 1.0  # shoulder radii
+# ---- die: 60 x 60 body, V 16 mm, 85 deg, shoulders R2 (the radius given for the die), sharp valley ----
+die = default_profile('die', 85, 2, 60, 16)
 x = derived(die, 'die')
-close(x['valley_angle'], 85.0); assert x['valley_radius'] == 2.0 and x['v_opening'] == 16.0 and x['shoulder_radii'] == [1.0, 1.0]
+assert x['width'] == 60 and x['base_width'] == DIE_CHANNEL == 60.0 and x['height'] == 60   # the base fits the 60 mm die channel
+close(x['valley_angle'], 85.0); assert x['v_opening'] == 16.0 and x['shoulder_radii'] == [2.0, 2.0] and x['valley_radius'] is None
 close(x['groove_depth'], 8 / math.tan(math.radians(42.5)))
+assert [(r['kind'], r['radius']) for r in radii_report(die)] == [('fillet', 2.0), ('fillet', 2.0)]
+die[2][2] = 1.5  # a radius at the bottom of the V is its own, separate number
+assert derived(die, 'die')['valley_radius'] == 1.5
+# a die may be narrower above its base: only the bottom `base_height` mm must be the 60 mm of the die channel
+narrow = [[-20, 0, 0, 0], [-8, 0, 2, 0], [0, -8.7, 0, 0], [8, 0, 2, 0], [20, 0, 0, 0], [20, -40, 0, 0], [30, -40, 0, 0], [30, -60, 0, 0], [-30, -60, 0, 0], [-30, -40, 0, 0], [-20, -40, 0, 0]]
+validate_polygon(narrow)
+bw = derived(narrow, 'die', 20)
+assert bw['base_width'] == 60 and bw['base_width_max'] == 60           # the bottom 20 mm are full width
+bw = derived(narrow, 'die', 30)
+assert bw['base_width'] == 40 and bw['base_width_max'] == 60           # a 30 mm base would include the narrower part
+assert derived(narrow, 'die')['base_width'] == 60                       # no base height given: only the bottom edge is checked
+
+# ---- a four-way die (M460.r): ONE block with a V groove on each side ----
+from bending.profile import grooves, multi_v_die, rotated
+
+m460 = multi_v_die(60, [(50, 85, 3, 5), (16, 85, 2, 1), (35, 85, 2, 3), (22, 85, 2, 3)])   # clockwise from the top side
+validate_polygon(m460)
+gs = grooves(m460)
+assert [g['v'] for g in gs] == [16, 22, 35, 50]
+for g in gs:
+    close(g['angle'], 85.0, 0.1)
+    close(g['depth'], (g['v'] / 2) / math.tan(math.radians(42.5)), 0.05)           # sharp-apex depth of an 85 deg V
+assert {g['v']: g['shoulder_radii'] for g in gs} == {16: [2.0, 2.0], 22: [2.0, 2.0], 35: [2.0, 2.0], 50: [3.0, 3.0]}
+assert {g['v']: g['valley_radius'] for g in gs} == {16: 1.0, 22: 3.0, 35: 3.0, 50: 5.0}
+rot = {g['v']: g['rotation'] for g in gs}
+assert rot[50] == 0 and rot[16] == 90 and abs(rot[35]) == 180 and rot[22] == -90          # top / right / bottom / left side
+dm = derived(m460, 'die')
+assert dm['width'] == 60 and dm['height'] == 60 and dm['base_width'] == 60 and len(dm['grooves']) == 4 and dm['v_opening'] == 50  # the V that faces up as drawn
+# standing on the machine with the V16 up: turn it so that groove opens upward; it then reads as a single-V die with the same numbers
+up = derived(rotated(m460, rot[16]), 'die')
+assert up['v_opening'] == 16 and up['shoulder_radii'] == [2.0, 2.0]
+assert polygon_svg(m460, 'die').count('<path') == 1
 
 # ---- checks ----
 raises(validate_polygon, [[0, 0], [1, 1]])

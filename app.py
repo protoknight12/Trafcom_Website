@@ -39,7 +39,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import ezdxf
 from bending.unfold import unfold_section, k_factor, bd_table
-from bending.profile import (tool_svg, validate_polygon, default_profile, polygon_from_dxf, clip_to_seat, tip_offset, CLAMP,
+from bending.profile import (tool_svg, validate_polygon, default_profile, polygon_from_dxf, clip_to_seat, tip_offset, CLAMP, DIE_CHANNEL,
                              normalize, outline, radii_report, derived)
 from bending.sequence import steps_from_unfold
 from bending.tools import force_kn_per_m, recommended_v, rank_dies, G as TONNE_KN
@@ -5670,11 +5670,29 @@ class BendTool(db.Model):
     profile_json = db.Column(db.Text)  # working-part outline: [[x, y, fillet r, arc a], ...] in mm, see bending/profile.py
     height_mm = db.Column(db.Float)
     angle_deg = db.Column(db.Float)
-    radius_mm = db.Column(db.Float)
+    radius_mm = db.Column(db.Float)  # punch: tip radius; die: radius of the shoulders (edges of the V opening)
+    base_height_mm = db.Column(db.Float)  # die: height of the base, which is exactly the die channel wide (bending.profile.DIE_CHANNEL)
     v_opening_mm = db.Column(db.Float)
     max_kn_per_m = db.Column(db.Float)
     status = db.Column(db.String(20), default='new', nullable=False)  # new / reviewed / in_library
     catalog = db.relationship('BendToolCatalog', backref='tools')
+
+    @property
+    def positions(self):
+        """The ways this tool can stand on the press brake: one per V groove found in its outline (a multi-V die such as M460.r has four),
+        else the single V from its own numbers. [{label, v, angle, shoulder_r, valley_radius, rotation}]"""
+        if self.kind != 'die':
+            return []
+        try:
+            gs = derived(self.profile, 'die')['grooves'] if self.profile else []
+        except ValueError:
+            gs = []
+        if gs:
+            return [{'label': f"V{g['v']:g}", 'v': g['v'], 'angle': g['angle'], 'shoulder_r': (g['shoulder_radii'] or [None])[0], 'valley_radius': g['valley_radius'],
+                     'rotation': g['rotation']} for g in gs]
+        if self.v_opening_mm:
+            return [{'label': f'V{self.v_opening_mm:g}', 'v': self.v_opening_mm, 'angle': self.angle_deg, 'shoulder_r': self.radius_mm, 'valley_radius': None, 'rotation': 0.0}]
+        return []
 
     @property
     def profile(self):
@@ -5739,7 +5757,7 @@ def admin_bending_add_tool():
         return redirect(url_for('admin_bending'))
     try:
         vals = {f: (_fnum(request.form[f], f, allow_lo=True) if request.form.get(f, '').strip() else None)
-                for f in ('height_mm', 'angle_deg', 'radius_mm', 'v_opening_mm', 'max_kn_per_m')}
+                for f in ('height_mm', 'base_height_mm', 'angle_deg', 'radius_mm', 'v_opening_mm', 'max_kn_per_m')}
     except ValueError as e:
         flash(str(e), 'danger')
         return redirect(url_for('admin_bending'))
@@ -5749,11 +5767,11 @@ def admin_bending_add_tool():
     return redirect(url_for('admin_bending'))
 
 
-BEND_TOOL_CSV_COLUMNS = ('height_mm', 'angle_deg', 'radius_mm', 'v_opening_mm', 'max_kn_per_m')
+BEND_TOOL_CSV_COLUMNS = ('height_mm', 'base_height_mm', 'angle_deg', 'radius_mm', 'v_opening_mm', 'max_kn_per_m')
 
 
 def _parse_bend_tool_csv(text):
-    """CSV (header: code,kind,height_mm,angle_deg,radius_mm,v_opening_mm,max_kn_per_m; kind = punch/die, numbers optional)
+    """CSV (header: code,kind,height_mm,base_height_mm,angle_deg,radius_mm,v_opening_mm,max_kn_per_m; kind = punch/die, numbers optional)
     -> list of BendTool kwargs. Any bad row raises ValueError naming its line - nothing is half-imported."""
     rows = list(csv.DictReader(io.StringIO(text.lstrip('\ufeff'))))
     if not rows or 'code' not in rows[0] or 'kind' not in rows[0]:
@@ -5808,7 +5826,7 @@ def admin_bending_approve_tool(tool_id):
 def bending_tool_profile(tool_id):
     """Schematic profile picture of a punch/die, drawn from its numbers (see bending/profile.py)."""
     t = db.get_or_404(BendTool, tool_id)
-    return Response(tool_svg(t.kind, t.angle_deg, t.radius_mm, t.height_mm, t.v_opening_mm, html.escape(t.code), t.profile), mimetype='image/svg+xml')
+    return Response(tool_svg(t.kind, t.angle_deg, t.radius_mm, t.height_mm, t.v_opening_mm, html.escape(t.code), t.profile, t.base_height_mm), mimetype='image/svg+xml')
 
 
 @app.route('/admin/bending/tools/<int:tool_id>/profile/edit')
@@ -5816,19 +5834,36 @@ def bending_tool_profile(tool_id):
 def admin_bending_profile_edit(tool_id):
     t = db.get_or_404(BendTool, tool_id)
     pts = normalize(t.profile) if t.profile else normalize(default_profile(t.kind, t.angle_deg, t.radius_mm, t.height_mm, t.v_opening_mm))
-    return render_template('admin_bending_profile.html', tool=t, points=pts, has_profile=bool(t.profile), clamp=CLAMP, active_page='admin_bending')
+    return render_template('admin_bending_profile.html', tool=t, points=pts, has_profile=bool(t.profile), clamp=CLAMP, die_channel=DIE_CHANNEL, active_page='admin_bending')
 
 
-def _profile_warnings(t, d):
+def _profile_warnings(t, d, base_height=None):
     """Where the outline disagrees with the tool's catalogue numbers (angle, radius, V) - these feed the force/collision maths."""
     out = []
-    ref = d.get('tip_angle') if t.kind == 'punch' else d.get('valley_angle')
-    rad = d.get('tip_radius') if t.kind == 'punch' else d.get('valley_radius')
+    multi = t.kind == 'die' and len(d.get('grooves') or []) > 1   # M460.r: four V grooves, each with its own width and radii
+    ref = d.get('tip_angle') if t.kind == 'punch' else (None if multi else d.get('valley_angle'))
     if t.angle_deg is not None and ref is not None and abs(ref - t.angle_deg) > 0.5:
         out.append(f'Ъгълът по контура е {ref:g}°, а в данните на инструмента е {t.angle_deg:g}°.')
-    if t.radius_mm is not None and abs((rad or 0) - t.radius_mm) > 0.05:
-        out.append(f'Радиусът по контура е R{(rad or 0):g}, а в данните на инструмента е R{t.radius_mm:g}.')
-    if t.kind == 'die' and t.v_opening_mm is not None and d.get('v_opening') is not None and abs(d['v_opening'] - t.v_opening_mm) > 0.2:
+    if multi and t.angle_deg is not None:
+        bad = [g for g in d['grooves'] if abs(g['angle'] - t.angle_deg) > 0.5]
+        if bad:
+            out.append('Ъгъл на V по контура: ' + ', '.join(f"V{g['v']:g} - {g['angle']:g}°" for g in bad) + f'; в данните на инструмента е {t.angle_deg:g}°.')
+    if t.radius_mm is not None and not multi:
+        if t.kind == 'punch':
+            got, what = d.get('tip_radius') or 0, 'на върха'
+            bad = abs(got - t.radius_mm) > 0.05
+        else:  # a die's catalogue radius is its shoulder radius
+            sh = d.get('shoulder_radii') or []
+            got, what = (sh[0] if sh else 0), 'на раменете'
+            bad = any(abs(r - t.radius_mm) > 0.05 for r in sh)
+        if bad:
+            out.append(f'Радиусът {what} по контура е R{got:g}, а в данните на инструмента е R{t.radius_mm:g}.')
+    if t.kind == 'die':
+        if not base_height:
+            out.append('Не е зададена височина на основата - не може да се провери, че основата е с широчината на канала.')
+        elif d.get('base_width') is not None and (abs(d['base_width'] - DIE_CHANNEL) > 0.2 or abs((d.get('base_width_max') or 0) - DIE_CHANNEL) > 0.2):
+            out.append(f'Основата ({base_height:g} mm от дъното) е {d["base_width"]:g}-{d["base_width_max"]:g} mm широка, а каналът на абканта е {DIE_CHANNEL:g} mm.')
+    if t.kind == 'die' and not multi and t.v_opening_mm is not None and d.get('v_opening') is not None and abs(d['v_opening'] - t.v_opening_mm) > 0.2:
         out.append(f'V-отворът по контура е {d["v_opening"]:g} mm, а в данните на инструмента е {t.v_opening_mm:g} mm.')
     return out
 
@@ -5838,10 +5873,16 @@ def _profile_warnings(t, d):
 def admin_bending_profile_outline(tool_id):
     """Editor helper (single source of the radius maths): vertices -> dense outline, list of radii, derived numbers and warnings."""
     t = db.get_or_404(BendTool, tool_id)
+    data = request.get_json(silent=True) or {}
     try:
-        pts = normalize((request.get_json(silent=True) or {}).get('points') or [])
-        d = derived(pts, t.kind)
-        return jsonify({'outline': outline(pts), 'radii': radii_report(pts), 'derived': d, 'warnings': _profile_warnings(t, d)})
+        bh = _fnum(data['base_height_mm'], 'височина на основата') if data.get('base_height_mm') not in (None, '', 0) else None
+        if t.kind != 'die':
+            bh = None
+        elif bh is None and 'base_height_mm' not in data:
+            bh = t.base_height_mm
+        pts = normalize(data.get('points') or [])
+        d = derived(pts, t.kind, bh)
+        return jsonify({'outline': outline(pts), 'radii': radii_report(pts), 'derived': d, 'warnings': _profile_warnings(t, d, bh)})
     except ValueError as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
 
@@ -5856,7 +5897,13 @@ def admin_bending_profile_save(tool_id):
         t.profile_json = None
     else:
         try:
-            t.profile_json = json.dumps(validate_polygon(data.get('points') or []))
+            pts = validate_polygon(data.get('points') or [])
+            if t.kind == 'die' and 'base_height_mm' in data:
+                bh = _fnum(data['base_height_mm'], 'височина на основата') if data['base_height_mm'] not in (None, '', 0) else None
+                if bh is not None and bh > derived(pts, 'die')['height'] + 1e-6:
+                    raise ValueError('Основата не може да е по-висока от матрицата.')
+                t.base_height_mm = bh
+            t.profile_json = json.dumps(pts)
         except ValueError as e:
             return jsonify({'status': 'error', 'message': str(e)}), 400
     db.session.commit()
@@ -5967,8 +6014,10 @@ def admin_bending_add_program():
 @app.route('/admin/bending/programs/<int:prog_id>')
 @role_required('admin')
 def admin_bending_program(prog_id):
-    return render_template('admin_bending_program.html', prog=db.get_or_404(BendProgram, prog_id),
-                           tools=BendTool.query.order_by(BendTool.code).all(), active_page='admin_bending')
+    tools = BendTool.query.order_by(BendTool.code).all()
+    die_options = [{'value': f'{t.id}|{p["v"]:g}' if len(t.positions) > 1 else str(t.id), 'label': f'{t.code} · {p["label"]}' if len(t.positions) > 1 else t.code}
+                   for t in tools if t.kind == 'die' for p in (t.positions if len(t.positions) > 1 else [None])]
+    return render_template('admin_bending_program.html', prog=db.get_or_404(BendProgram, prog_id), tools=tools, die_options=die_options, active_page='admin_bending')
 
 
 @app.route('/admin/bending/programs/<int:prog_id>/sheet')
@@ -5993,10 +6042,11 @@ def admin_bending_add_step(prog_id):
     if _program_editable(prog):
         try:
             opt = lambda k: _fnum(f[k], k, allow_lo=True) if f.get(k, '').strip() else None
-            tool = lambda k: (db.session.get(BendTool, f.get(k, type=int)) or None) if f.get(k, type=int) else None
+            tool = lambda k: (db.session.get(BendTool, int(f.get(k).split('|')[0])) or None) if (f.get(k) or '').split('|')[0].isdigit() else None
+            die_v = _fnum(f['die_id'].split('|')[1], 'V') if '|' in (f.get('die_id') or '') else None
             step = BendStep(program=prog, seq=len(prog.steps) + 1, angle_deg=_fnum(f.get('angle_deg'), 'ъгъл', hi=180.0),
                             x_mm=opt('x_mm'), r_mm=opt('r_mm'), force_kn=opt('force_kn'), flip=bool(f.get('flip')),
-                            punch=tool('punch_id'), die=tool('die_id'), notes=f.get('notes', '').strip() or None)
+                            punch=tool('punch_id'), die=tool('die_id'), die_v_mm=die_v, notes=f.get('notes', '').strip() or None)
         except ValueError as e:
             flash(str(e), 'danger')
         else:
@@ -6053,7 +6103,8 @@ def admin_bending_program_force(prog_id):
         rm, t, length = (_fnum(request.args.get(k), n) for k, n in (('rm', 'якост'), ('t', 'дебелина'), ('length', 'дължина')))
         cfg = prog.machine.press_brake
         machine_kn = cfg.tonnage_t * TONNE_KN if cfg and cfg.tonnage_t else None
-        dies = [(d.code, d.v_opening_mm, d.max_kn_per_m) for d in BendTool.query.filter_by(kind='die', status='in_library')]
+        dies = [(f'{d.code} · {p["label"]}' if len(d.positions) > 1 else d.code, p['v'], d.max_kn_per_m)
+                for d in BendTool.query.filter_by(kind='die', status='in_library') for p in d.positions]
         return jsonify({'recommended_v': recommended_v(t), 'machine_kn': machine_kn, 'dies': rank_dies(dies, rm, t, length, machine_kn),
                         'force_at_recommended_v': round(force_kn_per_m(rm, t, recommended_v(t)), 1)})
     except ValueError as e:
@@ -6147,7 +6198,7 @@ def admin_bending_program_new_version(prog_id):
         return redirect(url_for('admin_bending_program', prog_id=old.id))
     new = BendProgram(detail=old.detail, machine=old.machine, name=old.name, notes=old.notes, document_id=old.document_id, version=old.version + 1)
     new.steps = [BendStep(seq=st.seq, angle_deg=st.angle_deg, x_mm=st.x_mm, r_mm=st.r_mm, force_kn=st.force_kn, flip=st.flip,
-                          punch_id=st.punch_id, die_id=st.die_id, notes=st.notes) for st in old.steps]
+                          punch_id=st.punch_id, die_id=st.die_id, die_v_mm=st.die_v_mm, notes=st.notes) for st in old.steps]
     db.session.add(new)
     db.session.commit()
     log_action(f'Нова версия {new.version} на програма "{new.name}"')
@@ -6213,6 +6264,7 @@ class BendStep(db.Model):
     flip = db.Column(db.Boolean, default=False, nullable=False)  # turn the part over before this bend
     punch_id = db.Column(db.Integer, db.ForeignKey('bend_tool.id'))
     die_id = db.Column(db.Integer, db.ForeignKey('bend_tool.id'))
+    die_v_mm = db.Column(db.Float)  # which V of a multi-V die (e.g. M460.r) is up for this bend; None for a single-V die
     notes = db.Column(db.String(255))
     punch = db.relationship('BendTool', foreign_keys=[punch_id])
     die = db.relationship('BendTool', foreign_keys=[die_id])

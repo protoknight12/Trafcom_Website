@@ -83,9 +83,10 @@
                 <div class="form-group"><label for="bt_code">Код *</label><input type="text" id="bt_code" name="code" required></div>
                 <div class="form-group"><label for="bt_kind">Тип *</label>
                     <select id="bt_kind" name="kind" required><option value="punch">Поансон</option><option value="die">Матрица</option></select></div>
-                <div class="form-group"><label for="bt_h">Работна височина (mm)</label><input type="number" step="any" min="0" id="bt_h" name="height_mm"></div>
+                <div class="form-group"><label for="bt_h">Работна височина (mm; за матрица - височина)</label><input type="number" step="any" min="0" id="bt_h" name="height_mm"></div>
+                <div class="form-group"><label for="bt_bh">Височина на основата (mm, само за матрица - основата е 60 mm, колкото канала)</label><input type="number" step="any" min="0" id="bt_bh" name="base_height_mm"></div>
                 <div class="form-group"><label for="bt_a">Ъгъл (°)</label><input type="number" step="any" min="0" id="bt_a" name="angle_deg"></div>
-                <div class="form-group"><label for="bt_r">Радиус (mm)</label><input type="number" step="any" min="0" id="bt_r" name="radius_mm"></div>
+                <div class="form-group"><label for="bt_r">Радиус (mm) - на върха; за матрица - на раменете</label><input type="number" step="any" min="0" id="bt_r" name="radius_mm"></div>
                 <div class="form-group"><label for="bt_v">V-отвор (mm, за матрица)</label><input type="number" step="any" min="0" id="bt_v" name="v_opening_mm"></div>
                 <div class="form-group"><label for="bt_kn">Макс. сила (kN/m)</label><input type="number" step="any" min="0" id="bt_kn" name="max_kn_per_m"></div>
                 <button type="submit" class="btn-submit">Добави</button>
@@ -165,11 +166,18 @@
                     </div>
                     <dl class="specs">
                         {% if t.angle_deg is not none %}<div><dt>Ъгъл</dt><dd>{{ '%g'|format(t.angle_deg) }}°</dd></div>{% endif %}
-                        {% if t.radius_mm is not none %}<div><dt>Радиус</dt><dd>R{{ '%g'|format(t.radius_mm) }} mm</dd></div>{% endif %}
+                        {% if t.radius_mm is not none %}<div><dt>{{ 'Радиус на върха' if t.kind == 'punch' else 'Радиус на раменете' }}</dt><dd>R{{ '%g'|format(t.radius_mm) }} mm</dd></div>{% endif %}
                         {% if t.v_opening_mm is not none %}<div><dt>V-отвор</dt><dd>{{ '%g'|format(t.v_opening_mm) }} mm</dd></div>{% endif %}
-                        {% if t.height_mm is not none %}<div><dt>Работна височина</dt><dd>{{ '%g'|format(t.height_mm) }} mm</dd></div>{% endif %}
+                        {% if t.height_mm is not none %}<div><dt>{{ 'Работна височина' if t.kind == 'punch' else 'Височина' }}</dt><dd>{{ '%g'|format(t.height_mm) }} mm</dd></div>{% endif %}
+                        {% if t.kind == 'die' %}<div><dt>Основа (канал 60 mm)</dt><dd>{% if t.base_height_mm %}60 × {{ '%g'|format(t.base_height_mm) }} mm{% else %}не е зададена{% endif %}</dd></div>{% endif %}
                         {% if t.max_kn_per_m is not none %}<div><dt>Макс. сила</dt><dd>{{ '%g'|format(t.max_kn_per_m|round(0)) }} kN/m</dd></div>{% endif %}
                     </dl>
+                    {% if t.kind == 'die' and t.positions|length > 1 %}
+                    <div>
+                        <div class="seg-sum">{{ t.positions|length }} V канала - върти се, за да работи с нужния</div>
+                        <div class="lens">{% for p in t.positions %}<span>{{ p.label }} <i>рамо R{{ '%g'|format(p.shoulder_r) if p.shoulder_r is not none else '-' }}</i></span>{% endfor %}</div>
+                    </div>
+                    {% endif %}
                     <div>
                         <div class="seg-sum">{% if c.count %}{{ c.count }} сегмента · общо {{ '%g'|format(c.total_mm / 1000) }} m{% else %}Няма добавени сегменти{% endif %}</div>
                         <div class="lens">{% for length, n in c.lengths %}<span>{{ '%g'|format(length) }} <i>×{{ n }}</i></span>{% endfor %}</div>
