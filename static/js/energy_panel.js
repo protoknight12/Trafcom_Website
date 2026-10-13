@@ -40,8 +40,9 @@ var EnergyPanel = (function () {
         '.ep-period,.ep-from,.ep-to{padding:3px 6px;background:var(--bg-input);color:var(--text-main);border:1px solid var(--border-color);border-radius:4px}';
     document.head.appendChild(st);
 
+    function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
     function card(label, tip, cost, kwh) {
-        return '<div class="ep-card" title="' + tip + '"><div class="text-muted text-small">' + label + '</div><strong>' +
+        return '<div class="ep-card" title="' + escapeHtml(tip) + '"><div class="text-muted text-small">' + escapeHtml(label) + '</div><strong>' +
             (cost == null ? kwh.toFixed(2) + ' <small>kWh</small>' : cost.toFixed(2) + ' <small>€</small>') +
             '</strong><div class="text-muted text-small">' + kwh.toFixed(2) + ' kWh</div></div>';
     }
@@ -113,7 +114,7 @@ var EnergyPanel = (function () {
             var html = '<b>' + new Date(ref[best][0] * 1000).toLocaleString('bg-BG', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'}) + '</b>';
             H.lines.forEach(function (ch) {
                 var p = H.series[ch[0]][best], v = p && p[1] != null ? p[1] + ' ' + ch[2] : '—';
-                html += '<br><span style="color:' + ch[3] + '">●</span> ' + ch[1] + ': ' + v;
+                html += '<br><span style="color:' + ch[3] + '">●</span> ' + escapeHtml(ch[1]) + ': ' + v;
             });
             tip.innerHTML = html; tip.style.display = line.style.display = 'block';
             line.style.left = lx + 'px';
@@ -127,7 +128,7 @@ var EnergyPanel = (function () {
         S.from = S.from || today; S.to = S.to || today;
         el.classList.add('ep');
         el.innerHTML = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">' +
-            '<strong>' + (el.dataset.title || 'Консумация и разход') + '</strong><select class="ep-period">' + PERIODS.map(function (p) { return '<option value="' + p[0] + '">' + p[1] + '</option>'; }).join('') + '</select>' +
+            '<strong>' + escapeHtml(el.dataset.title || 'Консумация и разход') + '</strong><select class="ep-period">' + PERIODS.map(function (p) { return '<option value="' + p[0] + '">' + p[1] + '</option>'; }).join('') + '</select>' +
             '<span class="ep-range" style="display:none"><input type="date" class="ep-from"> – <input type="date" class="ep-to"></span></div>' +
             '<div class="ep-grid"></div><p class="text-muted text-small ep-note"></p><div class="ep-legend"></div>' +
             '<div class="ep-plate"><canvas></canvas><div class="ep-line"></div><div class="ep-tip"></div></div>';
@@ -140,7 +141,7 @@ var EnergyPanel = (function () {
             var lg = q('.ep-legend'), av = S.data && S.data.series ? available(S.data.series, S.data.plabels) : [];
             if (!S.on) { S.on = {}; av.forEach(function (l) { S.on[l[0]] = !!l[5]; }); }
             lg.innerHTML = av.map(function (l) {
-                return '<span data-k="' + l[0] + '" class="' + (S.on[l[0]] ? '' : 'off') + '"><i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' + l[3] + ';margin-right:5px"></i>' + l[1] + '</span>';
+                return '<span data-k="' + l[0] + '" class="' + (S.on[l[0]] ? '' : 'off') + '"><i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' + l[3] + ';margin-right:5px"></i>' + escapeHtml(l[1]) + '</span>';
             }).join('');
             lg.querySelectorAll('span').forEach(function (sp) {
                 sp.addEventListener('click', function () { S.on[sp.dataset.k] = !S.on[sp.dataset.k]; paint(); });

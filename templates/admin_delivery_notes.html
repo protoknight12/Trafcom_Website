@@ -62,7 +62,7 @@
         <h3 data-dialog-title>Нова стокова разписка</h3>
         <p class="section-subtitle">Въведете данните от фактурата/стоковата разписка на доставчика - всеки ред увеличава наличността на съответния материал, детайл или продукт.</p>
 
-        <form action="{{ url_for('create_delivery_note') }}" method="POST" id="deliveryNoteForm">
+        <form action="{{ url_for('create_delivery_note') }}" method="POST" id="deliveryNoteForm" data-once>
             {% include 'partials/csrf_field.html' %}
             <div class="add-item-row" style="margin-bottom: 16px;">
                 <div class="form-group">
@@ -511,6 +511,7 @@
                     sel.value = data.detail.id;
                 }
                 closeQuickDetailModal();
+                if (data.warning) alert(data.warning);   // DXF entities left out of the price
             } else {
                 errDiv.textContent = data.message || 'Грешка при създаване.';
                 errDiv.style.display = 'block';

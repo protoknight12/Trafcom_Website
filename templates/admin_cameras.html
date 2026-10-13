@@ -153,6 +153,7 @@
 
 <script src="{{ url_for('static', filename='js/camera_form.js') }}"></script>
 <script src="{{ url_for('static', filename='js/detect_overlay.js') }}"></script>
+<script src="{{ url_for('static', filename='js/poll.js') }}"></script>
 <script>
 (function () {      // snapshots refresh every 5 s; "Видео" turns one camera (or all) into the live MJPEG stream; click an image to enlarge it
     const imgs = document.querySelectorAll('img[data-snap]'), btns = {};
@@ -184,10 +185,10 @@
         td.replaceChildren(Object.assign(document.createElement('b'), { textContent: s.online === true ? '● онлайн' : s.online === false ? '● офлайн' : '● ?',
             style: 'color:' + (s.online === true ? '#16a34a' : s.online === false ? '#dc2626' : '#9ca3af') }), Object.assign(document.createElement('div'), { textContent: s.info || '', className: 'text-muted' }));
     };
-    const status = () => { if (document.hidden) return;
-        fetch('/admin/cameras/status').then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then(d => Object.entries(d).forEach(([id, s]) => paint(id, s)))
+    const status = () => {
+        return fetch('/admin/cameras/status').then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then(d => Object.entries(d).forEach(([id, s]) => paint(id, s)))
             .catch(e => document.querySelectorAll('[data-status]').forEach(td => paint(td.dataset.status, { online: null, info: 'грешка: ' + e.message }))); };
-    status(); setInterval(status, 15000);
+    startPoll(status, 15000);
 })();
 </script>
 </body>

@@ -467,6 +467,7 @@
 
 </main>
 
+<script src="{{ url_for('static', filename='js/poll.js') }}"></script>
 <script>
 (function () {
     var selected = {};  // panelId -> true
@@ -717,15 +718,16 @@
         ctx.lineWidth = 2;
         ctx.stroke();
     }
+    function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
     function renderSolarSummary(inverters) {
         solarSummaryCards.innerHTML = Object.keys(inverters).map(function (id) {
             var inv = inverters[id];
             var dot = '<span class="ssc-dot" style="background-color:' + invColor(id) + '"></span>';
             if (!inv.online) {
-                return '<div class="solar-summary-card offline"><div class="ssc-title">' + dot + inv.name + '</div><div class="ssc-power">няма връзка</div></div>';
+                return '<div class="solar-summary-card offline"><div class="ssc-title">' + dot + escapeHtml(inv.name) + '</div><div class="ssc-power">няма връзка</div></div>';
             }
             return '<div class="solar-summary-card">' +
-                '<div class="ssc-title">' + dot + inv.name + '</div>' +
+                '<div class="ssc-title">' + dot + escapeHtml(inv.name) + '</div>' +
                 '<div class="ssc-power">' + inv.power + ' W</div>' +
                 '<div class="ssc-row">Днес <span>' + inv.today_kwh.toFixed(1) + ' kWh</span></div>' +
                 '<div class="ssc-row">Вчера <span>' + inv.yesterday_kwh.toFixed(1) + ' kWh</span></div>' +
@@ -745,7 +747,7 @@
                 var val = inv[period.key];
                 var pct = Math.max(2, Math.round((val / max) * 100));
                 return '<div class="scr-bar-line">' +
-                    '<span class="scr-bar-name">' + inv.name + '</span>' +
+                    '<span class="scr-bar-name">' + escapeHtml(inv.name) + '</span>' +
                     '<div class="scr-bar-track"><div class="scr-bar-fill" style="width:' + pct + '%;background-color:' + invColor(id) + '"></div></div>' +
                     '<span class="scr-bar-value">' + val.toFixed(1) + ' kWh</span>' +
                     '</div>';
@@ -956,7 +958,7 @@
     }
 
     function pollStrings() {
-        fetch('{{ url_for("admin_solar_roof_data") }}')
+        return fetch('{{ url_for("admin_solar_roof_data") }}')
             .then(function (r) { return r.json(); })
             .then(function (data) {
                 lastStringData = data.strings;
@@ -980,8 +982,7 @@
             })
             .catch(function () {});
     }
-    pollStrings();
-    setInterval(pollStrings, 10000);
+    startPoll(pollStrings, 10000);
     updateMpptBorders();
 
     // Arriving from a tracker's node on the main map (?inverter=<ModbusDevice

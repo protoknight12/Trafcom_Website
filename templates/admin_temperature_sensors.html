@@ -133,13 +133,14 @@
 
 </main>
 
+<script src="{{ url_for('static', filename='js/poll.js') }}"></script>
 <script>
 (function () {
     var tsEl = document.getElementById('sensorsTs');
     if (!document.querySelector('[data-sensor-id]')) return;
 
     function poll() {
-        fetch('{{ url_for("admin_temperature_sensors_data") }}')
+        return fetch('{{ url_for("admin_temperature_sensors_data") }}')
             .then(function (r) { return r.json(); })
             .then(function (data) {
                 if (tsEl) tsEl.textContent = 'Последно обновено: ' + data.ts;
@@ -170,8 +171,7 @@
             })
             .catch(function () {});
     }
-    poll();
-    setInterval(poll, 10000);
+    startPoll(poll, 10000);
 })();
 </script>
 

@@ -851,3 +851,24 @@ def test_room_two_way_sync_stacked_rooms(admin_client):
         db.session.commit()
         eq = HallEquipment.query.filter_by(kind=kind, ref_id=dev.id).one()
         assert eq.parent_id == kit.id and 0 <= eq.elevation <= 6
+
+
+def test_factory3d_hides_security_equipment_from_non_admins(admin_client):
+    # ASCII names: the page embeds its data with |tojson, which escapes Cyrillic
+    from app import Camera, HallEquipment
+    cam = Camera(name="QA Camera", cam_type="dome", yaw=123.456, tilt=33.3, fov=77.7, range_m=44.4)
+    db.session.add(cam)
+    db.session.flush()
+    db.session.add(HallEquipment(kind="camera", ref_id=cam.id, name="QA Camera", x=1, z=1))
+    db.session.add(HallEquipment(kind="network", name="QA Switch", x=2, z=2))
+    db.session.add(User(username="qa_regular", password=generate_password_hash("irrelevant123"), role="regular_user"))
+    db.session.commit()
+    admin_page = admin_client.get("/factory3d").get_data(as_text=True)
+    assert "QA Camera" in admin_page and "123.456" in admin_page and "QA Switch" in admin_page
+    from flask import g
+    g.pop("_login_user", None)      # the fixture's app context caches the admin as flask-login's current user
+    c = flask_app.test_client()
+    c.post("/login", data={"username": "qa_regular", "password": "irrelevant123"})
+    page = c.get("/factory3d").get_data(as_text=True)
+    assert "QA Camera" not in page and "QA Switch" not in page
+    assert "123.456" not in page and '"fov"' not in page and '"yaw"' not in page

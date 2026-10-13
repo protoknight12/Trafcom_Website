@@ -43,3 +43,15 @@ training_files/
 
 # AD-ES 2040 controller backup + manufacturer docs (local only - never to GitHub)
 machine_data/
+
+# Local environments, databases and logs
+venv/
+.venv/
+*.sqlite
+*.sqlite3
+*.db
+*.log
+*.sql
+*.dump
+.env.*
+!.env.example

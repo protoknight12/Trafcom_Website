@@ -129,6 +129,7 @@
     </form>
 </main>
 
+<script src="{{ url_for('static', filename='js/poll.js') }}"></script>
 <script>
 (function () {
     var MODES = {{ modes|tojson }};
@@ -223,6 +224,7 @@
     function card(label, valueHtml, tipKey) {
         return '<div class="hp-card"' + tipAttr(tipKey) + '><div class="hp-label">' + label + '</div><div class="hp-value">' + valueHtml + '</div></div>';
     }
+    function escapeHtml(s) { return String(s).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
     function num(v, unit) { return v == null ? '<small>—</small>' : v + ' <small>' + unit + '</small>'; }
 
     function render(r) {
@@ -246,7 +248,7 @@
             .map(function (x) { return card(x[1], '<span style="font-size:1.15rem">' + x[2](s[x[0]]) + '</span>', x[0]); }).join('');
         if (s.last_fault) {
             html += card('Последна авария (' + s.fault_count + ' записа)',
-                '<span style="font-size:0.95rem">' + s.last_fault.text + '<br><small>' + new Date(s.last_fault.ts).toLocaleString('bg-BG') + '</small></span>', 'last_fault');
+                '<span style="font-size:0.95rem">' + escapeHtml(s.last_fault.text) + '<br><small>' + new Date(s.last_fault.ts).toLocaleString('bg-BG') + '</small></span>', 'last_fault');
         }
         document.getElementById('gridStates').innerHTML = html;
         renderControls(s);
@@ -298,7 +300,7 @@
     }
 
     function poll() {
-        fetch('{{ url_for("admin_heatpump_data") }}').then(function (r) { return r.json(); }).then(render).catch(function () {});
+        return fetch('{{ url_for("admin_heatpump_data") }}').then(function (r) { return r.json(); }).then(render).catch(function () {});
     }
 
     var chartHover = null, hpHidden = {};
@@ -333,7 +335,7 @@
 
     function drawChart() {
         var hours = document.getElementById('hoursSel').value;
-        fetch('{{ url_for("admin_heatpump_history") }}?hours=' + hours).then(function (r) { return r.json(); }).then(function (series) {
+        return fetch('{{ url_for("admin_heatpump_history") }}?hours=' + hours).then(function (r) { return r.json(); }).then(function (series) {
             var cv = document.getElementById('chart'), dpr = window.devicePixelRatio || 1;
             var w = cv.clientWidth, h = cv.clientHeight;
             cv.width = w * dpr; cv.height = h * dpr;
@@ -397,7 +399,7 @@
         var period = document.getElementById('costPeriod').value, q = '?period=' + period;
         document.getElementById('costRange').style.display = period === 'custom' ? 'inline' : 'none';
         if (period === 'custom') q += '&from=' + document.getElementById('costFrom').value + '&to=' + document.getElementById('costTo').value;
-        fetch('{{ url_for("admin_heatpump_cost") }}' + q)
+        return fetch('{{ url_for("admin_heatpump_cost") }}' + q)
             .then(function (r) { return r.json(); }).then(function (j) {
                 var grid = document.getElementById('costGrid'), note = document.getElementById('costNote');
                 if (j.error) { grid.innerHTML = ''; note.textContent = j.error; return; }
@@ -422,11 +424,11 @@
     var today = new Date().toISOString().slice(0, 10);
     document.getElementById('costFrom').value = document.getElementById('costTo').value = today;
     ['costPeriod', 'costFrom', 'costTo'].forEach(function (id) { document.getElementById(id).addEventListener('change', loadCost); });
-    loadCost(); setInterval(loadCost, 60000);
+    startPoll(loadCost, 60000);
 
     document.getElementById('hoursSel').addEventListener('change', drawChart);
-    poll(); setInterval(poll, 3000);
-    drawChart(); setInterval(drawChart, 60000);
+    startPoll(poll, 3000);
+    startPoll(drawChart, 60000);
 })();
 </script>
 </body>

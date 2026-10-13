@@ -114,6 +114,33 @@ def test_export_returns_xlsx(admin_client):
     assert resp.mimetype == 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 
 
+def test_export_neutralizes_spreadsheet_formulas(app, admin_client):
+    import io
+    from openpyxl import load_workbook
+    with app.app_context():
+        db.session.add(ActivityLog(username='=HYPERLINK("http://x")', role='regular_user', action='@SUM(A1)'))
+        db.session.commit()
+    rows = list(load_workbook(io.BytesIO(admin_client.get('/admin/log/export').data)).active.iter_rows(values_only=True))
+    assert rows[0] == ('Време', 'Потребител', 'Роля', 'Действие')
+    cells = [c for r in rows[1:] for c in r if isinstance(c, str)]
+    assert "'=HYPERLINK(\"http://x\")" in cells and "'@SUM(A1)" in cells
+    assert not any(c[:1] in '=+-@' for c in cells)
+
+
+def test_log_page_shows_only_newest_rows_and_says_so(app, admin_client, monkeypatch):
+    import sys
+    from datetime import datetime, timedelta
+    monkeypatch.setattr(sys.modules['app'], 'ADMIN_LOG_PAGE_LIMIT', 3)
+    with app.app_context():
+        now = datetime.now()
+        db.session.add_all([ActivityLog(username=f'u{i}', role='worker', action=f'act{i}', timestamp=now + timedelta(hours=i))
+                            for i in range(5)])
+        db.session.commit()
+    page = admin_client.get('/admin/log').get_data(as_text=True)
+    assert 'act4' in page and 'act2' in page and 'act1' not in page
+    assert 'Показани са последните 3 записа от общо' in page   # total also counts the login itself
+
+
 def test_composite_action_stores_expandable_details(app, admin_client):
     """
     Multi-item actions (delivery notes, orders, quick-create-product BOMs,

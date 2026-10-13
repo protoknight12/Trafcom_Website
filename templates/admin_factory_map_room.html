@@ -472,6 +472,7 @@
 
 </main>
 
+<script src="{{ url_for('static', filename='js/poll.js') }}"></script>
 <script>
 (function () {
     var ROOM_PLAN = {{ plan|tojson }};      // null when the room has no place on the hall plan - then the map stays in percent as before
@@ -1061,7 +1062,7 @@
             html += '<div class="tt-row">Обща мощност <span>' + Math.round(snap.total_power) + ' W</span></div>' +
                 '<div class="tt-row">Общо изразходвани <span>' + snap.total_energy.toFixed(1) + ' kWh</span></div>';
             snap.channels.forEach(function (ch) {
-                html += '<div class="tt-sub">' + ch.label + '</div>' +
+                html += '<div class="tt-sub">' + escapeHtml(ch.label) + '</div>' +
                     '<div class="tt-row">Мощност <span>' + Math.round(ch.act_power) + ' W</span></div>' +
                     '<div class="tt-row">Напрежение / Ток <span>' + ch.voltage.toFixed(1) + ' V / ' + ch.current.toFixed(2) + ' A</span></div>';
             });
@@ -1070,25 +1071,26 @@
         }
         return html;
     }
+    function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
     function showTooltip(card, kind, id, e) {
         var group = lastPollData && (kind === 'machine' ? lastPollData.machines : lastPollData.panels);
         var info = group && group[id];
         var name = card.querySelector('.mc-name').textContent;
-        var html = '<div class="tt-title">' + name + '</div>';
+        var html = '<div class="tt-title">' + escapeHtml(name) + '</div>';
         if (kind === 'machine') {
             var status = card.querySelector('.mc-status-label').textContent.trim();
-            html += '<div class="tt-row">Статус <span>' + status + '</span></div>' +
-                '<div class="tt-row">Тип машина <span>' + card.getAttribute('data-machine-type') + '</span></div>';
+            html += '<div class="tt-row">Статус <span>' + escapeHtml(status) + '</span></div>' +
+                '<div class="tt-row">Тип машина <span>' + escapeHtml(card.getAttribute('data-machine-type')) + '</span></div>';
         } else if (kind === 'stack') {
             card.querySelectorAll('.mc-sub').forEach(function (sub) {
-                html += '<div class="tt-row">' + sub.textContent + '</div>';
+                html += '<div class="tt-row">' + escapeHtml(sub.textContent) + '</div>';
             });
             tooltip.innerHTML = html;
             tooltip.style.display = 'block';
             positionTooltip(e);
             return;
         } else {
-            html += '<div class="tt-row">Захранва се от <span>' + card.getAttribute('data-fed-from') + '</span></div>';
+            html += '<div class="tt-row">Захранва се от <span>' + escapeHtml(card.getAttribute('data-fed-from')) + '</span></div>';
         }
         if (info && info.snapshots && info.snapshots.length) {
             info.snapshots.forEach(function (snap) { html += renderSnapshotDetail(snap); });
@@ -1128,7 +1130,7 @@
     var POWER_ACTIVE_THRESHOLD_W = 5;
 
     function pollPower() {
-        fetch('{{ url_for("admin_factory_map_room_data", room_id=room.id) }}')
+        return fetch('{{ url_for("admin_factory_map_room_data", room_id=room.id) }}')
             .then(function (r) { return r.json(); })
             .then(function (data) {
                 lastPollData = data;
@@ -1265,8 +1267,7 @@
             .catch(function () {});
     }
     redrawConnections();
-    pollPower();
-    setInterval(pollPower, 5000);
+    startPoll(pollPower, 5000);
 
     // --- Toggle a convector on/off directly from its map card ---
     document.querySelectorAll('.conv-toggle-map-btn').forEach(function (btn) {

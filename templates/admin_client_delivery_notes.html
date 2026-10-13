@@ -33,7 +33,7 @@
         <h3 data-dialog-title>Нова стокова разписка към клиент</h3>
         <p class="section-subtitle">Изберете клиента и артикулите, които напускат склада - всеки ред намалява наличността на съответния материал, детайл или продукт. Могат да се избират само артикули, които вече са в каталога.</p>
 
-        <form action="{{ url_for('create_client_delivery_note') }}" method="POST" id="clientDeliveryNoteForm">
+        <form action="{{ url_for('create_client_delivery_note') }}" method="POST" id="clientDeliveryNoteForm" data-once>
             {% include 'partials/csrf_field.html' %}
             <div class="add-item-row" style="margin-bottom: 16px;">
                 <div class="form-group">

@@ -395,6 +395,7 @@
 
 </main>
 
+<script src="{{ url_for('static', filename='js/poll.js') }}"></script>
 <script>
 (function () {
     var canvas = document.getElementById('mapCanvas');
@@ -1187,7 +1188,7 @@
             html += '<div class="tt-row">Обща мощност <span>' + Math.round(snap.total_power) + ' W</span></div>' +
                 '<div class="tt-row">Общо изразходвани <span>' + snap.total_energy.toFixed(1) + ' kWh</span></div>';
             snap.channels.forEach(function (ch) {
-                html += '<div class="tt-sub">' + ch.label + '</div>' +
+                html += '<div class="tt-sub">' + escapeHtml(ch.label) + '</div>' +
                     '<div class="tt-row">Мощност <span>' + Math.round(ch.act_power) + ' W</span></div>' +
                     '<div class="tt-row">Напрежение / Ток <span>' + ch.voltage.toFixed(1) + ' V / ' + ch.current.toFixed(2) + ' A</span></div>';
             });
@@ -1196,6 +1197,7 @@
         }
         return html;
     }
+    function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
     function showTooltip(card, kind, id, e) {
         var html;
         if (kind === 'pv') {
@@ -1250,9 +1252,9 @@
         } else {
             var name = card.querySelector('.pc-name').textContent;
             var place = card.querySelector('.pc-place').textContent;
-            html = '<div class="tt-title">' + name + '</div>' +
-                '<div class="tt-row">Помещение <span>' + place + '</span></div>' +
-                '<div class="tt-row">Захранва се от <span>' + card.getAttribute('data-fed-from') + '</span></div>';
+            html = '<div class="tt-title">' + escapeHtml(name) + '</div>' +
+                '<div class="tt-row">Помещение <span>' + escapeHtml(place) + '</span></div>' +
+                '<div class="tt-row">Захранва се от <span>' + escapeHtml(card.getAttribute('data-fed-from')) + '</span></div>';
             if (info && info.snapshots && info.snapshots.length) {
                 info.snapshots.forEach(function (snap) { html += renderSnapshotDetail(snap); });
             } else {
@@ -1269,7 +1271,7 @@
     var POWER_ACTIVE_THRESHOLD_W = 5;
 
     function pollPower() {
-        fetch('{{ url_for("admin_factory_map_overview_data") }}')
+        return fetch('{{ url_for("admin_factory_map_overview_data") }}')
             .then(function (r) { return r.json(); })
             .then(function (data) {
                 lastPollData = data;
@@ -1363,8 +1365,7 @@
             .catch(function () {});
     }
     redrawConnections();
-    pollPower();
-    setInterval(pollPower, 5000);
+    startPoll(pollPower, 5000);
 
     // "Назад" goes to wherever actually linked here instead of always the
     // same fixed page - falls back to the href already in the markup when

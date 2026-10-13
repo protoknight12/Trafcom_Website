@@ -208,6 +208,7 @@
     </dialog>
 
 </main>
+<script src="{{ url_for('static', filename='js/poll.js') }}"></script>
 <script>
     // Live SOC/voltage/temperature per stack - see admin_battery_cabinets_data()/
     // _battery_stack_live_data() in app.py. Only stacks with source_type=
@@ -225,7 +226,7 @@
             + `${g.cell_voltage_min.toFixed(2)}-${g.cell_voltage_max.toFixed(2)} V/cell &middot; ${g.temperature_min.toFixed(0)}-${g.temperature_max.toFixed(0)} °C`;
     }
     function pollStackLive() {
-        fetch('{{ url_for("admin_battery_cabinets_data") }}')
+        return fetch('{{ url_for("admin_battery_cabinets_data") }}')
             .then(r => r.json())
             .then(data => {
                 document.querySelectorAll('[data-live-for]').forEach(el => {
@@ -235,8 +236,7 @@
             })
             .catch(() => {});
     }
-    pollStackLive();
-    setInterval(pollStackLive, 10000);
+    startPoll(pollStackLive, 10000);
 </script>
 </body>
 </html>

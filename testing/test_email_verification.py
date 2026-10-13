@@ -105,7 +105,7 @@ def test_changing_email_resets_verification_and_resends(app, sent_emails):
     assert user.email_verified is True
 
     client.post('/login', data={'username': 'changer', 'password': 'irrelevant123'})
-    client.post('/account/email', data={'email': 'changer-new@example.com'})
+    client.post('/account/email', data={'email': 'changer-new@example.com', 'password': 'irrelevant123'})
 
     db.session.refresh(user)
     assert user.email == 'changer-new@example.com'

@@ -366,6 +366,8 @@
         }
     });
 
+    function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
+
     function cell(html, opts) {
         const td = document.createElement('td');
         td.innerHTML = html;
@@ -568,17 +570,17 @@
                 const hasLineTotal = item.quantity != null && item.unit_price != null;
                 const lineTotal = hasLineTotal ? item.quantity * item.unit_price : null;
 
-                tr.appendChild(cell(item.code || ''));
+                tr.appendChild(cell(escapeHtml(item.code)));
                 const thumbHtml = item.image_filename
-                    ? '<img src="' + OFFER_IMAGE_URL_PREFIX + item.image_filename + '" style="max-height:40px; max-width:60px; border-radius:4px;">'
+                    ? '<img src="' + OFFER_IMAGE_URL_PREFIX + escapeHtml(item.image_filename) + '" style="max-height:40px; max-width:60px; border-radius:4px;">'
                     : '';
                 tr.appendChild(cell(thumbHtml));
-                let nameHtml = item.name ? ('<strong>' + item.name + '</strong>') : '';
+                let nameHtml = item.name ? ('<strong>' + escapeHtml(item.name) + '</strong>') : '';
                 if (item.description_html) nameHtml += (nameHtml ? '<br>' : '') + '<span class="text-small text-muted">' + item.description_html + '</span>';
                 tr.appendChild(cell(nameHtml || '-'));
-                tr.appendChild(cell(item.dimensions || ''));
+                tr.appendChild(cell(escapeHtml(item.dimensions)));
                 tr.appendChild(cell(item.quantity != null ? item.quantity : '', { className: 'text-center' }));
-                tr.appendChild(cell(item.unit || ''));
+                tr.appendChild(cell(escapeHtml(item.unit)));
                 tr.appendChild(cell(item.unit_price != null ? item.unit_price.toFixed(2) + ' €' : '', { className: 'text-right' }));
                 tr.appendChild(cell(hasLineTotal ? lineTotal.toFixed(2) + ' €' : '', { className: 'text-right' }));
 
@@ -665,7 +667,7 @@
                 const cbTd = document.createElement('td');
                 cbTd.appendChild(cb);
                 tr.appendChild(cbTd);
-                tr.appendChild(cell('<strong>' + item.name + '</strong>'));
+                tr.appendChild(cell('<strong>' + escapeHtml(item.name) + '</strong>'));
 
                 // Quantity here is just the offer's default, editable per line
                 // before creating the order (e.g. quoted 2000 but ordering

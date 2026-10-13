@@ -1,21 +1,9 @@
 """
-One-off schema migration: clears cutting_speed_mm_per_min/pierce_rate_per_min
-for existing 'profiles' rows - profile stock is cut to length, not laser-cut/
-pierced, same reasoning already applied to 'rods' in
-migrate_material_rod_speeds_nullable.py. Both columns are already nullable
-(from that earlier migration), so this only backfills existing data. Safe to
-run more than once.
+One-off schema migration, now a no-op kept only so its name stays in the applied_once ledger: it used to NULL
+cutting_speed_mm_per_min/pierce_rate_per_min for every 'profiles' row (profile stock is cut to length, not laser-cut), but
+material types are admin-editable now and that UPDATE wiped speeds an admin had entered on every deploy (a new database has no
+legacy rows to clear). Both columns are made nullable by migrate_material_rod_speeds_nullable.py.
 
     python -m migration.migrate_material_profile_speeds_nullable
 """
-from sqlalchemy import text
-
-from app import app, db
-
-with app.app_context():
-    db.session.execute(text('''
-        UPDATE material_price SET cutting_speed_mm_per_min = NULL, pierce_rate_per_min = NULL WHERE type = 'profiles'
-    '''))
-    db.session.commit()
-
-print("material_price.cutting_speed_mm_per_min/pierce_rate_per_min cleared for existing 'profiles' rows (or already done).")
+print("migrate_material_profile_speeds_nullable: nothing to do.")

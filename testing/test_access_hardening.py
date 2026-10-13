@@ -128,13 +128,50 @@ def test_chat_tools_hide_other_clients_private_catalog(app):
 
 
 def test_chat_tools_hide_delivery_price_and_hall_cards_from_customers(app):
-    for tool, args in ((most_expensive_items, ()), (get_material_details, ('QA Стомана',))):
-        customer, staff = _as('qa_client_a', tool, *args), _as('qa_worker', tool, *args)
-        assert 'QA Стомана' in customer and '12.5' not in customer
-        assert '12.5' in staff
+    customer, staff = _as('qa_client_a', get_material_details, 'QA Стомана'), _as('qa_worker', get_material_details, 'QA Стомана')
+    assert 'QA Стомана' in customer and '12.5' not in customer
+    assert '12.5' in staff
+    # the ranking of materials is by delivery price too - a customer gets the details part only
+    customer, staff = _as('qa_client_a', most_expensive_items), _as('qa_worker', most_expensive_items)
+    assert 'QA Стомана' not in customer and 'Скоба публична' in customer
+    assert 'QA Стомана' in staff and '12.5' in staff
     assert '12345' not in _as('qa_client_a', get_machine_details, 'Вътрешен абкант')
     assert 'Лазер публичен' in _as('qa_client_a', get_machine_details, 'Лазер')
     assert '12345' in _as('qa_worker', get_machine_details, 'Вътрешен абкант')
+
+
+def test_product_details_do_not_name_other_clients_private_components(app):
+    from app import ProductDetail
+    mixed = Product(name='Шкаф смесен', markup_percent=0)
+    db.session.add(mixed)
+    db.session.flush()
+    for name in ('Скоба публична', 'Скоба частна Б'):
+        db.session.add(ProductDetail(product_id=mixed.id, detail_id=Detail.query.filter_by(name=name).first().id, quantity=2))
+    db.session.commit()
+
+    customer = _as('qa_client_a', get_product_details, 'Шкаф смесен')
+    assert 'Скоба публична x2' in customer and 'Скоба частна Б' not in customer
+    assert 'и 1 други компонента' in customer
+    staff = _as('qa_worker', get_product_details, 'Шкаф смесен')
+    assert 'Скоба частна Б x2' in staff and 'други компонента' not in staff
+
+
+def test_customer_detail_upload_is_limited_to_allowed_file_types(app):
+    detail_id = Detail.query.filter_by(name='Скоба публична').first().id
+    post = lambda username, name: _browser(app, username).post(
+        f'/details/{detail_id}/files/upload', data={'file': (io.BytesIO(b'x'), name)}, content_type='multipart/form-data')
+    assert post('qa_client_a', 'run.exe').status_code == 302
+    assert DetailDxfFile.query.filter_by(detail_id=detail_id).count() == 0
+    post('qa_client_a', 'photo.JPG')
+    assert DetailDxfFile.query.filter_by(detail_id=detail_id).count() == 1
+
+
+def test_staff_detail_upload_is_not_limited_by_file_type(app):
+    # Own test: the fixture's app context shares flask-login's cached user between browsers.
+    detail_id = Detail.query.filter_by(name='Скоба публична').first().id
+    _browser(app, 'qa_worker').post(f'/details/{detail_id}/files/upload', data={'file': (io.BytesIO(b'x'), 'notes.txt')},
+                                    content_type='multipart/form-data')
+    assert DetailDxfFile.query.filter_by(detail_id=detail_id).count() == 1
 
 
 def _upload_dxf(app, username):

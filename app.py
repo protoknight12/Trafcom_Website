@@ -11,6 +11,7 @@ import calendar
 import subprocess
 import difflib
 import uuid
+import hashlib
 import io
 import html
 import csv
@@ -46,6 +47,7 @@ from bending.profile import (FINGER_ASM, inner_radius, tool_svg, validate_polygo
 from bending.sequence import steps_from_unfold
 from bending.tools import force_kn_per_m, recommended_v, rank_dies, G as TONNE_KN
 from ezdxf import bbox
+from ezdxf import path as ezdxf_path
 from ezdxf.math import bulge_to_arc
 import random
 import barcode
@@ -84,6 +86,11 @@ app = Flask(__name__)
 # bucket. Trusts exactly ONE proxy hop (nginx) for X-Forwarded-For/-Proto -
 # raise x_for/x_proto only if another proxy is ever put in front of nginx.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
+# INFO and up to stderr (journald under systemd) for the app and the background pollers. Flask's own handler on the root logger: it
+# looks up stderr when a line is written, and Flask then adds no second handler to app.logger, so nothing is logged twice (gunicorn
+# keeps its own non-propagating loggers). A no-op if something configured logging before this import.
+from flask.logging import default_handler as _log_handler
+logging.basicConfig(level=logging.INFO, handlers=[_log_handler])
 
 # ----------------- APP CONFIGURATION -----------------
 # No hardcoded fallbacks - both must come from the environment (.env locally,
@@ -116,6 +123,8 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 # SameSite, the session cookie's cross-site behavior is left to each
 # browser's own default rather than a value this app controls.
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+# Opt-in (SESSION_COOKIE_SECURE=1 on the HTTPS-only live site): local dev and the test client use plain HTTP.
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE') == '1'
 # Idle-timeout logout: a session cookie is valid for this long since the
 # user's last request, not since login. Flask refreshes the cookie's
 # expiry on every request by default (SESSION_REFRESH_EACH_REQUEST), so an
@@ -323,7 +332,7 @@ class ActivityLog(db.Model):
     role they had *at the time*, not whatever their role is now.
     """
     id = db.Column(db.Integer, primary_key=True)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
     username = db.Column(db.String(50), nullable=False)
     role = db.Column(db.String(20), nullable=False)
     action = db.Column(db.String(255), nullable=False)
@@ -342,7 +351,7 @@ class DxfFile(db.Model):
     height = db.Column(db.Float, nullable=False)
     total_length = db.Column(db.Float, nullable=False)
     calculated_price = db.Column(db.Float, nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
     # Stores the extracted 2D geometry (lines/arcs/circles) as a JSON string,
     # so the viewer modal can render the drawing without re-parsing the DXF file.
     geometry_json = db.Column(db.Text, nullable=True)
@@ -768,7 +777,7 @@ class Detail(db.Model):
     # one client (+ staff) - see _catalog_item_visible(), used to filter the
     # self-service catalog (create_order()) and detail_dxf_dashboard() access
     # so one client can never browse/order another client's custom part.
-    owner_client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True)
+    owner_client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True, index=True)
     owner_client = db.relationship('Client', foreign_keys=[owner_client_id])
     # ERP code (shown as text + Code128 barcode) and internal part code (КД №)
     # printed on production labels - see print_label(). Optional/nullable
@@ -847,7 +856,7 @@ class DetailDxfFile(db.Model):
     admins may download - see download_detail_dxf().
     """
     id = db.Column(db.Integer, primary_key=True)
-    detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=False)
+    detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=False, index=True)
     filename = db.Column(db.String(255), nullable=False)  # on-disk name (uuid-prefixed, collision-safe)
     original_filename = db.Column(db.String(255), nullable=False)  # shown in the UI / used as download name
     uploaded_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
@@ -867,7 +876,7 @@ class Operation(db.Model):
     same detail (e.g. mill before deburr).
     """
     id = db.Column(db.Integer, primary_key=True)
-    detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=False)
+    detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=False, index=True)
     service_id = db.Column(db.Integer, db.ForeignKey('service.id'), nullable=False)
     sequence = db.Column(db.Integer, nullable=False, default=0)
     duration_minutes = db.Column(db.Float, nullable=False)
@@ -897,7 +906,7 @@ class Operation(db.Model):
 class ProductImage(db.Model):
     """Stores references to uploaded persistent product documentation or marketing images."""
     id = db.Column(db.Integer, primary_key=True)
-    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False, index=True)
     filename = db.Column(db.String(255), nullable=False)
 
 
@@ -928,7 +937,7 @@ class Product(db.Model):
     stock_quantity = db.Column(db.Float, nullable=False, default=0.0)
     # Same private-to-one-client convention as Detail.owner_client_id above -
     # NULL is the pre-existing public/general-catalog behavior.
-    owner_client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True)
+    owner_client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True, index=True)
     owner_client = db.relationship('Client', foreign_keys=[owner_client_id])
 
     product_details = db.relationship('ProductDetail', cascade='all, delete-orphan', backref='product', lazy=True)
@@ -940,8 +949,8 @@ class Product(db.Model):
 class ProductDetail(db.Model):
     """Join table: which Details compose a Product, and in what quantity."""
     id = db.Column(db.Integer, primary_key=True)
-    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
-    detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=False)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False, index=True)
+    detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=False, index=True)
     quantity = db.Column(db.Integer, nullable=False, default=1)
 
     detail = db.relationship('Detail')
@@ -961,9 +970,9 @@ class Order(db.Model):
     """
     id = db.Column(db.Integer, primary_key=True)
     order_number = db.Column(db.String(50), unique=True, nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
     customer_name = db.Column(db.String(150), nullable=False)
-    status = db.Column(db.String(50), default='new')  # new, in_production, completed, cancelled
+    status = db.Column(db.String(50), default='new', index=True)  # new, in_production, completed, cancelled
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     machine_id = db.Column(db.Integer, db.ForeignKey('machine.id'), nullable=True)
     # Optional links to the Client/Deliverer catalogs (see order_create.html's
@@ -971,7 +980,7 @@ class Order(db.Model):
     # displayed everywhere (my_orders.html, production_report.html, offer/
     # protocol/certificate) - it's auto-filled from the selected/created
     # client's name, so none of those templates need to change.
-    client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True)
+    client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True, index=True)
     deliverer_id = db.Column(db.Integer, db.ForeignKey('deliverer.id'), nullable=True)
 
     user = db.relationship('User', backref=db.backref('orders', lazy=True))
@@ -1031,7 +1040,7 @@ class OrderItem(db.Model):
     details and component-less products (see stock_target).
     """
     id = db.Column(db.Integer, primary_key=True)
-    order_id = db.Column(db.Integer, db.ForeignKey('order.id'), nullable=False)
+    order_id = db.Column(db.Integer, db.ForeignKey('order.id'), nullable=False, index=True)
     product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=True)
     detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=True)
     quantity_ordered = db.Column(db.Integer, nullable=False)
@@ -1104,7 +1113,7 @@ class OrderItemComponent(db.Model):
     up into OrderItem.percent_complete / Order.percent_complete.
     """
     id = db.Column(db.Integer, primary_key=True)
-    order_item_id = db.Column(db.Integer, db.ForeignKey('order_item.id'), nullable=False)
+    order_item_id = db.Column(db.Integer, db.ForeignKey('order_item.id'), nullable=False, index=True)
     detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=True)
     detail_name_snapshot = db.Column(db.String(150), nullable=False)
     quantity_needed = db.Column(db.Integer, nullable=False)
@@ -1140,7 +1149,7 @@ class OrderItemOperation(db.Model):
     breakdown for display, it is never re-summed for pricing after that.
     """
     id = db.Column(db.Integer, primary_key=True)
-    order_item_id = db.Column(db.Integer, db.ForeignKey('order_item.id'), nullable=False)
+    order_item_id = db.Column(db.Integer, db.ForeignKey('order_item.id'), nullable=False, index=True)
     service_id = db.Column(db.Integer, db.ForeignKey('service.id'), nullable=False)
     sequence = db.Column(db.Integer, nullable=False, default=0)
     duration_minutes = db.Column(db.Float, nullable=False)
@@ -1187,7 +1196,7 @@ class ProductExtraCost(db.Model):
     of columns, since these vary per product and per business need.
     """
     id = db.Column(db.Integer, primary_key=True)
-    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False, index=True)
     label = db.Column(db.String(100), nullable=False)
     amount = db.Column(db.Float, nullable=False)
 
@@ -1285,7 +1294,7 @@ class DeliveryNoteItem(db.Model):
     custom description on top of that, for anything else worth recording.
     """
     id = db.Column(db.Integer, primary_key=True)
-    delivery_note_id = db.Column(db.Integer, db.ForeignKey('delivery_note.id'), nullable=False)
+    delivery_note_id = db.Column(db.Integer, db.ForeignKey('delivery_note.id'), nullable=False, index=True)
     target_type = db.Column(db.String(20), nullable=False)  # 'material' / 'detail' / 'product'
     target_id = db.Column(db.Integer, nullable=False)
     description_snapshot = db.Column(db.String(255), nullable=False)
@@ -1296,6 +1305,7 @@ class DeliveryNoteItem(db.Model):
     height = db.Column(db.Float, nullable=True)
     thickness = db.Column(db.Float, nullable=True)
     brand = db.Column(db.String(100), nullable=True)
+    __table_args__ = (db.Index('ix_delivery_note_item_target', 'target_type', 'target_id'),)
 
 
 class ClientDeliveryNote(db.Model):
@@ -1328,13 +1338,14 @@ class ClientDeliveryNoteItem(db.Model):
     issue time, same reasoning as DeliveryNoteItem.description_snapshot.
     """
     id = db.Column(db.Integer, primary_key=True)
-    client_delivery_note_id = db.Column(db.Integer, db.ForeignKey('client_delivery_note.id'), nullable=False)
+    client_delivery_note_id = db.Column(db.Integer, db.ForeignKey('client_delivery_note.id'), nullable=False, index=True)
     target_type = db.Column(db.String(20), nullable=False)  # 'material' / 'detail' / 'product'
     target_id = db.Column(db.Integer, nullable=False)
     description_snapshot = db.Column(db.String(255), nullable=False)
     quantity = db.Column(db.Float, nullable=False)
     unit_price = db.Column(db.Float, nullable=True)
     notes = db.Column(db.String(255), nullable=True)
+    __table_args__ = (db.Index('ix_client_delivery_note_item_target', 'target_type', 'target_id'),)
 
 
 # Request status slugs, same ASCII-slug-as-CSS-class convention as
@@ -2240,6 +2251,7 @@ class ShellyReadingLog(db.Model):
     # Detail.geometry_json etc. use JSON elsewhere in this file. Nullable for
     # rows written before this column existed.
     channels_json = db.Column(db.Text)
+    __table_args__ = (db.Index('ix_shelly_reading_log_host_ts', 'host', 'ts'),)
 
 
 class SolisReadingLog(db.Model):
@@ -2265,6 +2277,7 @@ class SolisReadingLog(db.Model):
     battery_temperature = db.Column(db.Float)
     battery_fault_bits = db.Column(db.Integer)
     snapshot_json = db.Column(db.Text, nullable=False)
+    __table_args__ = (db.Index('ix_solis_reading_log_device_id_ts', 'device_id', 'ts'),)
 
     device = db.relationship('ModbusDevice', backref='reading_logs')
 
@@ -2726,6 +2739,10 @@ HALL_EQUIPMENT_KINDS = {'inverter': 'Инвертор', 'battery': 'Батери
                         'sensor': 'Температурен сензор', 'network': 'Мрежово устройство', 'camera': 'Камера',
                         'heatpump': 'Термопомпа'}
 
+# Само тези видове оборудване виждат клиентите на /factory3d (работниците - всичко без камерите); останалото (камери, мрежа, табла, сензори,
+# инвертори, батерии) разкрива охраната и ел. схемата на обекта. Нов вид е скрит, докато не се добави тук.
+HALL_PUBLIC_EQUIPMENT_KINDS = {'convector', 'heatpump'}
+
 CAMERA_CONN_TYPES = [{'value': 'nvr', 'label': 'През NVR (канал)'}, {'value': 'onvif', 'label': 'ONVIF (директно към камерата)'}, {'value': 'rtsp', 'label': 'RTSP (директно към камерата)'}]
 CAMERA_TYPES = {'dome': 'Купол', 'ptz': 'Въртяща (PTZ)', 'bullet': 'Bullet', 'fisheye': 'Рибешко око', 'other': 'Друга'}
 
@@ -3076,7 +3093,7 @@ class OfferItem(db.Model):
     offer editor's mini toolbar (admin_offer_edit.html).
     """
     id = db.Column(db.Integer, primary_key=True)
-    offer_id = db.Column(db.Integer, db.ForeignKey('offer.id'), nullable=False)
+    offer_id = db.Column(db.Integer, db.ForeignKey('offer.id'), nullable=False, index=True)
     position = db.Column(db.Integer, nullable=False, default=0)
     item_type = db.Column(db.String(10), nullable=False)  # 'product', 'detail', 'text'
     # Which catalog row this line was picked from, if any (nullable - 'text'
@@ -3291,6 +3308,7 @@ class TemperatureReading(db.Model):
     temperature = db.Column(db.Float)
     humidity = db.Column(db.Float)
     battery = db.Column(db.Float)
+    __table_args__ = (db.Index('ix_temperature_reading_sensor_id_ts', 'sensor_id', 'ts'),)
 
 
 class ConvectorLog(db.Model):
@@ -3301,6 +3319,7 @@ class ConvectorLog(db.Model):
     ts = db.Column(db.Integer, nullable=False, index=True)
     is_on = db.Column(db.Boolean, nullable=False)
     power_w = db.Column(db.Float)
+    __table_args__ = (db.Index('ix_convector_log_convector_id_ts', 'convector_id', 'ts'),)
 
 
 class QualitySample(db.Model):
@@ -4270,7 +4289,49 @@ def seed_index_machine_cards():
     db.session.commit()
 
 
-def process_entity(entity):
+# Max distance (mm) between a SPLINE/ELLIPSE and the straight pieces it is
+# flattened into for cut length/preview. A physical tuning knob: 0.01 mm is far
+# below laser kerf/positioning accuracy and keeps the length error under ~0.1%
+# even on a 3 mm radius curve; smaller = more pieces (slower, bigger
+# geometry_json), larger = curves priced shorter than they really are.
+DXF_FLATTEN_TOLERANCE_MM = 0.01
+
+# Hard cap on the pieces (endpoint segments / drawable shapes) one drawing may
+# produce - above it analyze_dxf_geometry() refuses the file instead of pinning
+# the worker (which also hosts the poller threads). A full 2500x3000 mm panel
+# from the Panel Generator with 10 mm hexagons at the default 6 mm spacing is
+# ~175 000 segments (an 8.6 MB DXF, half the 16 MB upload limit), so this
+# leaves real perforated-panel jobs plenty of room. At the cap count_pierces()
+# takes ~4-9 s (measured), on top of ezdxf reading the file.
+DXF_MAX_SEGMENTS = 500_000
+
+# DXF types that are legitimately "not a cut" (annotation/layout only) and are
+# skipped without a warning. Anything else process_entity() can't convert
+# (INSERT, HATCH, 3DFACE, unknown types...) may be real geometry missing from
+# the price, so it is reported - see dxf_skipped_warning().
+DXF_NON_CUT_TYPES = frozenset({'DIMENSION', 'ARC_DIMENSION', 'LEADER', 'MULTILEADER', 'MLEADER', 'TOLERANCE',
+                               'TEXT', 'MTEXT', 'ATTDEF', 'POINT', 'VIEWPORT'})
+
+
+def _dxf_report_note(report, bucket, dtype):
+    if report is not None:
+        counts = report.setdefault(bucket, {})
+        counts[dtype] = counts.get(dtype, 0) + 1
+
+
+def dxf_skipped_warning(report):
+    """User-facing Bulgarian warning for a report filled by analyze_dxf_geometry()
+    (None when everything in the drawing was priced)."""
+    fmt = lambda counts: ', '.join(f'{t} ×{n}' for t, n in sorted(counts.items()))
+    parts = []
+    if report.get('skipped'):
+        parts.append(f'Чертежът съдържа елементи, които не се включват в цената: {fmt(report["skipped"])}.')
+    if report.get('failed'):
+        parts.append(f'Повредени елементи, обработени само частично или пропуснати: {fmt(report["failed"])}.')
+    return ' '.join(parts + ['Проверете дължината на рязане.']) if parts else None
+
+
+def process_entity(entity, report=None):
     """
     Reads a single DXF entity ONCE and extracts everything the app needs from
     it: its cutting length, its endpoint segments (for pierce/loop detection),
@@ -4285,6 +4346,11 @@ def process_entity(entity):
     Returns a tuple: (length_contribution, segments, shapes)
     `shapes` is a list because a single polyline with bulges (rounded
     corners) decomposes into a mix of straight and arc sub-segments.
+
+    `report` (optional dict) is filled with what did NOT make it into the
+    price: report['skipped'][dxftype] = count of entities of a type this
+    function can't convert, report['failed'][dxftype] = count of entities
+    that raised mid-processing. Types in DXF_NON_CUT_TYPES are never reported.
     """
     dtype = entity.dxftype()
     length = 0.0
@@ -4352,6 +4418,8 @@ def process_entity(entity):
                 # we don't handle.
                 vertices = [(float(v.dxf.location.x), float(v.dxf.location.y), float(v.dxf.bulge))
                             for v in entity.vertices] if entity.is_2d_polyline else []
+                if not entity.is_2d_polyline:
+                    _dxf_report_note(report, 'skipped', 'POLYLINE (3D)')
 
             if vertices:
                 segment_pairs = [(vertices[i], vertices[i + 1]) for i in range(len(vertices) - 1)]
@@ -4396,8 +4464,30 @@ def process_entity(entity):
                             'end_angle': math.degrees(end_rad)
                         })
 
+        elif dtype in ('SPLINE', 'ELLIPSE'):
+            # No exact line/arc form - flatten with ezdxf's own path tools
+            # into straight pieces the viewer can draw as plain 'line' shapes
+            # (dxf_viewer.js knows no other curve type). float(): see the
+            # numpy.float64 note above.
+            points = [(float(p.x), float(p.y))
+                      for p in ezdxf_path.make_path(entity).flattening(DXF_FLATTEN_TOLERANCE_MM)]
+            if len(points) < 2:
+                raise ValueError('empty curve')
+            for (x1, y1), (x2, y2) in zip(points, points[1:]):
+                length += math.dist((x1, y1), (x2, y2))
+                shapes.append({'type': 'line', 'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2})
+            # Like an ARC: one segment from the curve's start to its end is all
+            # pierce counting needs. A closed spline/full ellipse ends where it
+            # starts, so it stays one closed loop = one pierce.
+            segments.append((points[0], points[-1]))
+
+        elif dtype not in DXF_NON_CUT_TYPES:
+            _dxf_report_note(report, 'skipped', dtype)
+
     except Exception:
-        pass  # Ignore malformed entities safely, keep processing the rest
+        # Malformed entity: keep processing the rest, but say so - whatever
+        # part of it was read before the failure stays in the result.
+        _dxf_report_note(report, 'failed', dtype)
 
     return length, segments, shapes
 
@@ -4407,45 +4497,70 @@ def count_pierces(all_segments, tolerance=0.5):
     Counts the number of separate closed loops/paths ("pierces") a laser/CNC
     head would need, by treating each entity's endpoints as graph nodes and
     grouping segments that touch (within `tolerance` mm) into connected
-    components via BFS.
+    components.
 
-    Note: this is an O(n^2) comparison across all segment endpoints, which is
-    fine for typical part drawings (hundreds of entities) but could get slow
-    on DXF files with several thousand entities. If that ever becomes a
-    bottleneck, a spatial grid/hash on endpoints would cut this down
-    significantly.
+    Near-linear: union-find over the distinct endpoints, with a spatial hash
+    to find the ones within `tolerance` of each other (this used to be an
+    O(n^2) pairwise comparison + BFS, which pinned the worker for minutes on a
+    large drawing). The grid cell is a hair under tolerance/sqrt(2), so two
+    points in the same cell are always within tolerance (joined without
+    measuring) and a point within tolerance is at most 2 cells away - the
+    0.1% margin keeps both true despite float rounding at a cell border.
+    Points in different cells are still decided by the same
+    `math.dist(a, b) <= tolerance` test as before, so the counts are unchanged.
+    Non-finite coordinates raise (analyze_dxf_geometry() then reports the
+    drawing as unreadable).
     """
-    num_segs = len(all_segments)
-    if num_segs == 0:
+    if not all_segments:
         return 0
 
-    adj = {i: [] for i in range(num_segs)}
-    for i in range(num_segs):
-        s1, e1 = all_segments[i]
-        for j in range(i + 1, num_segs):
-            s2, e2 = all_segments[j]
-            if (math.dist(s1, s2) <= tolerance or
-                    math.dist(s1, e2) <= tolerance or
-                    math.dist(e1, s2) <= tolerance or
-                    math.dist(e1, e2) <= tolerance):
-                adj[i].append(j)
-                adj[j].append(i)
+    parent = []
 
-    pierce_count = 0
-    visited = set()
-    for node in range(num_segs):
-        if node not in visited:
-            pierce_count += 1
-            queue = [node]
-            visited.add(node)
-            while queue:
-                curr = queue.pop(0)
-                for neighbor in adj[curr]:
-                    if neighbor not in visited:
-                        visited.add(neighbor)
-                        queue.append(neighbor)
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
 
-    return pierce_count
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    # One node per distinct endpoint; a segment joins its own two endpoints.
+    node_of = {}
+    for start, end in all_segments:
+        a = node_of.setdefault(start, len(node_of))
+        b = node_of.setdefault(end, len(node_of))
+        while len(parent) < len(node_of):
+            parent.append(len(parent))
+        union(a, b)
+
+    if tolerance > 0:  # at 0 only identical points touch - node_of already merged those
+        cell = tolerance / math.sqrt(2) * 0.999
+        cells = {}
+        for point, node in node_of.items():
+            cells.setdefault((math.floor(point[0] / cell), math.floor(point[1] / cell)), []).append((point, node))
+        for members in cells.values():
+            for _point, node in members[1:]:
+                union(members[0][1], node)
+        # Each pair of cells is looked at once (the "forward" half of the 5x5
+        # neighbourhood), adjacent cells first: in a dense cluster those join
+        # everything, so the further ones are skipped as already connected.
+        # ponytail: two cells' points are compared pairwise until the first
+        # hit - quadratic only for >10^4 distinct points packed into two cells
+        # that don't touch; DXF_MAX_SEGMENTS bounds it. A k-d tree if it matters.
+        for offsets in (((1, 0), (-1, 1), (0, 1), (1, 1)),
+                        ((2, 0), (-2, 1), (2, 1), (-2, 2), (-1, 2), (0, 2), (1, 2), (2, 2))):
+            for (cx, cy), members in cells.items():
+                for dx, dy in offsets:
+                    other = cells.get((cx + dx, cy + dy))
+                    if other is None or find(members[0][1]) == find(other[0][1]):
+                        continue
+                    if any(math.dist(p, q) <= tolerance for p, _n in members for q, _m in other):
+                        union(members[0][1], other[0][1])
+
+    return len({find(i) for i in range(len(parent))})
 
 
 def compute_bounding_box(shapes):
@@ -4499,11 +4614,16 @@ def compute_bounding_box(shapes):
     return max_x - min_x, max_y - min_y
 
 
-def analyze_dxf_geometry(file_path):
+def analyze_dxf_geometry(file_path, report=None):
     """
     Parses a DXF file to determine outer dimensions, total cutting length,
     a precise pierce count using direct entity extraction and graph matching,
     and a list of drawable shapes for the 2D viewer.
+
+    Pass a dict as `report` to learn what the 5-tuple can't say: 'skipped' /
+    'failed' (see process_entity(), dxf_skipped_warning()) and, when the
+    drawing was refused for exceeding DXF_MAX_SEGMENTS, 'error' - a
+    user-facing Bulgarian message to show instead of the generic one.
     """
     try:
         doc = ezdxf.readfile(file_path)
@@ -4520,10 +4640,16 @@ def analyze_dxf_geometry(file_path):
             # Bend lines (e.g. /flashing's BEND_UP/BEND_DOWN layers) are marks, not cuts.
             if entity.dxf.layer.upper().startswith('BEND'):
                 continue
-            entity_length, entity_segments, entity_shapes = process_entity(entity)
+            entity_length, entity_segments, entity_shapes = process_entity(entity, report)
             total_length += entity_length
             all_segments.extend(entity_segments)
             shapes.extend(entity_shapes)
+            if max(len(all_segments), len(shapes)) > DXF_MAX_SEGMENTS:
+                if report is not None:
+                    limit = f'{DXF_MAX_SEGMENTS:,}'.replace(',', ' ')
+                    report['error'] = (f'Чертежът е твърде сложен за автоматично изчисление (над {limit} сегмента). '
+                                       'Опростете го или го разделете на няколко файла.')
+                return None, None, None, None, None
 
         # 2. Calculate outer dimensions from the SAME sanitized shape data
         # used for the 2D viewer and cutting length/pricing - not a separate
@@ -4536,9 +4662,9 @@ def analyze_dxf_geometry(file_path):
         # and visualization guaranteed consistent.
         width, height = compute_bounding_box(shapes)
         if width == 0 and height == 0:
-            # Fallback for files with no LINE/CIRCLE/ARC/POLYLINE geometry at
-            # all (e.g. only SPLINE/HATCH/TEXT) - better to report ezdxf's
-            # own bounding box than nothing.
+            # Fallback for files with no LINE/CIRCLE/ARC/POLYLINE/SPLINE/
+            # ELLIPSE geometry at all (e.g. only HATCH/INSERT/TEXT) - better
+            # to report ezdxf's own bounding box than nothing.
             try:
                 extents = bbox.extents(msp, fast=True)
                 if extents.has_data:
@@ -7754,7 +7880,7 @@ def _hall_page(initial):
     ctx = dict(machines=out, solar=solar, shapes=[h.as_dict() for h in _hall_shapes()],
                parcels=[p.as_dict() for p in _hall_parcels()],
                db_buildings=[{'id': b.id, 'name': b.name, 'rooms': [{'id': r.id, 'name': r.name} for r in b.rooms]} for b in Building.query.order_by(Building.name)] if admin else [],
-               equipment=[e.as_dict() for e in _hall_equipment()], is_admin=admin, initial=initial, links=_hall_links() if admin else [], active_page='factory3d')
+               equipment=[e.as_dict() for e in _hall_equipment() if admin or e.kind in HALL_PUBLIC_EQUIPMENT_KINDS or (current_user.is_staff and e.kind != 'camera')], is_admin=admin, initial=initial, links=_hall_links() if admin else [], active_page='factory3d')
     if admin:
         cards = ServiceMachineCard.query.filter_by(kind='machine').order_by(ServiceMachineCard.title).all()
         ctx.update(meters=[{'kind': 'shelly', 'id': x.id, 'name': x.name} for x in ShellyDevice.query.order_by(ShellyDevice.name)] +
@@ -9015,6 +9141,19 @@ def api_flashing_presets_delete(preset_id):
     return jsonify({'status': 'success'})
 
 
+@app.after_request
+def _security_headers(response):
+    """setdefault, so a route that needs something else can set its own. SAMEORIGIN, never DENY: the app
+    iframes its own pages (form_dialog.js frames, the hall map tabs). No CSP - the templates are full of inline scripts."""
+    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
+    response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+    # A static URL with ?v=<mtime> (_static_cache_bust()) changes whenever the file does, so it can be cached forever.
+    if request.endpoint == 'static' and request.args.get('v') and response.status_code < 400:
+        response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+    return response
+
+
 # ----- EMAIL DELIVERY -----
 # Plain stdlib smtplib. Defaults to localhost:25 with no auth/TLS - i.e.
 # it hands the message to whatever mail transport is running on this same
@@ -9058,6 +9197,24 @@ def _reset_serializer():
     return URLSafeTimedSerializer(app.config['SECRET_KEY'], salt='password-reset')
 
 
+def _password_fingerprint(user):
+    return hashlib.sha256(user.password.encode()).hexdigest()[:16]
+
+
+def _reset_token(user):
+    """Bound to the current password hash, so the link dies the moment the password changes (first use included)."""
+    return _reset_serializer().dumps([user.id, _password_fingerprint(user)])
+
+
+def _mail_url(endpoint, **values):
+    """Link for an email. PUBLIC_BASE_URL (e.g. https://trafcombg.com) wins over the request's Host header,
+    which whoever sends the request controls (a poisoned Host would put an attacker's domain in the mail)."""
+    base = (os.environ.get('PUBLIC_BASE_URL') or '').strip().rstrip('/')
+    if base:
+        return base + url_for(endpoint, **values)
+    return url_for(endpoint, _external=True, **values)
+
+
 EMAIL_VERIFY_MAX_AGE = 3 * 24 * 3600  # 3 days
 
 
@@ -9066,8 +9223,9 @@ def _verify_serializer():
 
 
 def _send_verification_email(user):
-    token = _verify_serializer().dumps(user.id)
-    verify_url = url_for('verify_email', token=token, _external=True)
+    # The address is part of the token: a link mailed to an old address must not verify a newer one.
+    token = _verify_serializer().dumps([user.id, user.email])
+    verify_url = _mail_url('verify_email', token=token)
     send_email(
         user.email,
         'Потвърдете имейл адреса си - TRAFCOM',
@@ -9078,6 +9236,57 @@ def _send_verification_email(user):
         '---\n'
         'Това е автоматично съобщение. Моля, не отговаряйте на този имейл.'
     )
+
+
+# 3-50 characters: letters of any script (staff names may be Cyrillic), digits, . _ - ; first one a letter or
+# digit (so no "=..." spreadsheet-formula names). Checked only when a user is created - existing names stay valid.
+_USERNAME_RE = re.compile(r'[^\W_][\w.-]{2,49}')
+USERNAME_RULE_MESSAGE = ('Потребителското име трябва да е от 3 до 50 символа - букви, цифри, точка, долна черта '
+                         'или тире - и да започва с буква или цифра.')
+
+
+def _valid_username(username):
+    return bool(_USERNAME_RE.fullmatch(username or ''))
+
+
+TOTP_MAX_FAILURES = 5
+TOTP_FAILURE_WINDOW = 15 * 60  # seconds
+TOTP_PENDING_MAX_AGE = 5 * 60  # seconds between the password step and the code
+# ponytail: in-memory, per-process - resets on restart and is not shared between workers. Fine for the one
+# gunicorn worker production runs (--workers 1 --threads 8); move both to the DB or Redis if more are ever used.
+_totp_lock = threading.Lock()
+_totp_failures = {}   # user id -> times of the recent wrong codes
+_totp_last_step = {}  # user id -> last TOTP time-step a code was accepted for
+
+
+def _totp_locked(user_id, add_failure=False):
+    """True while the user has TOTP_MAX_FAILURES wrong codes inside TOTP_FAILURE_WINDOW. A successful login does
+    not clear them - they only age out, so the count can't be reset by the owner logging in between guesses."""
+    now = time.time()
+    with _totp_lock:
+        recent = [t for t in _totp_failures.get(user_id, ()) if now - t < TOTP_FAILURE_WINDOW]
+        if add_failure:
+            recent.append(now)
+        _totp_failures[user_id] = recent
+        return len(recent) >= TOTP_MAX_FAILURES
+
+
+def _totp_accept(user, code):
+    """True for the code of the current time-step (+-1 for clock drift, as before) - once: a step already used,
+    or older than the last one used, is refused, so a code seen over the shoulder can't be replayed."""
+    totp = pyotp.TOTP(user.totp_secret)
+    now_step = totp.timecode(datetime.now())
+    with _totp_lock:
+        for step in (now_step - 1, now_step, now_step + 1):
+            if step > _totp_last_step.get(user.id, 0) and pyotp.utils.strings_equal(code, totp.generate_otp(step)):
+                _totp_last_step[user.id] = step
+                return True
+    return False
+
+
+def _drop_pending_2fa():
+    session.pop('pending_2fa_user_id', None)
+    session.pop('pending_2fa_at', None)
 
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -9093,13 +9302,19 @@ def login():
 
         if user and check_password_hash(user.password, password):
             if user.totp_secret:
+                if _totp_locked(user.id):
+                    flash(gettext('Твърде много грешни кодове. Опитайте отново след 15 минути.'), 'danger')
+                    return redirect(url_for('login'))
                 session['pending_2fa_user_id'] = user.id
+                session['pending_2fa_at'] = time.time()
                 return redirect(url_for('login_2fa'))
             session.permanent = True
             login_user(user)
             if user.role == 'admin':
                 return redirect(url_for('admin_dashboard'))
             return redirect(url_for('dashboard'))
+        # Logger only, not ActivityLog: a table every bot can append to would grow without bound.
+        app.logger.warning('Failed login for %r from %s', username, request.remote_addr)
         flash(gettext('Невалидно потребителско име или парола.'))
     return render_template('login.html')
 
@@ -9110,18 +9325,31 @@ def login_2fa():
     user_id = session.get('pending_2fa_user_id')
     user = db.session.get(User, user_id) if user_id else None
     if not user or not user.totp_secret:
-        session.pop('pending_2fa_user_id', None)
+        _drop_pending_2fa()
+        return redirect(url_for('login'))
+    if time.time() - session.get('pending_2fa_at', 0) > TOTP_PENDING_MAX_AGE:
+        _drop_pending_2fa()
+        flash(gettext('Времето за въвеждане на кода изтече. Влезте отново.'), 'danger')
+        return redirect(url_for('login'))
+    if _totp_locked(user.id):
+        _drop_pending_2fa()
+        flash(gettext('Твърде много грешни кодове. Опитайте отново след 15 минути.'), 'danger')
         return redirect(url_for('login'))
 
     if request.method == 'POST':
         code = (request.form.get('code') or '').strip()
-        if pyotp.TOTP(user.totp_secret).verify(code, valid_window=1):
-            session.pop('pending_2fa_user_id', None)
+        if _totp_accept(user, code):
+            _drop_pending_2fa()
             session.permanent = True
             login_user(user)
             if user.role == 'admin':
                 return redirect(url_for('admin_dashboard'))
             return redirect(url_for('dashboard'))
+        app.logger.warning('Failed 2FA code for %r from %s', user.username, request.remote_addr)
+        if _totp_locked(user.id, add_failure=True):
+            _drop_pending_2fa()
+            flash(gettext('Твърде много грешни кодове. Опитайте отново след 15 минути.'), 'danger')
+            return redirect(url_for('login'))
         flash(gettext('Невалиден код.'), 'danger')
     return render_template('login_2fa.html')
 
@@ -9135,8 +9363,7 @@ def forgot_password():
         email, _ = _validate_email(request.form.get('email'))
         user = User.query.filter_by(email=email).first() if email else None
         if user:
-            token = _reset_serializer().dumps(user.id)
-            reset_url = url_for('reset_password', token=token, _external=True)
+            reset_url = _mail_url('reset_password', token=_reset_token(user))
             send_email(
                 user.email,
                 'Възстановяване на парола - TRAFCOM',
@@ -9160,7 +9387,7 @@ def reset_password(token):
     if current_user.is_authenticated:
         return redirect(url_for('index'))
     try:
-        user_id = _reset_serializer().loads(token, max_age=PASSWORD_RESET_MAX_AGE)
+        data = _reset_serializer().loads(token, max_age=PASSWORD_RESET_MAX_AGE)
     except SignatureExpired:
         flash(gettext('Връзката за възстановяване е изтекла. Заявете нова.'), 'danger')
         return redirect(url_for('forgot_password'))
@@ -9168,14 +9395,17 @@ def reset_password(token):
         flash(gettext('Невалидна връзка за възстановяване.'), 'danger')
         return redirect(url_for('forgot_password'))
 
-    user = db.session.get(User, user_id)
-    if not user:
+    # [user id, password fingerprint] - anything else (the old bare-id token included) is invalid, and so is a
+    # token whose password has changed since: already used once, or the password was changed some other way.
+    user = db.session.get(User, data[0]) if isinstance(data, list) and len(data) == 2 else None
+    if not user or data[1] != _password_fingerprint(user):
         flash(gettext('Невалидна връзка за възстановяване.'), 'danger')
         return redirect(url_for('forgot_password'))
 
     if request.method == 'POST':
-        password = request.form.get('password', '')
-        password_confirm = request.form.get('password_confirm', '')
+        # stripped like login() strips it - a password saved with a leading/trailing space could never log in
+        password = request.form.get('password', '').strip()
+        password_confirm = request.form.get('password_confirm', '').strip()
         if len(password) < 8:
             flash(gettext('Паролата трябва да бъде поне 8 символа.'), 'danger')
             return render_template('reset_password.html', token=token)
@@ -9201,9 +9431,13 @@ def register():
         return redirect(url_for('login'))
 
     if request.method == 'POST':
-        username = request.form.get('username')
-        password = request.form.get('password', '')
+        username = (request.form.get('username') or '').strip()
+        password = request.form.get('password', '').strip()  # login() strips it too
         email, email_error = _validate_email(request.form.get('email'))
+
+        if not _valid_username(username):
+            flash(gettext(USERNAME_RULE_MESSAGE), 'danger')
+            return redirect(url_for('register'))
 
         if not email:
             flash(email_error or gettext('Имейл е задължителен.'), 'danger')
@@ -9245,7 +9479,7 @@ def register():
 @app.route('/verify-email/<token>')
 def verify_email(token):
     try:
-        user_id = _verify_serializer().loads(token, max_age=EMAIL_VERIFY_MAX_AGE)
+        data = _verify_serializer().loads(token, max_age=EMAIL_VERIFY_MAX_AGE)
     except SignatureExpired:
         flash(gettext('Връзката за потвърждение е изтекла. Заявете нова от профила си.'), 'danger')
         return redirect(url_for('login'))
@@ -9253,8 +9487,9 @@ def verify_email(token):
         flash(gettext('Невалидна връзка за потвърждение.'), 'danger')
         return redirect(url_for('login'))
 
-    user = db.session.get(User, user_id)
-    if not user:
+    # [user id, email] - verifies only the address the link was mailed to (an old bare-id token is invalid)
+    user = db.session.get(User, data[0]) if isinstance(data, list) and len(data) == 2 else None
+    if not user or not user.email or user.email != data[1]:
         flash(gettext('Невалидна връзка за потвърждение.'), 'danger')
         return redirect(url_for('login'))
 
@@ -9273,6 +9508,10 @@ def account():
 @app.route('/account/email', methods=['POST'])
 @login_required
 def account_update_email():
+    # The address receives the password-reset links, so changing it takes the password, not just an open session.
+    if not check_password_hash(current_user.password, request.form.get('password', '').strip()):
+        flash(gettext('Грешна парола.'), 'danger')
+        return redirect(url_for('account'))
     email, error = _validate_email(request.form.get('email'))
     if not email:
         flash(error or gettext('Имейл е задължителен.'), 'danger')
@@ -9396,9 +9635,10 @@ def process_dxf_upload(file, material_key, service_ids, machine_id=None, own_mat
         file.save(temp_path)
 
         # Extracts geometric metrics, pierce count, and drawable shapes
-        width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(temp_path)
+        dxf_report = {}
+        width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(temp_path, dxf_report)
         if width is None or total_length is None:
-            return None, None, 'Грешка при обработката на DXF структурата.'
+            return None, None, dxf_report.get('error') or 'Грешка при обработката на DXF структурата.'
 
         material_row = MaterialPrice.query.filter_by(key=material_key).first()
         if not material_row:
@@ -9426,6 +9666,10 @@ def process_dxf_upload(file, material_key, service_ids, machine_id=None, own_mat
             services=services,
             own_material=own_material
         )
+        # Priced, but not everything in the drawing made it into the price.
+        skipped_warning = dxf_skipped_warning(dxf_report)
+        if skipped_warning:
+            flash(skipped_warning, 'warning')
         return dxf_file, pierce_count, None
     finally:
         # Always clean up the temp file, regardless of success/failure.
@@ -9594,11 +9838,16 @@ def admin_toggle_registration():
     return redirect(url_for('admin_users'))
 
 
+ADMIN_LOG_PAGE_LIMIT = 2000
+
+
 @app.route('/admin/log')
 @role_required('admin')
 def admin_log():
-    logs = ActivityLog.query.order_by(ActivityLog.timestamp.desc()).all()
-    return render_template('admin_log.html', logs=logs, active_page='admin_log')
+    # Таблицата не се подрязва - на страницата са само най-новите записи, пълният журнал е в експорта.
+    logs = ActivityLog.query.order_by(ActivityLog.timestamp.desc()).limit(ADMIN_LOG_PAGE_LIMIT).all()
+    total = ActivityLog.query.count()
+    return render_template('admin_log.html', logs=logs, total=total, limit=ADMIN_LOG_PAGE_LIMIT, active_page='admin_log')
 
 
 @app.route('/admin/log/clear', methods=['POST'])
@@ -9614,12 +9863,16 @@ def admin_log_clear():
 @role_required('admin')
 def admin_log_export():
     logs = ActivityLog.query.order_by(ActivityLog.timestamp.desc()).all()
-    wb = Workbook()
-    ws = wb.active
-    ws.title = 'Log'
+    wb = Workbook(write_only=True)  # без произволен достъп до клетки - не държи целия журнал в паметта
+    ws = wb.create_sheet('Log')
+
+    def safe(v):
+        # клетка, започваща с = + - @, е формула в Excel - предварваме с '
+        return "'" + v if isinstance(v, str) and v[:1] in ('=', '+', '-', '@') else v
+
     ws.append(['Време', 'Потребител', 'Роля', 'Действие'])
     for entry in logs:
-        ws.append([entry.timestamp.strftime('%Y-%m-%d %H:%M:%S'), entry.username, entry.role, entry.action])
+        ws.append([entry.timestamp.strftime('%Y-%m-%d %H:%M:%S'), safe(entry.username), safe(entry.role), safe(entry.action)])
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -10079,6 +10332,17 @@ def admin_delete_client(client_id):
         flash('Нямате достъп до тази страница.', 'danger')
         return redirect(url_for('dashboard'))
     client = Client.query.get_or_404(client_id)
+    # Offers, issued delivery notes, satisfaction surveys and the client's own
+    # private catalog items are theirs and would be left pointing at nothing
+    # (the DELETE fails on the foreign key - a 500): refuse and say what's left.
+    used_in = [label for model, column, label in (
+        (Offer, Offer.client_id, 'оферти'), (ClientDeliveryNote, ClientDeliveryNote.client_id, 'издадени стокови разписки'),
+        (CustomerSatisfactionRecord, CustomerSatisfactionRecord.client_id, 'анкети за удовлетвореност'),
+        (Detail, Detail.owner_client_id, 'собствени детайли'), (Product, Product.owner_client_id, 'собствени продукти'),
+    ) if model.query.filter(column == client.id).first()]
+    if used_in:
+        flash(f'Клиентът "{client.name}" има {", ".join(used_in)} и не може да бъде изтрит.', 'danger')
+        return redirect(url_for('admin_clients'))
     # Orders/Users referencing this client keep existing (both FKs nullable) -
     # detach rather than block deletion, same pattern as delete_machine().
     Order.query.filter_by(client_id=client.id).update({'client_id': None})
@@ -10299,9 +10563,20 @@ def admin_delete_deliverer(deliverer_id):
 
 def _bump_stock(target, quantity):
     """Adds `quantity` to target.stock_quantity and returns the new total.
-    Pure/no DB calls itself, so it's testable without a live database - see
-    test_delivery_note_stock.py."""
-    target.stock_quantity = (target.stock_quantity or 0) + quantity
+    A row already in the database is incremented by the database itself
+    (SET stock_quantity = COALESCE(stock_quantity, 0) + n, flushed right away),
+    not by writing back a total computed here - two requests moving the same
+    row at once (production report + delivery note) would otherwise both start
+    from the same old value and one movement would vanish. The UPDATE keeps the
+    row locked until commit; reading target.stock_quantity afterwards reloads
+    the real new total. A plain object (test_delivery_note_stock.py) or a row
+    not INSERTed yet (nobody else can see it) gets plain arithmetic, no DB call."""
+    state = sa_inspect(target, raiseerr=False)
+    if state is None or not state.persistent:
+        target.stock_quantity = (target.stock_quantity or 0) + quantity
+        return target.stock_quantity
+    target.stock_quantity = db.func.coalesce(type(target).stock_quantity, 0) + quantity
+    db.session.flush()  # also sends any other pending change on the row (e.g. a corrected price); expires stock_quantity
     return target.stock_quantity
 
 
@@ -10811,7 +11086,7 @@ def _apply_delivery_note_items(note, items, kept=None):
         _bump_stock(target, quantity)
         added_any = True
         log_parts.append(f'{item_type_labels.get(item_type, item_type)} "{description}" +{quantity:g} (нова наличност {target.stock_quantity:g})')
-        price_note = f', цена {unit_price:g} лв.' if unit_price is not None else ''
+        price_note = f', цена {unit_price:g} €' if unit_price is not None else ''
         notes_note = f', бележка: {row.get("notes")}' if (row.get('notes') or '').strip() else ''
         log_detail_lines.append(f'{item_type_labels.get(item_type, item_type)} "{description}": +{quantity:g} бр. → нова наличност {target.stock_quantity:g}{price_note}{notes_note}')
     return added_any, log_parts, log_detail_lines
@@ -11026,6 +11301,19 @@ def _save_upload(file, folder, allowed_extensions=None):
     unique_filename = f"{uuid.uuid4().hex}_{secure_filename(file.filename)}"
     file.save(os.path.join(folder, unique_filename))
     return unique_filename
+
+
+def _remove_files(paths):
+    """Removes uploaded files whose rows were just deleted. Call it only AFTER
+    the commit: a delete that fails in the database must not have already cost
+    the files, and a file that won't go must not turn a finished delete into a
+    500 - it's logged and left behind."""
+    for path in paths:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError as e:
+            app.logger.error('could not remove %s: %s', path, e)
 
 
 @app.route('/services/machine-cards/new')
@@ -11248,6 +11536,10 @@ def admin_create_user():
 
     if not username or not password:
         flash('Попълнете всички полета.')
+        return redirect(url_for('admin_users'))
+
+    if not _valid_username(username):
+        flash(USERNAME_RULE_MESSAGE, 'danger')
         return redirect(url_for('admin_users'))
 
     if User.query.filter_by(username=username).first():
@@ -11920,7 +12212,7 @@ def admin_delete_service(service_id):
     # under it - same "resolve usages first" rule as admin_delete_detail()
     # for a Detail still attached to a Product.
     in_use = (
-        DxfFile.query.filter_by(service_id=service.id).first()
+        DxfFile.query.filter(DxfFile.services.any(Service.id == service.id)).first()
         or Detail.query.filter_by(cutting_service_id=service.id).first()
         or Operation.query.filter_by(service_id=service.id).first()
     )
@@ -12039,6 +12331,7 @@ def admin_add_detail():
     # the file survives past this request - see detail_dxf_dashboard() /
     # DetailDxfFile. Only removed again below if something fails.
     stored_path = None
+    dxf_report = {}
     try:
         if has_dxf:
             # secure_filename() strips non-ASCII entirely (a Cyrillic-only
@@ -12052,9 +12345,9 @@ def admin_add_detail():
             stored_path = os.path.join(app.config['DETAIL_DXF_FOLDER'], stored_filename)
             file.save(stored_path)
 
-            width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(stored_path)
+            width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(stored_path, dxf_report)
             if width is None:
-                flash('Грешка при обработката на DXF структурата.', 'danger')
+                flash(dxf_report.get('error') or 'Грешка при обработката на DXF структурата.', 'danger')
                 os.remove(stored_path)
                 return redirect(url_for('admin_details'))
 
@@ -12093,11 +12386,14 @@ def admin_add_detail():
         # cart and _add_operations_from_rows().
         extra_ops = _add_operations_from_rows(new_detail, _parse_operations_json(request.form.get('operations_json')))
         db.session.commit()
-        log_action(f'Създаден детайл "{name}" (цена {new_detail.calculated_price:g} лв.{", "+str(extra_ops)+" доп. операции" if extra_ops else ""})')
+        log_action(f'Създаден детайл "{name}" (цена {new_detail.calculated_price:g} €{", "+str(extra_ops)+" доп. операции" if extra_ops else ""})')
         if extra_ops:
             flash(f'Детайлът "{name}" беше добавен успешно, с {extra_ops} допълнителна операция(и).', 'success')
         else:
             flash(f'Детайлът "{name}" беше добавен успешно.', 'success')
+        skipped_warning = dxf_skipped_warning(dxf_report)
+        if skipped_warning:
+            flash(skipped_warning, 'warning')
         return redirect(url_for('admin_details'))
 
     except Exception as e:
@@ -12188,11 +12484,15 @@ def admin_update_detail_material(detail_id):
     log_action(describe_changes(f'детайл "{detail.name}"', detail, {
         'material_key': 'материал', 'width': 'ширина мм', 'height': 'височина мм',
         'thickness_mm': 'дебелина мм', 'extra_width_mm': 'доп. ширина мм',
-        'extra_height_mm': 'доп. височина мм', 'calculated_price': 'цена лв.',
+        'extra_height_mm': 'доп. височина мм', 'calculated_price': 'цена €',
     }))
     db.session.commit()
     flash('Материалът и размерите бяха обновени успешно.', 'success')
     return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
+
+
+# Файловете, които клиент (не-персонал) може да прикачи към детайл от каталога.
+CUSTOMER_DETAIL_FILE_EXTENSIONS = {'dxf', 'dwg', 'pdf', 'step', 'stp', 'png', 'jpg', 'jpeg'}
 
 
 @app.route('/details/<int:detail_id>/files/upload', methods=['POST'])
@@ -12226,7 +12526,12 @@ def upload_detail_dxf(detail_id):
         return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
     original_filename = sanitize_display_filename(file.filename)
-    stored_filename = _save_upload(file, app.config['DETAIL_DXF_FOLDER'])
+    stored_filename = _save_upload(
+        file, app.config['DETAIL_DXF_FOLDER'],
+        allowed_extensions=None if current_user.is_staff else CUSTOMER_DETAIL_FILE_EXTENSIONS)
+    if not stored_filename:
+        flash('Този тип файл не е разрешен. Позволени са: ' + ', '.join(sorted(CUSTOMER_DETAIL_FILE_EXTENSIONS)) + '.', 'danger')
+        return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
     db.session.add(DetailDxfFile(
         detail_id=detail.id, filename=stored_filename, original_filename=original_filename,
         uploaded_by_id=current_user.id
@@ -12335,10 +12640,9 @@ def delete_detail_dxf(file_id):
     dxf_file = DetailDxfFile.query.get_or_404(file_id)
     detail_id = dxf_file.detail_id
     path = os.path.join(app.config['DETAIL_DXF_FOLDER'], dxf_file.filename)
-    if os.path.exists(path):
-        os.remove(path)
     db.session.delete(dxf_file)
     db.session.commit()
+    _remove_files([path])
     flash('Файлът беше премахнат успешно.', 'success')
     return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
@@ -12590,14 +12894,22 @@ def admin_delete_detail(detail_id):
         flash(f'Детайлът "{detail.name}" се използва в поне един продукт и не може да бъде изтрит.', 'danger')
         return redirect(url_for('admin_details'))
 
-    for dxf_file in detail.dxf_files:
-        dxf_path = os.path.join(app.config['DETAIL_DXF_FOLDER'], dxf_file.filename)
-        if os.path.exists(dxf_path):
-            os.remove(dxf_path)
+    # Same for everything else that points at it with no ON DELETE rule: the
+    # DELETE would fail on the foreign key (a 500) - refuse and say what uses it.
+    used_in = [label for model, label in (
+        (OrderItem, 'поръчка'), (OrderItemComponent, 'поръчка'), (OfferItem, 'оферта'),
+        (ProductionOrder, 'задача за производство'), (BendProgram, 'програма за огъване'),
+    ) if model.query.filter_by(detail_id=detail.id).first()]
+    if used_in:
+        flash(f'Детайлът "{detail.name}" се използва в поне една {", ".join(dict.fromkeys(used_in))} '
+              f'и не може да бъде изтрит.', 'danger')
+        return redirect(url_for('admin_details'))
 
+    dxf_paths = [os.path.join(app.config['DETAIL_DXF_FOLDER'], f.filename) for f in detail.dxf_files]
     name = detail.name
     db.session.delete(detail)
     db.session.commit()
+    _remove_files(dxf_paths)
     log_action(f'Изтрит детайл "{name}"')
     flash(f'Детайлът "{detail.name}" беше изтрит.', 'success')
     return redirect(url_for('admin_details'))
@@ -12782,17 +13094,11 @@ def admin_product_delete(product_id):
     product = Product.query.get_or_404(product_id)
     name = product.name
 
-    # Unlink files from storage before cascading database removal
-    for img in product.images:
-        file_path = os.path.join(app.config['PRODUCT_IMAGES_FOLDER'], img.filename)
-        try:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-        except Exception as e:
-            print(f"Failed disk cleanup for file {img.filename}: {e}")
+    image_paths = [os.path.join(app.config['PRODUCT_IMAGES_FOLDER'], img.filename) for img in product.images]
 
     db.session.delete(product)  # Cascades database records
     db.session.commit()
+    _remove_files(image_paths)
     log_action(f'Изтрит продукт "{name}"')
     flash(f'Продуктът "{name}" беше изтрит.', 'success')
     return redirect(url_for('admin_products'))
@@ -12876,7 +13182,7 @@ def admin_product_add_cost(product_id):
 
     db.session.add(ProductExtraCost(product_id=product.id, label=label, amount=round(amount, 2)))
     db.session.commit()
-    log_action(f'Добавен разход "{label}" ({amount:g} лв.) към продукт "{product.name}"')
+    log_action(f'Добавен разход "{label}" ({amount:g} €) към продукт "{product.name}"')
     flash(f'Разходът "{label}" беше добавен.', 'success')
     return redirect(url_for('admin_product_edit', product_id=product.id))
 
@@ -13145,7 +13451,7 @@ def create_order():
         header = f'Поръчка {new_order.order_number} за "{customer_name}"'
         if new_order.client:
             header += f' (клиент: {new_order.client.name})'
-        item_lines = [f'{oi.item_name}: {oi.quantity_ordered} бр. x {oi.unit_price:g} лв. = {oi.line_total:g} лв.' for oi in order_items]
+        item_lines = [f'{oi.item_name}: {oi.quantity_ordered} бр. x {oi.unit_price:g} € = {oi.line_total:g} €' for oi in order_items]
         log_action(f'Създадена поръчка {new_order.order_number} за "{customer_name}" ({len(order_items)} артикул(и))',
                    details=header + '\n' + '\n'.join(item_lines))
         flash(gettext('Поръчка %(order_number)s беше успешно изпратена!', order_number=new_order.order_number), 'success')
@@ -14475,15 +14781,13 @@ def admin_download_document_revision(revision_id):
 @role_required(['admin', 'quality_control'])
 def admin_delete_document(document_id):
     document = ControlledDocument.query.get_or_404(document_id)
-    for revision in document.revisions:
-        if revision.filename:
-            path = os.path.join(app.config['CONTROLLED_DOCUMENT_FOLDER'], revision.filename)
-            if os.path.exists(path):
-                os.remove(path)
+    paths = [os.path.join(app.config['CONTROLLED_DOCUMENT_FOLDER'], revision.filename)
+             for revision in document.revisions if revision.filename]
 
     document_no = document.document_no
     db.session.delete(document)
     db.session.commit()
+    _remove_files(paths)
     log_action(f'Изтрит документ "{document_no}"')
     flash(f'Документ "{document_no}" беше изтрит.', 'success')
     return redirect(url_for('admin_documents'))
@@ -15019,13 +15323,11 @@ def admin_download_training_certificate(record_id):
 @role_required(['admin', 'quality_control'])
 def admin_delete_training_record(record_id):
     record = TrainingRecord.query.get_or_404(record_id)
-    if record.filename:
-        path = os.path.join(app.config['TRAINING_CERT_FOLDER'], record.filename)
-        if os.path.exists(path):
-            os.remove(path)
+    paths = [os.path.join(app.config['TRAINING_CERT_FOLDER'], record.filename)] if record.filename else []
     topic = record.topic
     db.session.delete(record)
     db.session.commit()
+    _remove_files(paths)
     log_action(f'Изтрит запис за обучение "{topic}"')
     flash('Записът за обучение беше изтрит.', 'success')
     return redirect(url_for('admin_training_records'))
@@ -15314,15 +15616,16 @@ def api_quick_create_detail():
         return jsonify({'status': 'error', 'message': 'Невалиден формат за референтен файл! Приемат се само .pdf файлове.'}), 400
 
     temp_path = None
+    dxf_report = {}
     try:
         if has_dxf:
             filename = secure_filename(file.filename)
             temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{uuid.uuid4().hex}_{filename}")
             file.save(temp_path)
 
-            width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(temp_path)
+            width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(temp_path, dxf_report)
             if width is None:
-                return jsonify({'status': 'error', 'message': 'Грешка при обработката на DXF файла.'}), 400
+                return jsonify({'status': 'error', 'message': dxf_report.get('error') or 'Грешка при обработката на DXF файла.'}), 400
 
             if dup_mode == 'version':   # new revision of the existing Detail: its own material/service/ERP stay, geometry and price follow the new DXF
                 dup.width, dup.height, dup.total_length, dup.pierce_count = width, height, total_length, pierce_count
@@ -15337,8 +15640,8 @@ def api_quick_create_detail():
                                              uploaded_by_id=current_user.id))
                 step_note = _attach_flashing_step(dup, dup.name, request.form['flashing_json']) if request.form.get('flashing_json') else None
                 db.session.commit()
-                log_action(f'Нова версия на детайл "{dup.name}" (нов DXF, цена {dup.calculated_price:g} лв.)')
-                return jsonify({'status': 'success', 'version': True, 'step_note': step_note,
+                log_action(f'Нова версия на детайл "{dup.name}" (нов DXF, цена {dup.calculated_price:g} €)')
+                return jsonify({'status': 'success', 'version': True, 'step_note': step_note, 'warning': dxf_skipped_warning(dxf_report),
                                 'detail': {'id': dup.id, 'name': f"{dup.name} ({dup.material.display_name})" if getattr(dup, 'material', None) else dup.name,
                                            'price': dup.total_price}})
 
@@ -15372,10 +15675,10 @@ def api_quick_create_detail():
                 original_filename=sanitize_display_filename(pdf_file.filename), uploaded_by_id=current_user.id
             ))
         db.session.commit()
-        log_action(f'Създаден детайл "{name}" (бърз избор, материал "{mat.display_name}", цена {new_detail.calculated_price:g} лв.)')
+        log_action(f'Създаден детайл "{name}" (бърз избор, материал "{mat.display_name}", цена {new_detail.calculated_price:g} €)')
 
         return jsonify({
-            'status': 'success', 'step_note': step_note,
+            'status': 'success', 'step_note': step_note, 'warning': dxf_skipped_warning(dxf_report),
             'detail': {
                 'id': new_detail.id,
                 'name': f"{new_detail.name} ({mat.display_name})",
@@ -15977,16 +16280,19 @@ def _shelly_convector_set(conv, turn_on):
     hardware. See Convector's docstring for why this device class is
     exempt from the read-only-by-policy stance that covers Machines/meters
     (confirmed explicitly with the user, not assumed from the hardware
-    alone). Raises on any network/HTTP failure (the MQTT path can't detect
-    failure the same way - see _mqtt_publish()'s own caveat) - the caller
-    (admin_convector_toggle()) turns an HTTP failure into a flash message
-    instead of silently doing nothing.
+    alone). Raises on any network/HTTP failure, and MqttNotSent when the
+    command never left this process (no broker connection - the MQTT path
+    can't tell whether the DEVICE acted on it, see _mqtt_publish()'s own
+    caveat) - the caller (admin_convector_toggle()) turns either into a
+    flash message instead of silently doing nothing.
     """
     if conv.connection_type == 'mqtt':
         if conv.device_type == 'shelly_gen2':
-            _mqtt_publish(f'{conv.mqtt_topic}/command/switch:{conv.relay_channel}', 'on' if turn_on else 'off')
+            sent = _mqtt_publish(f'{conv.mqtt_topic}/command/switch:{conv.relay_channel}', 'on' if turn_on else 'off')
         else:
-            _mqtt_publish(f'{conv.mqtt_topic}/relay/{conv.relay_channel}/command', 'on' if turn_on else 'off')
+            sent = _mqtt_publish(f'{conv.mqtt_topic}/relay/{conv.relay_channel}/command', 'on' if turn_on else 'off')
+        if not sent:
+            raise MqttNotSent('няма връзка с MQTT брокера')
         return
     if conv.device_type == 'shelly_gen2':
         shelly_rpc(conv.host, 'Switch.Set', {'id': conv.relay_channel, 'on': 'true' if turn_on else 'false'})
@@ -16251,6 +16557,30 @@ _mqtt_temp_state = {}
 _mqtt_conv_state = {}
 _mqtt_lock = threading.Lock()
 _mqtt_client_instance = None
+# Seconds without a single message from a device before its cached reading stops counting as live. A Gen1 Shelly republishes every
+# reading each mqtt_update_period (30 s out of the box) and a Gen2 meter's emdata counters tick once a minute, so this is at least
+# three missed reports. Without it a dropped broker connection left the last power value "online" forever and the history poller
+# wrote it every minute, which the cost reports then turned into kWh and money.
+# ponytail: assumed periods, not measured on these meters - raise it if a healthy MQTT meter flickers offline on /admin/power.
+MQTT_STALE_AFTER = 180
+
+
+class MqttNotSent(Exception):
+    """A command was not handed to the broker (see _mqtt_publish()) - the device never saw it."""
+
+
+def _mqtt_stale(state):
+    seen = state.get('last_seen')
+    return seen is None or (datetime.utcnow() - seen).total_seconds() > MQTT_STALE_AFTER
+
+
+def _mqtt_mark_all_offline():
+    """The broker connection dropped: nothing cached is live any more. Only the online flag is cleared - the values stay, a device's
+    next message (or its retained .../online after the reconnect) brings it back."""
+    with _mqtt_lock:
+        for cache in (_mqtt_state, _mqtt_temp_state, _mqtt_conv_state):
+            for state in cache.values():
+                state['online'] = False
 
 
 def _handle_mqtt_message(topic, payload):
@@ -16381,7 +16711,7 @@ def _mqtt_snapshot(name, prefix):
         state = _mqtt_state.get(prefix)
         state = dict(state, channels=dict(state['channels'])) if state else None
 
-    if not state or not state['online']:
+    if not state or not state['online'] or _mqtt_stale(state):
         return {
             'name': name, 'host': prefix, 'online': False,
             'error': None if state else 'Няма получени данни по MQTT за този префикс още.',
@@ -16610,12 +16940,18 @@ def _mqtt_convector_snapshot(conv):
     """Render-ready {online, is_on, power_w, error} for one MQTT Convector -
     same offline-tolerant shape as _shelly_convector_status() (the HTTP
     path), so admin_convectors_data() doesn't need to care which transport
-    a given row uses."""
+    a given row uses.
+
+    A Gen1 relay republishes its state every mqtt_update_period, so one
+    silent for MQTT_STALE_AFTER is offline. A Gen2 relay only publishes on a
+    change - silence says nothing about it (and reading it as offline would
+    block the toggle), so for those the broker connection
+    (_mqtt_mark_all_offline()) and the device's own .../online decide."""
     with _mqtt_lock:
         state = _mqtt_conv_state.get(conv.mqtt_topic)
         state = dict(state, channels=dict(state['channels'])) if state else None
 
-    if not state or not state['online']:
+    if not state or not state['online'] or (conv.device_type != 'shelly_gen2' and _mqtt_stale(state)):
         return {
             'online': False, 'is_on': None, 'power_w': None,
             'error': None if state else 'Няма получени данни по MQTT за този конвектор още.',
@@ -16629,12 +16965,16 @@ def _mqtt_convector_snapshot(conv):
 def _mqtt_publish(topic, payload):
     """Publishes one message to the broker - the ONE place this app's MQTT
     client sends anything rather than just listening (see
-    _shelly_convector_set()). Silently does nothing if the broker isn't
-    configured/connected (MQTT_BROKER_HOST unset, or connect_async() hasn't
-    finished yet) - the caller in that case just gets a command that never
-    arrives, same practical effect as any other unreachable-device failure."""
-    if _mqtt_client_instance is not None:
-        _mqtt_client_instance.publish(topic, payload)
+    _shelly_convector_set()). Returns whether the message was actually
+    handed to the broker: False if the broker isn't configured/connected
+    (MQTT_BROKER_HOST unset, connect_async() hasn't finished yet, or the
+    connection dropped) - it used to do nothing silently and the caller
+    reported a switch that never happened. True still doesn't mean the
+    device acted on it, only that the broker got it (QoS 0)."""
+    client = _mqtt_client_instance
+    if client is None or not client.is_connected():
+        return False
+    return client.publish(topic, payload).rc == mqtt_client.MQTT_ERR_SUCCESS
 
 
 def start_mqtt_listener():
@@ -16654,22 +16994,120 @@ def start_mqtt_listener():
 
     def on_connect(client, userdata, flags, reason_code, properties=None):
         client.subscribe('#')
+        if not reason_code.is_failure:
+            _poller_mark('mqtt')
+
+    def on_disconnect(client, userdata, flags, reason_code, properties=None):
+        _mqtt_mark_all_offline()
+        app.logger.warning('MQTT broker connection lost (%s) - every MQTT device is offline until it reconnects', reason_code)
 
     def on_message(client, userdata, msg):
         try:
             _handle_mqtt_message(msg.topic, msg.payload.decode('utf-8', errors='replace'))
+            _poller_mark('mqtt')
         except Exception:
-            pass  # one malformed message shouldn't kill the listener
+            _poller_failed('mqtt')  # one malformed message (or a DB hiccup in the prefix lookup) shouldn't kill the listener
 
     client = mqtt_client.Client(mqtt_client.CallbackAPIVersion.VERSION2)
     username = os.environ.get('MQTT_USERNAME')
     if username:
         client.username_pw_set(username, os.environ.get('MQTT_PASSWORD', ''))
     client.on_connect = on_connect
+    client.on_disconnect = on_disconnect
     client.on_message = on_message
     client.connect_async(host, port, keepalive=30)
     client.loop_start()
     _mqtt_client_instance = client
+    _poller_mark('mqtt')  # baseline for /health: configured, so a broker that never answers shows up as stale, not as "not_started"
+
+
+# ----------------- LIVE SNAPSHOT CACHE -----------------
+# Every open admin tab (/admin/power/data, /admin/hall/live, the factory-map, battery and solar feeds) and the history pollers used to
+# read the same meters/inverters on their own, each call with its own ~3 s timeouts - a flaky gateway then held every request thread
+# of the single gunicorn worker and order entry and login stalled with it. One short-lived, single-flight cache per DEVICE (used by
+# shelly_device_snapshot(), _dtsu666_snapshot(), _solis_snapshot() - so every caller above them shares it): N tabs and N call sites
+# inside LIVE_CACHE_TTL cost one device read, and while a read is under way the others wait for it instead of starting their own.
+# The timings are guesses until tuned on the real devices - all four can be set in the environment without a code change.
+# ponytail: per process (one gunicorn worker); a slot per device ever read is kept (a handful). Redis if there are ever more workers.
+import copy
+from contextlib import contextmanager
+
+LIVE_CACHE_TTL = float(os.environ.get('LIVE_CACHE_TTL') or 2)    # seconds one reading is reused; 0 switches the cache off entirely
+# Longest a caller waits for another caller's read of the same device, counted from when THAT read started - once a read is older
+# than this it is treated as stalled and nobody else queues behind it (they get the answer below at once).
+LIVE_CACHE_WAIT = float(os.environ.get('LIVE_CACHE_WAIT') or 2)
+# A caller that gave up waiting (or found the device's gateway busy with another device - DeviceBusy) is answered with the last GOOD
+# reading if it is younger than this, else with an offline snapshot. The Solis WiFi stick needs seconds per connection (see
+# SOLIS_BLOCK_* below), so a healthy inverter is routinely mid-read when the next 2 s page poll arrives - without this it would
+# flicker "offline" on every second poll. Must cover one full pass over the devices behind one gateway; a failed (offline)
+# reading is never reused past LIVE_CACHE_TTL.
+LIVE_CACHE_STALE_MAX = float(os.environ.get('LIVE_CACHE_STALE_MAX') or 30)
+LIVE_BUSY_ERROR = 'Устройството е заето с друго четене - няма актуални данни в момента.'
+_live_cache = {}    # key -> {'lock': one reader at a time, 'hit': (monotonic time read, snapshot) or None, 'started': monotonic or None}
+_live_cache_guard = threading.Lock()
+
+
+class DeviceBusy(RuntimeError):
+    """Raised by a device read that never reached the device because something else holds its gateway (see _modbus_gateway())."""
+
+
+def _offline_snapshot(name, host, error, **extra):
+    """The offline shape shared by shelly_device_snapshot()/_dtsu666_snapshot()/_solis_snapshot() (`extra` = that kind's own keys)."""
+    return {'name': name, 'host': host, 'online': False, 'error': error, 'channels': [], 'total_power': 0.0, 'total_energy': 0.0,
+            'temperature': None, **extra}
+
+
+def _live_cached(key, read, busy):
+    """
+    read() -> a snapshot dict (with 'online'), at most once per LIVE_CACHE_TTL per key however many threads ask; busy() -> the
+    offline snapshot for a caller that can be given neither a fresh nor a recent reading. Returns a copy (callers add their own
+    keys - 'kind', 'machine' ...).
+    """
+    if LIVE_CACHE_TTL <= 0:
+        try:
+            return read()
+        except DeviceBusy:
+            return busy()
+    with _live_cache_guard:
+        slot = _live_cache.setdefault(key, {'lock': threading.Lock(), 'hit': None, 'started': None})
+
+    def age():
+        return time.monotonic() - slot['hit'][0] if slot['hit'] else float('inf')
+
+    if age() >= LIVE_CACHE_TTL:
+        started = slot['started']
+        wait = LIVE_CACHE_WAIT if started is None else max(0.0, LIVE_CACHE_WAIT - (time.monotonic() - started))
+        if slot['lock'].acquire(timeout=wait):
+            try:
+                if age() >= LIVE_CACHE_TTL:  # nobody refreshed it while we waited for the lock
+                    slot['started'] = time.monotonic()
+                    try:
+                        snap = read()
+                        slot['hit'] = (time.monotonic(), snap)
+                    except DeviceBusy:
+                        pass
+                    finally:
+                        slot['started'] = None
+            finally:
+                slot['lock'].release()
+    hit = slot['hit']
+    limit = max(LIVE_CACHE_STALE_MAX, LIVE_CACHE_TTL) if hit and hit[1].get('online') else LIVE_CACHE_TTL
+    if hit is None or time.monotonic() - hit[0] >= limit:
+        return busy()
+    return copy.deepcopy(hit[1])
+
+
+def _cached_modbus_snapshot(kind, **offline_extra):
+    """Decorator: puts a ModbusDevice snapshot function behind _live_cached(), one slot per device."""
+    def wrap(read):
+        def cached(device):
+            host = f'{device.host}:{device.port}'
+            snap = _live_cached((kind, device.id, device.host, device.port, device.unit_id), lambda: read(device),
+                                lambda: _offline_snapshot(device.name, host, LIVE_BUSY_ERROR, **offline_extra))
+            return dict(snap, name=device.name)
+        cached.__name__, cached.__doc__ = read.__name__, read.__doc__
+        return cached
+    return wrap
 
 
 def shelly_device_snapshot(name, host, mqtt_topic=None, connection_type='ip'):
@@ -16684,6 +17122,9 @@ def shelly_device_snapshot(name, host, mqtt_topic=None, connection_type='ip'):
     unreachable/silent meter is a normal state on a shop floor (Wi-Fi drop,
     panel powered down), and one dead device must not blank out the whole
     dashboard.
+
+    The HTTP read goes through _live_cached(), one slot per host - see LIVE
+    SNAPSHOT CACHE above (the MQTT path is already an in-memory read).
     """
     if connection_type == 'mqtt':
         return _mqtt_snapshot(name, mqtt_topic)
@@ -16695,6 +17136,13 @@ def shelly_device_snapshot(name, host, mqtt_topic=None, connection_type='ip'):
             'channels': [], 'total_power': 0.0, 'total_energy': 0.0,
             'temperature': None, 'rssi': None,
         }
+    snap = _live_cached(('shelly', host), lambda: _shelly_http_snapshot(name, host),
+                        lambda: _offline_snapshot(name, host, LIVE_BUSY_ERROR, rssi=None))
+    return dict(snap, name=name)
+
+
+def _shelly_http_snapshot(name, host):
+    """The uncached HTTP read behind shelly_device_snapshot() - one real request to the meter."""
     try:
         status = _shelly_get_status(host)
     except Exception as e:
@@ -16752,6 +17200,43 @@ def shelly_fleet_snapshot(devices):
 def _shelly_snapshot_args(devices):
     """ShellyDevice rows -> (name, host, mqtt_topic, connection_type) tuples for shelly_fleet_snapshot()."""
     return [(d.name, d.host, d.mqtt_topic, d.connection_type) for d in devices]
+
+
+# ----------------- POLLER HEALTH -----------------
+# The background threads (wsgi.py starts five) used to swallow every exception: a schema mismatch or a DB problem made each tick fail
+# forever with no trace anywhere. Now a failing tick is logged and the last good one is remembered for /health (see health() below).
+_poller_seen = {}           # poller name -> time.time() of its last successful tick (or of its start, until the first one)
+_poller_last_logged = {}    # poller name -> time.time() its failure was last written to the log
+POLLER_LOG_EVERY = 600      # seconds: a poller that keeps failing logs its traceback this often, not on every tick (journald flood)
+
+
+def _poller_mark(name):
+    _poller_seen[name] = time.time()
+
+
+def _poller_failed(name):
+    """Call inside an `except`: logs the current exception for this poller - the first time, then once per POLLER_LOG_EVERY."""
+    now = time.time()
+    if now - _poller_last_logged.get(name, 0) >= POLLER_LOG_EVERY:
+        _poller_last_logged[name] = now
+        app.logger.exception('%s: tick failed (repeats are logged every %d s)', name, POLLER_LOG_EVERY)
+
+
+def _poller_run_tick(name, tick):
+    """One guarded tick of a background poller in its own app context: a failure is logged (never raised - the loop must outlive it),
+    a success is noted for /health. The session is dropped inside the context - doing that after leaving it raises
+    "Working outside of application context", which is what used to kill the detector thread for good."""
+    try:
+        with app.app_context():
+            try:
+                tick()
+            finally:
+                db.session.remove()
+    except Exception:
+        _poller_failed(name)
+        return False
+    _poller_mark(name)
+    return True
 
 
 SHELLY_POLLER_INTERVAL = 60  # seconds - matches Gen2's own minute-resolution history
@@ -16815,8 +17300,8 @@ def _shelly_history_poll_tick():
         _convector_log_tick()
     except Exception:                       # e.g. ConvectorLog table not created yet - must not cost the other logs their commit
         db.session.rollback()
-        app.logger.exception('convector log tick failed')
-        _temp_logged.clear()                # rollback dropped the pending temperature rows; re-write them on this tick
+        _poller_failed('convector-log')
+        _temp_logged.clear()               # rollback dropped the pending temperature rows; re-write them on this tick
         _temp_log_tick()
     for snap in snapshots:
         if snap['online']:
@@ -16853,17 +17338,11 @@ def start_shelly_history_poller(interval=SHELLY_POLLER_INTERVAL):
     if _shelly_poller_started:
         return
     _shelly_poller_started = True
+    _poller_mark('shelly')
 
     def _loop():
         while True:
-            try:
-                with app.app_context():
-                    try:
-                        _shelly_history_poll_tick()
-                    finally:
-                        db.session.remove()
-            except Exception:
-                pass  # one bad tick (meter/DB hiccup) shouldn't kill the poller
+            _poller_run_tick('shelly', lambda: _shelly_history_poll_tick())  # one bad tick (meter/DB hiccup) shouldn't kill the poller
             time.sleep(interval)
 
     threading.Thread(target=_loop, daemon=True, name='shelly-history-poller').start()
@@ -16905,17 +17384,11 @@ def start_solis_history_poller(interval=SOLIS_POLLER_INTERVAL):
     if _solis_poller_started:
         return
     _solis_poller_started = True
+    _poller_mark('solis')
 
     def _loop():
         while True:
-            try:
-                with app.app_context():
-                    try:
-                        _solis_history_poll_tick()
-                    finally:
-                        db.session.remove()
-            except Exception:
-                pass  # one bad tick (inverter/DB hiccup) shouldn't kill the poller
+            _poller_run_tick('solis', lambda: _solis_history_poll_tick())  # one bad tick (inverter/DB hiccup) shouldn't kill the poller
             time.sleep(interval)
 
     threading.Thread(target=_loop, daemon=True, name='solis-history-poller').start()
@@ -16983,6 +17456,7 @@ def _heatpump_open(host):
 
 
 def _heatpump_close(hp):
+    # Deliberately silent: this runs on a connection that is usually already dead, and that failure was logged by _heatpump_loop().
     try:
         hp.logout()
     except Exception:
@@ -17043,6 +17517,7 @@ def _heatpump_loop():
                 db.session.remove()
             if not host:
                 _heatpump_live.update(online=False, error='не е зададен адрес на конвертора')
+                _poller_seen.pop('heatpump', None)  # not configured: /health says "not_started", not "stale"
             else:
                 if hp is not None and hp_host != host:
                     _heatpump_close(hp)
@@ -17063,7 +17538,10 @@ def _heatpump_loop():
                             db.session.remove()
                     last_slow = now
                 _heatpump_live.update(ts=now, online=True, error=None, data=data)
+                _poller_mark('heatpump')
         except Exception as e:
+            _poller_failed('heatpump')
+            _poller_seen.setdefault('heatpump', time.time())  # configured but failing: counts as started, so /health reports it stale
             if hp is not None:
                 _heatpump_close(hp)
             hp = None
@@ -17080,6 +17558,40 @@ def start_heatpump_poller():
     _heatpump_started = True
     logging.getLogger('htheatpump').setLevel(logging.ERROR)  # a missing sensor (-50) logs a warning every poll
     threading.Thread(target=_heatpump_loop, daemon=True, name='heatpump-poller').start()
+
+
+# Seconds since a poller's last successful tick after which /health calls it stale - a few of its own intervals, so one slow or
+# failed tick is not an alarm. A tick that completes counts as a success even if a DEVICE was offline; only a tick that raises
+# (DB, schema, a bug) or a thread that stopped ticking ages. ponytail: guessed margins - tune once real tick times are known.
+POLLER_STALE_AFTER = {
+    'shelly': 3 * SHELLY_POLLER_INTERVAL,
+    'solis': 3 * SOLIS_POLLER_INTERVAL,
+    'mqtt': MQTT_STALE_AFTER,               # a message (any topic) or a (re)connect counts; a silent broker is as bad as none
+    'detector': 180,                        # a pass over many unreachable cameras takes up to 16 s each (two 8 s timeouts)
+    'heatpump': 20 * HEATPUMP_POLL_INTERVAL,  # 60 s: a reconnect + login + the once-a-minute slow read fit well inside
+}
+
+
+@app.route('/health')
+@limiter.exempt
+def health():
+    """Liveness for the deploy scripts / an external monitor - no login, and so nothing but names and ages (no hosts, IPs or error
+    text). 503 only when the database does not answer; a stale poller makes it "degraded" but still 200, so a powered-off device
+    never fails a deploy's `curl -f`. A poller that was never started here (feature not configured) reads "not_started"."""
+    try:
+        db.session.execute(db.text('SELECT 1'))
+        db_ok = True
+    except Exception:
+        db.session.rollback()
+        db_ok = False
+    now = time.time()
+    pollers = {}
+    for name, limit in POLLER_STALE_AFTER.items():
+        seen = _poller_seen.get(name)
+        pollers[name] = 'not_started' if seen is None else {'age_s': round(now - seen), 'ok': now - seen < limit}
+    stale = any(p != 'not_started' and not p['ok'] for p in pollers.values())
+    status = 'down' if not db_ok else 'degraded' if stale else 'ok'
+    return jsonify({'status': status, 'db': 'ok' if db_ok else 'down', 'pollers': pollers}), 200 if db_ok else 503
 
 
 # --- cost of heating / cooling: a Shelly meter on the pump + a day/night tariff ---
@@ -19686,27 +20198,33 @@ def start_detection_worker():
     if _detect_started or not detection.available():
         return
     _detect_started = True
+    _poller_mark('detector')
 
     def loop():
-        memo, has_lock, last_clean = {}, False, 0
+        memo, st = {}, {'has_lock': False, 'last_clean': 0}
         while True:
-            try:
-                with app.app_context():
-                    has_lock = has_lock or _detection_lock()
-                    if has_lock:
-                        t0 = time.time()
-                        _detection_tick(memo)
-                        if t0 - last_clean > 3600:
-                            _detection_cleanup()
-                            last_clean = t0
-                        time.sleep(max(0.2, DETECT_INTERVAL - (time.time() - t0)))
-                        continue
-            except Exception:
-                db.session.rollback()
-                app.logger.exception('detection tick failed')
-            time.sleep(30 if not has_lock else DETECT_INTERVAL)
+            t0 = time.time()
+            _detection_loop_once(memo, st)
+            time.sleep(max(0.2, DETECT_INTERVAL - (time.time() - t0)) if st['has_lock'] else 30)
 
     threading.Thread(target=loop, daemon=True, name='detector').start()
+
+
+def _detection_loop_once(memo, st):
+    """One pass of the detector thread (st = its {'has_lock', 'last_clean'}), split out so a test can drive it without the thread.
+    The loop used to call db.session.rollback() in its `except` AFTER the app context had closed - that raised "Working outside of
+    application context" out of the handler, the thread died for good and its advisory-lock connection stayed held, so nothing
+    else could take over either. _poller_run_tick() cleans the session up inside the context and never raises."""
+    def step():
+        st['has_lock'] = st['has_lock'] or _detection_lock()
+        if not st['has_lock']:
+            return
+        now = time.time()
+        _detection_tick(memo)
+        if now - st['last_clean'] > 3600:
+            _detection_cleanup()
+            st['last_clean'] = now
+    return _poller_run_tick('detector', step)
 
 
 @app.route('/admin/cameras/<int:cam_id>/detections')
@@ -20497,6 +21015,11 @@ def admin_convector_toggle(conv_id):
     turn_on = not status['is_on']
     try:
         _shelly_convector_set(conv, turn_on)
+    except MqttNotSent:
+        # Used to be reported (and logged) as a successful switch although nothing was ever published.
+        log_action(f'Неуспешно превключване на конвектор "{conv.name}" – командата не беше изпратена (няма връзка с MQTT брокера)')
+        flash(f'Конвектор "{conv.name}": командата не беше изпратена – няма връзка с MQTT брокера.', 'danger')
+        return redirect(url_for('admin_convectors'))
     except Exception:
         flash(f'Неуспешно превключване на "{conv.name}" - устройството не отговори на командата.', 'danger')
         return redirect(url_for('admin_convectors'))
@@ -20674,12 +21197,39 @@ MODBUS_READ_TIMEOUT = 3.0
 # against that gateway, regardless of which route/poll triggered it.
 _modbus_locks = {}
 _modbus_locks_guard = threading.Lock()
+# Longest a read waits for its gateway while another read holds it, counted from when THAT read took the lock. The lock used to be
+# taken with no timeout: with a flaky gateway every request thread queued here and the whole site hung (2026-09-06, see the DB pool
+# comment at the top). A holder older than this is treated as stalled - later callers are turned away at once (DeviceBusy) instead
+# of queueing behind it. ponytail: 2 s is shorter than one healthy read through the Solis WiFi stick (seconds per connection), so
+# the second inverter is routinely turned away mid-poll - LIVE_CACHE_STALE_MAX then serves its last reading. Raise this (env var)
+# if readings are stale too often, lower it if pages still stall.
+MODBUS_LOCK_TIMEOUT = float(os.environ.get('MODBUS_LOCK_TIMEOUT') or 2)
+MODBUS_BUSY_ERROR = 'Шлюзът е зает с друго четене - опитайте отново.'
+_modbus_lock_since = {}     # (host, port) -> time.monotonic() when the current holder took the lock
 
 
 def _modbus_lock_for(host, port):
     key = (host, port)
     with _modbus_locks_guard:
         return _modbus_locks.setdefault(key, threading.Lock())
+
+
+@contextmanager
+def _modbus_gateway(host, port):
+    """`with _modbus_gateway(host, port):` - the per-gateway lock, taken with MODBUS_LOCK_TIMEOUT; raises DeviceBusy (a RuntimeError)
+    instead of waiting forever when another read holds the gateway."""
+    key = (host, port)
+    lock = _modbus_lock_for(host, port)
+    since = _modbus_lock_since.get(key)
+    wait = MODBUS_LOCK_TIMEOUT if since is None else max(0.0, MODBUS_LOCK_TIMEOUT - (time.monotonic() - since))
+    if not lock.acquire(timeout=wait):
+        raise DeviceBusy(MODBUS_BUSY_ERROR)
+    _modbus_lock_since[key] = time.monotonic()
+    try:
+        yield
+    finally:
+        _modbus_lock_since.pop(key, None)
+        lock.release()
 
 
 def _modbus_read_raw(host, port, unit_id, address, count, input_type):
@@ -20690,25 +21240,29 @@ def _modbus_read_raw(host, port, unit_id, address, count, input_type):
     human string, never raises, same tolerance as shelly_device_snapshot()
     towards a meter that's unreachable or rejects the request (wrong
     unit_id, wrong function code for that address range, etc.). Serialized
-    per (host, port) - see _modbus_lock_for()'s docstring.
+    per (host, port) - see _modbus_lock_for()'s docstring; a gateway that
+    stays busy past MODBUS_LOCK_TIMEOUT is reported as an error like any
+    other unreachable device (MODBUS_BUSY_ERROR), not waited on.
     """
-    lock = _modbus_lock_for(host, port)
-    with lock:
-        client = ModbusTcpClient(host, port=port, timeout=MODBUS_READ_TIMEOUT)
-        try:
-            if not client.connect():
-                return None, 'Няма връзка с устройството.'
-            if input_type == 'input':
-                result = client.read_input_registers(address, count=count, device_id=unit_id)
-            else:
-                result = client.read_holding_registers(address, count=count, device_id=unit_id)
-            if result.isError():
-                return None, str(result)
-            return result.registers, None
-        except Exception as e:
-            return None, f'{type(e).__name__}: {e}'
-        finally:
-            client.close()
+    try:
+        with _modbus_gateway(host, port):
+            client = ModbusTcpClient(host, port=port, timeout=MODBUS_READ_TIMEOUT)
+            try:
+                if not client.connect():
+                    return None, 'Няма връзка с устройството.'
+                if input_type == 'input':
+                    result = client.read_input_registers(address, count=count, device_id=unit_id)
+                else:
+                    result = client.read_holding_registers(address, count=count, device_id=unit_id)
+                if result.isError():
+                    return None, str(result)
+                return result.registers, None
+            except Exception as e:
+                return None, f'{type(e).__name__}: {e}'
+            finally:
+                client.close()
+    except DeviceBusy as e:
+        return None, str(e)
 
 
 def _modbus_decode(registers, data_type):
@@ -20760,11 +21314,13 @@ DTSU666_REGISTERS = {
 }
 
 
+@_cached_modbus_snapshot('dtsu666', rssi=None)
 def _dtsu666_snapshot(device):
     """
     Render-ready dict for a DTSU666, same shape as shelly_device_snapshot()'s
     return value so it can eventually feed the same kind of dashboard/panel
     aggregation - see DTSU666_REGISTERS for how each field was confirmed.
+    Cached per device for LIVE_CACHE_TTL - see LIVE SNAPSHOT CACHE.
     """
     def read_block(name):
         address, count = DTSU666_REGISTERS[name]
@@ -20936,10 +21492,10 @@ def _solis_read_blocks(device, specs):
     concurrent connections. Returns a list of register lists, one per spec;
     raises RuntimeError on any failure (unreachable device, wrong unit_id,
     short/garbled response under concurrent load - same tolerance as
-    _dtsu666_snapshot()'s read_block()).
+    _dtsu666_snapshot()'s read_block()) - including DeviceBusy when the
+    gateway stays held by another read past MODBUS_LOCK_TIMEOUT.
     """
-    lock = _modbus_lock_for(device.host, device.port)
-    with lock:
+    with _modbus_gateway(device.host, device.port):
         client = ModbusTcpClient(device.host, port=device.port, timeout=MODBUS_READ_TIMEOUT)
         try:
             if not client.connect():
@@ -21194,8 +21750,13 @@ def _battery_stack_snapshots(stacks):
     return {s.id: _battery_stack_live_data(s, snap_by_inverter_id.get(s.inverter_device_id)) for s in stacks}
 
 
+@_cached_modbus_snapshot('solis', pv=None, ac=None, battery=None, load=None, meter=None, generator=None, battery_groups=None,
+                         meter_3p=None)
 def _solis_snapshot(device):
     """
+    Cached per device for LIVE_CACHE_TTL (see LIVE SNAPSHOT CACHE) - every
+    page and the history poller share one read of an inverter.
+
     Render-ready dict for a Solis S6 hybrid inverter - same top-level shape
     as shelly_device_snapshot()/_dtsu666_snapshot() (name/host/online/error/
     channels/total_power/total_energy/temperature), plus nested 'pv'/'ac'/
@@ -21297,6 +21858,8 @@ def _solis_snapshot(device):
         # sharing one gateway; the extra blocks are read at most once every
         # SOLIS_EXTRA_REFRESH_SECONDS regardless of poll frequency).
         result['generator'], result['battery_groups'], result['meter_3p'] = _solis_extra_cached(device)
+    except DeviceBusy:
+        raise  # the gateway is mid-read for the other inverter - _live_cached() answers with the last reading, not a false "offline"
     except Exception as e:
         return {
             'name': device.name, 'host': f'{device.host}:{device.port}', 'online': False,
@@ -23245,7 +23808,7 @@ def _save_offer(offer):
     db.session.commit()
     offer_items = OfferItem.query.filter_by(offer_id=offer.id).order_by(OfferItem.position).all()
     item_lines = [
-        f'{oi.name or "(текст)"}' + (f': {oi.quantity:g} {oi.unit or ""} x {oi.unit_price:g} лв.' if oi.quantity is not None and oi.unit_price is not None else '')
+        f'{oi.name or "(текст)"}' + (f': {oi.quantity:g} {oi.unit or ""} x {oi.unit_price:g} €' if oi.quantity is not None and oi.unit_price is not None else '')
         for oi in offer_items
     ]
     log_action(f'{"Създадена" if is_new else "Обновена"} оферта № {offer.number} ("{offer.object_title or "-"}", {len(items)} артикул(и))',
@@ -23568,17 +24131,16 @@ def list_services() -> str:
 
 @anthropic.beta_tool
 def most_expensive_items(limit: int = 5) -> str:
-    """Връща най-скъпите материали и детайли в каталога, подредени по цена низходящо - за въпроси от типа "кое е най-скъпото нещо на склад". Цената на материалите (доставна) се връща само за служители.
+    """Връща най-скъпите детайли в каталога, подредени по цена низходящо - за въпроси от типа "кое е най-скъпото нещо на склад". Материали (подредени по доставна цена) се връщат само за служители.
 
     Args:
         limit: Максимален брой резултати за всяка категория (по подразбиране 5, максимум 20).
     """
     limit = max(1, min(limit, 20))
     results = []
-    for m in MaterialPrice.query.order_by(MaterialPrice.cost_per_m2.desc()).limit(limit):
-        # cost_per_m2 is the supplier delivery price - never shown to a customer.
-        price = f' - {m.cost_per_m2:g} €/м²' if current_user.is_staff else ''
-        results.append(f'Материал: {format_material_option(m)}{price} - наличност: {m.stock_quantity:g}')
+    if current_user.is_staff:   # cost_per_m2 е доставната цена - клиентът не я вижда, а и подредбата по нея би я издала
+        for m in MaterialPrice.query.order_by(MaterialPrice.cost_per_m2.desc()).limit(limit):
+            results.append(f'Материал: {format_material_option(m)} - {m.cost_per_m2:g} €/м² - наличност: {m.stock_quantity:g}')
     for d in sorted(_chat_catalog(Detail), key=lambda x: x.calculated_price or 0, reverse=True)[:limit]:
         results.append(f'Детайл: {d.name} - {d.calculated_price:g} € - наличност: {d.stock_quantity:g} бр.')
     if not results:
@@ -23648,7 +24210,7 @@ def list_products(offset: int = 0) -> str:
         return 'В момента няма въведени продукти.' if offset == 0 else 'Няма повече резултати.'
     lines = []
     for p in products:
-        price = calculate_product_pricing(p)['sell_price']
+        price = calculate_product_pricing(p, _viewer_client())['sell_price']   # клиентската цена, както в поръчката
         lines.append(f'{p.name} - {price:g} € - наличност: {p.stock_quantity:g} бр.')
     if total > offset + len(products):
         lines.append(f'(Показани {offset + 1}-{offset + len(products)} от общо {total} - за следващите извикай отново с offset={offset + _PAGE_SIZE}.)')
@@ -23666,13 +24228,20 @@ def get_product_details(name: str) -> str:
     if not matches:
         return f"Не намерих продукт с име '{name}'."
     product = matches[0]
-    pricing = calculate_product_pricing(product)
+    pricing = calculate_product_pricing(product, _viewer_client())
     lines = [f'{product.name} - цена: {pricing["sell_price"]:g} € - наличност: {product.stock_quantity:g} бр.']
     if product.description:
         lines.append(product.description.strip())
     lines.append('Съставни детайли:')
+    # компонент-детайл на друг клиент (частен) не се назовава - само се брои
+    hidden = 0
     for pd in product.product_details:
-        lines.append(f'- {pd.detail.name} x{pd.quantity}')
+        if current_user.is_staff or catalog_item_allowed(pd.detail, _viewer_client()):
+            lines.append(f'- {pd.detail.name} x{pd.quantity}')
+        else:
+            hidden += 1
+    if hidden:
+        lines.append(f'и {hidden} други компонента')
     return '\n'.join(lines)
 
 

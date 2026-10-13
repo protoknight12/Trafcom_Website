@@ -106,6 +106,8 @@ orders through production tracking. The UI is in Bulgarian.
 pip install -r requirements.txt
 ```
 
+Running the tests also needs the dev requirements: `pip install -r requirements-dev.txt` (adds `pytest`).
+
 Copy `.env.example` to `.env` and fill in real values:
 
 ```
@@ -250,10 +252,10 @@ set up the database).
 <summary><a href="https://github.com/protoknight12/Trafcom_Website/tree/main/migration"><code>migration/</code></a> — one-off migration/backfill/seed scripts (see below)</summary>
 
   - [`change_admin_password.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/migration/change_admin_password.py)
-  - [`backfill_erp_numbers.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/migration/backfill_erp_numbers.py)
+  - `backfill_erp_numbers.py` (local-only, not in this repository)
   - [`backfill_service_machine_cards.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/migration/backfill_service_machine_cards.py)
   - [`seed_real_machines.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/migration/seed_real_machines.py)
-  - [`seed_test_data.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/migration/seed_test_data.py)
+  - `seed_test_data.py` (local-only, not in this repository)
   - ...plus the various `migrate_*.py` schema-change and `backfill_*.py`
     data-backfill scripts (Shelly device/reading tables, the services
     pricing refactor, ...) —
@@ -355,10 +357,14 @@ pip install pytest flask-wtf
 pytest testing/test_security_fixes.py -v
 ```
 
+Tests always run against a throwaway SQLite database (`testing/__init__.py` forces it), never the database in `.env`, and are run one file at a time.
+
 ## Configuration notes
 
-- Rate limiting (`flask-limiter`) defaults to 300 requests/hour per IP,
-  with tighter limits on `/login` and `/register`. Storage is in-memory —
+- Rate limiting (`flask-limiter`) defaults to 300 requests/hour per IP for
+  each route, with tighter limits on `/login` and `/register`. The app trusts
+  one reverse-proxy hop (nginx) for the client address (`ProxyFix`, `x_for=1`).
+  Storage is in-memory —
   per-process only. If running more than one gunicorn/waitress worker,
   switch to a shared store (e.g. Redis) or limits won't be enforced
   correctly across workers.

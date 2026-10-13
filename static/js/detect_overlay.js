@@ -18,11 +18,15 @@ window.attachDetectOverlay = function (img, camId) {
             c.fillStyle = '#ffe600'; c.fillText(t, x + 3, Math.max(11, y - 4));
         });
     };
+    let busy = false;      // skip a tick while the previous request is still in flight
     const poll = async () => {
         if (!img.isConnected) { clearInterval(timer); cv.remove(); return; }
-        if (document.hidden) return;
-        const r = await fetch('/admin/cameras/' + camId + '/detections').catch(() => null), d = r && r.ok ? await r.json().catch(() => null) : null;
-        draw(d ? d.items : []);
+        if (document.hidden || busy) return;
+        busy = true;
+        try {
+            const r = await fetch('/admin/cameras/' + camId + '/detections').catch(() => null), d = r && r.ok ? await r.json().catch(() => null) : null;
+            draw(d ? d.items : []);
+        } finally { busy = false; }
     };
     poll(); timer = setInterval(poll, 1500);
 };

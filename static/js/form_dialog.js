@@ -283,6 +283,23 @@
         if (el && !confirm(el.dataset.confirm)) { e.preventDefault(); e.stopImmediatePropagation(); }
     }, true);
 
+    // --- opt-in double-submit guard: <form data-once> ----------------------------
+    // Bubble phase, so it runs after the form's own handlers: if one of them (or the
+    // confirm above) cancelled the submit, nothing is disabled. The buttons are
+    // disabled in a timeout - after the browser has built the form data.
+    document.addEventListener('submit', function (e) {
+        const form = e.target;
+        if (e.defaultPrevented || !form.hasAttribute || !form.hasAttribute('data-once')) return;
+        setTimeout(function () {
+            form.querySelectorAll('button[type="submit"]:not(:disabled)').forEach(function (b) { b.disabled = true; b.dataset.onceLocked = '1'; });
+        }, 0);
+    });
+    // Back/forward cache restores the page as it was left - give the buttons back.
+    window.addEventListener('pageshow', function (e) {
+        if (!e.persisted) return;
+        document.querySelectorAll('[data-once-locked]').forEach(function (b) { b.disabled = false; delete b.dataset.onceLocked; });
+    });
+
     // --- wiring -----------------------------------------------------------
     document.addEventListener('click', function (e) {
         const closer = e.target.closest('[data-dialog-close]');

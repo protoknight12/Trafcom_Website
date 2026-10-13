@@ -97,3 +97,20 @@ def test_update_service_toggles_show_price_off(admin_client, app):
 
     with app.app_context():
         assert Service.query.get(service_id).show_price is False
+
+
+def test_delete_service_used_by_a_dxf_upload_is_refused_not_a_500(admin_client, app):
+    from app import DxfFile
+    _add_service(admin_client, "QA Рязане 2", show_price=True)
+    with app.app_context():
+        service = Service.query.filter_by(name="QA Рязане 2").first()
+        admin = User.query.filter_by(username="qa_admin").first()
+        f = DxfFile(filename="a.dxf", material="m", width=1, height=1, total_length=1, calculated_price=1, user_id=admin.id)
+        f.services.append(service)
+        db.session.add(f)
+        db.session.commit()
+        service_id = service.id
+    resp = admin_client.post(f"/admin/services/{service_id}/delete")
+    assert resp.status_code == 302
+    with app.app_context():
+        assert Service.query.get(service_id) is not None   # still there: it is in use

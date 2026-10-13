@@ -557,6 +557,7 @@
 
 {% if devices or modbus_devices %}
 <script src="{{ url_for('static', filename='js/energy_panel.js') }}"></script>
+<script src="{{ url_for('static', filename='js/poll.js') }}"></script>
 <script>
     // Poll the server-side feed; the meters themselves are never contacted
     // from the browser (they're LAN-only and have no auth). Interval is
@@ -636,6 +637,8 @@
         return `<div style="position:absolute; right:${right}px; top:${top}; transform:translateY(${translateY}); width:${size}px; height:${size}px; opacity:${opacity}; color:${color}; pointer-events:none;">${svg}</div>`;
     }
 
+    function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';'); }
+
     // Same three states/labels as templates/machines.html's Machine.status badge.
     const MACHINE_STATUS_LABELS = { idle: 'Свободна', running: 'Работи', maintenance: 'Поддръжка' };
     function machineLinkHtml(d) {
@@ -645,7 +648,7 @@
         const chips = d.machines.map(m => {
             const cls = 'status-' + (MACHINE_STATUS_LABELS[m.status] ? m.status : 'maintenance');
             const label = MACHINE_STATUS_LABELS[m.status] || m.status;
-            return `<span>${m.name} <span class="machine-status-badge ${cls}">${label}</span></span>`;
+            return `<span>${escapeHtml(m.name)} <span class="machine-status-badge ${cls}">${escapeHtml(label)}</span></span>`;
         }).join('');
         return `<div class="machine-link-row">Машина(и):${chips}</div>`;
     }
@@ -662,9 +665,9 @@
             const cls = 'status-' + (MACHINE_STATUS_LABELS[m.status] ? m.status : 'maintenance');
             const label = MACHINE_STATUS_LABELS[m.status] || m.status;
             return `<div class="sidebar-machine">
-                <div class="sidebar-machine-name">${m.name}</div>
-                <span class="machine-status-badge ${cls}">${label}</span>
-                <div class="sidebar-machine-maint">Последна поддръжка: ${m.last_maintenance || 'Неизвестно'}</div>
+                <div class="sidebar-machine-name">${escapeHtml(m.name)}</div>
+                <span class="machine-status-badge ${cls}">${escapeHtml(label)}</span>
+                <div class="sidebar-machine-maint">Последна поддръжка: ${escapeHtml(m.last_maintenance || 'Неизвестно')}</div>
             </div>`;
         }).join('');
     }
@@ -698,7 +701,7 @@
     function renderChannel(ch) {
         return `
         <div class="channel-card">
-            <div class="channel-name">${ch.label}</div>
+            <div class="channel-name">${escapeHtml(ch.label)}</div>
             <div class="channel-power">${fmt(ch.act_power, 0)} <span class="total-unit">W</span></div>
             <div class="channel-rows">
                 <div>Напрежение <span>${fmt(ch.voltage, 1)} V</span></div>
@@ -769,7 +772,7 @@
     function renderBatteryBlock(d) {
         const b = d.battery, groups = d.battery_groups;
         if (!d.online || !b) {
-            return `<div class="solis-section"><div class="solis-section-title">${d.name}</div><p class="no-data" style="margin:0;">Без връзка.</p></div>`;
+            return `<div class="solis-section"><div class="solis-section-title">${escapeHtml(d.name)}</div><p class="no-data" style="margin:0;">Без връзка.</p></div>`;
         }
         // The top summary must reflect BOTH BMS ports of this inverter, not
         // just port 1 - explicit bug report: "общото зареждане на инвертора
@@ -795,7 +798,7 @@
         return `
             <div class="solis-section" style="position: relative; overflow: hidden;">
                 ${iconBox(ICON_BATTERY, { size: 74, right: -14, top: '-10px', translateY: '0', opacity: 0.12, color: '#10b981' })}
-                <div class="solis-section-title">${d.name} &middot; 2 порта &times; 11&times; Dyness Stack100 (22 общо)</div>
+                <div class="solis-section-title">${escapeHtml(d.name)} &middot; 2 порта &times; 11&times; Dyness Stack100 (22 общо)</div>
                 <div class="battery-soc-label"><span>${fmt(soc, 0)}% заряд${port2 ? ' &middot; средно за 2-та порта' : ''}</span><span class="text-muted">SOH ${fmt(b.soh, 0)}%</span></div>
                 <div class="battery-gauge"><div class="battery-gauge-fill ${batteryGaugeClass(soc)}" style="width: ${soc === null ? 0 : soc}%;"></div></div>
                 <span class="battery-direction ${direction}">${DIRECTION_LABELS[direction] || direction} &middot; ${fmt(Math.abs(power), 0)} W${port2 ? ' &middot; 2-та порта' : ''}</span>
@@ -824,7 +827,7 @@
                 <span class="total-power">${fmt(d.total_power, 0)}</span>
                 <span class="total-unit">W активна мощност към мрежата (+ подава, &minus; тегли)</span>
             </div>
-            <canvas class="spark" id="spark-${d.host}"></canvas>
+            <canvas class="spark" id="spark-${escapeHtml(d.host)}"></canvas>
             <div class="spark-caption">Мощност към мрежата, последните ~3 минути</div>
             <div class="solis-grid">
                 <div class="solis-section">
@@ -869,13 +872,13 @@
             ? '<span class="meter-state state-online">НА ЛИНИЯ</span>'
             : '<span class="meter-state state-offline">НЯМА ВРЪЗКА</span>';
 
-        const body = !d.online ? `<p class="no-data">Електромерът не отговаря: ${d.error}</p>` : d.kind === 'solis' ? renderSolisBody(d) : `
+        const body = !d.online ? `<p class="no-data">Електромерът не отговаря: ${escapeHtml(d.error)}</p>` : d.kind === 'solis' ? renderSolisBody(d) : `
             <div class="total-row">
                 <span class="total-power">${fmt(d.total_power, 0)}</span>
                 <span class="total-unit">W обща активна мощност</span>
                 <span class="total-unit">&middot; ${fmt(d.total_energy, 1)} kWh общо изразходвани</span>
             </div>
-            <canvas class="spark" id="spark-${d.host}"></canvas>
+            <canvas class="spark" id="spark-${escapeHtml(d.host)}"></canvas>
             <div class="spark-caption">Обща мощност, последните ~3 минути</div>
             <div class="channel-grid">${d.channels.map(renderChannel).join('')}</div>
             ${(d.kind === 'modbus' || d.kind === 'solis_grid_meter') ? '' : `
@@ -892,14 +895,14 @@
             <div class="device-hero">
                 ${iconBox(deviceIcon(d), { color: iconColor })}
                 <div class="device-hero-body">
-                    <a class="device-hero-name" href="${POWER_URL}?host=${encodeURIComponent(d.host)}">${d.name}</a>
-                    <div class="device-hero-sub">${d.host}</div>
+                    <a class="device-hero-name" href="${POWER_URL}?host=${encodeURIComponent(d.host)}">${escapeHtml(d.name)}</a>
+                    <div class="device-hero-sub">${escapeHtml(d.host)}</div>
                     ${machineLinkHtml(d)}
                 </div>
                 <div class="device-hero-body">${state}</div>
             </div>
             ${body}
-            ${`<div data-energy-panel data-key="${d.host}" data-url="{{ url_for('admin_energy_report') }}"></div>`}
+            ${`<div data-energy-panel data-key="${escapeHtml(d.host)}" data-url="{{ url_for('admin_energy_report') }}"></div>`}
         </section>`;
     }
 
@@ -961,7 +964,7 @@
             `${online.length} от ${devices.length} машини на линия`;
         document.getElementById('summaryBreakdown').innerHTML = devices.map(d => `
             <span class="summary-chip ${d.online ? '' : 'offline'}">
-                ${d.name}: <strong>${d.online ? fmt(d.total_power, 0) + ' W' : 'няма връзка'}</strong>
+                ${escapeHtml(d.name)}: <strong>${d.online ? fmt(d.total_power, 0) + ' W' : 'няма връзка'}</strong>
             </span>`).join('');
 
         totalHistory.push(totalPower);
@@ -1033,7 +1036,7 @@
                 payload = await resp.json();
                 if (!resp.ok) throw new Error(payload.error || resp.status);
             } catch (err) {
-                historyResult.innerHTML = `<p class="history-error">${err.message || err}</p>`;
+                historyResult.innerHTML = `<p class="history-error">${escapeHtml(err.message || err)}</p>`;
                 return;
             }
             if (!payload.count) {
@@ -1051,16 +1054,8 @@
         });
     }
 
-    poll();
-    // Don't keep hammering the meters while nobody is looking at the tab.
-    let timer = setInterval(poll, POLL_MS);
-    document.addEventListener('visibilitychange', () => {
-        clearInterval(timer);
-        if (!document.hidden) {
-            poll();
-            timer = setInterval(poll, POLL_MS);
-        }
-    });
+    // startPoll (poll.js): no overlapping requests, paused while the tab is hidden.
+    const poller = startPoll(poll, POLL_MS);
 
     if (pollIntervalSelect) {
         pollIntervalSelect.addEventListener('change', () => {
@@ -1068,8 +1063,7 @@
             POLL_MS = seconds * 1000;
             HISTORY = Math.max(10, Math.round(180000 / POLL_MS));
             try { localStorage.setItem(POLL_INTERVAL_KEY, String(seconds)); } catch (e) { /* ignore */ }
-            clearInterval(timer);
-            timer = setInterval(poll, POLL_MS);
+            poller.setMs(POLL_MS);
         });
     }
 
@@ -1087,7 +1081,7 @@
                 .then(function (r) { return r.json(); })
                 .then(function (data) {
                     if (data.error) {
-                        resultArea.innerHTML = '<p class="modbus-error">' + data.error + '</p>';
+                        resultArea.innerHTML = '<p class="modbus-error">' + escapeHtml(data.error) + '</p>';
                         return;
                     }
                     const rows = data.raw.map(function (val, i) {

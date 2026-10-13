@@ -525,6 +525,7 @@
                 sel.appendChild(opt);
                 sel.value = data.detail.id;
                 closeQuickDetailModal();
+                if (data.warning) alert(data.warning);   // DXF entities left out of the price
             } else {
                 errDiv.textContent = data.message || 'Грешка при създаване.';
                 errDiv.style.display = 'block';

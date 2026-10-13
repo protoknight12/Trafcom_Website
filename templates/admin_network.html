@@ -429,6 +429,7 @@
     </script>
 </main>
 
+<script src="{{ url_for('static', filename='js/poll.js') }}"></script>
 <script>
 (function () {
     var canvas = document.getElementById('mapCanvas');
@@ -593,7 +594,7 @@
 
     // --- Live online/offline poll ---
     function pollStatus() {
-        fetch('/admin/network/data').then(function (r) { return r.json(); }).then(function (data) {
+        return fetch('/admin/network/data').then(function (r) { return r.json(); }).then(function (data) {
             cards.forEach(function (card) {
                 var id = card.getAttribute('data-id');
                 if (!(id in data)) return;
@@ -610,8 +611,7 @@
             tsEl.textContent = 'Последна проверка: ' + new Date().toLocaleTimeString('bg-BG');
         }).catch(function () {});
     }
-    pollStatus();
-    setInterval(pollStatus, 8000);
+    startPoll(pollStatus, 8000);
 })();
 </script>
 

@@ -30,13 +30,8 @@ sudo systemctl stop trafcom
 # whatever fails from here on, bring the site back up instead of leaving the shop without it
 trap 'echo "!! update failed - starting the site again, check the error above"; sudo systemctl start trafcom' ERR
 
-for f in migration/migrate_*.py; do
-    mod="migration.$(basename "$f" .py)"
-    echo "== $mod =="
-    venv/bin/python -m "$mod"
-done
-
-echo "== one-time data steps =="
+# every migration/migrate_*.py and data step runs once per database (ledger table applied_once), in one process.
+# A schema change = a NEW migrate_*.py file; never edit one that has shipped - it will not run again.
 venv/bin/python -m migration.run_once
 
 trap - ERR

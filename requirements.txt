@@ -25,3 +25,4 @@ numpy
 pillow
 htheatpump
 cadquery-ocp-novtk
+pyserial

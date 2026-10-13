@@ -165,7 +165,7 @@ $('calSolve').onclick = async () => {
 };
 $('calSave').onclick = async () => {
     const [ok, d] = await post("{{ url_for('admin_camera_calibrate_save', cam_id=cam.id) }}", { yaw: pose.yaw, tilt: pose.tilt, roll: pose.roll, fov: pose.fov, pos: $('calMove').checked ? pose.pos : null, pairs });
-    $('calRes').innerHTML += ok ? '<br><b style="color:#16a34a">Запазено.</b> Планът и 3D картата ще я покажат след презареждане.' : '<br>' + (d.error || 'Грешка при запис.');
+    $('calRes').innerHTML += ok ? '<br><b style="color:#16a34a">Запазено.</b> Планът и 3D картата ще я покажат след презареждане.' : '<br>' + String(d.error || 'Грешка при запис.').replace(/</g, '&lt;');
 };
 // magnify the plan the same way (the viewBox shrinks around the cursor)
 const plan = $('lmPlan');

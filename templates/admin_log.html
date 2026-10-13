@@ -45,6 +45,10 @@
             </div>
         </div>
 
+        {% if total > limit %}
+        <p class="section-subtitle">Показани са последните {{ limit }} записа от общо {{ total }} – пълният журнал е в експорта.</p>
+        {% endif %}
+
         <div class="table-responsive">
             <table class="users-table">
                 <thead>

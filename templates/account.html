@@ -43,6 +43,10 @@
             <div class="form-group">
                 <input type="email" name="email" value="{{ current_user.email or '' }}" placeholder="you@example.com" required autocomplete="email">
             </div>
+            <div class="form-group">
+                <label for="email-password">{{ _('Парола (за потвърждение)') }}</label>
+                <input type="password" id="email-password" name="password" required autocomplete="current-password">
+            </div>
             <button type="submit" class="btn-submit">{{ _('Смени имейла') if current_user.email else _('Добави имейл') }}</button>
         </form>
     </div>

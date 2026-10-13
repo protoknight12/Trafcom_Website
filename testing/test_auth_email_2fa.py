@@ -31,7 +31,7 @@ import pyotp
 import pytest
 from werkzeug.security import generate_password_hash
 
-from app import app as flask_app, db, User, limiter, _reset_serializer, PASSWORD_RESET_MAX_AGE
+from app import app as flask_app, db, User, limiter, _reset_token, PASSWORD_RESET_MAX_AGE
 
 
 @pytest.fixture
@@ -102,7 +102,7 @@ def test_reset_password_token_roundtrip(client, app):
         user_id = user.id
 
     with app.app_context():
-        token = _reset_serializer().dumps(user_id)
+        token = _reset_token(db.session.get(User, user_id))
 
     resp = client.post(f'/reset-password/{token}', data={'password': 'newpassword1', 'password_confirm': 'newpassword1'},
                        follow_redirects=True)

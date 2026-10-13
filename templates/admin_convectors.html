@@ -142,13 +142,14 @@
 
 </main>
 
+<script src="{{ url_for('static', filename='js/poll.js') }}"></script>
 <script>
 (function () {
     var tsEl = document.getElementById('convectorsTs');
     if (!document.querySelector('[data-conv-id]')) return;
 
     function poll() {
-        fetch('{{ url_for("admin_convectors_data") }}')
+        return fetch('{{ url_for("admin_convectors_data") }}')
             .then(function (r) { return r.json(); })
             .then(function (data) {
                 if (tsEl) tsEl.textContent = 'Последно обновено: ' + data.ts;
@@ -158,7 +159,11 @@
                     var toggleBtn = document.querySelector('.conv-toggle-btn[data-conv-id="' + id + '"]');
                     var powerEl = document.querySelector('[data-field="power"][data-conv-id="' + id + '"]');
                     if (!info || !info.online) {
-                        el.innerHTML = '<span class="conv-offline">' + (info && info.error ? info.error : 'няма връзка') + '</span>';
+                        el.textContent = '';
+                        var off = document.createElement('span');
+                        off.className = 'conv-offline';
+                        off.textContent = info && info.error ? info.error : 'няма връзка';
+                        el.appendChild(off);
                         if (toggleBtn) { toggleBtn.disabled = true; toggleBtn.classList.remove('is-on'); }
                         if (powerEl) powerEl.textContent = '—';
                         return;
@@ -182,8 +187,7 @@
             })
             .catch(function () {});
     }
-    poll();
-    setInterval(poll, 10000);
+    startPoll(poll, 10000);
 })();
 </script>
 
