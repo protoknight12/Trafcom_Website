@@ -464,7 +464,7 @@ def write_dxf(flat, path):
         else:
             msp.add_arc(e[1], e[2], e[3], e[4], dxfattribs=at)
     for b in flat['bends']:
-        layer = f"BEND_{b['dir'].upper()}_{int(round(b['angle']))}"
+        layer = f"BEND_{b['dir'].upper()}_{int(round(b['angle']))}_R{round(b['radius'], 2):g}"
         if layer not in doc.layers:
             doc.layers.add(layer, color=3 if b['dir'] == 'up' else 5, linetype='DASHED')
         msp.add_line(b['p0'], b['p1'], dxfattribs={'layer': layer})

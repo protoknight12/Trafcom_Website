@@ -68,7 +68,7 @@ def test_dxf_round_trip_gives_bend_steps(asm, tmp_path):
     lines = [(e.dxf.layer, tuple(e.dxf.start)[:2], tuple(e.dxf.end)[:2]) for e in msp if e.dxftype() == 'LINE' and e.dxf.layer.startswith('BEND')]
     outline = [tuple(e.dxf.start)[:2] for e in msp if e.dxftype() == 'LINE' and e.dxf.layer == 'CUT']
     bends, flat_len = bends_from_lines(lines, (0, 0), flat['size'])
-    assert len(bends) == 2 and all(b['angle'] == 90 and b['dir'] == 'down' for b in bends) and outline
+    assert len(bends) == 2 and all(b['angle'] == 90 and b['dir'] == 'down' and b['radius'] == 2.0 for b in bends) and outline   # the radius of the model is in the layer name
 
 
 def test_native_solidworks_files_are_explained(asm):

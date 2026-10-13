@@ -68,14 +68,20 @@ def step_checks(fold_deg, thickness, v, punch_angle=None, die_angle=None, stroke
     return out
 
 
-def pick_tools(punches, dies, thickness, fold_deg):
+def target_v(thickness, radius=None):
+    """The V opening to look for: the thickness rule, or - with the model's inner radius - the V that makes about that radius in an air bend (r = 0.16 V),
+    kept within 5..12 x the thickness."""
+    return recommended_v(thickness) if not radius else max(5 * thickness, min(12 * thickness, radius / 0.16))
+
+
+def pick_tools(punches, dies, thickness, fold_deg, radius=None):
     """Default tools for a bend. punches: [(id, angle_deg)], dies: [(id, v, angle_deg)] (one row per V of a multi-V die).
     Punch: the sharpest-fitting one (largest angle that still fits the inner angle); die: V closest to the usual rule for the thickness
-    among those whose groove angle fits. -> (punch_id or None, (die_id, v) or None)"""
+    among those whose groove angle fits (with `radius`, the model's inner radius: the V that makes it). -> (punch_id or None, (die_id, v) or None)"""
     inner = 180 - fold_deg
     fit_p = [p for p in punches if p[1] is None or p[1] <= inner + 0.01]
-    punch = max(fit_p, key=lambda p: p[1] or 0)[0] if fit_p else None
-    vrec = recommended_v(thickness)
+    punch = max(fit_p, key=lambda p: ((p[1] or 0), -abs((p[2] if len(p) > 2 and p[2] else radius or 0) - (radius or 0))))[0] if fit_p else None   # the sharpest fit; then the tip radius nearest the model's
+    vrec = target_v(thickness, radius)
     fit_d = [d for d in dies if d[2] is None or d[2] <= inner + 0.01]
     die = min(fit_d, key=lambda d: abs(d[1] - vrec)) if fit_d else None
     return punch, ((die[0], die[1]) if die else None)
@@ -104,31 +110,41 @@ def outside_length(leg, fold_deg, inner_radius, thickness, k=0.33):
     return leg - th * (inner_radius + k * thickness) / 2 + (inner_radius + thickness) * math.tan(th / 2)
 
 
-def pick_segments(length, avail, max_total=None):
-    """Which tool segments to mount for a bend `length` mm long. avail: {segment length: how many pieces are available (the same length on the punch and
-    on the die)}. The tool must cover the whole bend: the smallest total >= length (least overhang), then the fewest pieces; the pieces are laid out
-    symmetrically about the middle, the longest in the centre. -> {'total', 'excess', 'segments': [lengths left to right]} or None when it cannot be covered.
-    ponytail: all pieces cut at multiples of 5 mm (the real set is 10/15/20/40/50/100/200/370/415), the bend length = the part's width."""
-    step = 5
+def _reachable(avail, max_total, step=5):
+    """{reachable total (in steps of 5 mm): the fewest pieces (a list of lengths) that make it}, within max_total."""
     items = sorted((int(round(l)), n) for l, n in avail.items() if n > 0 and l > 0)
     cap = int((max_total if max_total else sum(l * n for l, n in items)) // step)
-    need = int(-(-length // step))
-    best = {0: []}   # reachable total (in steps) -> the fewest pieces reaching it
+    best = {0: []}
     for l, n in items:
         for _ in range(int(n)):
             for t, segs in sorted(best.items(), reverse=True):
                 u = t + l // step
                 if u <= cap and (u not in best or len(best[u]) > len(segs) + 1):
                     best[u] = segs + [l]
+    return best
+
+
+def _centre(pieces):
+    """Lay pieces out symmetrically: the longest in the centre, the others alternately outwards."""
+    left, right = [], []
+    for i, l in enumerate(sorted(pieces, reverse=True)):
+        (left if i % 2 else right).append(l)
+    return left[::-1] + right
+
+
+def pick_segments(length, avail, max_total=None):
+    """Which tool segments to mount for a bend `length` mm long. avail: {segment length: how many pieces are available (the same length on the punch and
+    on the die)}. The tool must cover the whole bend: the smallest total >= length (least overhang), then the fewest pieces; the pieces are laid out
+    symmetrically about the middle, the longest in the centre. -> {'total', 'excess', 'segments': [lengths left to right]} or None when it cannot be covered.
+    ponytail: all pieces cut at multiples of 5 mm (the real set is 10/15/20/40/50/100/200/370/415), the bend length = the part's width."""
+    step = 5
+    best = _reachable(avail, max_total, step)
+    need = int(-(-length // step))
     fit = [t for t in best if t >= need]
     if not fit:
         return None
     t = min(fit, key=lambda k: (k, len(best[k])))
-    segs = sorted(best[t], reverse=True)
-    left, right = [], []
-    for i, l in enumerate(segs):   # the longest in the centre, the others alternately outwards
-        (left if i % 2 else right).append(l)
-    return {'total': t * step, 'excess': round(t * step - length, 1), 'segments': left[::-1] + right}
+    return {'total': t * step, 'excess': round(t * step - length, 1), 'segments': _centre(best[t])}
 
 
 def plan_row(lengths, avail, max_total=None):
@@ -164,3 +180,25 @@ def plan_row(lengths, avail, max_total=None):
     for w in windows:
         w['start'] = lcount - w.pop('lcount')
     return {'row': list(row), 'windows': windows, 'missing': missing}
+
+
+STANDARD_LENGTHS = {10: 99, 15: 99, 20: 99, 40: 99, 50: 99, 100: 99, 200: 99, 370: 99, 415: 99}   # the pieces a tool set usually comes in (any number of each)
+
+
+def nearest_sets(length, avail, max_total=None):
+    """When no set of the pieces in stock covers a bend `length` mm long (pick_segments gave None): the nearest things that do work.
+    -> {'too_long': the bend is longer than the machine, 'short': the best set in stock that stays below the length ({'total', 'segments', 'shortfall'} - the bend
+    can be done in two passes, the part shifted between them) or None, 'buy': pieces to add (per tool: punch AND die) to the short set to cover the whole bend
+    ({'add': [lengths], 'total', 'excess'}) or None}. Same 5 mm grid as pick_segments."""
+    cap = max_total if max_total else None
+    if cap and length > cap:
+        return {'too_long': True, 'short': None, 'buy': None}
+    step = 5
+    best = _reachable(avail, cap, step)
+    below = [t for t in best if 0 < t * step < length]
+    t = max(below, key=lambda k: (k, -len(best[k]))) if below else None
+    short = {'total': t * step, 'segments': _centre(best[t]), 'shortfall': round(length - t * step, 1)} if t else None
+    base = short['total'] if short else 0
+    extra = pick_segments(length - base, STANDARD_LENGTHS, (cap - base) if cap else None)
+    buy = {'add': sorted(extra['segments'], reverse=True), 'total': base + extra['total'], 'excess': round(base + extra['total'] - length, 1)} if extra else None
+    return {'too_long': False, 'short': short, 'buy': buy}

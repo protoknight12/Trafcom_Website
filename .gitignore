@@ -33,3 +33,6 @@ tools/
 models/
 detection_files/
 training_files/
+
+# AD-ES 2040 controller backup + manufacturer docs (local only - never to GitHub)
+machine_data/

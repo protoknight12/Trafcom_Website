@@ -1,4 +1,6 @@
 {% from 'partials/bend_tooling.html' import tooling_start, tooling_change, tooling_caption %}
+{% from 'partials/step_axes.html' import step_axes, axes_legend %}
+{% from 'partials/machine_fit.html' import machine_fit_banner %}
 <!DOCTYPE html>
 <html lang="bg">
 <head>
@@ -24,6 +26,8 @@
     {% endwith %}
 
     <p><a href="{{ url_for('admin_bending_programs') }}">&larr; Програми</a></p>
+
+    {{ machine_fit_banner(fit, prog, prog.status != 'approved') }}
 
     <section class="admin-card">
         <h3>{{ prog.name }} <small>v{{ prog.version }} · {{ prog.status }}</small></h3>
@@ -66,6 +70,8 @@
         {% else %}<p><small>Свържете почасова услуга „Огъване“ с машината в /admin/services, за да се запише цената.</small></p>{% endif %}
     </section>
     {% endif %}
+
+    {% if part_view %}<section class="admin-card">{% set pv_interactive = true %}{% include 'partials/part_view.html' %}</section>{% endif %}
 
     {% if prog.status != 'approved' %}
     <section class="admin-card" data-dialog-section="+ Нова стъпка">
@@ -154,17 +160,18 @@
             {% include 'partials/csrf_field.html' %}<button type="submit" class="btn-submit">Попълни инструментите автоматично</button>
         </form>
         {% endif %}
-        {{ tooling_start(tooling) }}
+        {{ tooling_start(tooling, prog) }}
+        {{ axes_legend() }}
         <div class="table-responsive">
             <table class="users-table">
-                <thead><tr><th>№</th><th>Ъгъл</th><th>X</th><th>R</th><th>kN</th><th>Поансон</th><th>Матрица</th><th>Картинка</th><th>Обръщане</th><th>Ход</th><th>Бележка</th><th></th></tr></thead>
+                <thead><tr><th>№</th><th>Ъгъл</th><th>X</th><th>R</th><th>kN</th><th>Поансон</th><th>Матрица</th><th>Картинка</th><th>Обръщане</th><th>Ход и оси</th><th>Бележка</th><th></th></tr></thead>
                 <tbody>
                 {% for st in prog.steps %}
                 {% if tooling.step.get(st.id) and tooling.step[st.id].change %}<tr><td colspan="12">{{ tooling_change(tooling, st) }}</td></tr>{% endif %}
                 <tr>
                     <td>{{ st.seq }}</td><td>{{ st.angle_deg }}°</td><td>{{ st.x_mm if st.x_mm is not none else '-' }}{% set xa = checks[st.id].x_axis if checks and st.id in checks else none %}{% if xa is not none %}<br><small>ос X: <b>{{ xa }}</b> ({{ 'опора върху ниво 0' if checks[st.id].finger_opt == 'ledge' else 'лице на ниво 0' }}, стена {{ checks[st.id].x_wall }})</small>{% endif %}{{ tooling_caption(tooling, st) }}{% if st.back_end %}<br><small>упор: {{ 'ляв' if st.back_end == 'left' else 'десен' }} край</small>{% endif %}</td><td>{{ st.r_mm if st.r_mm is not none else '-' }}</td>
                     <td>{{ st.force_kn if st.force_kn is not none else '-' }}</td><td>{{ st.punch.code if st.punch else '-' }}</td><td>{{ (st.die.code ~ (' · V%g' % st.die_v_mm if st.die_v_mm else '')) if st.die else '-' }}</td>
-                    <td>{% if pictures[st.id] %}<a data-frame="stay" href="{{ url_for('bending_step_view', step_id=st.id) }}" title="Отвори и увеличи"><img src="{{ url_for('bending_step_picture', step_id=st.id) }}" alt="стъпка {{ st.seq }}" style="width:190px;height:150px;background:#14171a;border-radius:6px;cursor:zoom-in"></a>{% else %}-{% endif %}</td><td>{{ 'да' if st.flip else '' }}</td><td>{% set c = checks[st.id] %}{% if c.travel is not none %}{{ c.travel }} mm{% else %}-{% endif %}{% if c.retract %}<div style="color:#ffb340;font-size:.8em">упор: отдръпване при ≈{{ '%g'|format(c.retract) }}°</div>{% endif %}{% for w in c.warnings %}<div style="color:#e0a030;font-size:.8em">⚠ {{ w }}</div>{% endfor %}</td><td>{{ st.notes or '' }}</td>
+                    <td>{% if pictures[st.id] %}<a data-frame="stay" href="{{ url_for('bending_step_view', step_id=st.id) }}" title="Отвори и увеличи"><img src="{{ url_for('bending_step_picture', step_id=st.id) }}" alt="стъпка {{ st.seq }}" style="width:190px;height:150px;background:#14171a;border-radius:6px;cursor:zoom-in"></a>{% else %}-{% endif %}</td><td>{{ 'да' if st.flip else '' }}</td><td>{% set c = checks[st.id] %}{{ step_axes(c) }}{% if c.travel is not none %}ход {{ c.travel }} mm{% else %}-{% endif %}{% if c.retract %}<div style="color:#ffb340;font-size:.8em">упор: отдръпване при ≈{{ '%g'|format(c.retract) }}°</div>{% endif %}{% for w in c.warnings %}<div style="color:#e0a030;font-size:.8em">⚠ {{ w }}</div>{% endfor %}</td><td>{{ st.notes or '' }}</td>
                     <td>{% if prog.status != 'approved' %}<form action="{{ url_for('admin_bending_delete_step', step_id=st.id) }}" method="POST" onsubmit="return confirm('Изтриване на стъпката?')">
                         {% include 'partials/csrf_field.html' %}<button type="submit" class="btn-delete">Изтрий</button></form>{% endif %}</td>
                 </tr>
@@ -176,5 +183,20 @@
         </div>
     </section>
 </main>
+<script>
+document.querySelectorAll('.ai-tooling').forEach(function (b) {
+    b.addEventListener('click', function () {
+        var out = b.parentNode.querySelector('.ai-answer');
+        out.textContent = 'AI мисли...';
+        b.disabled = true;
+        fetch(b.dataset.url, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('input[name=csrf_token]').value},
+                              body: JSON.stringify({setup: Number(b.dataset.setup), need: Number(b.dataset.need)})})
+            .then(function (r) { return r.json(); })
+            .then(function (d) { out.textContent = d.reply || d.message || 'Няма отговор.'; })
+            .catch(function () { out.textContent = 'Грешка при връзката.'; })
+            .finally(function () { b.disabled = false; });
+    });
+});
+</script>
 </body>
 </html>

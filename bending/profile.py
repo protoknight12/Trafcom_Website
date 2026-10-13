@@ -4,6 +4,8 @@ A tool's profile is its WORKING part only, as vertices [x, y, r, a] in mm (y up)
 arc replacing the edge to the next vertex. The radii are data - calculations read them from here. The clamping part is standard
 for the machine's beam (CLAMP) and is only added when drawing. A tool without a stored profile gets a starting one from its numbers.
 """
+import contextlib
+import contextvars
 import math
 
 PUNCH_HALF_WIDTH = 7.0  # body half-width, mm
@@ -522,6 +524,19 @@ def finger_section(wall_x, die_half, hang=False, prefer='face'):
     return [(wall_x, 0.0), (wall_x + ln, 0.0), (wall_x + ln, h + wl), (wall_x + off, h + wl), (wall_x + off, h), (wall_x, h)], wall_x, 'face'
 
 
+_INNER_R = contextvars.ContextVar('bend_inner_radius', default=None)
+
+
+@contextlib.contextmanager
+def inner_radius(r):
+    """Within the block every bend is computed with the inner radius `r` (mm) from the part's model instead of the air-bend rule 0.16 V; None = the rule."""
+    token = _INNER_R.set(r if r and r > 0 else None)
+    try:
+        yield
+    finally:
+        _INNER_R.reset(token)
+
+
 def _step_geom(punch_pts, die_pts, v, thickness, fold_deg, left, right, overbend=0.0):
     """Layout of one bend at the bottom of the stroke. The sheet rests on the die's shoulders at exact points: its bottom surface is a straight
     line tangent to each shoulder circle (radius R, centre cx = V/2 + R(1 - sin b)/cos b below the top plane, b = half the groove angle); the
@@ -544,7 +559,7 @@ def _step_geom(punch_pts, die_pts, v, thickness, fold_deg, left, right, overbend
     contacts = [(-(cx - R * c), -R + R * s), (cx - R * c, -R + R * s)] if R else [(-v / 2, 0.0), (v / 2, 0.0)]
     tip_r = (derived(punch_pts, 'punch').get('tip_radius') or 0.0)
     A = (0.0, y_out + thickness / (2 * s))                # apex on the sheet's centre line
-    inner_r = 0.16 * v                                    # air bend: the sheet forms its own inner radius (~0.16 V), see bending.tools.outside_length
+    inner_r = _INNER_R.get() or 0.16 * v                  # air bend: the sheet forms its own inner radius (~0.16 V), see bending.tools.outside_length; the model's radius wins
     r_eff = max(tip_r, inner_r)                           # the tip rests on the rounded inner surface (its lowest point), not in a sharp corner
     tip_y = y_out + thickness / s + r_eff / s - r_eff     # lowest point of the punch tip
     dflt = [(max(30.0, v * 0.9), None)]

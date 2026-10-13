@@ -1,5 +1,5 @@
 {# Tool setups of a bend program (app._program_tooling): the arrangement(s) at the start of a sheet, and the change banner before a step. #}
-{% macro tooling_start(tooling) %}
+{% macro tooling_start(tooling, prog=none) %}
 {% if tooling and tooling.setups %}
 <div class="tool-setups" style="margin:14px 0">
     <h3 style="margin:0 0 6px">Подреждане на инструментите{% if tooling.setups|length > 1 %} ({{ tooling.setups|length }} комплекта){% endif %}</h3>
@@ -8,9 +8,28 @@
         <b>{% if tooling.setups|length > 1 %}Комплект {{ su.n }}: {% endif %}поансон {{ su.punch }} / матрица {{ su.die }}{% if su.v %} V{{ '%g'|format(su.v) }}{% endif %}</b>
         <small>- за огъвания {{ su.steps|join(', ') }}</small>
         {% if su.row %}<div>Секции отляво надясно: <b>{{ su.row|join(' + ') }}</b> = {{ '%g'|format(su.total) }} mm</div>{{ su.svg }}
-        {% for w in su.windows %}<small>огъване {{ '%g'|format(w.need) }} mm: {{ w.n }} {{ 'секция' if w.n == 1 else 'секции' }} в средата = {{ '%g'|format(w.total) }} mm</small>{% if not loop.last %}<br>{% endif %}{% endfor %}
+        {% for w in su.windows %}<small>огъване {{ '%g'|format(w.part or w.need) }} mm (с запас: {{ '%g'|format(w.need) }}): {{ w.n }} {{ 'секция' if w.n == 1 else 'секции' }} в средата = {{ '%g'|format(w.total) }} mm</small>{% if not loop.last %}<br>{% endif %}{% endfor %}
         {% endif %}
-        {% for m in su.missing %}<div style="color:#c0392b">Няма комплект секции за огъване {{ '%g'|format(m) }} mm в наличност.</div>{% endfor %}
+        {% for sg in su.suggest %}
+        <div style="margin:6px 0;padding:8px 10px;border:1px solid #c0392b;border-radius:6px;break-inside:avoid">
+            <b style="color:#c0392b">Няма комплект секции за огъване {{ '%g'|format(sg.part or sg.need) }} mm (с запас {{ '%g'|format(sg.need) }}) в наличност</b> <small>(стъпки {{ sg.steps|join(', ') }})</small>
+            <ul style="margin:4px 0 4px 18px;padding:0">
+                {% if sg.near.too_long %}<li>Огъването е по-дълго от работната дължина на машината.</li>{% endif %}
+                {% if sg.near.short %}<li>Най-близкият комплект от наличното: <b>{{ sg.near.short.segments|join(' + ') }}</b> = {{ '%g'|format(sg.near.short.total) }} mm - къс с {{ '%g'|format(sg.near.short.shortfall) }} mm; огъване на два пъти с преместване на детайла.</li>{% endif %}
+                {% if sg.near.buy %}<li>За цяло огъване липсват секции (на поансона и на матрицата): <b>{{ sg.near.buy.add|join(' + ') }}</b> -> {{ '%g'|format(sg.near.buy.total) }} mm{% if sg.near.buy.excess %}, излишък {{ '%g'|format(sg.near.buy.excess) }} mm{% endif %}.</li>{% endif %}
+                {% for a in sg.alts %}
+                <li>Друг инструмент с пълен комплект: поансон {{ a.punch }} / матрица {{ a.die }} V{{ '%g'|format(a.v) }} = {{ '%g'|format(a.total) }} mm{% if a.excess %} (излишък {{ '%g'|format(a.excess) }}){% endif %}
+                    {% if prog and prog.status != 'approved' %}
+                    <form action="{{ url_for('admin_bending_retool', prog_id=prog.id) }}" method="POST" style="display:inline" onsubmit="return confirm('Смяна на инструмента на стъпки {{ sg.steps|join(', ') }}?')">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="steps" value="{{ sg.steps|join(',') }}">
+                        <input type="hidden" name="punch_id" value="{{ a.punch_id }}"><input type="hidden" name="die_id" value="{{ a.die_id }}"><input type="hidden" name="v" value="{{ a.v }}">
+                        <button type="submit" class="btn-submit" style="padding:2px 10px">Приложи</button></form>{% endif %}</li>
+                {% endfor %}
+            </ul>
+            {% if prog %}<button type="button" class="btn-secondary ai-tooling" data-url="{{ url_for('admin_bending_ai_tooling', prog_id=prog.id) }}" data-setup="{{ su.n }}" data-need="{{ sg.need }}" style="padding:2px 10px">Попитай AI</button>
+            <div class="ai-answer" style="margin-top:6px;white-space:pre-wrap"></div>{% endif %}
+        </div>
+        {% endfor %}
     </div>
     {% endfor %}
     {% if tooling.setups|length > 1 %}<small>Смяната на инструмента е отбелязана пред стъпката, за която е нужна.</small>{% endif %}

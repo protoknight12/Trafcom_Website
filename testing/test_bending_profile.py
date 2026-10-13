@@ -219,3 +219,11 @@ _tr = step_trajectory(_P, _D, 16, 2, 90, [(300, None)], [(250, 100), (250, None)
 assert _tr['first_hit'] and _tr['first_hit']['pair'] in _tr['hits'] and len(_tr['first_hit']['at']) == 2 and _tr['first_hit']['angle'] >= 0
 assert step_trajectory(_P, _D, 16, 2, 90, right=[(40, None)])['first_hit'] is None
 print('ok first hit')
+
+# the model's inner radius replaces the air-bend rule 0.16 V (and only inside the block)
+from bending.profile import inner_radius
+base = step_frames(_P, _D, 16, 2, 90)['inner_radius']
+with inner_radius(5.0):
+    assert step_frames(_P, _D, 16, 2, 90)['inner_radius'] == 5.0
+assert base == 0.16 * 16 and step_frames(_P, _D, 16, 2, 90)['inner_radius'] == base
+print('ok model radius')

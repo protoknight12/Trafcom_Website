@@ -1,0 +1,23 @@
+{# Can the program run on its machine? app._machine_fit -> `fit`; the banner shows the reasons and the press brakes of the shop that can take it. #}
+{% macro machine_fit_banner(fit, prog, can_switch=false) %}
+{% if fit and not fit.ok %}
+<div style="border:2px solid #c0392b;border-radius:8px;padding:10px 14px;margin:10px 0;background:#fdecea;color:#14171a;break-inside:avoid">
+    <b style="color:#c0392b;font-size:1.1em">НЕ МОЖЕ ДА СЕ ИЗПЪЛНИ НА ТАЗИ МАШИНА ({{ prog.machine.name }})</b>
+    <ul style="margin:6px 0 6px 18px;padding:0">{% for p in fit.problems %}<li>{{ p.text }}</li>{% endfor %}</ul>
+    {% if fit.alternatives %}
+    <div><b>Може да се изпълни на:</b></div>
+    <ul style="margin:4px 0 0 18px;padding:0">
+        {% for a in fit.alternatives %}
+        <li>{{ a.machine.name }} - {% if a.cfg.working_length_mm %}дължина {{ '%g'|format(a.cfg.working_length_mm) }} mm{% endif %}{% if a.cfg.tonnage_t %}, {{ '%g'|format(a.cfg.tonnage_t) }} t{% endif %}{% if a.cfg.x_max_mm %}, ход X {{ '%g'|format(a.cfg.x_max_mm) }} mm{% endif %}
+            {% if can_switch %}
+            <form action="{{ url_for('admin_bending_program_machine', prog_id=prog.id) }}" method="POST" style="display:inline" onsubmit="return confirm('Смяна на машината? Ходовете, инструментите и подреждането трябва да се проверят наново.')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="machine_id" value="{{ a.machine.id }}">
+                <button type="submit" class="btn-submit" style="padding:2px 10px">Смени машината</button></form>{% endif %}</li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <div>В системата няма абкант, който го събира{% if fit.needs.length %} (нужна е дължина на огъване поне {{ '%g'|format(fit.needs.length) }} mm){% endif %}. Детайлът трябва да се огъва другаде или да се раздели.</div>
+    {% endif %}
+</div>
+{% endif %}
+{% endmacro %}

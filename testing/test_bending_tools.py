@@ -70,3 +70,19 @@ assert sum(r['row'][w0['start']:w0['start'] + w0['n']]) == w0['total']          
 assert plan_row([100], SET)['row'] == [100] and plan_row([3000], SET, 2050)['missing'] == [3000]
 assert len(plan_row([50, 50], {50: 1})['windows']) == 1                      # the same length twice needs no second piece
 print('ok row')
+
+# ---- nearest sets when nothing covers the bend ----
+from bending.tools import nearest_sets
+r = nearest_sets(300, {100: 1, 40: 2, 15: 1}, 2050)
+assert r['short']['total'] == 195 and r['short']['shortfall'] == 105 and sum(r['short']['segments']) == 195     # the most the stock makes below 300
+assert r['buy']['total'] == 300 and sum(r['buy']['add']) == 105 and not r['buy']['excess']                       # + 105 mm of standard pieces covers it
+assert nearest_sets(3000, {100: 1}, 2050)['too_long'] and nearest_sets(80, {}, 2050)['short'] is None and sum(nearest_sets(80, {}, 2050)['buy']['add']) == 80
+print('ok nearest')
+
+# tools from the model's inner radius: the V that makes it in an air bend (r = 0.16 V), within 5..12 x the thickness
+from bending.tools import pick_tools, target_v
+assert target_v(2.0) == 12 and target_v(2.0, 3.2) == 20 and target_v(2.0, 0.5) == 10 and target_v(2.0, 9) == 24          # the rule / r/0.16 / the lower and upper limits
+dies = [(1, 12, 85), (2, 20, 85), (3, 30, 85)]
+assert pick_tools([(1, 85, 0.8)], dies, 2.0, 90)[1][0] == 1 and pick_tools([(1, 85, 0.8)], dies, 2.0, 90, 3.2)[1][0] == 2
+assert pick_tools([(1, 85, 0.8), (2, 85, 3.0)], dies, 2.0, 90, 3.2)[0] == 2                                          # same sharpness: the tip radius nearest the model's
+print('ok radius tools')

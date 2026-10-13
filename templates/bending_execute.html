@@ -1,4 +1,5 @@
 {% from 'partials/bend_tooling.html' import tooling_start, tooling_change, tooling_caption %}
+{% from 'partials/step_axes.html' import step_axes, axes_legend %}
 <!DOCTYPE html>
 <html lang="bg">
 <head>
@@ -35,6 +36,7 @@
             {{ tooling_start(tooling) }}
             {% for st in prog.steps %}
             {{ tooling_change(tooling, st) }}
+            {{ step_axes(checks[st.id]) }}
             <div class="form-group"><label for="m{{ st.id }}">Огъване {{ st.seq }} - зададен {{ st.angle_deg }}° · измерен (°)</label>
                 <input type="number" step="any" min="0" id="m{{ st.id }}" name="m{{ st.id }}" inputmode="decimal"></div>
             {% endfor %}

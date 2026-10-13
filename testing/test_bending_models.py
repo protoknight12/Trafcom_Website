@@ -632,3 +632,260 @@ def test_chatbot_bending_tools_staff_only(ctx):
         login_user(staff)
         assert '1 огъвания' in bending_program_info.call({'detail_name': 'Конзола'})
         assert '500 mm (на склад)' in bend_tool_stock.call({'query': 'P.97'})
+
+
+def test_springback_is_learned_from_measured_angles(ctx):
+    from werkzeug.security import generate_password_hash
+    from app import User, limiter, Detail, BendProgram, BendStep, MaterialPrice, BendSpringbackCorrection, _overbend_fn
+    app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
+    limiter.reset()
+    m = Machine(name='MS')
+    die = BendTool(code='D16', kind='die', v_opening_mm=16)
+    db.session.add_all([User(username='bq_sb', password=generate_password_hash('irrelevant123'), role='admin'), m, die, MaterialPrice(key='st', display_name='Стомана', type='sheets', cost_per_m2=1)])
+    db.session.flush()
+    d = Detail(name='D', material_key='st', thickness_mm=2.0, width=1, height=1, total_length=1, pierce_count=1, calculated_price=1, geometry_json='[]')
+    db.session.add(d)
+    db.session.flush()
+    p = BendProgram(detail=d, machine=m, name='P', status='approved', steps=[BendStep(seq=1, angle_deg=90, die_id=die.id), BendStep(seq=2, angle_deg=90, die_id=die.id)])
+    db.session.add(p)
+    db.session.commit()
+    base = _overbend_fn(p)(16, 2.0)
+    c = app.test_client()
+    c.post('/login', data={'username': 'bq_sb', 'password': 'irrelevant123'})
+    s1, s2 = p.steps
+    c.post(f'/bending/programs/{p.id}/execute', data={f'm{s1.id}': '92', f'm{s2.id}': '95'})   # 2 and 5 degrees too open, V16 x 2 mm
+    row = BendSpringbackCorrection.query.one()
+    assert (row.v_mm, row.thickness_mm, row.samples) == (16.0, 2.0, 2) and row.correction_deg == pytest.approx(3.5, abs=0.01)   # 0 + 2/2, then + 5/2
+    assert _overbend_fn(p)(16, 2.0) == round(base + row.correction_deg, 1)
+    c.post(f'/bending/programs/{p.id}/execute', data={f'm{s1.id}': '130'})    # a 40 degree "error" is a typo: ignored
+    assert BendSpringbackCorrection.query.one().samples == 2
+    assert b'+3.5' in c.get('/admin/bending').data
+    c.post(f'/admin/bending/springback/{row.id}/delete')
+    assert BendSpringbackCorrection.query.count() == 0
+
+
+def test_missing_set_suggests_nearest_and_alternative_tools(ctx):
+    from werkzeug.security import generate_password_hash
+    from app import User, limiter, Detail, BendProgram, BendStep, MaterialPrice, _program_tooling
+    app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
+    limiter.reset()
+    m = Machine(name='MN')
+    punch = BendTool(code='P', kind='punch', status='in_library', angle_deg=88)
+    die_a = BendTool(code='DA', kind='die', status='in_library', v_opening_mm=16, angle_deg=88)
+    die_b = BendTool(code='DB', kind='die', status='in_library', v_opening_mm=14, angle_deg=88)   # a full set exists only for this one
+    db.session.add_all([User(username='bq_ns', password=generate_password_hash('irrelevant123'), role='admin'), m, punch, die_a, die_b,
+                        MaterialPrice(key='st', display_name='Стомана', type='sheets', cost_per_m2=1)])
+    db.session.flush()
+    db.session.add(PressBrakeConfig(machine=m, working_length_mm=2050))
+    for tool, pieces in ((punch, [100, 40, 40, 15, 200]), (die_a, [100, 40, 40, 15]), (die_b, [200, 100, 40, 40, 15])):
+        db.session.add_all([BendToolSegment(tool=tool, length_mm=l, erp_number=None) for l in pieces])
+    d = Detail(name='D', material_key='st', thickness_mm=2.0, width=300, height=100, total_length=1, pierce_count=1, calculated_price=1, geometry_json='[]')
+    db.session.add(d)
+    db.session.flush()
+    p = BendProgram(detail=d, machine=m, name='P', steps=[BendStep(seq=1, angle_deg=90, punch_id=punch.id, die_id=die_a.id, length_mm=300)])
+    db.session.add(p)
+    db.session.commit()
+    (su,) = _program_tooling(p)['setups']
+    (sg,) = su['suggest']
+    assert su['missing'] == [320] and sg['part'] == 300 and sg['near']['short']['total'] == 195 and sum(sg['near']['buy']['add']) == 125   # 300 + 10 mm at each end
+    assert [(a['die'], a['v']) for a in sg['alts']] == [('DB', 14.0)]
+    c = app.test_client()
+    c.post('/login', data={'username': 'bq_ns', 'password': 'irrelevant123'})
+    html = c.get(f'/admin/bending/programs/{p.id}').get_data(as_text=True)
+    assert 'Най-близкият комплект' in html and 'Друг инструмент с пълен комплект' in html and 'Попитай AI' in html
+    c.post(f'/admin/bending/programs/{p.id}/retool', data={'punch_id': punch.id, 'die_id': die_b.id, 'steps': '1', 'v': '14'})
+    db.session.expire_all()
+    assert p.steps[0].die_id == die_b.id and not _program_tooling(p)['setups'][0]['missing']
+    r = c.post(f'/admin/bending/programs/{p.id}/ai-tooling', json={'setup': 1, 'need': 320})   # nothing missing any more
+    assert r.status_code in (400, 503)
+
+
+def test_tool_is_longer_than_the_bend_by_a_margin(ctx):
+    from app import Detail, BendProgram, BendStep, MaterialPrice, _program_tooling
+    m = Machine(name='MM')
+    punch, die = BendTool(code='P', kind='punch', status='in_library'), BendTool(code='D', kind='die', status='in_library', v_opening_mm=16)
+    db.session.add_all([m, punch, die, MaterialPrice(key='st', display_name='S', type='sheets', cost_per_m2=1)])
+    db.session.flush()
+    db.session.add(PressBrakeConfig(machine=m, working_length_mm=2050))
+    db.session.add_all([BendToolSegment(tool=t, length_mm=l) for t in (punch, die) for l in (100, 100, 100)])
+    d = Detail(name='D', material_key='st', thickness_mm=2.0, width=300, height=100, total_length=1, pierce_count=1, calculated_price=1, geometry_json='[]')
+    p = BendProgram(detail=d, machine=m, name='P', steps=[BendStep(seq=1, angle_deg=90, punch=punch, die=die, length_mm=290), BendStep(seq=2, angle_deg=90, punch=punch, die=die, length_mm=300)])
+    db.session.add(p)
+    db.session.commit()
+    (su,) = _program_tooling(p)['setups']
+    assert su['missing'] == [310, 320]   # 290 and 300 mm bends + 10 mm at each end: both need more than the 300 mm in stock
+    m.press_brake.kinematics_json = '{"tool_margin_mm": 0}'
+    db.session.commit()
+    (su,) = _program_tooling(p)['setups']
+    assert su['missing'] == [] and su['windows'][-1]['part'] == 300 and su['total'] == 300      # without a margin the old exact cover is back
+
+
+def test_part_views_and_model_radius(ctx, tmp_path):
+    import json
+    import ezdxf
+    from werkzeug.security import generate_password_hash
+    from app import User, limiter, Detail, DetailDxfFile, BendProgram, MaterialPrice
+    app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
+    limiter.reset()
+    m = Machine(name='MV')
+    doc = ezdxf.new('R2000')
+    msp = doc.modelspace()
+    for a, b in (((0, 0), (80, 0)), ((80, 0), (80, 50)), ((80, 50), (0, 50)), ((0, 50), (0, 0))):
+        msp.add_line(a, b, dxfattribs={'layer': 'CUT'})
+    msp.add_circle((20, 25), 4, dxfattribs={'layer': 'CUT'})
+    msp.add_line((50, 0), (50, 50), dxfattribs={'layer': 'BEND_DOWN_90_R3'})
+    name = 'pv_test_part.dxf'
+    path = os.path.join(app.config['DETAIL_DXF_FOLDER'], name)
+    doc.saveas(path)
+    try:
+        d = Detail(name='D', material_key='st', thickness_mm=2.0, width=80, height=50, total_length=1, pierce_count=1, calculated_price=1, geometry_json='[]')
+        db.session.add_all([User(username='bq_pv', password=generate_password_hash('irrelevant123'), role='admin'), m, d, MaterialPrice(key='st', display_name='S', type='sheets', cost_per_m2=1)])
+        db.session.flush()
+        db.session.add_all([PressBrakeConfig(machine=m, working_length_mm=2050), DetailDxfFile(detail=d, filename=name, original_filename=name)])
+        p = BendProgram(detail=d, machine=m, name='P')
+        db.session.add(p)
+        db.session.commit()
+        c = app.test_client()
+        c.post('/login', data={'username': 'bq_pv', 'password': 'irrelevant123'})
+        c.post(f'/admin/bending/programs/{p.id}/generate')
+        db.session.expire_all()
+        assert [s.inner_radius_mm for s in BendProgram.query.one().steps] == [3.0]          # the radius of the model reached the step
+        for url, interactive in ((f'/admin/bending/programs/{p.id}', True), (f'/admin/bending/programs/{p.id}/sheet', False)):
+            html = c.get(url).get_data(as_text=True)
+            assert 'id="partViewData"' in html and 'Детайл: разгънат и сгънат' in html and ('id="partFold"' in html) == interactive
+            data = json.loads(html.split('id="partViewData">')[1].split('</script>')[0])
+            assert data['L'] == 80 and data['thickness'] == 2.0 and len(data['loops']) == 2 and data['loops'][0] and len(data['loops'][0]) == 4   # the outline + the hole
+            assert [(b['pos'], b['angle'], b['dir'], b['radius']) for b in data['bends']] == [(50.0, 90.0, 'down', 3.0)]
+            assert '<svg' in html and 'stroke-dasharray' in html
+            assert 'Y1 = Y2' in html and '>Z1<' in html and '>Z2<' in html and 'Ъгъл' in html   # every axis of the step is shown for typing it in by hand (the sheet and the program page)
+    finally:
+        os.remove(path)
+
+
+def test_plan_uses_tools_in_stock_first_then_the_library(ctx):
+    import json
+    import ezdxf
+    import migration.seed_bend_tools_m460r as seed
+    from bending.profile import multi_v_die, tip_offset
+    from app import User, limiter, Detail, DetailDxfFile, BendProgram, MaterialPrice, _plan_program
+    app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
+    off = tip_offset(75, 0.8)
+    punch_pts = [[x, y - off, r, a] for x, y, r, a in seed.P97_PROFILE]
+    die_pts = multi_v_die(seed.DIE_SIZE, seed.M460R_SIDES)
+    m = Machine(name='MP')
+    pa, pb = (BendTool(code=c, kind='punch', status='in_library', angle_deg=75, radius_mm=0.8, profile_json=json.dumps(punch_pts)) for c in ('PA', 'PB'))
+    da, db_ = (BendTool(code=c, kind='die', status='in_library', angle_deg=85, v_opening_mm=16, height_mm=60, profile_json=json.dumps(die_pts)) for c in ('DA', 'DB'))
+    doc = ezdxf.new('R2000')
+    msp = doc.modelspace()
+    for a, b in (((0, 0), (100, 0)), ((100, 0), (100, 50)), ((100, 50), (0, 50)), ((0, 50), (0, 0))):
+        msp.add_line(a, b, dxfattribs={'layer': 'CUT'})
+    msp.add_line((30, 0), (30, 50), dxfattribs={'layer': 'BEND_UP_90'})
+    name = 'plan_stock_test.dxf'
+    path = os.path.join(app.config['DETAIL_DXF_FOLDER'], name)
+    doc.saveas(path)
+    try:
+        d = Detail(name='D', material_key='st', thickness_mm=2.0, width=100, height=50, total_length=1, pierce_count=1, calculated_price=1, geometry_json='[]')
+        db.session.add_all([m, pa, pb, da, db_, d, MaterialPrice(key='st', display_name='S', type='sheets', cost_per_m2=1)])
+        db.session.flush()
+        db.session.add_all([PressBrakeConfig(machine=m, working_length_mm=2050), DetailDxfFile(detail=d, filename=name, original_filename=name)])
+        p = BendProgram(detail=d, machine=m, name='P')
+        db.session.add(p)
+        db.session.commit()
+        # nothing in stock: no tool has a set - the whole library is searched and the plan says so
+        steps, why, source = _plan_program(p)
+        assert steps and source == 'library'
+        # pieces for PB + DB only: the plan is made from them, even though PA/DA stand first in the library
+        db.session.add_all([BendToolSegment(tool=t, length_mm=l) for t in (pb, db_) for l in (100, 40, 15)])
+        db.session.commit()
+        steps, why, source = _plan_program(p)
+        assert source == 'stock' and (steps[0]['punch_id'], steps[0]['die_id']) == (pb.id, db_.id)
+    finally:
+        os.remove(path)
+
+
+def test_tapered_part_has_slanted_bend_lines_and_x1_x2(ctx):
+    import json
+    import ezdxf
+    from werkzeug.security import generate_password_hash
+    from app import User, limiter, Detail, DetailDxfFile, BendProgram, MaterialPrice, _program_checks, _program_tooling
+    app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
+    limiter.reset()
+    m = Machine(name='MT2')
+    doc = ezdxf.new('R2000')
+    msp = doc.modelspace()
+    # a cladding that narrows from 300 to 240 over 1000 mm: the right edge and the bend line (c = 60 -> 30) are slanted
+    msp.add_lwpolyline([(0, 0), (300, 0), (240, 1000), (0, 1000)], close=True, dxfattribs={'layer': 'CUT'})
+    msp.add_line((60, 0), (30, 1000), dxfattribs={'layer': 'BEND_UP_90_R2'})
+    name = 'tapered_test.dxf'
+    path = os.path.join(app.config['DETAIL_DXF_FOLDER'], name)
+    doc.saveas(path)
+    try:
+        d = Detail(name='D', material_key='st', thickness_mm=2.0, width=300, height=1000, total_length=1, pierce_count=1, calculated_price=1, geometry_json='[]')
+        db.session.add_all([User(username='bq_tp', password=generate_password_hash('irrelevant123'), role='admin'), m, d, MaterialPrice(key='st', display_name='S', type='sheets', cost_per_m2=1)])
+        db.session.flush()
+        db.session.add_all([PressBrakeConfig(machine=m, working_length_mm=2050), DetailDxfFile(detail=d, filename=name, original_filename=name)])
+        p = BendProgram(detail=d, machine=m, name='P')
+        db.session.add(p)
+        db.session.commit()
+        c = app.test_client()
+        c.post('/login', data={'username': 'bq_tp', 'password': 'irrelevant123'})
+        c.post(f'/admin/bending/programs/{p.id}/generate')
+        db.session.expire_all()
+        st = BendProgram.query.one().steps[0]
+        assert json.loads(st.line_json) == [60.0, -500.0, 30.0, 500.0] and st.inner_radius_mm == 2.0   # the real, slanted line and the radius of the generator
+        ax = _program_checks(p, _program_tooling(p))[st.id]['axes']
+        assert ax['x1'] is not None and ax['x2'] is not None and abs(ax['x1'] - ax['x2']) > 0.5   # X differs between the two fingers
+        html = c.get(f'/admin/bending/programs/{p.id}/sheet').get_data(as_text=True)
+        assert '>X1<' in html and '>X2<' in html
+        data = json.loads(html.split('id="partViewData">')[1].split('</script>')[0])
+        assert data['bends'][0]['line'] == [60.0, -500.0, 30.0, 500.0]                       # the flat view draws the line as it is, slanted
+    finally:
+        os.remove(path)
+
+
+def test_part_too_big_for_the_machine_is_refused_and_another_is_offered(ctx):
+    from werkzeug.security import generate_password_hash
+    from app import User, limiter, Detail, BendProgram, BendStep, MaterialPrice, _machine_fit
+    app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
+    limiter.reset()
+    small, big, tiny = Machine(name='Малък 2050'), Machine(name='Голям 4050'), Machine(name='Съвсем малък')
+    db.session.add_all([User(username='bq_fit', password=generate_password_hash('irrelevant123'), role='admin'), small, big, tiny, MaterialPrice(key='st', display_name='S', type='sheets', cost_per_m2=1)])
+    db.session.flush()
+    db.session.add_all([PressBrakeConfig(machine=small, working_length_mm=2050, tonnage_t=40, x_max_mm=650), PressBrakeConfig(machine=big, working_length_mm=4050, tonnage_t=175, x_max_mm=800),
+                        PressBrakeConfig(machine=tiny, working_length_mm=1250, tonnage_t=30, x_max_mm=500)])
+    d = Detail(name='D', material_key='st', thickness_mm=2.0, width=3000, height=500, total_length=1, pierce_count=1, calculated_price=1, geometry_json='[]')
+    db.session.add(d)
+    db.session.flush()
+    p = BendProgram(detail=d, machine=small, name='P', steps=[BendStep(seq=1, angle_deg=90, x_mm=100, length_mm=3000)])
+    db.session.add(p)
+    db.session.commit()
+    fit = _machine_fit(p)
+    assert not fit['ok'] and fit['problems'][0]['kind'] == 'length' and [a['machine'].name for a in fit['alternatives']] == ['Голям 4050']   # the one that can take it
+    c = app.test_client()
+    c.post('/login', data={'username': 'bq_fit', 'password': 'irrelevant123'})
+    html = c.get(f'/admin/bending/programs/{p.id}').get_data(as_text=True)
+    assert 'НЕ МОЖЕ ДА СЕ ИЗПЪЛНИ НА ТАЗИ МАШИНА' in html and 'Голям 4050' in html and 'Смени машината' in html
+    assert 'НЕ МОЖЕ ДА СЕ ИЗПЪЛНИ' in c.get(f'/admin/bending/programs/{p.id}/sheet').get_data(as_text=True)
+    c.post(f'/admin/bending/programs/{p.id}/status', data={'status': 'approved'})        # refused
+    db.session.expire_all()
+    assert BendProgram.query.one().status == 'draft'
+    c.post(f'/admin/bending/programs/{p.id}/machine', data={'machine_id': big.id})        # switch to the offered machine
+    db.session.expire_all()
+    assert _machine_fit(BendProgram.query.one())['ok']
+    r = c.post(f'/admin/bending/programs/{p.id}/status', data={'status': 'approved'}, follow_redirects=True)
+    db.session.expire_all()
+    import re as _re
+    assert BendProgram.query.one().status == 'approved', _re.findall(r'alert alert-[a-z]+">([^<]+)', r.get_data(as_text=True)) or r.status_code
+    # a part nobody can take: no alternative, and the banner says what is needed
+    p2 = BendProgram(detail=d, machine=big, name='P2', steps=[BendStep(seq=1, angle_deg=90, length_mm=6000)])
+    db.session.add(p2)
+    db.session.commit()
+    f2 = _machine_fit(p2)
+    assert not f2['ok'] and not f2['alternatives']
+    assert 'няма абкант' in c.get(f'/admin/bending/programs/{p2.id}').get_data(as_text=True)
+    # force: a thick plate over a short V needs more than the small machine can give
+    p3 = BendProgram(detail=d, machine=small, name='P3', steps=[BendStep(seq=1, angle_deg=90, length_mm=2000, force_kn=900)])
+    db.session.add(p3)
+    db.session.commit()
+    f3 = _machine_fit(p3)
+    assert [x['kind'] for x in f3['problems']] == ['force'] and [a['machine'].name for a in f3['alternatives']] == ['Голям 4050']

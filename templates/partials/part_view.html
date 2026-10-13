@@ -1,0 +1,23 @@
+{# The part of a bend program: unfolded with its bend lines (server SVG) and folded in 3D (static/js/part_view.js). Needs `part_view` (app._part_view); `pv_interactive` = orbit + fold slider, else one picture that prints. #}
+{% if part_view %}
+<section class="part-view" style="margin:14px 0;break-inside:avoid">
+    <h3 style="margin:0 0 6px">Детайл: разгънат и сгънат</h3>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start">
+        <div style="flex:1 1 280px;max-width:440px;min-width:0">{{ part_view.svg }}</div>
+        <div style="flex:1 1 280px;max-width:440px;min-width:0">
+            <div id="partView3d" style="min-height:{{ 300 if pv_interactive else 0 }}px">Зареждане на 3D...</div>
+            {% if pv_interactive %}<label class="noprint" style="display:block;margin-top:6px">Разгънат <input type="range" id="partFold" min="0" max="100" value="100" style="vertical-align:middle;width:55%"> сгънат</label>{% endif %}
+        </div>
+    </div>
+    <script type="application/json" id="partViewData">{{ part_view.data|tojson }}</script>
+    <script type="importmap">
+    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+    </script>
+    <script type="module">
+        import { mountPartView } from "{{ url_for('static', filename='js/part_view.js') }}";
+        const el = document.getElementById('partView3d');
+        try { mountPartView(el, JSON.parse(document.getElementById('partViewData').textContent), { interactive: {{ 'true' if pv_interactive else 'false' }}, width: 420, height: 300, slider: document.getElementById('partFold') }); }
+        catch (e) { el.textContent = '3D изгледът не може да се покаже.'; console.error(e); }
+    </script>
+</section>
+{% endif %}

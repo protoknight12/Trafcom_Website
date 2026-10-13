@@ -1,4 +1,6 @@
 {% from 'partials/bend_tooling.html' import tooling_start, tooling_change, tooling_caption %}
+{% from 'partials/step_axes.html' import step_axes, axes_legend %}
+{% from 'partials/machine_fit.html' import machine_fit_banner %}
 <!DOCTYPE html>
 <html lang="bg">
 <head>
@@ -22,6 +24,9 @@
     <h1>{{ prog.name }}</h1>
     <p class="meta">Детайл: <b>{{ prog.detail.name }}</b>{% if prog.detail.erp_number %} (ERP № {{ prog.detail.erp_number }}){% endif %} · Машина: <b>{{ prog.machine.name }}</b> · Версия {{ prog.version }} · {{ 'ОДОБРЕНА' if prog.status == 'approved' else prog.status }}</p>
     {% if prog.notes %}<p class="meta">{{ prog.notes }}</p>{% endif %}
+    {{ machine_fit_banner(fit, prog) }}
+    {% include 'partials/part_view.html' %}
+    {{ axes_legend() }}
     {{ tooling_start(tooling) }}
     <table>
         <thead><tr><th>№</th><th>Ъгъл</th><th>Задна опора X</th><th>R</th><th>Сила kN</th><th>Поансон</th><th>Матрица</th><th>Обръщане</th><th>Измерен ъгъл</th></tr></thead>
@@ -33,6 +38,7 @@
             <td>{{ st.force_kn if st.force_kn is not none else '' }}</td><td>{{ st.punch.code if st.punch else '' }}</td><td>{{ (st.die.code ~ (' · V%g' % st.die_v_mm if st.die_v_mm else '')) if st.die else '' }}</td>
             <td>{{ 'ОБРЪЩАНЕ' if st.flip else '' }}</td><td class="measured"></td>
         </tr>
+        <tr><td></td><td colspan="8">{{ step_axes(checks[st.id]) }}</td></tr>
         {% if pictures[st.id] %}<tr><td></td><td colspan="8"><img src="{{ url_for('bending_step_picture', step_id=st.id) }}" alt="" style="height:130px;background:#fff"></td></tr>{% endif %}
         {% if checks[st.id].retract %}<tr><td></td><td colspan="8"><b>ОТМЕТНЕТЕ УПОРА (Retract) при ≈{{ '%g'|format(checks[st.id].retract) }}° от хода - пречи на детайла.</b></td></tr>{% endif %}
         {% if st.notes %}<tr><td></td><td colspan="8"><i>{{ st.notes }}</i></td></tr>{% endif %}

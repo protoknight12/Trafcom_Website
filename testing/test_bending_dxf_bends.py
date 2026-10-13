@@ -11,3 +11,8 @@ s = steps_from_bend_lines([('BEND_UP', (0, 40), (40, 40))], (0, 0), (40, 50))
 assert s[0]['x_mm'] == 10 and s[0]['back_end'] == 'right'
 assert steps_from_bend_lines([], (0, 0), (1, 1)) == []
 print('ok')
+
+# the model's inner radius travels in the layer name: BEND_<dir>_<angle>_R<radius>
+s = steps_from_bend_lines([('BEND_DOWN_90_R2.5', (20, 0), (20, 30)), ('BEND_UP_45', (60, 0), (60, 30))], (0, 0), (100, 30))
+assert [x.get('inner_radius_mm') for x in sorted(s, key=lambda x: x['seq'])] == [2.5, None] and sorted(x['angle_deg'] for x in s) == [45, 90]
+print('ok radius')

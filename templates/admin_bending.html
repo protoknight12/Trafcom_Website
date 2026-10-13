@@ -265,6 +265,27 @@
             </table>
         </div>
     </section>
+    <section class="admin-card" id="springback">
+        <h3>Научено пружиниране</h3>
+        <p class="hint">Всяко измерване при изпълнение на програма (ъгъл вместо зададения) мести корекцията с половината от грешката. Към оценката по материал се добавя за същия материал, V и дебелина - използва се в хода, колизиите и 3D.</p>
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead><tr><th>Материал</th><th>Дебелина</th><th>V</th><th>Корекция</th><th>Измервания</th><th></th></tr></thead>
+                <tbody>
+                {% for r in springbacks %}
+                <tr>
+                    <td>{{ material_names.get(r.material_key, r.material_key) }}</td><td>{{ '%g'|format(r.thickness_mm) }} mm</td><td>V{{ '%g'|format(r.v_mm) }}</td>
+                    <td><b>{{ '%+g'|format(r.correction_deg) }}°</b></td><td>{{ r.samples }}</td>
+                    <td><form action="{{ url_for('admin_bending_delete_springback', row_id=r.id) }}" method="POST" onsubmit="return confirm('Изтриване на научената корекция?')">
+                        {% include 'partials/csrf_field.html' %}<button type="submit" class="btn-delete">Изтрий</button></form></td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6">Още няма измервания.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
 </main>
 </body>
 </html>

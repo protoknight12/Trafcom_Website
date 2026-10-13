@@ -560,6 +560,7 @@
             fd.append('material', $('d-material').value); fd.append('service_id', $('d-service').value);
             fd.append('file', new File([r.blob], r.name, { type: 'application/dxf' }));
             fd.append('ask_duplicate', '1');
+            fd.append('flashing_json', JSON.stringify(collect()));   // the server also builds the folded 3D body (STEP) and keeps it with the detail
             let res = await fetch('/api/quick-create-detail', { method: 'POST', body: fd });
             let data = await res.json();
             if (res.status === 409) {   // a Detail with this name exists: new version of it, or a separate new Detail
@@ -573,6 +574,7 @@ OK - нова версия на същия детайл (нов DXF, преиз�
                 data = await res.json();
             }
             msg.textContent = res.ok ? `${data.version ? 'Нова версия на детайл' : 'Записан детайл'} „${data.detail.name}“ - ${f2(data.detail.price)} лв.` : (data.message || 'Грешка');
+            if (res.ok) msg.textContent += data.step_note ? ` STEP не е записан: ${data.step_note}` : ' Записан е и STEP файл (3D).';
             if (res.ok && await savePreset(name)) msg.textContent += ' Запазен е и пресет със същото име.';
             const brake = $('d-brake');
             if (res.ok && brake && brake.value) {

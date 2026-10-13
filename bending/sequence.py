@@ -7,6 +7,8 @@ changes and turned end-for-end when the gauge end changes.
 ponytail: developed lengths only - real sequencing with 3D collisions is stage 3.
 """
 
+import json
+
 END = {'left': 'ляв', 'right': 'десен'}
 
 
@@ -28,15 +30,18 @@ def steps_from_bends(bends, flat, order=None):
         elif end != prev_end:
             notes.append(f'Завъртете детайла на 180°: късата страна към упора ({END[end]} край)')
         steps.append({'seq': i, 'angle_deg': b['angle'], 'x_mm': round(x, 1), 'flip': prev_dir is not None and b['dir'] != prev_dir,
-                      'notes': '; '.join(notes) or None, 'back_end': end, 'bend_dir': b['dir'], **({'length_mm': b['length']} if b.get('length') else {})})
+                      'notes': '; '.join(notes) or None, 'back_end': end, 'bend_dir': b['dir'], **({'length_mm': b['length']} if b.get('length') else {}), **({'inner_radius_mm': b['radius']} if b.get('radius') else {}), **({'line_json': json.dumps(b['line'])} if b.get('line') else {})})
         prev_dir, prev_end = b['dir'], end
     return steps
 
 
 def steps_from_unfold(unfold):
     """flashing-style unfold dict -> steps (see steps_from_bends)."""
-    return steps_from_bends([{'pos': b['line'], 'angle': b['angle'], 'dir': b['dir'], 'note': 'Подгъвка (затваряне на ръба)' if b['kind'] == 'hem' else None}
-                             for b in unfold['bends']], unfold['flat_length'])
+    # a tapered part's bend lines are slanted (y = 0 -> y = length): the step stands at the middle of its line, like the DXF-based steps
+    L, f0, f1 = unfold.get('length') or 0.0, unfold['flat_length'], unfold.get('flat_length_end', unfold['flat_length'])
+    return steps_from_bends([{'pos': (b['line'] + b.get('line_end', b['line'])) / 2, 'angle': b['angle'], 'dir': b['dir'], 'note': 'Подгъвка (затваряне на ръба)' if b['kind'] == 'hem' else None,
+                              **({'radius': b['radius']} if b['kind'] == 'bend' and b.get('radius') else {}), **({'line': [b['line'], -L / 2, b.get('line_end', b['line']), L / 2]} if L else {})}
+                             for b in unfold['bends']], (f0 + f1) / 2)
 
 
 def legs_around(here, done, flat):

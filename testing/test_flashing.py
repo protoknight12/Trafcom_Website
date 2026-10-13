@@ -7,6 +7,7 @@ Run with:
 """
 import atexit
 import io
+import json
 import os
 import tempfile
 
@@ -253,9 +254,9 @@ def test_dxf_layers_units_and_pricing_ignores_bend_lines(client, tmp_path):
     doc = ezdxf.read(io.StringIO(res.get_data(as_text=True)))
     assert doc.header.get('$INSUNITS') == 4 and doc.header.get('$MEASUREMENT') == 1  # millimetres, metric
     assert doc.header.get('$DIMLFAC', 1.0) == 1.0  # a 100x linear factor made SolidWorks import 100 mm as 10000 mm
-    assert doc.layers.get('BEND_UP').dxf.linetype == 'DASHED' and 'DASHED' in doc.linetypes
+    assert doc.layers.get('BEND_UP_90_R2').dxf.linetype == 'DASHED' and 'DASHED' in doc.linetypes   # the angle and the inner radius travel in the layer name
     layers = sorted(e.dxf.layer for e in doc.modelspace())
-    assert layers == ['BEND_UP', 'BEND_UP', 'CUT']
+    assert layers == ['BEND_UP_90_R2', 'BEND_UP_90_R2', 'CUT']
     path = tmp_path / 'f.dxf'
     path.write_bytes(res.data)
     w, h, total, pierces, _ = analyze_dxf_geometry(str(path))
@@ -326,3 +327,31 @@ def test_flashing_program_from_profile(client):
     progs = BendProgram.query.order_by(BendProgram.version).all()
     assert [(p.version, p.status) for p in progs] == [(1, 'approved'), (2, 'draft')] and r3['version'] == 2 and progs[1].name == progs[0].name
     assert len(progs[1].steps) == 2 and progs[1].steps[0].back_end
+
+
+def test_saving_a_flashing_detail_keeps_the_3d_step(client):
+    pytest.importorskip('OCP')
+    from app import Detail, DetailDxfFile, MaterialPrice
+    db.session.add_all([MaterialPrice(key='k', display_name='M', type='sheets', cost_per_m2=1),
+                        User(username='qa_adm2', password=generate_password_hash('irrelevant123'), role='admin')])
+    db.session.commit()
+    from flask import g
+    g.pop('_login_user', None)
+    admin = flask_app.test_client()
+    admin.post('/login', data={'username': 'qa_adm2', 'password': 'irrelevant123'})
+    g.pop('_login_user', None)
+    body = {**BASE, 'profile': 'HAT', 'flanges': [20, 30, 60, 30, 20], 'angles': [90] * 4, 'flanges_end': [20, 30, 40, 30, 20]}   # tapered
+    dxf = admin.post('/api/flashing/dxf', json=body).data
+    r = admin.post('/api/quick-create-detail', data={'name': 'Обл', 'material': 'k', 'file': (io.BytesIO(dxf), 'f.dxf'), 'flashing_json': json.dumps(body)}, content_type='multipart/form-data')
+    assert r.status_code == 200 and r.get_json()['step_note'] is None, r.get_data(as_text=True)
+    files = {f.original_filename.rsplit('.', 1)[1]: f for f in DetailDxfFile.query.filter_by(detail_id=Detail.query.one().id)}
+    assert set(files) == {'dxf', 'step'}
+    m = admin.get(f"/details/files/{files['step'].id}/mesh").get_json()
+    assert len(m['indices']) > 100 and m['bbox'][1][1] == pytest.approx(1000.0, abs=0.01)           # the 3D body is as long as the cladding
+    # hems cannot be lofted: the detail is still saved, with the reason
+    hem = {**BASE, 'profile': 'L', 'flanges': [30, 30], 'angles': [90], 'hem_start': True, 'hem_length': 10}
+    r2 = admin.post('/api/quick-create-detail', data={'name': 'Обл2', 'material': 'k', 'file': (io.BytesIO(admin.post('/api/flashing/dxf', json=hem).data), 'g.dxf'), 'flashing_json': json.dumps(hem)},
+                    content_type='multipart/form-data')
+    assert r2.status_code == 200 and 'STEP' in r2.get_json()['step_note'] or 'hem' in r2.get_json()['step_note']
+    for f in DetailDxfFile.query.all():
+        os.remove(os.path.join(flask_app.config['DETAIL_DXF_FOLDER'], f.filename))

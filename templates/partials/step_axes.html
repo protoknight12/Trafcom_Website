@@ -1,0 +1,31 @@
+{# All axes of one bend for typing into the machine by hand (app._program_checks -> checks[step.id].axes). Inline styles: it is printed on the operator sheet too. #}
+{% macro step_axes(c) %}
+{% set a = c.axes if c else none %}
+{% if a %}
+<div style="display:flex;flex-wrap:wrap;gap:6px;margin:4px 0;break-inside:avoid">
+    {% for chip in (
+        ('Y1 = Y2', a.ys.bottom if a.ys else a.y, 'mm', (('допир ' ~ ('%.2f'|format(a.ys.contact)) ~ ' · mute ' ~ ('%.2f'|format(a.ys.mute)) ~ ' · дълбочина ' ~ ('%.2f'|format(a.y))) if a.ys else ('ход от допир ' ~ ('%.2f'|format(a.travel)) ~ ' mm' if a.travel is not none else ''))),
+        ('X', a.x, 'mm', ('стена ' ~ ('%g'|format(a.x_wall)) ~ ' mm') if a.x_wall is not none else ''),
+        ('X1', a.x1, 'mm', 'при Z1 - линията на огъване не е успоредна на инструмента') if a.x1 is not none else none,
+        ('X2', a.x2, 'mm', 'при Z2') if a.x2 is not none else none,
+        ('R', a.r if a.r is not none else a.r_suggest, 'mm', '' if a.r is not none else ('препоръчано (на равнината на матрицата)' if a.r_suggest is not none else 'не е зададено')),
+        ('Z1', a.z[0] if a.z else none, 'mm', ''),
+        ('Z2', a.z[1] if a.z else none, 'mm', ''),
+        ('Ъгъл', a.angle, '°', ('+' ~ ('%g'|format(a.ob)) ~ '° пружиниране') if a.ob else '')) if chip is not none %}
+    {% set lab, val, unit, sub = chip %}
+    {% if not (lab == 'X' and a.x1 is not none) %}
+    <div style="border:1px solid #888;border-radius:5px;padding:3px 8px;min-width:78px;background:#fff;color:#000">
+        <div style="font-size:.72em;color:#555">{{ lab }}</div>
+        <div style="font-size:1.15em;font-weight:bold">{% if val is none %}-{% else %}{{ ('%.2f'|format(val)) if lab in ('Y1 = Y2', 'R') else ('%g'|format(val)) }} {{ unit }}{% endif %}</div>
+        {% if sub %}<div style="font-size:.7em;color:#555">{{ sub }}</div>{% endif %}
+    </div>
+    {% endif %}
+    {% endfor %}
+</div>
+{% endif %}
+{% endmacro %}
+
+{% macro axes_legend() %}
+<small style="display:block;margin:6px 0;color:#555">Y1 = Y2 (Delem DA-69S): расте надолу; дъно = ToolReference (338) - височина на поансона - височина на матрицата + дълбочина на огъването (с пружинирането); "допир" е Y, при който върхът докосва листа, "mute" - къде бързото затваряне минава на натискане (на 4 mm над листа). Изведено от файловете на машината - сверете с пробно огъване.
+    X: ос на упора (носът на езика); R: височина на упора (на равнината на матрицата = височината на матрицата); Z1/Z2: упорите от левия край на машината.</small>
+{% endmacro %}

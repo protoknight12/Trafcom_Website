@@ -4,6 +4,7 @@
 // tools are as wide as the part + margin; the part is boxes per centre-line segment. The fingers use the controller's real plan outlines.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { flatSlices, mapSlices, sliceCuts, bendAllowance } from './part_view.js';
 
 const sim = JSON.parse(document.getElementById('simdata').textContent);
 const M = sim.machine || {};
@@ -40,6 +41,7 @@ const mats = { die: mat(0x8fa0b0), punch: mat(0xcfd8e0), clamp: mat(0x7d8a97), f
     frame: mat(0x9db4cc, 0.5), ram: mat(0x6f8299), bed: mat(0x4a5560), holder: mat(0x6b7886), crowning: mat(0xc9a227), rail: mat(0x9aa5b1), beam: mat(0x2f6f9f),
     arm: mat(0x7d8a97), fbody: mat(0x3d7a52), panel: mat(0x22262b), screen: mat(0x2f8fbf), floor: mat(0x1d2126) };
 
+mats.part.side = mats.hit.side = THREE.DoubleSide;
 const lineMat = new THREE.LineBasicMaterial({ color: 0xaab6c4 });
 const staticG = new THREE.Group(), dynG = new THREE.Group();
 scene.add(staticG, dynG);
@@ -220,14 +222,48 @@ function draw(f) {
     const bnose = Math.min(...env.bg_beam.map(p => p[0]));
     for (const sgn of [-1, 1]) add(box('bg_beam', mats.beam, 130, 90, 90, bnose + 55, Math.min(...env.bg_beam.map(p => p[1])) + 20, sgn * (BF / 2 - 90), dynG));
     fingerMeshes(lerpPts(a.finger, b.finger, u), add, bnose);
-    const strip = tag(shapeMesh(sheetOutline(lerpPts(a.part, b.part, u), T, st.inner_radius), dynG.userData.hit && stopAt >= 0 && f >= stopAt ? mats.hit : mats.part, st.bend_len || W), 'part');
+    const partMat = dynG.userData.hit && stopAt >= 0 && f >= stopAt ? mats.hit : mats.part;
+    const ps = partSlices(cur);
+    const strip = ps ? tag(new THREE.Mesh(realPart(ps, lerpPts(a.part, b.part, u), st.inner_radius), partMat), 'part')
+                     : tag(shapeMesh(sheetOutline(lerpPts(a.part, b.part, u), T, st.inner_radius), partMat, st.bend_len || W), 'part');   // no flat pattern known: the cross-section as a strip
     add(strip);
+}
+
+// The part as it really is: the detail's flat pattern (outline, holes, notches, rounded corners - sim.part, from its DXF) folded onto the centre line of the cross-section.
+// The flat pattern is cut into slices and triangulated once per step (partSlices); every frame only places the vertices on the current centre line (realPart).
+// Orientation: the gauge end of the flat pattern is the back end of the chain; a part that has to be turned over (a bend down) is mirrored across the bend line.
+// ponytail: only the current step's orientation is drawn; the flat length is stretched to the centre-line length (they differ by <1% - K 0.44 vs 0.5).
+const partCache = new Map();
+function partSlices(i) {
+    if (!sim.part) return null;
+    if (!partCache.has(i)) {
+        const D = sim.part, st = sim.steps[i], L = D.L, flip = st.back_end === 'left', zs = (flip ? -1 : 1) * (st.bend_dir === 'down' ? -1 : 1);
+        const uOf = c => (flip ? L - c : c);
+        const cuts = sliceCuts(L, D.bends, D.thickness, b => { const h = bendAllowance(b, D.thickness) / 2, c = uOf(b.pos); return [c - h, c + h]; });
+        partCache.set(i, flatSlices(D.loops.map(lp => lp.map(([c, w]) => [uOf(c), zs * w])), cuts));
+    }
+    return partCache.get(i);
+}
+function realPart(slices, line, rIn) {
+    const path = sheetPath(line, T, rIn), cum = [0];
+    for (let i = 1; i < path.length; i++) cum.push(cum[i - 1] + Math.hypot(path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1]));
+    const k = cum[cum.length - 1] / sim.part.L;
+    const ang = path.map((q, i) => { const a = path[Math.max(i - 1, 0)], b = path[Math.min(i + 1, path.length - 1)]; return Math.atan2(b[1] - a[1], b[0] - a[0]); });   // the tangent angle at each vertex: smooth shading round the bends
+    return mapSlices(slices, T, (u, z, w) => {
+        const s = Math.min(Math.max(u * k, 0), cum[cum.length - 1]);
+        let lo = 0, hi = cum.length - 2;
+        while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (cum[mid] <= s) lo = mid; else hi = mid - 1; }
+        const seg = cum[lo + 1] - cum[lo] || 1, t = (s - cum[lo]) / seg;
+        const dx = (path[lo + 1][0] - path[lo][0]) / seg, dy = (path[lo + 1][1] - path[lo][1]) / seg;
+        const th = ang[lo] + (ang[lo + 1] - ang[lo]) * t, nx = -Math.sin(th), ny = Math.cos(th);
+        return [path[lo][0] + dx * seg * t - dy * w, path[lo][1] + dy * seg * t + dx * w, z, nx, ny];
+    });
 }
 
 // The sheet as ONE solid strip: the centre line with every bend rounded with the inner radius the calculation uses (bending.profile: 0.16 V), offset by +-T/2.
 // The outline is (left side) + (right side reversed). Free ends stay exactly on the centre-line ends (the finger touches that wall).
 // ponytail: one radius rule for every material (0.16 V; aluminium is a bit tighter, stainless a bit wider); a leg shorter than the arc needs gets a smaller radius.
-function sheetOutline(line, T, rIn) {
+function sheetPath(line, T, rIn) {
     const p = line.filter((q, i) => !i || Math.hypot(q[0] - line[i - 1][0], q[1] - line[i - 1][1]) > 1e-6);
     const dir = (a, b) => { const l = Math.hypot(b[0] - a[0], b[1] - a[1]); return [(b[0] - a[0]) / l, (b[1] - a[1]) / l]; };
     const path = [p[0]];
@@ -242,6 +278,11 @@ function sheetOutline(line, T, rIn) {
         for (let k = 0; k <= N; k++) { const a = a0 + s * phi * k / N; path.push([C[0] + R * Math.cos(a), C[1] + R * Math.sin(a)]); }
     }
     path.push(p[p.length - 1]);
+    return path;
+}
+function sheetOutline(line, T, rIn) {
+    const dir = (a, b) => { const l = Math.hypot(b[0] - a[0], b[1] - a[1]); return [(b[0] - a[0]) / l, (b[1] - a[1]) / l]; };
+    const path = sheetPath(line, T, rIn);
     const nrm = i => { const a = path[Math.max(i - 1, 0)], b = path[Math.min(i + 1, path.length - 1)], d = dir(a, b); return [-d[1], d[0]]; };
     const side = sg => path.map((q, i) => { const n = nrm(i); return [q[0] + sg * n[0] * T / 2, q[1] + sg * n[1] * T / 2]; });
     return side(1).concat(side(-1).reverse());
