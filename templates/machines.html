@@ -139,7 +139,7 @@
                     {% if current_user.is_admin %}
                     <td class="text-right">
                         <form action="{{ url_for('delete_machine', id=m.id) }}" method="POST"
-                              onsubmit="return confirm('Изтриване на машина &quot;{{ m.name|e }}&quot;? Всички свързани поръчки и чертежи ще останат, но без назначена машина.');" style="display:inline;">
+                              data-confirm="Изтриване на машина &quot;{{ m.name }}&quot;? Всички свързани поръчки и чертежи ще останат, но без назначена машина." style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Изтрий</button>
                         </form>

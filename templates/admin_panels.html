@@ -86,7 +86,7 @@
                     </td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_panel', panel_id=p.id) }}" method="POST"
-                              onsubmit="return confirm('Изтриване на табло &quot;{{ p.name|e }}&quot;?');" style="display:inline;">
+                              data-confirm="Изтриване на табло &quot;{{ p.name }}&quot;?" style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Изтрий</button>
                         </form>

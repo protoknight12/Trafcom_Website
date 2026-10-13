@@ -144,7 +144,7 @@
                         <br><span class="text-muted text-small">до {{ latest_cal.next_due_date.strftime('%d.%m.%Y') }}</span>
                         {% endif %}
                         <br>
-                        <button type="button" class="btn-secondary" style="padding: 4px 8px; font-size: 0.72rem; margin-top: 4px;" onclick="openCalModal({{ instrument.id }}, '{{ instrument.name|e }}')">+ Калибриране</button>
+                        <button type="button" class="btn-secondary" style="padding: 4px 8px; font-size: 0.72rem; margin-top: 4px;" data-name="{{ instrument.name }}" onclick="openCalModal({{ instrument.id }}, this.dataset.name)">+ Калибриране</button>
                         {% if instrument.calibration_records|length > 0 %}
                         <details class="cal-history">
                             <summary>История ({{ instrument.calibration_records|length }})</summary>
@@ -178,7 +178,7 @@
                     </td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_measuring_instrument', instrument_id=instrument.id) }}" method="POST"
-                              onsubmit="return confirm('Изтриване на инструмент &quot;{{ instrument.name|e }}&quot;? Това е възможно само ако няма QC измервания, направени с него.');" style="display:inline;">
+                              data-confirm="Изтриване на инструмент &quot;{{ instrument.name }}&quot;? Това е възможно само ако няма QC измервания, направени с него." style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Изтрий</button>
                         </form>

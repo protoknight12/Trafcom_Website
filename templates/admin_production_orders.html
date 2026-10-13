@@ -109,7 +109,7 @@
                             </form>
                             {% endif %}
                             <form method="POST" action="{{ url_for('delete_production_order', order_id=job.id) }}" style="display: inline;"
-                                  onsubmit="return confirm('{% if job.status == "done" %}Задачата е завършена - изтриването ѝ ще върне наличностите (материал +{{ job.actual_display }} {{ job.unit_label }}, детайл -{{ job.quantity }} бр.). Потвърждавате ли?{% else %}Изтриване на задачата?{% endif %}');">
+                                  data-confirm="{% if job.status == 'done' %}Задачата е завършена - изтриването ѝ ще върне наличностите (материал +{{ job.actual_display }} {{ job.unit_label }}, детайл -{{ job.quantity }} бр.). Потвърждавате ли?{% else %}Изтриване на задачата?{% endif %}">
                                 {% include 'partials/csrf_field.html' %}
                                 <button type="submit" class="btn-delete" style="padding: 6px 12px; font-size: 0.85rem;">Изтрий</button>
                             </form>

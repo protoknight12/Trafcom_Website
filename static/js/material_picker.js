@@ -182,9 +182,15 @@
                     groupRow.className = 'mp-row mp-group-row';
                     const expanded = !!q; // auto-expand groups when actively searching
                     if (expanded) groupRow.classList.add('expanded');
-                    groupRow.innerHTML = '<span class="mp-chevron">▶</span><span>' +
-                        item.name + (dimsLabel(item) ? ' (' + dimsLabel(item) + ')' : '') + '</span>' +
-                        '<span class="mp-lot-count">' + item.opts.length + ' лота</span>';
+                    const chevron = document.createElement('span');
+                    chevron.className = 'mp-chevron';
+                    chevron.textContent = '▶';
+                    const nameSpan = document.createElement('span');
+                    nameSpan.textContent = item.name + (dimsLabel(item) ? ' (' + dimsLabel(item) + ')' : '');
+                    const lotCount = document.createElement('span');
+                    lotCount.className = 'mp-lot-count';
+                    lotCount.textContent = item.opts.length + ' лота';
+                    groupRow.append(chevron, nameSpan, lotCount);
                     rows.push(groupRow);
                     const leafRows = (q ? matchingOpts : item.opts).map(function (o) {
                         const leaf = document.createElement('div');

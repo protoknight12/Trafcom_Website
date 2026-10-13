@@ -268,6 +268,21 @@
         row.appendChild(btn);
     }
 
+    // --- confirm before submit/click --------------------------------------
+    // <form data-confirm="Изтриване на ...?"> or <button|a data-confirm="..."> -
+    // the message lives in a data attribute (never in an inline JS string, where
+    // a quote in a name would break out of it). Capture phase + stopImmediate
+    // Propagation: on cancel no other handler (dialogs, fetch submits) runs.
+    // A form's data-confirm is asked once, on submit - its buttons are skipped.
+    document.addEventListener('submit', function (e) {
+        const msg = e.target.dataset && e.target.dataset.confirm;
+        if (msg && !confirm(msg)) { e.preventDefault(); e.stopImmediatePropagation(); }
+    }, true);
+    document.addEventListener('click', function (e) {
+        const el = e.target.closest('[data-confirm]:not(form)');
+        if (el && !confirm(el.dataset.confirm)) { e.preventDefault(); e.stopImmediatePropagation(); }
+    }, true);
+
     // --- wiring -----------------------------------------------------------
     document.addEventListener('click', function (e) {
         const closer = e.target.closest('[data-dialog-close]');

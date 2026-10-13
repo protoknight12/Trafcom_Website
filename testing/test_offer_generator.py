@@ -41,6 +41,7 @@ assert sanitize_rich_text('<img src=x onerror=alert(1)>text') == 'text'
 assert sanitize_rich_text('<div>line1</div><div>line2</div>') == 'line1<br>line2'
 
 with app.app_context():
+    db.create_all()  # fresh throwaway SQLite (see testing/__init__.py)
     OfferItem.query.delete()
     Offer.query.delete()
     db.session.commit()

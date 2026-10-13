@@ -114,7 +114,7 @@
                 <td class="text-small text-muted">{{ c.fov|round|int }}° · {{ c.range_m|round|int }} м</td>
                 <td class="text-right"><a href="{{ url_for('admin_camera_calibrate', cam_id=c.id) }}" data-frame="stay" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;" title="Посока, наклон и зрително поле по известни обекти">🎯 Калибрирай</a>
                     <a href="{{ url_for('edit_camera_window', cam_id=c.id) }}" data-frame class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редактирай</a></td>
-                <td class="text-right"><form action="{{ url_for('admin_delete_camera', cam_id=c.id) }}" method="POST" onsubmit="return confirm('Изтриване на камера &quot;{{ c.name|e }}&quot;?');" style="display:inline;">
+                <td class="text-right"><form action="{{ url_for('admin_delete_camera', cam_id=c.id) }}" method="POST" data-confirm="Изтриване на камера &quot;{{ c.name }}&quot;?" style="display:inline;">
                     {% include 'partials/csrf_field.html' %}<button type="submit" class="btn-delete">Изтрий</button></form></td>
             </tr>
             {% endfor %}

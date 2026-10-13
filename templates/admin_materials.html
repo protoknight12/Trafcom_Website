@@ -268,7 +268,7 @@
                     </td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_material', key=material.key) }}" method="POST"
-                              onsubmit="return confirm('Изтриване на материал &quot;{{ material.display_name|e }}&quot;? Това е възможно само ако няма детайли, които го използват.');" style="display:inline;">
+                              data-confirm="Изтриване на материал &quot;{{ material.display_name }}&quot;? Това е възможно само ако няма детайли, които го използват." style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Изтрий</button>
                         </form>
@@ -319,7 +319,7 @@
                                     "has_cutting": t.has_cutting, "is_round": t.is_round, "sort_order": t.sort_order}|tojson|forceescape }}'>Редактирай</button>
                         {% if not type_usage.get(t.key) %}
                         <form action="{{ url_for('admin_delete_material_type', type_id=t.id) }}" method="POST" style="display:inline;"
-                              onsubmit="return confirm('Изтриване на типа &quot;{{ t.label|e }}&quot;?');">
+                              data-confirm="Изтриване на типа &quot;{{ t.label }}&quot;?">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Изтрий</button>
                         </form>

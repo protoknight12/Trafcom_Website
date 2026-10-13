@@ -48,7 +48,7 @@
         </form>
         <p style="margin-top:10px">
             {% for c in classes %}
-            <form action="{{ url_for('admin_object_class_delete', class_id=c.id) }}" method="POST" style="display:inline" onsubmit="return confirm('Изтриване на „{{ c.name|e }}“ и всичките му рамки?');">
+            <form action="{{ url_for('admin_object_class_delete', class_id=c.id) }}" method="POST" style="display:inline" data-confirm="Изтриване на „{{ c.name }}“ и всичките му рамки?">
                 {% include 'partials/csrf_field.html' %}
                 <span class="btn-secondary" style="padding:4px 10px;display:inline-block">{{ c.name }} <button type="submit" class="btn-delete" style="padding:0 6px;margin-left:4px">✕</button></span>
             </form>

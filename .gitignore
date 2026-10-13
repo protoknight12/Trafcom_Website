@@ -10,6 +10,13 @@ controlled_documents/
 calibration_certificates/
 training_certificates/
 
+# Pre-update database dumps written by deploy/update.sh on the server
+/backups/
+
+# Local-only notes - a chat transcript and a staff questionnaire, never to GitHub
+/user_prompts_log.md
+/wyprosi
+
 # Local-only dev docs - not part of the public site repo
 CLAUDE.md
 

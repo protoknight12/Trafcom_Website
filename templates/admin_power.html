@@ -322,7 +322,7 @@
         {%- endmacro %}
 
         {% macro delete_button(url, name, label) -%}
-        <form action="{{ url }}" method="POST" onsubmit="return confirm('{{ label }} &quot;{{ name|e }}&quot;?');" style="display:inline;">
+        <form action="{{ url }}" method="POST" data-confirm="{{ label }} &quot;{{ name }}&quot;?" style="display:inline;">
             {% include 'partials/csrf_field.html' %}
             <button type="submit" class="btn-delete">Премахни</button>
         </form>

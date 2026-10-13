@@ -129,7 +129,8 @@ def test_rename_device(admin_client):
         db.session.commit()
         device_id = d.id
 
-    admin_client.post(f'/admin/power/devices/{device_id}/rename', data={'name': 'New Name'})
+    # the route is the whole edit dialog now - an "ip" device must send its host along, as the form does
+    admin_client.post(f'/admin/power/devices/{device_id}/rename', data={'name': 'New Name', 'host': '10.0.0.17'})
     with flask_app.app_context():
         assert ShellyDevice.query.get(device_id).name == 'New Name'
         # host and any machine links are untouched by a rename

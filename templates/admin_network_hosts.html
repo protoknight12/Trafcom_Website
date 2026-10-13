@@ -107,13 +107,13 @@
                                     "notes": h.notes}|tojson|forceescape }}'>Редактирай</button>
                         {% if h.ip_mode == 'dynamic' %}
                         <form action="{{ url_for('admin_network_host_make_static', host_id=h.id) }}" method="POST"
-                              onsubmit="return confirm('Реално ще се изпрати команда към живия DHCP сървър, за да стане {{ h.mac_address }} статичен. Продължи?');" style="display:inline;">
+                              data-confirm="Реално ще се изпрати команда към живия DHCP сървър, за да стане {{ h.mac_address }} статичен. Продължи?" style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-secondary" style="padding:5px 10px; font-size:0.8rem;" title="Изпраща make-static към живия DHCP сървър">📡 Статичен</button>
                         </form>
                         {% endif %}
                         <form action="{{ url_for('admin_network_delete_host', host_id=h.id) }}" method="POST"
-                              onsubmit="return confirm('Изтриване на хост {{ h.mac_address }}?');" style="display:inline;">
+                              data-confirm="Изтриване на хост {{ h.mac_address }}?" style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete" style="padding:5px 10px; font-size:0.8rem;">Изтрий</button>
                         </form>

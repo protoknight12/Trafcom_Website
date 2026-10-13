@@ -104,7 +104,7 @@
                 <strong>{{ _('Обща сума:') }} {{ "%.2f"|format(order.total_price) }} €</strong>
                 {% if order.can_cancel %}
                 <form method="POST" action="{{ url_for('cancel_order', order_id=order.id) }}"
-                      onsubmit="return confirm('{{ _('Наистина ли искате да отмените поръчка %(order_number)s?', order_number=order.order_number) }}');">
+                      data-confirm="{{ _('Наистина ли искате да отмените поръчка %(order_number)s?', order_number=order.order_number) }}">
                     {% include 'partials/csrf_field.html' %}
                     <button type="submit" class="btn-delete">{{ _('Отмени поръчка') }}</button>
                 </form>

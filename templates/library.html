@@ -144,7 +144,7 @@
                 <a href="{{ url_for('upload') }}" class="btn-submit" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; text-decoration: none;">+ {{ _('Нов чертеж') }}</a>
                 {% if uploads %}
                 <form action="{{ url_for('delete_all_dxf_files') }}" method="POST"
-                      onsubmit="return confirm('{{ _('Да се изтрият ли всички %(count)s файла от библиотеката? Действието е необратимо.', count=uploads|length) }}');">
+                      data-confirm="{{ _('Да се изтрият ли всички %(count)s файла от библиотеката? Действието е необратимо.', count=uploads|length) }}">
                     {% include 'partials/csrf_field.html' %}
                     <button type="submit" class="btn-delete">{{ _('Изтрий всички') }}</button>
                 </form>

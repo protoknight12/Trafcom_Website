@@ -204,9 +204,9 @@
                     <td class="text-right">
                         {% if current_user.is_admin or current_user.role == 'quality_control' %}
                         <div style="display: flex; gap: 6px; justify-content: flex-end;">
-                            <button type="button" class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;" onclick="openRevisionModal({{ doc.id }}, '{{ doc.document_no|e }}')">+ Версия</button>
+                            <button type="button" class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;" data-document-no="{{ doc.document_no }}" onclick="openRevisionModal({{ doc.id }}, this.dataset.documentNo)">+ Версия</button>
                             <form action="{{ url_for('admin_delete_document', document_id=doc.id) }}" method="POST"
-                                  onsubmit="return confirm('Изтриване на документ &quot;{{ doc.document_no|e }}&quot;? Ще се изтрият и всички негови версии.');" style="display:inline;">
+                                  data-confirm="Изтриване на документ &quot;{{ doc.document_no }}&quot;? Ще се изтрият и всички негови версии." style="display:inline;">
                                 {% include 'partials/csrf_field.html' %}
                                 <button type="submit" class="btn-delete">Изтрий</button>
                             </form>

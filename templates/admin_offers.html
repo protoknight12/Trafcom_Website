@@ -68,7 +68,7 @@
                     </td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_offer_delete', offer_id=offer.id) }}" method="POST"
-                              onsubmit="return confirm('Изтриване на оферта № {{ offer.number }}?');" style="display:inline;">
+                              data-confirm="Изтриване на оферта № {{ offer.number }}?" style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Изтрий</button>
                         </form>

@@ -104,7 +104,8 @@ def test_reset_password_token_roundtrip(client, app):
     with app.app_context():
         token = _reset_serializer().dumps(user_id)
 
-    resp = client.post(f'/reset-password/{token}', data={'password': 'newpassword1'}, follow_redirects=True)
+    resp = client.post(f'/reset-password/{token}', data={'password': 'newpassword1', 'password_confirm': 'newpassword1'},
+                       follow_redirects=True)
     assert resp.status_code == 200
 
     with app.app_context():

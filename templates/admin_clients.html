@@ -111,7 +111,7 @@
                     </td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_client', client_id=client.id) }}" method="POST"
-                              onsubmit="return confirm('Изтриване на клиента &quot;{{ client.name|e }}&quot;?');" style="display:inline;">
+                              data-confirm="Изтриване на клиента &quot;{{ client.name }}&quot;?" style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Изтрий</button>
                         </form>
@@ -205,7 +205,7 @@
                     </td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_deliverer', deliverer_id=deliverer.id) }}" method="POST"
-                              onsubmit="return confirm('Изтриване на куриера &quot;{{ deliverer.name|e }}&quot;?');" style="display:inline;">
+                              data-confirm="Изтриване на куриера &quot;{{ deliverer.name }}&quot;?" style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Изтрий</button>
                         </form>

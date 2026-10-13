@@ -37,6 +37,7 @@ from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect, CSRFError
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
+from werkzeug.middleware.proxy_fix import ProxyFix
 import ezdxf
 from bending.unfold import unfold_section, k_factor, bd_table
 from bending.controller import r_default, y_positions
@@ -77,6 +78,12 @@ except ImportError:
     pass
 
 app = Flask(__name__)
+# In production gunicorn listens on 127.0.0.1 behind nginx (deploy/
+# nginx_trafcombg.conf), so without this every visitor's remote_addr is
+# 127.0.0.1 and the rate limiter below puts the whole internet in one
+# bucket. Trusts exactly ONE proxy hop (nginx) for X-Forwarded-For/-Proto -
+# raise x_for/x_proto only if another proxy is ever put in front of nginx.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
 # ----------------- APP CONFIGURATION -----------------
 # No hardcoded fallbacks - both must come from the environment (.env locally,
@@ -197,6 +204,8 @@ app.jinja_env.globals['localized'] = localized
 _anthropic_workspace_id = os.environ.get('ANTHROPIC_WORKSPACE_ID')
 anthropic_client = anthropic.Anthropic(
     default_headers={'anthropic-workspace-id': _anthropic_workspace_id} if _anthropic_workspace_id else None,
+    # The SDK default (10 min, 2 retries) lets one hung call hold a request thread for far too long.
+    timeout=30.0, max_retries=1,
 ) if os.environ.get('ANTHROPIC_API_KEY') else None
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -9018,8 +9027,9 @@ def api_flashing_presets_delete(preset_id):
 # (forgot_password()) must show the same message either way, to avoid
 # leaking which emails are registered.
 def send_email(to_addr, subject, body):
-    host = os.environ.get('SMTP_HOST', 'localhost')
-    port = int(os.environ.get('SMTP_PORT', '25'))
+    # "or", not a .get() default: .env.example ships these as blank lines, and a blank SMTP_PORT crashed int()
+    host = os.environ.get('SMTP_HOST') or 'localhost'
+    port = int(os.environ.get('SMTP_PORT') or 25)
     username = os.environ.get('SMTP_USER')
     password = os.environ.get('SMTP_PASSWORD')
 
@@ -11191,6 +11201,9 @@ def edit_text_window():
     if not key:
         flash('Липсва ключ на текста.', 'danger')
         return redirect(url_for('dashboard'))
+    if key.startswith('settings.'):  # internal settings share this table - never editable as page text
+        flash('Нямате достъп до тази страница.', 'danger')
+        return redirect(url_for('dashboard'))
     value = get_text(key, request.args.get('default', ''))
     return render_template(
         'edit_window.html', item_label='текст', saved=request.args.get('saved') == '1',
@@ -11202,7 +11215,9 @@ def edit_text_window():
 @app.route('/content-text/<path:key>/update', methods=['POST'])
 @login_required
 def update_text(key):
-    if not current_user.can_edit_content:
+    # 'settings.*' rows in EditableText are internal settings (registration
+    # lock, heat pump host/tariff...) with their own admin-only setters.
+    if not current_user.can_edit_content or key.startswith('settings.'):
         flash('Нямате достъп до тази страница.', 'danger')
         return redirect(url_for('dashboard'))
 
@@ -12198,7 +12213,8 @@ def upload_detail_dxf(detail_id):
     nothing else ever populates it after creation. Only fills in *missing*
     geometry, never overwrites existing data - once a detail has real cut
     data, further .dxf uploads here are just reference/revision files like
-    any other attachment.
+    any other attachment. Staff only: a customer's upload is always just an
+    attachment and never sets a catalog detail's geometry or price.
     """
     detail = Detail.query.get_or_404(detail_id)
     if not current_user.is_staff and not catalog_item_allowed(detail, current_user.client):
@@ -12216,7 +12232,7 @@ def upload_detail_dxf(detail_id):
         uploaded_by_id=current_user.id
     ))
 
-    if not detail.total_length and file.filename.lower().endswith('.dxf'):
+    if current_user.is_staff and not detail.total_length and file.filename.lower().endswith('.dxf'):
         path = os.path.join(app.config['DETAIL_DXF_FOLDER'], stored_filename)
         width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(path)
         if width is not None:
@@ -17898,6 +17914,7 @@ def admin_power_set_device_machines(device_id):
 
 @app.route('/admin/power/data')
 @role_required('admin')
+@limiter.exempt  # polled on a timer by its own page (see solar-roof/data)
 def admin_power_data():
     """
     JSON feed polled by admin_power.html. Polling happens server-side so the
@@ -18881,6 +18898,7 @@ def admin_battery_cabinets():
 
 @app.route('/admin/battery-cabinets/data')
 @role_required(['admin', 'worker'])
+@limiter.exempt  # polled on a timer by its own page (see solar-roof/data)
 def admin_battery_cabinets_data():
     """JSON feed polled by admin_battery_cabinets.html for each stack's live
     SOC/voltage/temperature - see _battery_stack_snapshots()."""
@@ -19337,6 +19355,7 @@ def admin_temperature_sensors():
 
 @app.route('/admin/temperature-sensors/data')
 @role_required(['admin', 'worker'])
+@limiter.exempt  # polled on a timer by its own page (see solar-roof/data)
 def admin_temperature_sensors_data():
     """JSON feed polled by admin_temperature_sensors.html - live temperature/
     humidity/battery per sensor, keyed by id."""
@@ -20321,6 +20340,7 @@ def admin_convectors():
 
 @app.route('/admin/convectors/data')
 @role_required(['admin', 'worker'])
+@limiter.exempt  # polled on a timer by its own page (see solar-roof/data)
 def admin_convectors_data():
     """JSON feed polled by admin_convectors.html - live on/off state per convector."""
     convectors = Convector.query.all()
@@ -22033,6 +22053,7 @@ def admin_network():
 
 @app.route('/admin/network/data')
 @role_required('admin')
+@limiter.exempt  # polled on a timer by its own page (see solar-roof/data)
 def admin_network_data():
     """JSON feed polled by admin_network.html for live online/offline status - see _ping_fleet()."""
     devices = NetworkDevice.query.all()
@@ -22707,6 +22728,7 @@ def admin_update_convector_position(conv_id):
 
 @app.route('/admin/factory-map/room/<int:room_id>/data')
 @role_required(['admin', 'worker'])
+@limiter.exempt  # polled on a timer by its own page (see solar-roof/data)
 def admin_factory_map_room_data(room_id):
     """JSON feed polled by admin_factory_map_room.html - live power per
     Machine/ElectricalPanel plus live on/off per Convector (each keyed by
@@ -22758,6 +22780,7 @@ def admin_factory_map_overview():
 
 @app.route('/admin/factory-map/overview/data')
 @role_required(['admin', 'worker'])
+@limiter.exempt  # polled on a timer by its own page (see solar-roof/data)
 def admin_factory_map_overview_data():
     """JSON feed polled by admin_factory_map_overview.html - live power per
     ElectricalPanel (keyed by id), site-wide (no room filter)."""
@@ -23498,6 +23521,16 @@ def _fuzzy_match(rows, name_of, query, limit=5, cutoff=0.6):
     return [row for _, row in scored[:limit]]
 
 
+def _chat_catalog(model):
+    """Detail/Product rows the chat user may be told about: staff see the whole
+    catalog, anyone else only what catalog_item_allowed() gives their client
+    (public items within the client's allowlist + the client's own private ones)."""
+    rows = model.query.all()
+    if current_user.is_staff:
+        return rows
+    return [r for r in rows if catalog_item_allowed(r, _viewer_client())]
+
+
 @anthropic.beta_tool
 def search_catalog(query: str) -> str:
     """Търси в каталога на Трафком (материали, детайли, продукти) по име или марка - толерира леки правописни грешки - и връща наличност на склад.
@@ -23511,9 +23544,9 @@ def search_catalog(query: str) -> str:
     results = []
     for m in _fuzzy_match(MaterialPrice.query.all(), lambda x: x.display_name, query, limit=5):
         results.append(f'Материал: {format_material_option(m)} - наличност: {m.stock_quantity:g}')
-    for d in _fuzzy_match(Detail.query.all(), lambda x: x.name, query, limit=5):
+    for d in _fuzzy_match(_chat_catalog(Detail), lambda x: x.name, query, limit=5):
         results.append(f'Детайл: {d.name} - наличност: {d.stock_quantity:g} бр.')
-    for p in _fuzzy_match(Product.query.all(), lambda x: x.name, query, limit=5):
+    for p in _fuzzy_match(_chat_catalog(Product), lambda x: x.name, query, limit=5):
         results.append(f'Продукт: {p.name} - наличност: {p.stock_quantity:g} бр.')
     if not results:
         return f"Няма намерени резултати за '{query}' в каталога."
@@ -23535,7 +23568,7 @@ def list_services() -> str:
 
 @anthropic.beta_tool
 def most_expensive_items(limit: int = 5) -> str:
-    """Връща най-скъпите материали и детайли в каталога, подредени по цена низходящо - за въпроси от типа "кое е най-скъпото нещо на склад".
+    """Връща най-скъпите материали и детайли в каталога, подредени по цена низходящо - за въпроси от типа "кое е най-скъпото нещо на склад". Цената на материалите (доставна) се връща само за служители.
 
     Args:
         limit: Максимален брой резултати за всяка категория (по подразбиране 5, максимум 20).
@@ -23543,8 +23576,10 @@ def most_expensive_items(limit: int = 5) -> str:
     limit = max(1, min(limit, 20))
     results = []
     for m in MaterialPrice.query.order_by(MaterialPrice.cost_per_m2.desc()).limit(limit):
-        results.append(f'Материал: {format_material_option(m)} - {m.cost_per_m2:g} €/м² - наличност: {m.stock_quantity:g}')
-    for d in Detail.query.order_by(Detail.calculated_price.desc()).limit(limit):
+        # cost_per_m2 is the supplier delivery price - never shown to a customer.
+        price = f' - {m.cost_per_m2:g} €/м²' if current_user.is_staff else ''
+        results.append(f'Материал: {format_material_option(m)}{price} - наличност: {m.stock_quantity:g}')
+    for d in sorted(_chat_catalog(Detail), key=lambda x: x.calculated_price or 0, reverse=True)[:limit]:
         results.append(f'Детайл: {d.name} - {d.calculated_price:g} € - наличност: {d.stock_quantity:g} бр.')
     if not results:
         return 'Няма данни в каталога.'
@@ -23580,7 +23615,7 @@ def list_materials(material_type: str = '', offset: int = 0) -> str:
 
 @anthropic.beta_tool
 def get_material_details(name: str) -> str:
-    """Връща пълните характеристики на конкретен материал по име (толерира леки правописни грешки).
+    """Връща характеристиките на конкретен материал по име (толерира леки правописни грешки) - тип, размери, наличност; доставната цена само за служители.
 
     Args:
         name: Име или част от името на материала.
@@ -23589,10 +23624,11 @@ def get_material_details(name: str) -> str:
     if not matches:
         return f"Не намерих материал с име '{name}'."
     material = matches[0]
+    price = f'Цена: {material.cost_per_m2:g} €/м²\n' if current_user.is_staff else ''  # supplier delivery price
     return (
         f'{format_material_option(material)}\n'
         f'Тип: {material_type_labels().get(material.type, material.type)}\n'
-        f'Цена: {material.cost_per_m2:g} €/м²\n'
+        f'{price}'
         f'Наличност: {material.stock_quantity:g}'
     )
 
@@ -23604,10 +23640,10 @@ def list_products(offset: int = 0) -> str:
     Args:
         offset: Колко записа да пропусне - за следваща страница при повече от 30 резултата.
     """
-    q = Product.query.order_by(Product.name)
-    total = q.count()
+    visible = sorted(_chat_catalog(Product), key=lambda p: p.name)
+    total = len(visible)
     offset = max(0, offset)
-    products = q.offset(offset).limit(_PAGE_SIZE).all()
+    products = visible[offset:offset + _PAGE_SIZE]
     if not products:
         return 'В момента няма въведени продукти.' if offset == 0 else 'Няма повече резултати.'
     lines = []
@@ -23626,7 +23662,7 @@ def get_product_details(name: str) -> str:
     Args:
         name: Име или част от името на продукта.
     """
-    matches = _fuzzy_match(Product.query.all(), lambda x: x.name, name, limit=1)
+    matches = _fuzzy_match(_chat_catalog(Product), lambda x: x.name, name, limit=1)
     if not matches:
         return f"Не намерих продукт с име '{name}'."
     product = matches[0]
@@ -23722,7 +23758,11 @@ def get_machine_details(name: str) -> str:
     Args:
         name: Име или част от името на машината.
     """
-    matches = _fuzzy_match(ServiceMachineCard.query.all(), lambda x: x.title, name, limit=1)
+    cards = ServiceMachineCard.query
+    if not current_user.is_staff:
+        # page='hall' cards are internal machine dossiers - customers only get the public pages' cards.
+        cards = cards.filter(ServiceMachineCard.page.in_(('services', 'index')))
+    matches = _fuzzy_match(cards.all(), lambda x: x.title, name, limit=1)
     if not matches:
         return f"Не намерих машина с име '{name}'."
     card = matches[0]

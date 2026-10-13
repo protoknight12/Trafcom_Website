@@ -56,7 +56,8 @@ def admin_client(app):
 
 
 def _add_service(client, name, show_price):
-    data = {'name': name, 'price_per_hour_eur': '50.00', 'pricing_mode': 'time'}
+    # machine_type: services.html only lists a service that has a machine type, a visible price or a description
+    data = {'name': name, 'price_per_hour_eur': '50.00', 'pricing_mode': 'time', 'machine_type': 'QA'}
     if show_price:
         data['show_price'] = 'on'
     return client.post('/admin/services/add', data=data)

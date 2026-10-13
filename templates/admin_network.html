@@ -193,7 +193,7 @@
                                     "management_ip": d.management_ip, "mac_address": d.mac_address, "management_vlan": d.management_vlan,
                                     "notes": d.notes, "is_dhcp_server": d.is_dhcp_server}|tojson|forceescape }}'>Редактирай</button>
                         <form action="{{ url_for('admin_network_delete_device', device_id=d.id) }}" method="POST"
-                              onsubmit="return confirm('Изтриване на устройство &quot;{{ d.name|e }}&quot;?');" style="display:inline;">
+                              data-confirm="Изтриване на устройство &quot;{{ d.name }}&quot;?" style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete" style="padding:5px 10px; font-size:0.8rem;">Изтрий</button>
                         </form>
@@ -232,7 +232,7 @@
                                 data-values='{{ {"is_cisco": "1" if d.vendor == "cisco" else ""}|tojson|forceescape }}'>{{ 'Смени достъп' if d.has_api_credentials else 'Задай достъп' }}</button>
                         {% if d.has_api_credentials %}
                         <form action="{{ url_for('admin_network_device_api_credentials', device_id=d.id) }}" method="POST"
-                              onsubmit="return confirm('Премахване на достъпа за {{ d.name|e }}?');" style="display:inline;">
+                              data-confirm="Премахване на достъпа за {{ d.name }}?" style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
                             <input type="hidden" name="clear" value="1">
                             <button type="submit" class="btn-delete" style="padding:5px 10px; font-size:0.8rem;">Изчисти</button>

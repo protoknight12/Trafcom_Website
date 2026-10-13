@@ -114,7 +114,7 @@
                     </td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_temperature_sensor', sensor_id=s.id) }}" method="POST"
-                              onsubmit="return confirm('Изтриване на сензор &quot;{{ s.name|e }}&quot;?');" style="display:inline;">
+                              data-confirm="Изтриване на сензор &quot;{{ s.name }}&quot;?" style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Изтрий</button>
                         </form>

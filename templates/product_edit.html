@@ -141,7 +141,7 @@
                     <td>{{ "%.2f"|format((pd.detail.total_price if pd.detail else 0) * pd.quantity) }} €</td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_product_remove_detail', product_id=product.id, product_detail_id=pd.id) }}" method="POST"
-                              onsubmit="return confirm('Премахване на &quot;{{ (pd.detail.name if pd.detail else "детайла")|e }}&quot; от продукта?');" style="display:inline;">
+                              data-confirm="Премахване на &quot;{{ (pd.detail.name if pd.detail else "детайла") }}&quot; от продукта?" style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Премахни</button>
                         </form>
@@ -190,7 +190,7 @@
                     <td>{{ "%.2f"|format(cost.amount) }} €</td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_product_remove_cost', product_id=product.id, cost_id=cost.id) }}" method="POST"
-                              onsubmit="return confirm('Премахване на разход &quot;{{ cost.label|e }}&quot;?');" style="display:inline;">
+                              data-confirm="Премахване на разход &quot;{{ cost.label }}&quot;?" style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Премахни</button>
                         </form>
@@ -386,6 +386,7 @@
     </div>
 </dialog>
 
+<script src="{{ url_for('static', filename='js/form_dialog.js') }}"></script>
 <script src="{{ url_for('static', filename='js/material_picker.js') }}"></script>
 <script>
     let qmTargetSelectId = null;

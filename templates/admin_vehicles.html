@@ -190,7 +190,7 @@
                     </td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_vehicle', vehicle_id=v.id) }}" method="POST"
-                              onsubmit="return confirm('Изтриване на автомобил &quot;{{ v.name|e }}&quot;?');" style="display:inline;">
+                              data-confirm="Изтриване на автомобил &quot;{{ v.name }}&quot;?" style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Изтрий</button>
                         </form>

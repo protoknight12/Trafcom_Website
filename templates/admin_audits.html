@@ -109,7 +109,7 @@
                     <td class="text-right">
                         {% if current_user.is_admin or current_user.role == 'quality_control' %}
                         <form action="{{ url_for('admin_delete_audit', audit_id=audit.id) }}" method="POST"
-                              onsubmit="return confirm('Изтриване на &quot;{{ audit.audit_no }}&quot;? Ще се изтрият и всички негови констатации.');" style="display:inline;">
+                              data-confirm="Изтриване на &quot;{{ audit.audit_no }}&quot;? Ще се изтрият и всички негови констатации." style="display:inline;">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete">Изтрий</button>
                         </form>
