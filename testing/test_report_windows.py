@@ -13,7 +13,14 @@ import hashlib
 import json
 import os
 import tempfile
+import time
 from datetime import datetime, timedelta
+
+# EXPECTED was captured in Europe/Sofia and the reports bucket by local time (day windows, night tariff), so pin the
+# zone: on a UTC machine (GitHub Actions) every timestamp came out 2 h off. Windows has no tzset - run it there in Sofia time.
+os.environ['TZ'] = 'Europe/Sofia'
+if hasattr(time, 'tzset'):
+    time.tzset()
 
 _db_fd, _db_path = tempfile.mkstemp(suffix='.db')
 os.close(_db_fd)
