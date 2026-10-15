@@ -26,3 +26,4 @@ pillow
 htheatpump
 cadquery-ocp-novtk
 pyserial
+tzdata

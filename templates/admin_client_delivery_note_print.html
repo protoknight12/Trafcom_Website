@@ -92,7 +92,7 @@
     </div>
 
     <div class="offer-signoff">
-        <span>Дата: {{ note.created_at.strftime('%d.%m.%Y') if note.created_at else '' }}</span>
+        <span>Дата: {{ (note.created_at|local).strftime('%d.%m.%Y') if note.created_at else '' }}</span>
         <span>Съставил: {{ note.created_by.username if note.created_by else '' }}</span>
     </div>
 </div>

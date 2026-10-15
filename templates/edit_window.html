@@ -68,7 +68,7 @@
             {% if f.type == 'textarea' %}
             <textarea id="field_{{ loop.index }}" name="{{ f.name }}" rows="6">{{ f.value }}</textarea>
             {% elif f.type == 'select' %}
-            <select id="field_{{ loop.index }}" name="{{ f.name }}">
+            <select id="field_{{ loop.index }}" name="{{ f.name }}" {% if f.readonly %}disabled{% endif %}>
                 {% for opt in f.options %}
                 <option value="{{ opt.value }}" {% if opt.style %}style="{{ opt.style }}"{% endif %} {% if opt.value == f.value %}selected{% endif %}>{{ opt.label }}</option>
                 {% endfor %}
@@ -97,7 +97,7 @@
             <input type="file" id="field_{{ loop.index }}" name="{{ f.name }}" accept="image/*">
             {% else %}
             <input type="text" id="field_{{ loop.index }}" name="{{ f.name }}" value="{{ f.value }}"
-                   {% if f.required %}required{% endif %}
+                   {% if f.required and not f.readonly %}required{% endif %}{% if f.readonly %} readonly{% endif %}
                    {% if f.pattern %}pattern="{{ f.pattern }}"{% endif %}
                    {% if f.maxlength %}maxlength="{{ f.maxlength }}"{% endif %}
                    {% if f.inputmode %}inputmode="{{ f.inputmode }}"{% endif %}

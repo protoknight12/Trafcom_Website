@@ -135,7 +135,7 @@
             <thead><tr><th>Дата</th><th>Оператор</th><th>Поръчка</th><th>Версия</th><th>Резултат</th></tr></thead>
             <tbody>
             {% for e in prog.executions|reverse %}
-            <tr><td>{{ e.created_at.strftime('%d.%m.%Y %H:%M') }}</td><td>{{ e.user.username }}</td><td>{{ e.order_no or '-' }}</td><td>{{ e.program_version }}</td>
+            <tr><td>{{ (e.created_at|local).strftime('%d.%m.%Y %H:%M') }}</td><td>{{ e.user.username }}</td><td>{{ e.order_no or '-' }}</td><td>{{ e.program_version }}</td>
                 <td>{{ 'годен' if e.quality_check.overall_result == 'pass' else 'НЕГОДЕН' }}</td></tr>
             {% endfor %}
             </tbody>

@@ -30,6 +30,7 @@
     {% endif %}
     {% endwith %}
 
+    {% if current_user.is_admin %}
     <section class="admin-card" data-dialog-section="+ Нов конвектор">
         <h3>Нов конвектор</h3>
         <p class="section-subtitle">Отоплителен/охладителен конвектор, превключван през собствено Shelly реле (Shelly 1/1PM или Plus/Pro 1/1PM). Свържете го към помещение от картата, или въведете свободно място, ако не е в нито едно заведено помещение.</p>
@@ -84,6 +85,7 @@
             <button type="submit" class="btn-submit">Добави конвектор</button>
         </form>
     </section>
+    {% endif %}
 
     <section class="admin-card">
         <h3>Конвектори</h3>

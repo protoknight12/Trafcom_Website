@@ -111,7 +111,7 @@
                 {% for capa in records %}
                 <tr>
                     <td><strong>{{ capa.capa_no }}</strong></td>
-                    <td>{{ capa.created_at.strftime('%d.%m.%Y') }}</td>
+                    <td>{{ (capa.created_at|local).strftime('%d.%m.%Y') }}</td>
                     <td style="max-width: 320px;">{{ capa.problem_description }}</td>
                     <td>{{ capa.source_description or '—' }}</td>
                     <td>{{ capa.responsible.username if capa.responsible else '—' }}</td>

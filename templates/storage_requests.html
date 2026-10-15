@@ -101,7 +101,7 @@
                 <tr>
                     <td>{{ format_material_option(req.material) if req.material else 'Изтрит материал' }}</td>
                     <td class="text-center">{{ req.quantity|round(2) }}</td>
-                    <td>{{ req.created_at.strftime('%d.%m.%Y %H:%M') if req.created_at else '-' }} {% if req.created_by %}<div class="text-muted text-small">{{ req.created_by.username }}</div>{% endif %}</td>
+                    <td>{{ (req.created_at|local).strftime('%d.%m.%Y %H:%M') if req.created_at else '-' }} {% if req.created_by %}<div class="text-muted text-small">{{ req.created_by.username }}</div>{% endif %}</td>
                     <td class="text-center"><span class="status-badge status-{{ req.status }}">{{ req.status_label }}</span></td>
                     <td>{{ req.supplier.name if req.supplier else '-' }}</td>
                     <td>

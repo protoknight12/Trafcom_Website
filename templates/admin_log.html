@@ -62,7 +62,7 @@
                 <tbody id="adminLogTableBody">
                 {% for entry in logs %}
                 <tr data-search="{{ entry.username | lower }} {{ entry.role | lower }} {{ entry.action | lower }}">
-                    <td>{{ entry.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td>{{ (entry.timestamp|local).strftime('%Y-%m-%d %H:%M:%S') }}</td>
                     <td><strong>{{ entry.username }}</strong></td>
                     <td>{{ entry.role }}</td>
                     <td>

@@ -37,7 +37,7 @@
             <h3 style="margin: 0;">{{ capa.capa_no }}</h3>
             <a href="{{ url_for('admin_capa') }}" class="text-small">&larr; Обратно към CAPA записите</a>
         </div>
-        <p class="section-subtitle">Отворен на {{ capa.created_at.strftime('%d.%m.%Y') }}{% if capa.opened_by %} от {{ capa.opened_by.username }}{% endif %}.</p>
+        <p class="section-subtitle">Отворен на {{ (capa.created_at|local).strftime('%d.%m.%Y') }}{% if capa.opened_by %} от {{ capa.opened_by.username }}{% endif %}.</p>
 
         {% set readonly = not (current_user.is_admin or current_user.role == 'quality_control') %}
         <form action="{{ url_for('admin_update_capa', capa_id=capa.id) }}" method="POST" class="admin-form">

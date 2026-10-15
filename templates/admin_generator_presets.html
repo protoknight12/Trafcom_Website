@@ -37,7 +37,7 @@
         <div class="preset-card-header">
             <div>
                 <strong style="font-size: 1.1rem;">{{ preset.name }}</strong>
-                <div class="text-muted text-small">{{ preset.created_at.strftime('%d.%m.%Y %H:%M') }} · Потребител: {{ preset.user.username if preset.user else 'Изтрит потребител' }}</div>
+                <div class="text-muted text-small">{{ (preset.created_at|local).strftime('%d.%m.%Y %H:%M') }} · Потребител: {{ preset.user.username if preset.user else 'Изтрит потребител' }}</div>
             </div>
             <form action="{{ url_for('admin_generator_preset_copy', preset_id=preset.id) }}" method="POST">
                 {% include 'partials/csrf_field.html' %}

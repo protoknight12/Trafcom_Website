@@ -38,7 +38,7 @@
         <div class="order-card-header">
             <div>
                 <strong style="font-size: 1.1rem;">{{ order.order_number }}</strong> &nbsp;—&nbsp; {{ order.customer_name }}
-                <div class="text-muted text-small">{{ order.created_at.strftime('%d.%m.%Y %H:%M') }} · Потребител: {{ order.user.username if order.user else 'Изтрит потребител' }}</div>
+                <div class="text-muted text-small">{{ (order.created_at|local).strftime('%d.%m.%Y %H:%M') }} · Потребител: {{ order.user.username if order.user else 'Изтрит потребител' }}</div>
             </div>
             <span class="status-badge status-{{ order.status }}">{{ order.status_label }}</span>
         </div>

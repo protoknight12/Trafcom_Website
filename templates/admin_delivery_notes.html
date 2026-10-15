@@ -58,6 +58,7 @@
         </form>
     </section>
 
+    {% if current_user.is_admin %}
     <section class="admin-card" id="deliveryNoteSection" data-dialog-section="+ Нова стокова разписка">
         <h3 data-dialog-title>Нова стокова разписка</h3>
         <p class="section-subtitle">Въведете данните от фактурата/стоковата разписка на доставчика - всеки ред увеличава наличността на съответния материал, детайл или продукт.</p>
@@ -240,7 +241,6 @@
         </form>
     </section>
 
-    {% if current_user.is_admin %}
     <dialog id="quickDetailModal" class="form-dialog">
         <div>
             <span onclick="closeQuickDetailModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
@@ -368,7 +368,7 @@
                 <tbody>
                 {% for note in notes %}
                 <tr>
-                    <td>{{ note.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+                    <td>{{ (note.created_at|local).strftime('%d.%m.%Y %H:%M') }}</td>
                     <td>{{ note.supplier.name if note.supplier else '-' }}</td>
                     <td>{{ note.note_number or '-' }}</td>
                     <td>
@@ -388,17 +388,21 @@
                         {% endfor %}
                     </td>
                     <td style="white-space: nowrap;">
+                        {% if current_user.is_admin %}
                         <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;"
                                 data-dialog="deliveryNoteSection-dialog" data-note-id="{{ note.id }}"
                                 data-action="{{ url_for('edit_delivery_note', note_id=note.id) }}"
                                 data-title="Редакция на стокова разписка №{{ note.id }}"
                                 data-values='{{ {"supplier_id": note.supplier_id or "", "note_number": note.note_number or "", "note_date": note.note_date.isoformat() if note.note_date else ""}|tojson|forceescape }}'>Редактирай</button>
+                        {% endif %}
                         <a href="{{ url_for('admin_delivery_note_print', note_id=note.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Печат</a>
+                        {% if current_user.is_admin %}
                         <form action="{{ url_for('delete_delivery_note', note_id=note.id) }}" method="POST" style="display: inline;"
                               onsubmit="return confirm('Да се изтрие ли стокова разписка №{{ note.id }}? Заприходените количества ще бъдат извадени от наличностите.');">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete" style="padding: 6px 12px; font-size: 0.85rem;">Изтрий</button>
                         </form>
+                        {% endif %}
                     </td>
                 </tr>
                 {% else %}
@@ -413,6 +417,7 @@
 
 </main>
 
+{% if current_user.is_admin %}
 <script src="{{ url_for('static', filename='js/material_picker.js') }}"></script>
 <script>
     const MATERIALS = {{ materials_data|tojson }};
@@ -998,5 +1003,6 @@
         );
     });
 </script>
+{% endif %}
 </body>
 </html>

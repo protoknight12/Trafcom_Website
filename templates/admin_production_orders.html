@@ -93,9 +93,9 @@
                     <td class="text-center"><span class="status-badge status-{{ job.status }}">{{ job.status_label }}</span></td>
                     <td>
                         {% if job.status == 'done' %}
-                        {{ job.completed_at.strftime('%d.%m.%Y %H:%M') }}{% if job.completed_by %} &middot; {{ job.completed_by.username }}{% endif %}
+                        {{ (job.completed_at|local).strftime('%d.%m.%Y %H:%M') }}{% if job.completed_by %} &middot; {{ job.completed_by.username }}{% endif %}
                         {% else %}
-                        {{ job.created_at.strftime('%d.%m.%Y %H:%M') }}{% if job.created_by %} &middot; {{ job.created_by.username }}{% endif %}
+                        {{ (job.created_at|local).strftime('%d.%m.%Y %H:%M') }}{% if job.created_by %} &middot; {{ job.created_by.username }}{% endif %}
                         {% endif %}
                     </td>
                     <td class="text-right">

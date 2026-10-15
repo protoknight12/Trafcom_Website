@@ -1,6 +1,7 @@
 from bisect import bisect_right
 from collections import deque
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import os
 import shutil
 import json
@@ -1870,7 +1871,7 @@ def vehicle_deadline_status(expiry_date):
     'unset' (no date on file)."""
     if not expiry_date:
         return 'unset', None
-    days = (expiry_date - datetime.utcnow().date()).days
+    days = (expiry_date - datetime.now(APP_TZ).date()).days
     if days < 0:
         return 'expired', days
     if days <= VEHICLE_WARNING_DAYS:
@@ -3240,7 +3241,7 @@ class MeasuringInstrument(db.Model):
         latest = self.latest_calibration
         if not latest or not latest.next_due_date:
             return 'not_tracked'
-        days_left = (latest.next_due_date - datetime.utcnow().date()).days
+        days_left = (latest.next_due_date - datetime.now(APP_TZ).date()).days
         if days_left < 0:
             return 'overdue'
         if days_left <= 30:
@@ -3533,7 +3534,7 @@ class CapaRecord(db.Model):
 
     @property
     def is_overdue(self):
-        return bool(self.due_date and self.status in ('open', 'in_progress') and self.due_date < datetime.utcnow().date())
+        return bool(self.due_date and self.status in ('open', 'in_progress') and self.due_date < datetime.now(APP_TZ).date())
 
 
 def _next_capa_number():
@@ -3729,7 +3730,7 @@ class TrainingRecord(db.Model):
 
     @property
     def is_expired(self):
-        return bool(self.valid_until and self.valid_until < datetime.utcnow().date())
+        return bool(self.valid_until and self.valid_until < datetime.now(APP_TZ).date())
 
 
 # ----------------- ISO 9001 - РЕГИСТЪР НА РИСКА (§6.1) -----------------
@@ -4980,6 +4981,10 @@ def _material_available_qty(material):
     return stock
 
 
+# Float slack when comparing a material need with stock (0.3 vs 0.30000000000000004).
+PRODUCTION_STOCK_TOLERANCE = 1e-9
+
+
 def _material_stock_delta(material, native_qty):
     """
     Inverse of _material_available_qty(): converts a material-need/material-
@@ -5308,6 +5313,20 @@ def format_material_option(material):
     return f"{id_prefix}{localized(material, 'display_name')} ({material.brand or '-'}, {_format_material_dims(material)})"
 
 
+# Timestamps are stored as naive UTC (datetime.utcnow); people read local time. Convert only on display - never what is stored.
+# `ZoneInfo` needs the system tz database (Linux has it; Windows needs the `tzdata` package) - failing here, at import, is deliberate.
+APP_TZ = ZoneInfo(os.environ.get('APP_TIMEZONE') or 'Europe/Sofia')
+
+
+def to_local(dt):
+    """A naive datetime is UTC (how every utcnow column is stored) -> aware datetime in APP_TZ; an aware one is converted;
+    None and plain dates pass through. Columns defaulting to datetime.now (DetectionEvent.ts, TrainImage.created_at) are already local - don't convert those."""
+    if not isinstance(dt, datetime):
+        return dt
+    return (dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt).astimezone(APP_TZ)
+
+
+app.jinja_env.filters['local'] = to_local
 app.jinja_env.globals['get_text'] = get_text
 # MATERIAL_TYPE_LABELS values are looked up dynamically (by type_key), so
 # pybabel can't statically extract them from this lambda - their EN/DE
@@ -9926,7 +9945,7 @@ def admin_log_export():
 
     ws.append(['Време', 'Потребител', 'Роля', 'Действие'])
     for entry in logs:
-        ws.append([entry.timestamp.strftime('%Y-%m-%d %H:%M:%S'), safe(entry.username), safe(entry.role), safe(entry.action)])
+        ws.append([to_local(entry.timestamp).strftime('%Y-%m-%d %H:%M:%S'), safe(entry.username), safe(entry.role), safe(entry.action)])
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -10068,14 +10087,14 @@ def admin_material_history(material_id):
                        .all())
 
     movements = [
-        {'date': item.delivery_note.note_date or item.delivery_note.created_at.date(),
+        {'date': item.delivery_note.note_date or to_local(item.delivery_note.created_at).date(),
          'created_at': item.delivery_note.created_at,
          'kind': 'delivery', 'direction': 'in', 'quantity': item.quantity,
          'party': item.delivery_note.supplier.name if item.delivery_note.supplier else '-',
          'note_number': item.delivery_note.note_number, 'unit_price': item.unit_price, 'notes': item.notes}
         for item in incoming
     ] + [
-        {'date': item.client_delivery_note.note_date or item.client_delivery_note.created_at.date(),
+        {'date': item.client_delivery_note.note_date or to_local(item.client_delivery_note.created_at).date(),
          'created_at': item.client_delivery_note.created_at,
          'kind': 'client', 'direction': 'out', 'quantity': item.quantity,
          'party': item.client_delivery_note.client.name if item.client_delivery_note.client else '-',
@@ -10086,7 +10105,7 @@ def admin_material_history(material_id):
         taken_qty = _material_stock_delta(material, job.actual_material_qty)
         completed_by = job.completed_by.username if job.completed_by else '-'
         movements.append({
-            'date': job.completed_at.date(), 'created_at': job.completed_at,
+            'date': to_local(job.completed_at).date(), 'created_at': job.completed_at,
             'kind': 'production_take', 'direction': 'out', 'quantity': taken_qty,
             'party': 'Производство', 'note_number': None, 'unit_price': None,
             'notes': f'{job.quantity} бр. "{job.detail.name}" ({completed_by})',
@@ -10094,7 +10113,7 @@ def admin_material_history(material_id):
         if job.reversed_at is not None:
             reversed_by = job.reversed_by.username if job.reversed_by else '-'
             movements.append({
-                'date': job.reversed_at.date(), 'created_at': job.reversed_at,
+                'date': to_local(job.reversed_at).date(), 'created_at': job.reversed_at,
                 'kind': 'production_return', 'direction': 'in', 'quantity': taken_qty,
                 'party': 'Производство', 'note_number': None, 'unit_price': None,
                 'notes': f'изтрита задача - {job.quantity} бр. "{job.detail.name}" ({reversed_by})',
@@ -10951,7 +10970,7 @@ def admin_add_supplier():
 
 
 @app.route('/admin/delivery-notes/create', methods=['POST'])
-@role_required(['admin', 'worker'])
+@role_required('admin')
 def create_delivery_note():
     """
     Records a delivery note and bumps stock_quantity on every referenced
@@ -10999,7 +11018,7 @@ def create_delivery_note():
 
 
 @app.route('/admin/delivery-notes/<int:note_id>/edit', methods=['POST'])
-@role_required(['admin', 'worker'])
+@role_required('admin')
 def edit_delivery_note(note_id):
     """
     Rewrites a recorded DeliveryNote from the same form as create_delivery_note():
@@ -11040,7 +11059,7 @@ def edit_delivery_note(note_id):
 
 
 @app.route('/admin/delivery-notes/<int:note_id>/delete', methods=['POST'])
-@role_required(['admin', 'worker'])
+@role_required('admin')
 def delete_delivery_note(note_id):
     """Deletes a DeliveryNote the reverse way it was recorded: every line's
     intake is taken back out of stock. Catalog rows the note created (new
@@ -11050,7 +11069,7 @@ def delete_delivery_note(note_id):
 
 
 @app.route('/admin/client-delivery-notes/<int:note_id>/delete', methods=['POST'])
-@role_required(['admin', 'worker'])
+@role_required('admin')
 def delete_client_delivery_note(note_id):
     """Deletes a ClientDeliveryNote: everything it issued goes back into stock."""
     note = _lock_or_404(ClientDeliveryNote, note_id)
@@ -11247,7 +11266,7 @@ def admin_client_delivery_notes():
 
 
 @app.route('/admin/client-delivery-notes/create', methods=['POST'])
-@role_required(['admin', 'worker'])
+@role_required('admin')
 def create_client_delivery_note():
     """
     Records a client delivery note and decrements stock_quantity on every
@@ -11282,7 +11301,7 @@ def create_client_delivery_note():
 
 
 @app.route('/admin/client-delivery-notes/<int:note_id>/edit', methods=['POST'])
-@role_required(['admin', 'worker'])
+@role_required('admin')
 def edit_client_delivery_note(note_id):
     """Rewrites a ClientDeliveryNote: the old lines' stock is given back,
     then the submitted lines are issued fresh - mirrors edit_delivery_note()."""
@@ -14013,6 +14032,20 @@ def complete_production_order(order_id):
         return redirect(url_for('admin_production_orders'))
 
     actual_qty = actual_display / 1000.0 if job.is_linear_material else actual_display
+
+    # create_production_order() clamps against the stock at creation time only:
+    # pending jobs reserve nothing, so by now another completion, an issue note
+    # or a bigger actual usage may have eaten the batch. Lock the lot, re-check
+    # in its native unit and refuse before anything moves - the job stays pending.
+    material = _lock_or_404(MaterialPrice, job.material_id)
+    available = _material_available_qty(material)
+    if actual_qty > available + PRODUCTION_STOCK_TOLERANCE:
+        flash(f'Задачата не може да се завърши: наличността на "{material.display_name}" е '
+              f'{job.material_available_display} {job.unit_label}, а са нужни '
+              f'{round(actual_qty * 1000, 1) if job.is_linear_material else round(actual_qty, 3)} {job.unit_label} - '
+              f'наличността би паднала под нула. Запишете доставка на материала или намалете действителния разход.',
+              'danger')
+        return redirect(url_for('admin_production_orders'))
 
     job.actual_material_qty = actual_qty
     job.status = 'done'
@@ -17072,7 +17105,7 @@ def _mqtt_temp_snapshot_live(sensor):
     return {
         'name': sensor.name, 'online': state['online'], 'error': None,
         'temperature': state['temperature'], 'humidity': state['humidity'], 'battery': state['battery'],
-        'last_seen': state['last_seen'].strftime('%H:%M:%S') if state['last_seen'] else None,
+        'last_seen': to_local(state['last_seen']).strftime('%H:%M:%S') if state['last_seen'] else None,
     }
 
 
@@ -20159,7 +20192,7 @@ def admin_temperature_sensors_data():
 
 
 @app.route('/admin/temperature-sensors/create', methods=['POST'])
-@role_required(['admin', 'worker'])
+@role_required('admin')
 def admin_add_temperature_sensor():
     name = request.form.get('name', '').strip()
     mqtt_topic = request.form.get('mqtt_topic', '').strip().strip('/')
@@ -20196,9 +20229,10 @@ def edit_temperature_sensor_window(sensor_id):
         action=url_for('admin_update_temperature_sensor', sensor_id=sensor.id),
         fields=[
             {'name': 'name', 'label': 'Име на сензора', 'value': sensor.name, 'type': 'text', 'required': True},
-            {'name': 'mqtt_topic', 'label': 'MQTT тема', 'value': sensor.mqtt_topic, 'type': 'text', 'required': True},
+            {'name': 'mqtt_topic', 'label': 'MQTT тема', 'value': sensor.mqtt_topic, 'type': 'text', 'required': True,
+             'readonly': not current_user.is_admin},
             {'name': 'sensor_type', 'label': 'Вид сензор', 'value': sensor.sensor_type, 'type': 'select',
-             'options': [{'value': k, 'label': v} for k, v in TEMP_SENSOR_TYPES.items()]},
+             'options': [{'value': k, 'label': v} for k, v in TEMP_SENSOR_TYPES.items()], 'readonly': not current_user.is_admin},
             {'name': 'room_id', 'label': 'Помещение', 'value': sensor.room_id or '', 'type': 'select', 'options': [
                 {'value': '', 'label': '-- няма --'}
             ] + [{'value': r.id, 'label': f'{r.building.name} / {r.name}'} for r in rooms]},
@@ -20214,6 +20248,8 @@ def admin_update_temperature_sensor(sensor_id):
     sensor = TemperatureSensor.query.get_or_404(sensor_id)
     name = request.form.get('name', '').strip()
     mqtt_topic = request.form.get('mqtt_topic', '').strip().strip('/')
+    if not current_user.is_admin:   # the MQTT topic / sensor kind are the device's address: only an admin sets them
+        mqtt_topic = sensor.mqtt_topic
     if not name or not mqtt_topic:
         flash('Моля въведете име и MQTT тема на сензора.', 'danger')
         return redirect(url_for('admin_temperature_sensors'))
@@ -20223,7 +20259,7 @@ def admin_update_temperature_sensor(sensor_id):
     room_id_raw = request.form.get('room_id', '')
     room_id = int(room_id_raw) if room_id_raw.isdigit() and db.session.get(Room, int(room_id_raw)) else None
     sensor_type = request.form.get('sensor_type', '')
-    if sensor_type not in TEMP_SENSOR_TYPES:
+    if sensor_type not in TEMP_SENSOR_TYPES or not current_user.is_admin:
         sensor_type = sensor.sensor_type
     sensor.name = name
     sensor.mqtt_topic = mqtt_topic
@@ -21149,7 +21185,7 @@ def admin_convectors_data():
 
 
 @app.route('/admin/convectors/create', methods=['POST'])
-@role_required(['admin', 'worker'])
+@role_required('admin')
 def admin_add_convector():
     name = request.form.get('name', '').strip()
     host = request.form.get('host', '').strip()
@@ -21200,12 +21236,14 @@ def edit_convector_window(conv_id):
         fields=[
             {'name': 'name', 'label': 'Име на конвектора', 'value': conv.name, 'type': 'text', 'required': True},
             {'name': 'connection_type', 'label': 'Вид връзка', 'value': conv.connection_type, 'type': 'select',
-             'options': [{'value': k, 'label': v} for k, v in CONVECTOR_CONNECTION_TYPES.items()]},
-            {'name': 'host', 'label': 'Адрес (IP, за връзка тип IP)', 'value': conv.host or '', 'type': 'text'},
-            {'name': 'mqtt_topic', 'label': 'MQTT тема (за връзка тип MQTT)', 'value': conv.mqtt_topic or '', 'type': 'text'},
+             'options': [{'value': k, 'label': v} for k, v in CONVECTOR_CONNECTION_TYPES.items()], 'readonly': not current_user.is_admin},
+            {'name': 'host', 'label': 'Адрес (IP, за връзка тип IP)', 'value': conv.host or '', 'type': 'text', 'readonly': not current_user.is_admin},
+            {'name': 'mqtt_topic', 'label': 'MQTT тема (за връзка тип MQTT)', 'value': conv.mqtt_topic or '', 'type': 'text',
+             'readonly': not current_user.is_admin},
             {'name': 'device_type', 'label': 'Вид устройство', 'value': conv.device_type, 'type': 'select',
-             'options': [{'value': k, 'label': v} for k, v in CONVECTOR_TYPES.items()]},
-            {'name': 'relay_channel', 'label': 'Номер на реле (0 за еднoканални)', 'value': conv.relay_channel, 'type': 'text'},
+             'options': [{'value': k, 'label': v} for k, v in CONVECTOR_TYPES.items()], 'readonly': not current_user.is_admin},
+            {'name': 'relay_channel', 'label': 'Номер на реле (0 за еднoканални)', 'value': conv.relay_channel, 'type': 'text',
+             'readonly': not current_user.is_admin},
             {'name': 'room_id', 'label': 'Помещение', 'value': conv.room_id or '', 'type': 'select', 'options': [
                 {'value': '', 'label': '-- няма --'}
             ] + [{'value': r.id, 'label': f'{r.building.name} / {r.name}'} for r in rooms]},
@@ -21226,6 +21264,8 @@ def admin_update_convector(conv_id):
     host = request.form.get('host', '').strip()
     mqtt_topic = request.form.get('mqtt_topic', '').strip().strip('/')
     connection_type = request.form.get('connection_type', '')
+    if not current_user.is_admin:   # address / connection fields: only an admin sets them, a worker's values are ignored
+        host, mqtt_topic, connection_type = conv.host or '', conv.mqtt_topic or '', conv.connection_type
     if connection_type not in CONVECTOR_CONNECTION_TYPES:
         connection_type = conv.connection_type
     if not name:
@@ -21238,10 +21278,10 @@ def admin_update_convector(conv_id):
         flash('Моля въведете MQTT тема за връзка тип "MQTT".', 'danger')
         return redirect(url_for('admin_convectors'))
     device_type = request.form.get('device_type', '')
-    if device_type not in CONVECTOR_TYPES:
+    if device_type not in CONVECTOR_TYPES or not current_user.is_admin:
         device_type = conv.device_type
     channel_raw = request.form.get('relay_channel', '0')
-    relay_channel = int(channel_raw) if channel_raw.isdigit() else conv.relay_channel
+    relay_channel = int(channel_raw) if channel_raw.isdigit() and current_user.is_admin else conv.relay_channel
     if mqtt_topic and Convector.query.filter(Convector.mqtt_topic == mqtt_topic, Convector.relay_channel == relay_channel,
                                              Convector.id != conv.id).first():
         flash(f'Вече има друг конвектор с MQTT тема "{mqtt_topic}" и реле №{relay_channel}.', 'danger')
@@ -22607,7 +22647,7 @@ def _routeros_sync_device_info(device):
         if r.get('board-name'):
             device.model = r['board-name']
         version = r.get('version')
-        sync_line = f'[API sync {datetime.utcnow():%Y-%m-%d %H:%M}] identity="{name}"' + (f', RouterOS {version}' if version else '')
+        sync_line = f'[API sync {to_local(datetime.utcnow()):%Y-%m-%d %H:%M}] identity="{name}"' + (f', RouterOS {version}' if version else '')
         kept_lines = [line for line in (device.notes or '').splitlines() if not line.startswith('[API sync ')]
         device.notes = '\n'.join(kept_lines + [sync_line]).strip()
     db.session.commit()
@@ -22775,7 +22815,7 @@ def _cisco_sync_device_info(device):
     m = _CISCO_MODEL_NUMBER_RE.search(output)
     if m:
         device.model = m.group(1)
-    sync_line = f'[API sync {datetime.utcnow():%Y-%m-%d %H:%M}] prompt="{prompt}"'
+    sync_line = f'[API sync {to_local(datetime.utcnow()):%Y-%m-%d %H:%M}] prompt="{prompt}"'
     kept_lines = [line for line in (device.notes or '').splitlines() if not line.startswith('[API sync ')]
     device.notes = '\n'.join(kept_lines + [sync_line]).strip()
     db.session.commit()
@@ -24542,7 +24582,7 @@ def my_orders(offset: int = 0) -> str:
         return 'Нямате направени поръчки.' if offset == 0 else 'Няма повече резултати.'
     lines = [
         f'№ {o.order_number} - {o.status_label} ({o.percent_complete:g}%) - '
-        f'{o.created_at.strftime("%d.%m.%Y")} - {o.total_price:g} €'
+        f'{to_local(o.created_at).strftime("%d.%m.%Y")} - {o.total_price:g} €'
         for o in orders
     ]
     if total > offset + len(orders):

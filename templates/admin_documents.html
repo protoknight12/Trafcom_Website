@@ -166,7 +166,7 @@
                                 {% for rev in doc.revisions|reverse %}
                                 <tr>
                                     <td>{{ rev.revision_label }}</td>
-                                    <td>{{ rev.created_at.strftime('%d.%m.%Y') }}</td>
+                                    <td>{{ (rev.created_at|local).strftime('%d.%m.%Y') }}</td>
                                     <td>{{ rev.change_description or '—' }}</td>
                                     <td>{{ rev.approved_by or '—' }}</td>
                                     <td>{{ rev.revised_by.username if rev.revised_by else '—' }}</td>

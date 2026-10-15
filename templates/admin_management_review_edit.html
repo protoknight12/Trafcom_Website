@@ -59,7 +59,7 @@
             <h3 style="margin: 0;">Преглед от {{ review.review_date.strftime('%d.%m.%Y') }}</h3>
             <a href="{{ url_for('admin_management_reviews') }}" class="text-small">&larr; Обратно към прегледите</a>
         </div>
-        <p class="section-subtitle">Създаден на {{ review.created_at.strftime('%d.%m.%Y') }}{% if review.created_by %} от {{ review.created_by.username }}{% endif %}.</p>
+        <p class="section-subtitle">Създаден на {{ (review.created_at|local).strftime('%d.%m.%Y') }}{% if review.created_by %} от {{ review.created_by.username }}{% endif %}.</p>
 
         <div class="snapshot-grid">
             <div class="snapshot-box">

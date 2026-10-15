@@ -97,7 +97,7 @@
                     <td>{{ h.switch_device.name if h.switch_device else '—' }}{% if h.switch_port %}<br><span class="text-small">{{ h.switch_port }}</span>{% endif %}</td>
                     <td style="max-width:200px; white-space:normal; word-break:break-word;">{{ h.notes or '—' }}</td>
                     <td>{{ 'DHCP импорт' if h.source == 'dhcp_import' else 'ръчно' }}</td>
-                    <td class="text-small">{{ h.last_seen.strftime('%d.%m.%Y %H:%M') if h.last_seen else '—' }}</td>
+                    <td class="text-small">{{ (h.last_seen|local).strftime('%d.%m.%Y %H:%M') if h.last_seen else '—' }}</td>
                     <td class="text-right">
                         <button type="button" class="btn-secondary" style="padding:5px 10px; font-size:0.8rem;" data-dialog="hostForm-dialog"
                                 data-action="{{ url_for('admin_network_edit_host', host_id=h.id) }}"

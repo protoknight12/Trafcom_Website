@@ -136,7 +136,7 @@
             <td class="mir-label" style="width: 12%;">Drawing No</td>
             <td style="width: 21%;">{{ check.drawing_no or '' }}</td>
             <td class="mir-label" style="width: 12%;">Insp. Date</td>
-            <td style="width: 15%;">{{ check.created_at.strftime('%Y/%m/%d') }}</td>
+            <td style="width: 15%;">{{ (check.created_at|local).strftime('%Y/%m/%d') }}</td>
             <td class="mir-label" style="width: 15%;">Delivery Q'ty</td>
             <td style="width: 12%;">{{ check.batch_size or '' }}{% if check.batch_size %} pcs{% endif %}</td>
         </tr>
@@ -212,7 +212,7 @@
             <td class="mir-footer-label" style="width: 12%;">Supervisor</td>
             <td style="width: 19%;">{{ check.supervisor_name or '' }}</td>
             <td class="mir-footer-label" style="width: 7%;">Date</td>
-            <td style="width: 12%;">{{ check.created_at.strftime('%d.%m.%Y') }}</td>
+            <td style="width: 12%;">{{ (check.created_at|local).strftime('%d.%m.%Y') }}</td>
         </tr>
         <tr>
             <td class="mir-footer-label">Disposition</td>

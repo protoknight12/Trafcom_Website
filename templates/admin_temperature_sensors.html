@@ -41,6 +41,7 @@
     {% endif %}
     {% endwith %}
 
+    {% if current_user.is_admin %}
     <section class="admin-card" data-dialog-section="+ Нов сензор">
         <h3>Нов температурен сензор</h3>
         <p class="section-subtitle">Shelly H&amp;T (или подобен) сензор, публикуващ по MQTT. Свържете го към помещение от картата, или въведете свободно място (напр. "склад - северна стена"), ако не е в нито едно заведено помещение.</p>
@@ -79,6 +80,7 @@
             <button type="submit" class="btn-submit">Добави сензор</button>
         </form>
     </section>
+    {% endif %}
 
     <section class="admin-card">
         <h3>Сензори</h3>

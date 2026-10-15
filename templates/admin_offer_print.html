@@ -114,13 +114,13 @@
         {% if line.strip() %}<p>{{ line.strip() }}</p>{% endif %}
         {% endfor %}
         {% if offer.valid_until %}
-        <p>Валидност на офертата {{ (offer.valid_until - offer.created_at.date()).days }} дни</p>
+        <p>Валидност на офертата {{ (offer.valid_until - (offer.created_at|local).date()).days }} дни</p>
         {% endif %}
     </div>
     {% endif %}
 
     <div class="offer-signoff">
-        <span>Дата: {{ offer.created_at.strftime('%d.%m.%Y') if offer.created_at else '' }}</span>
+        <span>Дата: {{ (offer.created_at|local).strftime('%d.%m.%Y') if offer.created_at else '' }}</span>
         {% if offer.signed_by %}<span>С уважение: {{ offer.signed_by }}</span>{% endif %}
     </div>
 </div>

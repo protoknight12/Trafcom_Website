@@ -260,7 +260,7 @@
                 {% for check in checks %}
                 <tr>
                     <td>#{{ check.id }}</td>
-                    <td>{{ check.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+                    <td>{{ (check.created_at|local).strftime('%d.%m.%Y %H:%M') }}</td>
                     <td>
                         {{ check.target_name }}
                         <br><span class="text-muted text-small">{{ 'Детайл' if check.target_type == 'detail' else 'Продукт' }}</span>

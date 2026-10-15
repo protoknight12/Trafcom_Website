@@ -42,7 +42,7 @@
         <div class="order-card-header">
             <div>
                 <strong style="font-size: 1.1rem;">{{ order.order_number }}</strong> &nbsp;—&nbsp; {{ order.customer_name }}
-                <div class="text-muted text-small">{{ order.created_at.strftime('%d.%m.%Y %H:%M') }} · Потребител: {{ order.user.username if order.user else 'Изтрит потребител' }}</div>
+                <div class="text-muted text-small">{{ (order.created_at|local).strftime('%d.%m.%Y %H:%M') }} · Потребител: {{ order.user.username if order.user else 'Изтрит потребител' }}</div>
             </div>
             <div style="display: flex; align-items: center; gap: 8px; margin-left: auto; margin-right: 16px;">
                 <label for="machine_select_{{ order.id }}" style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">Машина:</label>

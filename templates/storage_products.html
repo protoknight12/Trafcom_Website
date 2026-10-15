@@ -28,7 +28,9 @@
                 <h3 style="margin-bottom: 4px;">Склад &middot; Продукти</h3>
                 <p class="section-subtitle" style="margin: 0;">Текуща наличност по продукти.</p>
             </div>
+            {% if current_user.is_admin %}
             <a class="btn-submit" style="text-decoration: none;" href="{{ url_for('admin_delivery_notes', type='product') }}">+ Бърза заявка (стокова разписка)</a>
+            {% endif %}
         </div>
 
         {% if products %}

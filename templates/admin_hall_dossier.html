@@ -192,7 +192,7 @@
                     <td><a href="{{ url_for('admin_hall_file_download', file_id=f.id) }}">{{ f.original_name }}</a></td>
                     <td>{{ categories.get(f.category, f.category) }}</td>
                     <td>{{ f.size_text }}</td>
-                    <td>{{ f.uploaded_at.strftime('%d.%m.%Y %H:%M') if f.uploaded_at else '' }}{% if f.uploaded_by %} · {{ f.uploaded_by }}{% endif %}</td>
+                    <td>{{ (f.uploaded_at|local).strftime('%d.%m.%Y %H:%M') if f.uploaded_at else '' }}{% if f.uploaded_by %} · {{ f.uploaded_by }}{% endif %}</td>
                     <td>{{ f.note or '' }}</td>
                     <td>
                         <form method="post" action="{{ url_for('admin_hall_file_delete', file_id=f.id) }}" onsubmit="return confirm('Да се изтрие ли файлът?')">

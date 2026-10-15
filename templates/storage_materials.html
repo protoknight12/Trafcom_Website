@@ -41,7 +41,9 @@
             </div>
             <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                 <a class="btn-submit" style="text-decoration: none;" href="{{ url_for('storage_requests') }}">Заявки за материали</a>
+                {% if current_user.is_admin %}
                 <a class="btn-submit" style="text-decoration: none;" href="{{ url_for('admin_delivery_notes', type='material') }}">+ Бърза заявка (стокова разписка)</a>
+                {% endif %}
             </div>
         </div>
 
