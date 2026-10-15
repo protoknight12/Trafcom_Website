@@ -413,7 +413,7 @@ function drawTree() {
 }
 
 function fillRef(kind, value) {
-    $('f-ref').innerHTML = '<option value="">- без връзка -</option>' + (CHOICES[kind] || []).map(c => `<option value="${c.id}">${c.label.replace(/</g, '&lt;')}</option>`).join('');
+    $('f-ref').replaceChildren(new Option('- без връзка -', ''), ...(CHOICES[kind] || []).map(c => new Option(c.label, c.id)));
     $('f-ref').value = value ?? '';
 }
 // every object is locked until "Отключи"; a locked object can't be dragged, nudged or edited. "Запази и заключи" locks it again.
@@ -447,15 +447,15 @@ function select(o) {
 }
 function fillParent(o) {          // "belongs to": a building -> its parcel; a room -> its building; anything else -> a room or building
     const isB = o._t === 'shape' && o.kind === 'building', isR = o._t === 'shape' && o.kind === 'room';
-    const opt = (v, t) => `<option value="${v}">${String(t).replace(/</g, '&lt;')}</option>`;
-    let h = opt('', isR ? '- не е зададена (основно хале) -' : '- автоматично (по позиция) -');
-    if (isB) h += PARCELS.map(p => opt(p.id, 'ПИ ' + p.cadnum + ' · ' + Math.round(p.area) + ' м²')).join('');
+    const opt = (v, t) => new Option(String(t), v);
+    const h = [opt('', isR ? '- не е зададена (основно хале) -' : '- автоматично (по позиция) -')];
+    if (isB) h.push(...PARCELS.map(p => opt(p.id, 'ПИ ' + p.cadnum + ' · ' + Math.round(p.area) + ' м²')));
     else {
-        h += opt(0, 'Хале') + SHAPES.filter(s => s.id && s.kind === 'building' && s !== o).map(s => opt(s.id, 'Сграда: ' + (s.name || s.id))).join('');
-        if (!isR) h += SHAPES.filter(s => s.id && s.kind === 'room' && s !== o).map(s => opt(s.id, 'Помещение: ' + (s.label || s.name || s.id))).join('');
+        h.push(opt(0, 'Хале'), ...SHAPES.filter(s => s.id && s.kind === 'building' && s !== o).map(s => opt(s.id, 'Сграда: ' + (s.name || s.id))));
+        if (!isR) h.push(...SHAPES.filter(s => s.id && s.kind === 'room' && s !== o).map(s => opt(s.id, 'Помещение: ' + (s.label || s.name || s.id))));
     }
     $('l-parent').textContent = isB ? 'Имот' : isR ? 'Сграда' : 'Помещение / сграда';
-    $('f-parent').innerHTML = h; $('f-parent').value = (isB ? o.parcel_id : o.parent_id) ?? '';
+    $('f-parent').replaceChildren(...h); $('f-parent').value = (isB ? o.parcel_id : o.parent_id) ?? '';
 }
 function syncKind() {
     const kind = $('f-kind').value, isShape = sel && sel._t === 'shape';

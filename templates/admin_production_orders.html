@@ -36,7 +36,7 @@
         <h3>Нова задача за производство</h3>
         <p class="section-subtitle">Изберете детайл, количество и от коя партида материал да се произведе - нужният материал се изчислява автоматично.</p>
 
-        <form method="POST" action="{{ url_for('create_production_order') }}">
+        <form method="POST" action="{{ url_for('create_production_order') }}" data-once>
             {% include 'partials/csrf_field.html' %}
             <div class="po-wizard-row">
                 <div class="form-group">

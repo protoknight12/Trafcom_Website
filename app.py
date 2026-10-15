@@ -32,7 +32,7 @@ from openpyxl import Workbook
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import inspect as sa_inspect
 from markupsafe import Markup
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, DBAPIError
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -5180,6 +5180,50 @@ def role_required(roles):
     return decorator
 
 
+DB_BUSY_PGCODES = ('40P01', '40001')  # deadlock_detected, serialization_failure - PostgreSQL rolled the transaction back, a rerun can succeed
+DB_BUSY_MESSAGE = 'Системата беше заета с друга операция върху същите наличности. Нищо не е променено - опитайте отново.'
+
+
+def _is_db_busy(exc):
+    """A deadlock / serialization failure (SQLAlchemy wraps psycopg2's DeadlockDetected / SerializationFailure; .orig has the SQLSTATE)."""
+    return isinstance(exc, DBAPIError) and getattr(exc.orig, 'pgcode', None) in DB_BUSY_PGCODES
+
+
+def retry_on_db_busy(view=None, json_reply=False):
+    """For the stock-moving POST routes, placed under @role_required: two of them can lock the same stock rows in opposite order
+    (complete a production job = Detail then material lot; edit a delivery note = lines in note order) and PostgreSQL then aborts
+    one with a deadlock error - which used to be a 500. Instead the transaction is rolled back and the WHOLE handler run once more
+    from the request (it re-reads every row: rollback expires all loaded objects and drops the ones the failed attempt added);
+    failing again, it is rolled back and the user gets DB_BUSY_MESSAGE (a flash and a redirect back, or JSON for an AJAX route).
+    Flashes and the log_action() text of a failed attempt are discarded so nothing is shown or logged twice.
+    No global lock order on purpose - one retry covers the rare collision."""
+    if view is None:
+        return lambda v: retry_on_db_busy(v, json_reply)
+
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        flashes = list(session.get('_flashes', []))
+        for attempt in (1, 2):
+            try:
+                return view(*args, **kwargs)
+            except DBAPIError as e:
+                if not _is_db_busy(e):
+                    raise
+                db.session.rollback()
+                session['_flashes'] = list(flashes)
+                for key in ('log_action', 'log_action_details', '_material_types'):
+                    g.pop(key, None)
+                app.logger.warning('%s: %s on attempt %d (pgcode %s)', request.endpoint,
+                                   'retrying' if attempt == 1 else 'gave up', attempt, e.orig.pgcode)
+        g.log_action = f'{request.endpoint}: отказано - базата данни беше заета, нищо не е променено'
+        if json_reply:
+            return jsonify({'status': 'error', 'message': DB_BUSY_MESSAGE}), 503
+        flash(DB_BUSY_MESSAGE, 'danger')
+        return redirect(request.referrer or url_for('dashboard'))
+
+    return wrapper
+
+
 def log_action(text, details=None):
     """
     Call from inside a route - anywhere before the response is returned - to
@@ -10305,7 +10349,7 @@ def update_material_request(request_id):
 @app.route('/storage/details')
 @role_required(['admin', 'worker'])
 def storage_details():
-    details = Detail.query.order_by(Detail.name).all()
+    details = Detail.query.order_by(Detail.name).options(db.joinedload(Detail.material)).all()
     return render_template('storage_details.html', details=details, active_page='storage')
 
 
@@ -10971,6 +11015,7 @@ def admin_add_supplier():
 
 @app.route('/admin/delivery-notes/create', methods=['POST'])
 @role_required('admin')
+@retry_on_db_busy
 def create_delivery_note():
     """
     Records a delivery note and bumps stock_quantity on every referenced
@@ -11019,6 +11064,7 @@ def create_delivery_note():
 
 @app.route('/admin/delivery-notes/<int:note_id>/edit', methods=['POST'])
 @role_required('admin')
+@retry_on_db_busy
 def edit_delivery_note(note_id):
     """
     Rewrites a recorded DeliveryNote from the same form as create_delivery_note():
@@ -11060,6 +11106,7 @@ def edit_delivery_note(note_id):
 
 @app.route('/admin/delivery-notes/<int:note_id>/delete', methods=['POST'])
 @role_required('admin')
+@retry_on_db_busy
 def delete_delivery_note(note_id):
     """Deletes a DeliveryNote the reverse way it was recorded: every line's
     intake is taken back out of stock. Catalog rows the note created (new
@@ -11070,6 +11117,7 @@ def delete_delivery_note(note_id):
 
 @app.route('/admin/client-delivery-notes/<int:note_id>/delete', methods=['POST'])
 @role_required('admin')
+@retry_on_db_busy
 def delete_client_delivery_note(note_id):
     """Deletes a ClientDeliveryNote: everything it issued goes back into stock."""
     note = _lock_or_404(ClientDeliveryNote, note_id)
@@ -11267,6 +11315,7 @@ def admin_client_delivery_notes():
 
 @app.route('/admin/client-delivery-notes/create', methods=['POST'])
 @role_required('admin')
+@retry_on_db_busy
 def create_client_delivery_note():
     """
     Records a client delivery note and decrements stock_quantity on every
@@ -11302,6 +11351,7 @@ def create_client_delivery_note():
 
 @app.route('/admin/client-delivery-notes/<int:note_id>/edit', methods=['POST'])
 @role_required('admin')
+@retry_on_db_busy
 def edit_client_delivery_note(note_id):
     """Rewrites a ClientDeliveryNote: the old lines' stock is given back,
     then the submitted lines are issued fresh - mirrors edit_delivery_note()."""
@@ -13394,7 +13444,9 @@ def admin_product_offer(product_id):
     # by hand). Static print document, no server round-trip needed.
     client_pricing = {
         c.id: {'detail_type': c.detail_adjustment_type, 'detail_percent': c.detail_adjustment_percent,
-               'product_type': c.product_adjustment_type, 'product_percent': c.product_adjustment_percent}
+               'product_type': c.product_adjustment_type, 'product_percent': c.product_adjustment_percent,
+               # the server's own figure - the JS can't rebuild the unrounded price to the cent
+               'product_price': calculate_product_pricing(product, c)['sell_price']}
         for c in clients
     }
     return render_template('offer.html', product=product, pricing=pricing, customer_name=customer_name,
@@ -13791,6 +13843,7 @@ def cancel_order(order_id):
 # АДМИН СТРАНИЦА - СПРАВКА ЗА ПРОИЗВОДСТВО И ОСТАТЪЦИ
 @app.route('/admin/production', methods=['GET', 'POST'])
 @login_required
+@retry_on_db_busy(json_reply=True)
 def admin_production_report():
     if not current_user.is_staff:
         flash('Нямате достъп до тази страница.', 'danger')
@@ -13911,7 +13964,9 @@ def admin_production_orders():
     JSON for the wizard's client-side math - same *_data-as-JSON convention
     as admin_delivery_notes().
     """
-    details = Detail.query.order_by(Detail.name).all()
+    details = Detail.query.order_by(Detail.name).options(db.joinedload(Detail.material)).all()
+    # every price lot once, cheapest first; each detail picks its own lots out of this list below
+    all_lots = MaterialPrice.query.order_by(MaterialPrice.cost_per_m2).all()
     details_data = [{
         'id': d.id,
         'name': d.name,
@@ -13931,19 +13986,22 @@ def admin_production_orders():
             # would silently compare the wrong units.
             {'id': m.id, 'label': f'{format_material_option(m)} — {m.cost_per_m2:.2f} €/{material_unit_short(m.type)}',
              'stock': round(_material_available_qty(m), 3)}
-            for m in MaterialPrice.query.filter_by(
-                display_name=d.material.display_name, brand=d.material.brand, type=d.material.type,
-                sheet_width_mm=d.material.sheet_width_mm, sheet_length_mm=d.material.sheet_length_mm,
-                thickness_mm=d.material.thickness_mm,
-            ).order_by(MaterialPrice.cost_per_m2).all()
+            for m in all_lots
+            if (m.display_name, m.brand, m.type, m.sheet_width_mm, m.sheet_length_mm, m.thickness_mm) ==
+               (d.material.display_name, d.material.brand, d.material.type, d.material.sheet_width_mm,
+                d.material.sheet_length_mm, d.material.thickness_mm)
         ],
     } for d in details]
 
-    pending_jobs = ProductionOrder.query.filter_by(status='pending').order_by(ProductionOrder.created_at.asc()).all()
+    job_options = (db.joinedload(ProductionOrder.detail), db.joinedload(ProductionOrder.material),
+                   db.joinedload(ProductionOrder.created_by), db.joinedload(ProductionOrder.completed_by))
+    pending_jobs = (ProductionOrder.query.filter_by(status='pending').order_by(ProductionOrder.created_at.asc())
+                    .options(*job_options).all())
     # Excludes reversed ('undone') jobs - soft-deleted by delete_production_
     # order() to keep a record for admin_material_history(), but no longer
     # an active/completed job from this page's point of view.
-    done_jobs = ProductionOrder.query.filter_by(status='done', reversed_at=None).order_by(ProductionOrder.completed_at.desc()).all()
+    done_jobs = (ProductionOrder.query.filter_by(status='done', reversed_at=None).order_by(ProductionOrder.completed_at.desc())
+                 .options(*job_options).all())
 
     return render_template(
         'admin_production_orders.html', details=details, details_data=details_data,
@@ -14009,6 +14067,7 @@ def create_production_order():
 
 @app.route('/admin/production-orders/<int:order_id>/complete', methods=['POST'])
 @role_required(['admin', 'worker'])
+@retry_on_db_busy
 def complete_production_order(order_id):
     """
     Marks a ProductionOrder done: the operator enters how much material was
@@ -14064,6 +14123,7 @@ def complete_production_order(order_id):
 
 @app.route('/admin/production-orders/<int:order_id>/delete', methods=['POST'])
 @role_required(['admin', 'worker'])
+@retry_on_db_busy
 def delete_production_order(order_id):
     """
     A pending job never touched stock (see create_production_order()), so
@@ -16831,12 +16891,37 @@ def _mqtt_mark_all_offline():
                 state['online'] = False
 
 
-def _handle_mqtt_message(topic, payload):
-    """Dispatches one incoming message to _mqtt_state (power, ShellyDevice)
-    or _mqtt_temp_state (TemperatureSensor), whichever's configured topic
-    prefixes it matches. Prefixes are looked up fresh per message (cheap, a
-    handful of rows) rather than cached at subscribe time, so adding a new
-    device's topic takes effect without restarting the listener."""
+# Topic prefixes of every MQTT device, for _handle_mqtt_message(). They used to be queried (three SELECTs) on EVERY message of the '#'
+# subscription - every Shelly publish from every device hit the database. Now they are loaded once and reloaded after any commit that
+# touched a ShellyDevice / TemperatureSensor / Convector row (the session events below; every route that adds, edits or deletes one
+# goes through the ORM), so a new device still counts from its first message. 'gen' moves on each such commit; a load that started
+# before it (and so may have read the old rows) is stored under the old gen and thrown away on the next message.
+# MQTT_TOPICS_MAX_AGE is the backstop for what the events cannot see: raw SQL, or an edit made in ANOTHER process.
+# ponytail: per-process cache - fine for the one gunicorn worker; with several, an edit in another worker shows up here only after
+# MQTT_TOPICS_MAX_AGE seconds (a cross-process signal, e.g. LISTEN/NOTIFY, if that is ever too slow).
+MQTT_TOPICS_MAX_AGE = 300
+_MQTT_TOPIC_MODELS = (ShellyDevice, TemperatureSensor, Convector)
+_mqtt_topics = {'gen': 0, 'loaded_gen': None, 'at': 0.0, 'rows': None}
+
+
+@db.event.listens_for(db.session, 'after_flush')
+def _mqtt_topics_note_change(session, flush_context):
+    if any(isinstance(o, _MQTT_TOPIC_MODELS) for o in (*session.new, *session.dirty, *session.deleted)):
+        session.info['mqtt_topics_changed'] = True
+
+
+@db.event.listens_for(db.session, 'after_commit')
+def _mqtt_topics_invalidate(session):
+    if session.info.pop('mqtt_topics_changed', False):
+        _mqtt_topics['gen'] += 1
+
+
+def _mqtt_topic_rows():
+    """(power prefixes, [(temp prefix, sensor_type)], [(convector prefix, device_type)]) - cached, see _mqtt_topics above."""
+    c = _mqtt_topics
+    if c['rows'] is not None and c['loaded_gen'] == c['gen'] and time.monotonic() - c['at'] < MQTT_TOPICS_MAX_AGE:
+        return c['rows']
+    gen = c['gen']
     with app.app_context():
         try:
             power_prefixes = [t for (t,) in db.session.query(ShellyDevice.mqtt_topic)
@@ -16846,6 +16931,17 @@ def _handle_mqtt_message(topic, payload):
                 .filter(Convector.connection_type == 'mqtt', Convector.mqtt_topic.isnot(None)).all()
         finally:
             db.session.remove()
+    c.update(rows=(power_prefixes, temp_sensors, conv_sensors), loaded_gen=gen, at=time.monotonic())
+    return c['rows']
+
+
+def _handle_mqtt_message(topic, payload):
+    """Dispatches one incoming message to _mqtt_state (power, ShellyDevice)
+    or _mqtt_temp_state (TemperatureSensor), whichever's configured topic
+    prefixes it matches. Prefixes come from _mqtt_topic_rows() (cached,
+    reloaded after any device change), so adding a new device's topic takes
+    effect without restarting the listener."""
+    power_prefixes, temp_sensors, conv_sensors = _mqtt_topic_rows()
 
     prefix = next((p for p in power_prefixes if topic == f'{p}/online' or topic.startswith(f'{p}/emeter/')
                    or topic.startswith(f'{p}/relay/') or topic.startswith(f'{p}/status/')
@@ -17789,7 +17885,9 @@ def _heatpump_run_cmds(hp):
 def _heatpump_loop():
     """Sole owner of the pump connection: the converter allows one TCP client
     and the pump one session, so everything (live view + history) goes
-    through this thread. Any error drops the connection and retries next tick.
+    through this thread. A pump error drops the connection and retries next
+    tick; a database error (host setting, the minute's HeatPumpReading row)
+    is rolled back and logged as 'heatpump-db' and leaves the connection up.
 
     ponytail: one thread per process - behind several gunicorn workers each
     would fight over the single connection; run one worker or add a lock."""
@@ -17797,9 +17895,21 @@ def _heatpump_loop():
     last_slow = 0.0
     while True:
         try:
-            with app.app_context():
-                host = get_text(HEATPUMP_HOST_KEY, '').strip()
-                db.session.remove()
+            db_ok = True
+            try:
+                with app.app_context():
+                    try:
+                        host = get_text(HEATPUMP_HOST_KEY, '').strip()
+                    finally:
+                        db.session.remove()
+            except Exception:
+                # A database error is not a pump error: keep the open session (expensive to re-establish, the converter takes one
+                # client) and carry on with the host we have. With no session yet there is nothing to keep - the usual path below.
+                if hp is None:
+                    raise
+                _poller_failed('heatpump-db')
+                db_ok = False
+                host = hp_host
             if not host:
                 _heatpump_live.update(online=False, error='не е зададен адрес на конвертора')
                 _poller_seen.pop('heatpump', None)  # not configured: /health says "not_started", not "stale"
@@ -17814,16 +17924,22 @@ def _heatpump_loop():
                 now = time.time()
                 if now - last_slow >= HEATPUMP_SLOW_INTERVAL:
                     _heatpump_live['slow'] = _heatpump_slow(hp)
+                    last_slow = now
                     with app.app_context():
                         try:
                             db.session.add(HeatPumpReading(ts=int(now), data_json=json.dumps(
                                 {**data, 'Betriebsart': _heatpump_live['slow'].get('Betriebsart')})))
                             db.session.commit()
+                        except Exception:
+                            # Database failure domain: this minute's row is lost, the pump connection stays up.
+                            db.session.rollback()
+                            _poller_failed('heatpump-db')
+                            db_ok = False
                         finally:
                             db.session.remove()
-                    last_slow = now
                 _heatpump_live.update(ts=now, online=True, error=None, data=data)
-                _poller_mark('heatpump')
+                if db_ok:  # a tick that could not use the database is not a success for /health
+                    _poller_mark('heatpump')
         except Exception as e:
             _poller_failed('heatpump')
             _poller_seen.setdefault('heatpump', time.time())  # configured but failing: counts as started, so /health reports it stale
@@ -20407,20 +20523,50 @@ DETECT_MIN_SCORE = float(os.environ.get('DETECT_MIN_SCORE', '0.4'))
 DETECT_KEEP_DAYS = int(os.environ.get('DETECT_KEEP_DAYS', '30'))
 DETECTION_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'detection_files')
 os.makedirs(DETECTION_FOLDER, exist_ok=True)
+DETECT_LOCK_RETRY = 30        # seconds between attempts to take (or, after a lost connection, re-take) the detector lock
+DETECT_LOCK_CHECK_EVERY = 60  # seconds between checks that the held lock's connection is still alive
 _detect_started = False
 _detect_lock_conn = None
+_detect_lock_checked = 0.0    # time.monotonic() of the last successful check of the held lock
+_detect_lock_broken = False   # inside a failure episode (already logged once)
 
 
-def _detection_lock():
+def _detection_lock(held=False):
     """Only one process runs the detector (gunicorn has several workers): a Postgres advisory lock held on a dedicated connection.
-    Without Postgres (tests, sqlite) the caller just runs. Called until it returns True, then never again."""
-    global _detect_lock_conn
+    Without Postgres (tests, sqlite) the caller just runs. Called on every pass with whether the lock is held: not held -> try to
+    take it; held -> every DETECT_LOCK_CHECK_EVERY confirm the connection is alive and still holds it. The lock lives and dies with
+    that connection (DB restart, network blip): a dead one used to be kept forever, so the detector either never got the lock again
+    or kept running without it next to a worker that had taken it over. Now any error drops the connection, returns False (the
+    caller waits DETECT_LOCK_RETRY and tries again on a fresh one) and is logged once per failure episode."""
+    global _detect_lock_conn, _detect_lock_checked, _detect_lock_broken
     if db.engine.dialect.name != 'postgresql':
         return True
-    if _detect_lock_conn is None:
-        _detect_lock_conn = db.engine.connect()
-    got = _detect_lock_conn.execute(db.text('SELECT pg_try_advisory_lock(735100)')).scalar()
-    _detect_lock_conn.commit()
+    if held and time.monotonic() - _detect_lock_checked < DETECT_LOCK_CHECK_EVERY:
+        return True
+    try:
+        if _detect_lock_conn is None:
+            _detect_lock_conn = db.engine.connect()
+        if held:  # session-level advisory locks stack, so check pg_locks instead of taking it again
+            got = _detect_lock_conn.execute(db.text(
+                "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND objid = 735100 AND granted"
+                " AND pid = pg_backend_pid()")).scalar()
+        else:
+            got = _detect_lock_conn.execute(db.text('SELECT pg_try_advisory_lock(735100)')).scalar()
+        _detect_lock_conn.commit()
+    except Exception:
+        if not _detect_lock_broken:
+            _detect_lock_broken = True
+            app.logger.exception('detector: advisory-lock connection failed - dropped, retrying every %d s', DETECT_LOCK_RETRY)
+        try:
+            _detect_lock_conn.close()
+        except Exception:
+            pass
+        _detect_lock_conn = None
+        return False
+    if _detect_lock_broken:
+        _detect_lock_broken = False
+        app.logger.warning('detector: advisory-lock connection is back')
+    _detect_lock_checked = time.monotonic()
     return bool(got)
 
 
@@ -20521,7 +20667,7 @@ def start_detection_worker():
         while True:
             t0 = time.time()
             _detection_loop_once(memo, st)
-            time.sleep(max(0.2, DETECT_INTERVAL - (time.time() - t0)) if st['has_lock'] else 30)
+            time.sleep(max(0.2, DETECT_INTERVAL - (time.time() - t0)) if st['has_lock'] else DETECT_LOCK_RETRY)
 
     threading.Thread(target=loop, daemon=True, name='detector').start()
 
@@ -20532,7 +20678,7 @@ def _detection_loop_once(memo, st):
     application context" out of the handler, the thread died for good and its advisory-lock connection stayed held, so nothing
     else could take over either. _poller_run_tick() cleans the session up inside the context and never raises."""
     def step():
-        st['has_lock'] = st['has_lock'] or _detection_lock()
+        st['has_lock'] = _detection_lock(st['has_lock'])
         if not st['has_lock']:
             return
         now = time.time()
@@ -23953,14 +24099,20 @@ def upload_offer_item_image():
     })
 
 
-def _offer_product_json(p):
-    """One entry of admin_offer_edit.html's PRODUCTS array."""
+def _offer_product_json(p, clients=()):
+    """One entry of admin_offer_edit.html's PRODUCTS array. client_prices is
+    the server's own price for each of `clients` with Продукти terms - the
+    terms apply to the unrounded list price, which the JS can't rebuild to
+    the cent from the rounded breakdown."""
     pricing = calculate_product_pricing(p)
     return {
         'id': p.id, 'name': p.name, 'price': pricing['sell_price'],
         'details_subtotal': pricing['details_subtotal'],
         'extra_costs_subtotal': pricing['extra_costs_subtotal'],
         'markup_percent': p.markup_percent,
+        # ponytail: products x clients-with-terms pricing calls per page load; fine at shop scale
+        'client_prices': {c.id: calculate_product_pricing(p, c)['sell_price'] for c in clients
+                          if c.product_adjustment_type and c.product_adjustment_percent},
     }
 
 
@@ -23978,9 +24130,13 @@ def _offer_picker_context():
     frozen column - neither a later catalog price change nor a later edit to
     the client's discount percent ever touches an already-saved offer.
     """
-    products = [_offer_product_json(p) for p in Product.query.order_by(Product.name).all()]
-    details = [{'id': d.id, 'name': d.name, 'price': d.total_price} for d in Detail.query.order_by(Detail.name).all()]
     clients = Client.query.order_by(Client.name).all()
+    products = [_offer_product_json(p, clients) for p in Product.query.order_by(Product.name).options(
+        db.selectinload(Product.extra_costs),
+        db.selectinload(Product.product_details).joinedload(ProductDetail.detail)
+        .selectinload(Detail.operations).joinedload(Operation.service)).all()]
+    details = [{'id': d.id, 'name': d.name, 'price': d.total_price} for d in Detail.query.order_by(Detail.name).options(
+        db.selectinload(Detail.operations).joinedload(Operation.service)).all()]
     client_pricing = {
         c.id: {'detail_type': c.detail_adjustment_type, 'detail_percent': c.detail_adjustment_percent,
                'product_type': c.product_adjustment_type, 'product_percent': c.product_adjustment_percent}
@@ -24165,16 +24321,19 @@ def admin_offer_edit(offer_id):
 @role_required('admin')
 def admin_offer_create_order(offer_id):
     """Turns the checked product/detail lines of an existing Offer into a new
-    Order, via the same product-recipe-snapshot / current-catalog-price logic
-    as create_order()'s cart loop (component snapshot for products,
-    detail.total_price - material plus the detail's own permanent operations -
-    for standalone details) - offer lines don't carry per-detail ad-hoc
-    operations/attachments, so those parts of that loop don't apply here.
-    Prices are freshly computed against offer.client (not the offer's own
-    frozen OfferItem.unit_price, which may be a hand-negotiated one-off) -
-    same client discount/markup a self-service order would get, see
-    calculate_product_pricing()/detail_price_for(). Text lines have no
-    product_id/detail_id (see OfferItem) and can't be selected."""
+    Order, via the same product-recipe-snapshot logic as create_order()'s cart
+    loop (component snapshot for products) - offer lines don't carry
+    per-detail ad-hoc operations/attachments, so those parts of that loop
+    don't apply here.
+    Owner's decision (2026-10-15): an order created from an offer is priced
+    AS QUOTED - OrderItem.unit_price is frozen to the offer line's own
+    unit_price (possibly a hand-negotiated one-off) minus the offer's
+    whole-offer discount_percent, never re-priced from the current catalog.
+    Only a line with no price at all falls back to the fresh server price
+    (calculate_product_pricing()/detail_price_for() against offer.client).
+    OrderItem.quantity_ordered is an Integer, so a fractional quantity is
+    rounded UP (2.5 pieces cannot be delivered as 2) and the admin is told.
+    Text lines have no product_id/detail_id (see OfferItem) and can't be selected."""
     offer = Offer.query.get_or_404(offer_id)
     item_ids = request.form.getlist('item_ids', type=int)
     customer_name = request.form.get('customer_name', '').strip()
@@ -24193,6 +24352,8 @@ def admin_offer_create_order(offer_id):
     db.session.flush()
 
     added_any = False
+    rounded_up = []
+    discount_factor = 1 - (offer.discount_percent or 0) / 100
     for oi in selected:
         # The offer's own quantity is just the default - the order-creation
         # panel lets an admin tweak it per line before creating the order
@@ -24201,18 +24362,22 @@ def admin_offer_create_order(offer_id):
         # back to the offer's quantity when that field is missing/invalid.
         qty_override = request.form.get(f'qty_{oi.id}', '')
         try:
-            qty = int(float(qty_override)) if qty_override else 0
+            wanted = float(qty_override) if qty_override else 0.0
         except ValueError:
-            qty = 0
-        if qty < 1:
-            qty = int(oi.quantity) if oi.quantity and oi.quantity >= 1 else 1
+            wanted = 0.0
+        if not wanted > 0:  # also catches nan
+            wanted = oi.quantity if oi.quantity and oi.quantity > 0 else 1
+        qty = max(1, math.ceil(wanted - 1e-9))  # Integer column: never round down
+        if qty - wanted > 1e-9:
+            rounded_up.append(f'{oi.name or "ред"} ({wanted:g} -> {qty})')
         if oi.product_id:
             product = Product.query.get(oi.product_id)
             if not product:
                 continue
-            pricing = calculate_product_pricing(product, offer.client)
+            unit_price = (round(oi.unit_price * discount_factor, 2) if oi.unit_price is not None
+                          else calculate_product_pricing(product, offer.client)['sell_price'])  # no quoted price: fresh one
             order_item = OrderItem(order_id=new_order.id, product_id=product.id,
-                                    quantity_ordered=qty, unit_price=pricing['sell_price'])
+                                    quantity_ordered=qty, unit_price=unit_price)
             db.session.add(order_item)
             db.session.flush()
             for pd in product.product_details:
@@ -24225,8 +24390,10 @@ def admin_offer_create_order(offer_id):
             detail = Detail.query.get(oi.detail_id)
             if not detail:
                 continue
+            unit_price = (round(oi.unit_price * discount_factor, 2) if oi.unit_price is not None
+                          else detail_price_for(detail, offer.client))  # no quoted price: fresh one
             db.session.add(OrderItem(order_id=new_order.id, detail_id=detail.id,
-                                      quantity_ordered=qty, unit_price=detail_price_for(detail, offer.client)))
+                                      quantity_ordered=qty, unit_price=unit_price))
             added_any = True
 
     if not added_any:
@@ -24237,6 +24404,8 @@ def admin_offer_create_order(offer_id):
     db.session.commit()
     log_action(f'Създадена поръчка {new_order.order_number} от оферта № {offer.number} за "{customer_name}" ({len(selected)} артикул(и))')
     flash(f'Поръчка {new_order.order_number} беше създадена от офертата.', 'success')
+    if rounded_up:
+        flash('Количеството е закръглено нагоре до цяло число (бройките са цели): ' + '; '.join(rounded_up) + '.', 'warning')
     return redirect(url_for('admin_production_report'))
 
 
@@ -24288,7 +24457,7 @@ def api_offer_item_to_product():
     db.session.commit()
     log_action(f'{"Създаден продукт" if created else "Свързан продукт"} "{product.name}" от ред в оферта'
                + (f' № {item.offer.number}' if item else ''))
-    return jsonify({'status': 'success', 'created': created, 'product': _offer_product_json(product)})
+    return jsonify({'status': 'success', 'created': created, 'product': _offer_product_json(product, Client.query.all())})
 
 
 @app.route('/admin/offers/<int:offer_id>/delete', methods=['POST'])

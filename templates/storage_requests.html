@@ -35,7 +35,7 @@
         <h3 style="margin-bottom: 4px;">Нова заявка за материали</h3>
         <p class="section-subtitle" style="margin: 0 0 16px 0;">Добавете колкото материали са необходими, след което запишете - всеки се появява като отделна заявка по-долу.</p>
 
-        <form method="POST" action="{{ url_for('create_material_request') }}" id="requestForm">
+        <form method="POST" action="{{ url_for('create_material_request') }}" id="requestForm" data-once>
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
             <div class="add-item-row">

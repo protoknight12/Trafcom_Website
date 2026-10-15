@@ -152,7 +152,7 @@
             </table>
         </div>
 
-        <form method="POST" id="orderForm" style="margin-top: 24px;">
+        <form method="POST" id="orderForm" style="margin-top: 24px;" data-once>
             {% include 'partials/csrf_field.html' %}
             <div class="form-group" style="margin-bottom: 20px;{% if not client_section_on('machines') %} display: none;{% endif %}">
                 <label for="machine_id">{{ _('Назначи машина (по избор)') }}</label>

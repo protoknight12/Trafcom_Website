@@ -85,3 +85,13 @@ def test_rejects_line_without_qty_or_price(admin_client):
     for data in ({'name': 'Бележка'}, {'name': 'Бележка', 'quantity': '0', 'unit_price': '5'}, {'name': '', 'quantity': '1', 'unit_price': '5'}):
         assert admin_client.post('/api/offer-item-to-product', data=data).status_code == 400
     assert Product.query.count() == 0
+
+
+def test_converted_line_is_ordered_at_quoted_price_less_offer_discount(admin_client):
+    offer, item = _offer_with_text_line(price=120.0)
+    offer.discount_percent = 10
+    db.session.commit()
+    admin_client.post('/api/offer-item-to-product', data={
+        'name': item.name, 'quantity': '3', 'unit_price': '120', 'offer_item_id': str(item.id)})
+    admin_client.post(f'/admin/offers/{offer.id}/create-order', data={'customer_name': 'X', 'item_ids': [str(item.id)]})
+    assert OrderItem.query.one().unit_price == 108.0  # quoted 120 - 10%, not the product's 120

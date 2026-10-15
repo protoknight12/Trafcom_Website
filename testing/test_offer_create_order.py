@@ -1,7 +1,9 @@
 """
 pytest regression test for admin_offer_create_order() - turning checked
 product/detail lines of an Offer into a real Order (see admin_offer_edit.html's
-per-row checkboxes). Uses the Flask test client since this needs real
+per-row checkboxes). The order is priced as QUOTED (owner's decision
+2026-10-15): the offer line's own price less the offer's discount_percent;
+only an unpriced line falls back to the fresh catalog price. Uses the Flask test client since this needs real
 request/session/login behavior, same pattern as
 test_quick_create_product_components.py.
 
@@ -108,17 +110,95 @@ def test_create_order_from_selected_offer_items(client):
 
         product_line = next(i for i in items if i.product_id == product_id)
         assert product_line.quantity_ordered == 3
-        # price must come from the current catalog, not the offer's frozen 999.0
-        assert product_line.unit_price != 999.0
+        # frozen as quoted (999.0), not re-priced from the catalog
+        assert product_line.unit_price == 999.0
         components = OrderItemComponent.query.filter_by(order_item_id=product_line.id).all()
         assert len(components) == 1 and components[0].detail_id == detail_id
         assert components[0].quantity_needed == 2 * 3  # ProductDetail quantity x ordered qty
 
         detail_line = next(i for i in items if i.detail_id == detail_id)
         assert detail_line.quantity_ordered == 4
+        assert detail_line.unit_price == 999.0  # the catalog's 17.5 must not leak in
+
+
+def _post_flashes(c, offer_id, data):
+    res = c.post(f'/admin/offers/{offer_id}/create-order', data=data)
+    assert res.status_code == 302
+    with c.session_transaction() as sess:
+        return [msg for _cat, msg in sess.get('_flashes', [])]
+
+
+def test_create_order_freezes_hand_edited_line_price(client):
+    c, offer_id, product_item_id, detail_item_id, _t, _p, _d = client
+    with flask_app.app_context():
+        db.session.get(OfferItem, detail_item_id).unit_price = 12.34  # typed by hand in the editor
+        db.session.commit()
+    c.post(f'/admin/offers/{offer_id}/create-order', data={'customer_name': 'QA Typed', 'item_ids': [str(detail_item_id)]})
+    with flask_app.app_context():
+        order = Order.query.filter_by(customer_name='QA Typed').one()
+        assert OrderItem.query.filter_by(order_id=order.id).one().unit_price == 12.34
+
+
+def test_create_order_applies_offer_discount_to_quoted_price(client):
+    c, offer_id, product_item_id, detail_item_id, _t, product_id, _d = client
+    with flask_app.app_context():
+        offer = db.session.get(Offer, offer_id)
+        offer.discount_percent = 10
+        db.session.get(OfferItem, product_item_id).unit_price = 1.11  # 0.999 -> 1.0
+        db.session.get(OfferItem, detail_item_id).unit_price = 100.0  # 90.0
+        db.session.commit()
+    c.post(f'/admin/offers/{offer_id}/create-order', data={
+        'customer_name': 'QA Disc', 'item_ids': [str(product_item_id), str(detail_item_id)]})
+    with flask_app.app_context():
+        order = Order.query.filter_by(customer_name='QA Disc').one()
+        items = OrderItem.query.filter_by(order_id=order.id).all()
+        assert next(i for i in items if i.product_id == product_id).unit_price == 1.0
+        assert next(i for i in items if i.product_id is None).unit_price == 90.0
+
+
+def test_create_order_unpriced_line_falls_back_to_catalog_price(client):
+    c, offer_id, product_item_id, detail_item_id, _t, product_id, _d = client
+    with flask_app.app_context():
+        db.session.get(Offer, offer_id).discount_percent = 50  # must not touch a fresh price
+        db.session.get(OfferItem, product_item_id).unit_price = None
+        db.session.get(OfferItem, detail_item_id).unit_price = None
+        db.session.commit()
+    c.post(f'/admin/offers/{offer_id}/create-order', data={
+        'customer_name': 'QA Unpriced', 'item_ids': [str(product_item_id), str(detail_item_id)]})
+    with flask_app.app_context():
+        order = Order.query.filter_by(customer_name='QA Unpriced').one()
+        items = OrderItem.query.filter_by(order_id=order.id).all()
         # Detail.total_price = calculated_price (7.5) + its permanent Operation
         # (10 min @ 60 EUR/h = 10.0) - must NOT be calculated_price alone.
-        assert detail_line.unit_price == 17.5
+        assert next(i for i in items if i.product_id is None).unit_price == 17.5
+        assert next(i for i in items if i.product_id == product_id).unit_price == 35.0  # 2 x 17.5
+
+
+def test_create_order_fractional_quantity_rounds_up_and_says_so(client):
+    c, offer_id, product_item_id, detail_item_id, _t, product_id, _d = client
+    with flask_app.app_context():
+        db.session.get(OfferItem, detail_item_id).quantity = 1.5  # the offer's own default
+        db.session.commit()
+    flashes = _post_flashes(c, offer_id, {
+        'customer_name': 'QA Frac', 'item_ids': [str(product_item_id), str(detail_item_id)],
+        f'qty_{product_item_id}': '2.5'})
+    with flask_app.app_context():
+        order = Order.query.filter_by(customer_name='QA Frac').one()
+        items = OrderItem.query.filter_by(order_id=order.id).all()
+        product_line = next(i for i in items if i.product_id == product_id)
+        assert product_line.quantity_ordered == 3
+        assert next(i for i in items if i.product_id is None).quantity_ordered == 2
+        assert OrderItemComponent.query.filter_by(order_item_id=product_line.id).one().quantity_needed == 2 * 3
+    rounded = [m for m in flashes if 'закръглено нагоре' in m]
+    assert len(rounded) == 1 and '2.5 -> 3' in rounded[0] and '1.5 -> 2' in rounded[0]
+
+
+def test_create_order_whole_quantities_get_no_rounding_flash(client):
+    c, offer_id, product_item_id, detail_item_id, _t, _p, _d = client
+    flashes = _post_flashes(c, offer_id, {
+        'customer_name': 'QA Whole', 'item_ids': [str(product_item_id), str(detail_item_id)],
+        f'qty_{product_item_id}': '3.0'})
+    assert not [m for m in flashes if 'закръглено' in m]
 
 
 def test_create_order_respects_qty_override(client):

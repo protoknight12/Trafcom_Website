@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-09-02 13:29+0300\n"
+"POT-Creation-Date: 2026-10-15 15:09+0300\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -17,273 +17,300 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
-#: app.py:485
+#: app.py:650
 msgid "ЕИК трябва да съдържа точно 9 цифри."
 msgstr ""
 
-#: app.py:500
+#: app.py:665
 msgid "Невалиден имейл адрес."
 msgstr ""
 
-#: app.py:3510
+#: app.py:4870
+msgid "Нямате достъп до това приложение."
+msgstr ""
+
+#: app.py:5551 app.py:9153
 msgid "Моля въведете име на пресет."
 msgstr ""
 
-#: app.py:3514
+#: app.py:5555 app.py:9157
 msgid "Невалидни настройки."
 msgstr ""
 
-#: app.py:3531
+#: app.py:5572 app.py:9173
 msgid "Нямате достъп."
 msgstr ""
 
-#: app.py:3720
+#: app.py:9341 app.py:9371 app.py:9386
+msgid "Твърде много грешни кодове. Опитайте отново след 15 минути."
+msgstr ""
+
+#: app.py:9353
 msgid "Невалидно потребителско име или парола."
 msgstr ""
 
-#: app.py:3742
+#: app.py:9367
+msgid "Времето за въвеждане на кода изтече. Влезте отново."
+msgstr ""
+
+#: app.py:9388
 msgid "Невалиден код."
 msgstr ""
 
-#: app.py:3769
+#: app.py:9414
 msgid ""
 "Ако имейлът съществува в системата, изпратихме връзка за възстановяване "
 "на паролата."
 msgstr ""
 
-#: app.py:3782
+#: app.py:9427
 msgid "Връзката за възстановяване е изтекла. Заявете нова."
 msgstr ""
 
-#: app.py:3785 app.py:3790
+#: app.py:9430 app.py:9437
 msgid "Невалидна връзка за възстановяване."
 msgstr ""
 
-#: app.py:3797 app.py:3833
+#: app.py:9445 app.py:9485 app.py:9577
 msgid "Паролата трябва да бъде поне 8 символа."
 msgstr ""
 
-#: app.py:3800 templates/reset_password.html:42
+#: app.py:9448 app.py:9580 templates/reset_password.html:42
 msgid "Паролите не съвпадат."
 msgstr ""
 
-#: app.py:3804
+#: app.py:9452
 msgid "Паролата е сменена успешно. Влезте с новата парола."
 msgstr ""
 
-#: app.py:3817
+#: app.py:9465
 msgid ""
 "Сайтът е в момента на техническа поддръжка. Регистрацията на нови профили"
 " е временно спряна."
 msgstr ""
 
-#: app.py:3826 app.py:3895
+#: app.py:9478 app.py:9552
 msgid "Имейл е задължителен."
 msgstr ""
 
-#: app.py:3852
+#: app.py:9504
 msgid "Това потребителско име или имейл вече съществува."
 msgstr ""
 
-#: app.py:3856
+#: app.py:9508
 msgid "Регистрацията е успешна! Проверете имейла си, за да потвърдите адреса."
 msgstr ""
 
-#: app.py:3867
+#: app.py:9519
 msgid "Връзката за потвърждение е изтекла. Заявете нова от профила си."
 msgstr ""
 
-#: app.py:3870 app.py:3875
+#: app.py:9522 app.py:9528
 msgid "Невалидна връзка за потвърждение."
 msgstr ""
 
-#: app.py:3880
+#: app.py:9533
 msgid "Имейлът е потвърден успешно."
 msgstr ""
 
-#: app.py:3903
-msgid "Този имейл вече се използва от друг акаунт."
-msgstr ""
-
-#: app.py:3906
-msgid "Имейлът е обновен. Изпратихме връзка за потвърждение на новия адрес."
-msgstr ""
-
-#: app.py:3915
-msgid "Имейлът вече е потвърден."
-msgstr ""
-
-#: app.py:3918
-msgid "Нямате зададен имейл."
-msgstr ""
-
-#: app.py:3921
-msgid "Изпратихме нова връзка за потвърждение."
-msgstr ""
-
-#: app.py:3929
-msgid "Двуфакторното удостоверяване вече е активирано."
-msgstr ""
-
-#: app.py:3936
-msgid "Невалиден код. Опитайте отново."
-msgstr ""
-
-#: app.py:3941
-msgid "Двуфакторното удостоверяване е активирано."
-msgstr ""
-
-#: app.py:3959
+#: app.py:9548 app.py:9572 app.py:9640 app.py:9781
 msgid "Грешна парола."
 msgstr ""
 
-#: app.py:3964
+#: app.py:9560
+msgid "Този имейл вече се използва от друг акаунт."
+msgstr ""
+
+#: app.py:9563
+msgid "Имейлът е обновен. Изпратихме връзка за потвърждение на новия адрес."
+msgstr ""
+
+#: app.py:9585
+msgid "Паролата е сменена успешно."
+msgstr ""
+
+#: app.py:9594
+msgid "Имейлът вече е потвърден."
+msgstr ""
+
+#: app.py:9597
+msgid "Нямате зададен имейл."
+msgstr ""
+
+#: app.py:9600
+msgid "Изпратихме нова връзка за потвърждение."
+msgstr ""
+
+#: app.py:9608
+msgid "Двуфакторното удостоверяване вече е активирано."
+msgstr ""
+
+#: app.py:9617
+msgid "Невалиден код. Опитайте отново."
+msgstr ""
+
+#: app.py:9622
+msgid "Двуфакторното удостоверяване е активирано."
+msgstr ""
+
+#: app.py:9645
 msgid "Двуфакторното удостоверяване е изключено."
 msgstr ""
 
-#: app.py:4103
+#: app.py:9784
+msgid "Не можете да изтриете единствения администратор."
+msgstr ""
+
+#: app.py:9790
+#, python-format
+msgid ""
+"Профилът има свързани записи (%(what)s) и не може да бъде изтрит. "
+"Свържете се с администратор."
+msgstr ""
+
+#: app.py:9808
 msgid "Моля, изберете файл за качване."
 msgstr ""
 
-#: app.py:4107
+#: app.py:9812
 msgid "Невалиден формат! Системата приема само .dxf файлове."
 msgstr ""
 
-#: app.py:4125
+#: app.py:9833
 #, python-format
 msgid "Файлът \"%(filename)s\" беше качен и обработен успешно!"
 msgstr ""
 
-#: app.py:4130
+#: app.py:9838
 #, python-format
 msgid "Критична грешка при обработка/запис: %(error)s"
 msgstr ""
 
-#: app.py:6388
+#: app.py:12689
 msgid "Моля изберете файл."
 msgstr ""
 
-#: app.py:6410
+#: app.py:12716
 msgid "Файлът беше качен успешно."
 msgstr ""
 
-#: app.py:7088
+#: app.py:13493
 msgid "Няма избран файл."
 msgstr ""
 
-#: app.py:7091
+#: app.py:13496
 msgid "Приемат се само PDF файлове."
 msgstr ""
 
-#: app.py:7108
+#: app.py:13513
 msgid "Моля въведете име на клиент."
 msgstr ""
 
-#: app.py:7119 templates/order_create.html:675
+#: app.py:13524 templates/order_create.html:786
 msgid "Моля добавете поне един артикул към поръчката."
 msgstr ""
 
-#: app.py:7198
+#: app.py:13630
 msgid "Невалидни артикули в поръчката."
 msgstr ""
 
-#: app.py:7209
+#: app.py:13641
 #, python-format
 msgid "Поръчка %(order_number)s беше успешно изпратена!"
 msgstr ""
 
-#: app.py:7217
+#: app.py:13649
 #, python-format
 msgid ""
 "Внимание: поръчка %(order_number)s има недостатъчна наличност за: "
 "%(missing_desc)s. Виж таблото \"Липсваща наличност\"."
 msgstr ""
 
-#: app.py:7268
+#: app.py:13776
 msgid "Нямате достъп до тази поръчка."
 msgstr ""
 
-#: app.py:7272
+#: app.py:13780
 msgid ""
 "Поръчката вече е в процес на изработка (или вече е приключена/отменена) и"
 " не може да бъде отменена."
 msgstr ""
 
-#: app.py:7279
+#: app.py:13787
 #, python-format
 msgid "Поръчка %(order_number)s беше отменена."
 msgstr ""
 
-#: app.py:9576
+#: app.py:16132
 msgid "Моля въведете име на клиента."
 msgstr ""
 
-#: app.py:9605
+#: app.py:16170
 msgid "Моля въведете име на куриера."
 msgstr ""
 
-#: app.py:12366
+#: app.py:24843
 msgid "Страницата не е намерена"
 msgstr ""
 
-#: app.py:12367
+#: app.py:24844
 msgid "Проверете адреса или се върнете към началото."
 msgstr ""
 
-#: app.py:12372
+#: app.py:24849
 msgid "Нямате достъп"
 msgstr ""
 
-#: app.py:12373
+#: app.py:24850
 msgid "Нямате права за тази страница."
 msgstr ""
 
-#: app.py:12378
+#: app.py:24855
 msgid "Твърде много опити"
 msgstr ""
 
-#: app.py:12379
+#: app.py:24856
 msgid "Изчакайте малко и опитайте отново."
 msgstr ""
 
-#: app.py:12384
+#: app.py:24861
 msgid "Възникна грешка"
 msgstr ""
 
-#: app.py:12385
+#: app.py:24862
 msgid "Нещо се обърка от наша страна. Опитайте отново по-късно."
 msgstr ""
 
-#: app.py:12392
+#: app.py:24869
 msgid "Изтекла сесия на формата"
 msgstr ""
 
-#: app.py:12393
+#: app.py:24870
 msgid "Презаредете страницата и опитайте отново."
 msgstr ""
 
 #: templates/about.html:7 templates/partials/footer.html:16
-#: templates/partials/navbar.html:20
+#: templates/partials/navbar.html:30
 msgid "За нас"
 msgstr ""
 
-#: templates/about.html:34
+#: templates/about.html:39
 msgid "ИСТОРИЯ НА ФИРМАТА"
 msgstr ""
 
-#: templates/about.html:35
+#: templates/about.html:40
 msgid "ЗА"
 msgstr ""
 
-#: templates/about.html:35
+#: templates/about.html:40
 msgid "ТРАФКОМ"
 msgstr ""
 
-#: templates/about.html:35
+#: templates/about.html:40
 msgid "ООД"
 msgstr ""
 
-#: templates/about.html:36
+#: templates/about.html:41
 msgid ""
 "Трафком ООД е основана през 1997 г. в гр. Тетевен. Първоначално фирмата "
 "произвежда трансформатори и електроника за радиотехника. От 2021 г. "
@@ -291,77 +318,81 @@ msgid ""
 "е механична обработка на детайли."
 msgstr ""
 
-#: templates/about.html:41 templates/index.html:42
+#: templates/about.html:43
+msgid "Свържете се с нас"
+msgstr ""
+
+#: templates/about.html:48 templates/index.html:45
 msgid "Основана в гр. Тетевен"
 msgstr ""
 
-#: templates/about.html:45 templates/index.html:46
+#: templates/about.html:52 templates/index.html:49
 msgid "Механичен цех (от 2021 г.)"
 msgstr ""
 
-#: templates/about.html:48 templates/index.html:49
+#: templates/about.html:55 templates/index.html:52
 msgid "5-осно"
 msgstr ""
 
-#: templates/about.html:49 templates/index.html:50
+#: templates/about.html:56 templates/index.html:53
 msgid "Фрезоване и струговане"
 msgstr ""
 
-#: templates/about.html:57
+#: templates/about.html:65
 msgid "КОМПЕТЕНЦИИ"
 msgstr ""
 
-#: templates/about.html:58
+#: templates/about.html:66
 msgid "С КАКВО СЕ ЗАНИМАВАМЕ"
 msgstr ""
 
-#: templates/about.html:64
+#: templates/about.html:72
 msgid ""
 "Високоточна механична обработка на стомани, алуминиеви сплави и цветни "
 "метали"
 msgstr ""
 
-#: templates/about.html:65
+#: templates/about.html:73
 msgid "5-осно фрезоване и многоосно струговане със задвижвани инструменти"
 msgstr ""
 
-#: templates/about.html:66
+#: templates/about.html:74
 msgid "Лазерно рязане и нишкова електроерозия (Wire EDM)"
 msgstr ""
 
-#: templates/about.html:67
+#: templates/about.html:75
 msgid "Огъване и формоване на листов материал"
 msgstr ""
 
-#: templates/about.html:68
+#: templates/about.html:76
 msgid "3D измерване и контрол на качеството (CMM)"
 msgstr ""
 
-#: templates/about.html:69
+#: templates/about.html:77
 msgid "3D лазерно сканиране и reverse engineering"
 msgstr ""
 
-#: templates/about.html:76
+#: templates/about.html:88
 msgid "ЛОКАЦИИ"
 msgstr ""
 
-#: templates/about.html:77
+#: templates/about.html:89
 msgid "КЪДЕ СМЕ"
 msgstr ""
 
-#: templates/about.html:84
+#: templates/about.html:96
 msgid "Офис и кореспонденция"
 msgstr ""
 
-#: templates/about.html:85 templates/contact.html:41
+#: templates/about.html:97 templates/contact.html:46
 msgid "гр. Тетевен, ул. „Александър Стамболийски“ 36"
 msgstr ""
 
-#: templates/about.html:88 templates/contact.html:44
+#: templates/about.html:100 templates/contact.html:49
 msgid "Производствена база"
 msgstr ""
 
-#: templates/about.html:89
+#: templates/about.html:101
 msgid "гр. Тетевен, ул. „Воловийте“ · механичен цех ≈ 4 000 m²"
 msgstr ""
 
@@ -369,9 +400,9 @@ msgstr ""
 msgid "Моят профил"
 msgstr ""
 
-#: templates/account.html:28 templates/contact.html:52
-#: templates/forgot_password.html:40 templates/order_create.html:371
-#: templates/order_create.html:414 templates/register.html:64
+#: templates/account.html:28 templates/contact.html:57
+#: templates/forgot_password.html:40 templates/order_create.html:387
+#: templates/order_create.html:430 templates/register.html:64
 msgid "Имейл"
 msgstr ""
 
@@ -391,37 +422,58 @@ msgstr ""
 msgid "Изпрати връзка за потвърждение отново"
 msgstr ""
 
-#: templates/account.html:46
+#: templates/account.html:47 templates/account.html:81
+msgid "Парола (за потвърждение)"
+msgstr ""
+
+#: templates/account.html:50
 msgid "Смени имейла"
 msgstr ""
 
-#: templates/account.html:46
+#: templates/account.html:50
 msgid "Добави имейл"
 msgstr ""
 
-#: templates/account.html:51
+#: templates/account.html:55 templates/login.html:63 templates/register.html:68
+msgid "Парола"
+msgstr ""
+
+#: templates/account.html:59
+msgid "Текуща парола"
+msgstr ""
+
+#: templates/account.html:63 templates/reset_password.html:7
+#: templates/reset_password.html:20 templates/reset_password.html:36
+msgid "Нова парола"
+msgstr ""
+
+#: templates/account.html:67
+msgid "Повторете новата парола"
+msgstr ""
+
+#: templates/account.html:70 templates/reset_password.html:45
+msgid "Смени паролата"
+msgstr ""
+
+#: templates/account.html:75
 msgid "Двуфакторно удостоверяване (2FA)"
 msgstr ""
 
-#: templates/account.html:53
+#: templates/account.html:77
 msgid ""
 "Активирано е. При вход ще се изисква код от приложението за "
 "удостоверяване."
 msgstr ""
 
-#: templates/account.html:57
-msgid "Парола (за потвърждение)"
-msgstr ""
-
-#: templates/account.html:60
+#: templates/account.html:84
 msgid "Изключи 2FA"
 msgstr ""
 
-#: templates/account.html:63
+#: templates/account.html:87
 msgid "Не е активирано. Добавете допълнителен слой защита на входа."
 msgstr ""
 
-#: templates/account.html:64
+#: templates/account.html:88
 msgid "Активирай 2FA"
 msgstr ""
 
@@ -454,150 +506,38 @@ msgid "Отказ"
 msgstr ""
 
 #: templates/contact.html:7 templates/partials/footer.html:8
-#: templates/partials/footer.html:17 templates/partials/navbar.html:21
+#: templates/partials/footer.html:17 templates/partials/navbar.html:31
 msgid "Контакти"
 msgstr ""
 
-#: templates/contact.html:34
+#: templates/contact.html:39
 msgid "ВРЪЗКА С НАС"
 msgstr ""
 
-#: templates/contact.html:35
+#: templates/contact.html:40
 msgid "КОНТАКТИ"
 msgstr ""
 
-#: templates/contact.html:36
+#: templates/contact.html:41
 msgid ""
 "За запитвания, оферти и въпроси относно механична обработка, лазерно "
 "рязане или производство на детайли - свържете се с нас директно."
 msgstr ""
 
-#: templates/contact.html:40
+#: templates/contact.html:45
 msgid "Административен адрес"
 msgstr ""
 
-#: templates/contact.html:45
+#: templates/contact.html:50
 msgid "ул. „Воловийте“, 5700 гр. Тетевен"
 msgstr ""
 
-#: templates/contact.html:48 templates/order_create.html:375
-#: templates/order_create.html:418
+#: templates/contact.html:53 templates/order_create.html:391
+#: templates/order_create.html:434
 msgid "Телефон"
 msgstr ""
 
-#: templates/dashboard.html:7
-msgid "Табло"
-msgstr ""
-
-#: templates/dashboard.html:111
-msgid "Услуги и цени на час"
-msgstr ""
-
-#: templates/dashboard.html:112
-msgid ""
-"Часовите ставки, използвани при изчисляване на цената на чертежите "
-"по-долу."
-msgstr ""
-
-#: templates/dashboard.html:117 templates/dashboard.html:168
-msgid "Услуга"
-msgstr ""
-
-#: templates/dashboard.html:118 templates/services.html:179
-msgid "Тип машина"
-msgstr ""
-
-#: templates/dashboard.html:119 templates/services.html:182
-msgid "Цена на час"
-msgstr ""
-
-#: templates/dashboard.html:139
-msgid "Вашата библиотека с изчисления"
-msgstr ""
-
-#: templates/dashboard.html:140
-msgid ""
-"Списък на всички обработени от вас CAD чертежи, съобразени с размерите и "
-"материала."
-msgstr ""
-
-#: templates/dashboard.html:141
-msgid "Кликнете върху име на файл за 2D визуализация."
-msgstr ""
-
-#: templates/dashboard.html:144
-msgid "Нов чертеж"
-msgstr ""
-
-#: templates/dashboard.html:147
-#, python-format
-msgid ""
-"Да се изтрият ли всички %(count)s файла от библиотеката? Действието е "
-"необратимо."
-msgstr ""
-
-#: templates/dashboard.html:149
-msgid "Изтрий всички"
-msgstr ""
-
-#: templates/dashboard.html:157
-msgid "Търсене по име на файл, материал..."
-msgstr ""
-
-#: templates/dashboard.html:166
-msgid "Име на файл"
-msgstr ""
-
-#: templates/dashboard.html:167
-msgid "Материал"
-msgstr ""
-
-#: templates/dashboard.html:169
-msgid "Размери (Габарити)"
-msgstr ""
-
-#: templates/dashboard.html:170
-msgid "Дължина на рязане"
-msgstr ""
-
-#: templates/dashboard.html:171
-msgid "Изчислена цена"
-msgstr ""
-
-#: templates/dashboard.html:172 templates/detail_dxf_dashboard.html:136
-#: templates/order_create.html:129
-msgid "Действие"
-msgstr ""
-
-#: templates/dashboard.html:197
-msgid "мм"
-msgstr ""
-
-#: templates/dashboard.html:204
-msgid "Изтрий"
-msgstr ""
-
-#: templates/dashboard.html:211
-msgid "Вашата библиотека е празна."
-msgstr ""
-
-#: templates/dashboard.html:211
-msgid "Качете първия си чертеж"
-msgstr ""
-
-#: templates/dashboard.html:216 templates/my_orders.html:119
-msgid "Няма съвпадения."
-msgstr ""
-
-#: templates/dashboard.html:228 templates/detail_dxf_dashboard.html:640
-msgid "Визуализация"
-msgstr ""
-
-#: templates/dashboard.html:232 templates/detail_dxf_dashboard.html:644
-msgid "Зареждане..."
-msgstr ""
-
-#: templates/detail_dxf_dashboard.html:7
+#: templates/detail_dxf_dashboard.html:7 templates/factory3d.html:881
 msgid "Файлове"
 msgstr ""
 
@@ -609,6 +549,14 @@ msgstr ""
 msgid ""
 "Хранилище на файлове за този детайл - всякакъв тип (DXF чертежи, снимки, "
 "спецификации...)."
+msgstr ""
+
+#: templates/detail_dxf_dashboard.html:120
+msgid "+ Качи нова версия"
+msgstr ""
+
+#: templates/detail_dxf_dashboard.html:120
+msgid "Нова версия на DXF файла"
 msgstr ""
 
 #: templates/detail_dxf_dashboard.html:123
@@ -631,12 +579,25 @@ msgstr ""
 msgid "Дата"
 msgstr ""
 
-#: templates/detail_dxf_dashboard.html:160
+#: templates/detail_dxf_dashboard.html:136 templates/library.html:172
+#: templates/order_create.html:139
+msgid "Действие"
+msgstr ""
+
+#: templates/detail_dxf_dashboard.html:163
 msgid "Само за администратори"
 msgstr ""
 
-#: templates/detail_dxf_dashboard.html:166
+#: templates/detail_dxf_dashboard.html:169
 msgid "Няма качени файлове."
+msgstr ""
+
+#: templates/detail_dxf_dashboard.html:644 templates/library.html:228
+msgid "Визуализация"
+msgstr ""
+
+#: templates/detail_dxf_dashboard.html:648 templates/library.html:232
+msgid "Зареждане..."
 msgstr ""
 
 #: templates/error.html:7
@@ -645,6 +606,988 @@ msgstr ""
 
 #: templates/error.html:41
 msgid "Към началото"
+msgstr ""
+
+#: templates/factory3d.html:7 templates/factory3d.html:118
+#: templates/partials/navbar.html:25
+msgid "Фабрика 3D"
+msgstr ""
+
+#: templates/factory3d.html:122
+msgid "3D карта"
+msgstr ""
+
+#: templates/factory3d.html:123
+msgid "План (редакция)"
+msgstr ""
+
+#: templates/factory3d.html:124
+msgid "Покрив и панели"
+msgstr ""
+
+#: templates/factory3d.html:125 templates/factory3d.html:178
+msgid "Свои обекти"
+msgstr ""
+
+#: templates/factory3d.html:126 templates/factory3d.html:176
+msgid "Устройства и схеми"
+msgstr ""
+
+#: templates/factory3d.html:129
+msgid "Слоеве: какво да се вижда"
+msgstr ""
+
+#: templates/factory3d.html:133
+msgid "Изглед"
+msgstr ""
+
+#: templates/factory3d.html:135
+msgid "Изометричен"
+msgstr ""
+
+#: templates/factory3d.html:136
+msgid "Отгоре"
+msgstr ""
+
+#: templates/factory3d.html:137
+msgid "Отпред"
+msgstr ""
+
+#: templates/factory3d.html:138
+msgid "Отстрани"
+msgstr ""
+
+#: templates/factory3d.html:140
+msgid "Зона"
+msgstr ""
+
+#: templates/factory3d.html:145
+msgid "Слънце"
+msgstr ""
+
+#: templates/factory3d.html:148
+msgid "Сега"
+msgstr ""
+
+#: templates/factory3d.html:152
+msgid ""
+"Влачене - въртене · колело - мащаб · десен бутон - местене · клик върху "
+"машина - детайли"
+msgstr ""
+
+#: templates/factory3d.html:155 templates/factory3d.html:189
+msgid "Лазер"
+msgstr ""
+
+#: templates/factory3d.html:156 templates/factory3d.html:189
+msgid "Фрезов център"
+msgstr ""
+
+#: templates/factory3d.html:157 templates/factory3d.html:189
+msgid "Струг"
+msgstr ""
+
+#: templates/factory3d.html:158 templates/factory3d.html:190
+msgid "Абкант"
+msgstr ""
+
+#: templates/factory3d.html:159 templates/factory3d.html:190
+msgid "Друго"
+msgstr ""
+
+#: templates/factory3d.html:160 templates/factory3d.html:447
+msgid "Инвертор"
+msgstr ""
+
+#: templates/factory3d.html:161 templates/factory3d.html:447
+msgid "Батериен блок"
+msgstr ""
+
+#: templates/factory3d.html:162 templates/factory3d.html:447
+msgid "Ел. табло"
+msgstr ""
+
+#: templates/factory3d.html:169
+msgid "Схема на разпределението"
+msgstr ""
+
+#: templates/factory3d.html:169
+msgid "Карти на помещенията"
+msgstr ""
+
+#: templates/factory3d.html:170
+msgid "Сгради и помещения"
+msgstr ""
+
+#: templates/factory3d.html:170
+msgid "Ел. табла"
+msgstr ""
+
+#: templates/factory3d.html:170
+msgid "Конвектори"
+msgstr ""
+
+#: templates/factory3d.html:171
+msgid "Температурни сензори"
+msgstr ""
+
+#: templates/factory3d.html:171
+msgid "Измерватели и консумация"
+msgstr ""
+
+#: templates/factory3d.html:172
+msgid "Мрежа"
+msgstr ""
+
+#: templates/factory3d.html:172
+msgid "Батерийно стопанство"
+msgstr ""
+
+#: templates/factory3d.html:172
+msgid "Машини и досиета"
+msgstr ""
+
+#: templates/factory3d.html:172
+msgid "Камери"
+msgstr ""
+
+#: templates/factory3d.html:172 templates/factory3d.html:447
+msgid "Термопомпа"
+msgstr ""
+
+#: templates/factory3d.html:179
+msgid "Покрив и соларни панели"
+msgstr ""
+
+#: templates/factory3d.html:326
+msgid "етажа"
+msgstr ""
+
+#: templates/factory3d.html:447
+msgid "Конвектор"
+msgstr ""
+
+#: templates/factory3d.html:447
+msgid "Температурен сензор"
+msgstr ""
+
+#: templates/factory3d.html:447
+msgid "Мрежово устройство"
+msgstr ""
+
+#: templates/factory3d.html:447
+msgid "Камера"
+msgstr ""
+
+#: templates/factory3d.html:554
+msgid "Цялото хале"
+msgstr ""
+
+#: templates/factory3d.html:554
+msgid "Лява част"
+msgstr ""
+
+#: templates/factory3d.html:554
+msgid "Дясна част"
+msgstr ""
+
+#: templates/factory3d.html:614
+msgid "азимут"
+msgstr ""
+
+#: templates/factory3d.html:614
+msgid "височина"
+msgstr ""
+
+#: templates/factory3d.html:642
+msgid "Соларни панели"
+msgstr ""
+
+#: templates/factory3d.html:645
+msgid "Скат"
+msgstr ""
+
+#: templates/factory3d.html:645
+msgid "запад"
+msgstr ""
+
+#: templates/factory3d.html:645
+msgid "изток"
+msgstr ""
+
+#: templates/factory3d.html:646 templates/factory3d.html:655
+msgid "модула"
+msgstr ""
+
+#: templates/factory3d.html:648
+msgid "Няма пряка светлина (нощ)"
+msgstr ""
+
+#: templates/factory3d.html:648 templates/factory3d.html:848
+msgid "Огряване"
+msgstr ""
+
+#: templates/factory3d.html:648
+msgid "ъгъл на падане"
+msgstr ""
+
+#: templates/factory3d.html:650
+msgid "Мощност сега"
+msgstr ""
+
+#: templates/factory3d.html:650
+msgid "днес"
+msgstr ""
+
+#: templates/factory3d.html:650
+msgid "месец"
+msgstr ""
+
+#: templates/factory3d.html:650
+msgid "Инверторът не отговаря"
+msgstr ""
+
+#: templates/factory3d.html:655
+msgid "без стринг"
+msgstr ""
+
+#: templates/factory3d.html:655 templates/factory3d.html:847
+msgid "Стринг"
+msgstr ""
+
+#: templates/factory3d.html:660
+msgid "Оцвети панелите по стринг"
+msgstr ""
+
+#: templates/factory3d.html:671
+msgid "Сграда"
+msgstr ""
+
+#: templates/factory3d.html:671
+msgid "Стени"
+msgstr ""
+
+#: templates/factory3d.html:671
+msgid "Прозорци"
+msgstr ""
+
+#: templates/factory3d.html:671
+msgid "Врати"
+msgstr ""
+
+#: templates/factory3d.html:671
+msgid "Стълби"
+msgstr ""
+
+#: templates/factory3d.html:672
+msgid "Съседни сгради"
+msgstr ""
+
+#: templates/factory3d.html:672
+msgid "Подова настилка"
+msgstr ""
+
+#: templates/factory3d.html:672
+msgid "Помещения"
+msgstr ""
+
+#: templates/factory3d.html:672
+msgid "Въздух: оцветяване по температура"
+msgstr ""
+
+#: templates/factory3d.html:672
+msgid "Обзавеждане"
+msgstr ""
+
+#: templates/factory3d.html:673
+msgid "Имоти"
+msgstr ""
+
+#: templates/factory3d.html:673
+msgid "Граници на имотите (кадастър)"
+msgstr ""
+
+#: templates/factory3d.html:674
+msgid "Оборудване"
+msgstr ""
+
+#: templates/factory3d.html:674
+msgid "Машини и инвентар"
+msgstr ""
+
+#: templates/factory3d.html:674
+msgid "Инвертори, батерии, табла"
+msgstr ""
+
+#: templates/factory3d.html:675
+msgid "Мрежови устройства (суичове, рутери)"
+msgstr ""
+
+#: templates/factory3d.html:675
+msgid "Камери и зрително поле"
+msgstr ""
+
+#: templates/factory3d.html:675
+msgid "Открити обекти (хора, коли)"
+msgstr ""
+
+#: templates/factory3d.html:675
+msgid "IoT: сензори, конвектори, измерватели"
+msgstr ""
+
+#: templates/factory3d.html:676
+msgid "Връзки (анимирани)"
+msgstr ""
+
+#: templates/factory3d.html:676
+msgid "Ел. връзки: табла, инвертори, батерии, машини"
+msgstr ""
+
+#: templates/factory3d.html:676
+msgid "Мрежови връзки и комуникации"
+msgstr ""
+
+#: templates/factory3d.html:677
+msgid "Отопление: термопомпа → конвектори"
+msgstr ""
+
+#: templates/factory3d.html:677
+msgid "Охлаждане: термопомпа → конвектори"
+msgstr ""
+
+#: templates/factory3d.html:678
+msgid "DC кабели на панелите (стринг -> инвертор, по билото)"
+msgstr ""
+
+#: templates/factory3d.html:679
+msgid "Надписи"
+msgstr ""
+
+#: templates/factory3d.html:679
+msgid "Машини: номера и имена"
+msgstr ""
+
+#: templates/factory3d.html:679
+msgid "Други надписи"
+msgstr ""
+
+#: templates/factory3d.html:680
+msgid "Покрив"
+msgstr ""
+
+#: templates/factory3d.html:680
+msgid "Таван и осветление"
+msgstr ""
+
+#: templates/factory3d.html:680
+msgid "Покривни панели"
+msgstr ""
+
+#: templates/factory3d.html:680
+msgid "Соларни панели (подробности)"
+msgstr ""
+
+#: templates/factory3d.html:681
+msgid "Слънце: огряване и сенки (по час)"
+msgstr ""
+
+#: templates/factory3d.html:682
+msgid "Лъчи от слънцето (анимация)"
+msgstr ""
+
+#: templates/factory3d.html:717
+msgid "Плътни стени (не прозрачни)"
+msgstr ""
+
+#: templates/factory3d.html:721
+msgid "Прозрачност на въздуха"
+msgstr ""
+
+#: templates/factory3d.html:723
+msgid "Градиент: синьо при"
+msgstr ""
+
+#: templates/factory3d.html:723
+msgid "червено при"
+msgstr ""
+
+#: templates/factory3d.html:731
+msgid "Всичко"
+msgstr ""
+
+#: templates/factory3d.html:732
+msgid "По подразбиране"
+msgstr ""
+
+#: templates/factory3d.html:733
+msgid "Само машини"
+msgstr ""
+
+#: templates/factory3d.html:734
+msgid "Само покрив и панели"
+msgstr ""
+
+#: templates/factory3d.html:776
+msgid "включен"
+msgstr ""
+
+#: templates/factory3d.html:776
+msgid "изключен"
+msgstr ""
+
+#: templates/factory3d.html:776
+msgid "не отговаря"
+msgstr ""
+
+#: templates/factory3d.html:777
+msgid "Изключи"
+msgstr ""
+
+#: templates/factory3d.html:777
+msgid "Включи"
+msgstr ""
+
+#: templates/factory3d.html:782 templates/factory3d.html:787
+msgid "няма връзка"
+msgstr ""
+
+#: templates/factory3d.html:787
+msgid "АВАРИЯ"
+msgstr ""
+
+#: templates/factory3d.html:787
+msgid "компресор: работи"
+msgstr ""
+
+#: templates/factory3d.html:787
+msgid "компресор: спрян"
+msgstr ""
+
+#: templates/factory3d.html:788
+msgid "подаване"
+msgstr ""
+
+#: templates/factory3d.html:788
+msgid "връщане"
+msgstr ""
+
+#: templates/factory3d.html:789
+msgid "външна"
+msgstr ""
+
+#: templates/factory3d.html:794
+msgid "измервателят не отговаря"
+msgstr ""
+
+#: templates/factory3d.html:794
+msgid "няма измерватели"
+msgstr ""
+
+#: templates/factory3d.html:799
+msgid "няма сензор с температура за помещение"
+msgstr ""
+
+#: templates/factory3d.html:844
+msgid "Соларен панел"
+msgstr ""
+
+#: templates/factory3d.html:844
+msgid "ред"
+msgstr ""
+
+#: templates/factory3d.html:844
+msgid "колона"
+msgstr ""
+
+#: templates/factory3d.html:847
+msgid "Без стринг"
+msgstr ""
+
+#: templates/factory3d.html:854 templates/factory3d.html:865
+msgid "На"
+msgstr ""
+
+#: templates/factory3d.html:854 templates/factory3d.html:865
+msgid "м от пода"
+msgstr ""
+
+#: templates/factory3d.html:863
+msgid "Статус"
+msgstr ""
+
+#: templates/factory3d.html:863 templates/order_create.html:162
+#: templates/upload.html:84
+msgid "Работи"
+msgstr ""
+
+#: templates/factory3d.html:863 templates/order_create.html:162
+#: templates/upload.html:84
+msgid "Свободна"
+msgstr ""
+
+#: templates/factory3d.html:863 templates/order_create.html:162
+#: templates/upload.html:84
+msgid "Поддръжка"
+msgstr ""
+
+#: templates/factory3d.html:864
+msgid "Инвентар"
+msgstr ""
+
+#: templates/factory3d.html:864
+msgid "без име"
+msgstr ""
+
+#: templates/factory3d.html:874
+msgid "Консумация"
+msgstr ""
+
+#: templates/factory3d.html:875 templates/library.html:7
+msgid "Табло"
+msgstr ""
+
+#: templates/factory3d.html:877 templates/partials/footer.html:15
+#: templates/partials/navbar.html:29 templates/services.html:7
+msgid "Услуги"
+msgstr ""
+
+#: templates/factory3d.html:878
+msgid "Последна поддръжка"
+msgstr ""
+
+#: templates/factory3d.html:879
+msgid "Комуникации"
+msgstr ""
+
+#: templates/factory3d.html:893
+msgid "Връзки"
+msgstr ""
+
+#: templates/factory3d.html:898
+msgid "Състояние"
+msgstr ""
+
+#: templates/factory3d.html:905 templates/factory3d.html:907
+#: templates/factory3d.html:910
+msgid "Видео"
+msgstr ""
+
+#: templates/factory3d.html:910
+msgid "Снимка"
+msgstr ""
+
+#: templates/factory3d.html:914
+msgid "Калибрирай по обекти"
+msgstr ""
+
+#: templates/factory3d.html:920
+msgid "Превключи"
+msgstr ""
+
+#: templates/factory3d.html:925
+msgid "Управление"
+msgstr ""
+
+#: templates/factory3d.html:931
+msgid "Измерватели"
+msgstr ""
+
+#: templates/factory3d.html:933
+msgid "прикачи"
+msgstr ""
+
+#: templates/factory3d.html:939
+msgid "Откачи"
+msgstr ""
+
+#: templates/factory3d.html:945
+msgid "Досие"
+msgstr ""
+
+#: templates/factory3d.html:946
+msgid "Редактирай"
+msgstr ""
+
+#: templates/flashing.html:7 templates/partials/navbar.html:24
+msgid "Облицовки от ламарина"
+msgstr ""
+
+#: templates/flashing.html:59 templates/partials/navbar.html:191
+msgid "Профил"
+msgstr ""
+
+#: templates/flashing.html:64
+msgid "Шапка"
+msgstr ""
+
+#: templates/flashing.html:67
+msgid "Материал и дължина"
+msgstr ""
+
+#: templates/flashing.html:69
+msgid "Дебелина, мм"
+msgstr ""
+
+#: templates/flashing.html:70
+msgid "Вътрешен радиус, мм"
+msgstr ""
+
+#: templates/flashing.html:71 templates/flashing.html:73
+msgid "K-фактор"
+msgstr ""
+
+#: templates/flashing.html:73
+msgid "BD таблица"
+msgstr ""
+
+#: templates/flashing.html:75 templates/flashing.html:114
+msgid "Дължина, мм"
+msgstr ""
+
+#: templates/flashing.html:78
+msgid "Страни - цифри (размери, мм)"
+msgstr ""
+
+#: templates/flashing.html:80
+msgid "Външни размери"
+msgstr ""
+
+#: templates/flashing.html:80
+msgid "Вътрешни размери"
+msgstr ""
+
+#: templates/flashing.html:82
+msgid "Трапецовидна (различни размери в двата края)"
+msgstr ""
+
+#: templates/flashing.html:85
+msgid "Страни в края на дължината"
+msgstr ""
+
+#: templates/flashing.html:88
+msgid "Ъгли - букви (90° = прав ъгъл)"
+msgstr ""
+
+#: templates/flashing.html:91
+msgid "Подгъвки"
+msgstr ""
+
+#: templates/flashing.html:92
+msgid "В началото"
+msgstr ""
+
+#: templates/flashing.html:93
+msgid "В края"
+msgstr ""
+
+#: templates/flashing.html:94
+msgid ""
+"Подгъвката е част от страната, от която се огъва (в таблицата: 1п = "
+"подгъвка на страна 1). Тя има собствен ъгъл (буква) и дължина на "
+"подгъвката."
+msgstr ""
+
+#: templates/flashing.html:96
+msgid "Дължина на подгъвката"
+msgstr ""
+
+#: templates/flashing.html:97
+msgid "Радиус на подгъвката"
+msgstr ""
+
+#: templates/flashing.html:98
+msgid "Ъгъл на подгъвката (180° = плоска)"
+msgstr ""
+
+#: templates/flashing.html:101
+msgid "Релефи на огъвките (в двата края)"
+msgstr ""
+
+#: templates/flashing.html:102
+msgid "Изрязване в краищата на всяка огъвка"
+msgstr ""
+
+#: templates/flashing.html:104 templates/flashing.html:113
+#: templates/flashing.html:249
+msgid "Ширина, мм"
+msgstr ""
+
+#: templates/flashing.html:105
+msgid "Дълбочина, мм"
+msgstr ""
+
+#: templates/flashing.html:108
+msgid "Отщипване в ъглите на разгъвката"
+msgstr ""
+
+#: templates/flashing.html:109
+msgid "Ляво-долу"
+msgstr ""
+
+#: templates/flashing.html:109
+msgid "Ляво-горе"
+msgstr ""
+
+#: templates/flashing.html:109
+msgid "Дясно-горе"
+msgstr ""
+
+#: templates/flashing.html:109
+msgid "Дясно-долу"
+msgstr ""
+
+#: templates/flashing.html:111
+msgid "няма"
+msgstr ""
+
+#: templates/flashing.html:111
+msgid "правоъг."
+msgstr ""
+
+#: templates/flashing.html:111
+msgid "скосено"
+msgstr ""
+
+#: templates/flashing.html:112
+msgid "Ширина до"
+msgstr ""
+
+#: templates/flashing.html:118
+msgid "Ощипване отляво / отдясно (между линии)"
+msgstr ""
+
+#: templates/flashing.html:120
+msgid "Добави ощипване"
+msgstr ""
+
+#: templates/flashing.html:122
+msgid "Отвори / изрязвания"
+msgstr ""
+
+#: templates/flashing.html:124
+msgid "Добави отвор"
+msgstr ""
+
+#: templates/flashing.html:126 templates/generator.html:216
+msgid "Пресети"
+msgstr ""
+
+#: templates/flashing.html:128 templates/flashing.html:525
+#: templates/generator.html:218 templates/generator.html:868
+msgid "Избери пресет"
+msgstr ""
+
+#: templates/flashing.html:129 templates/generator.html:219
+msgid "Зареди"
+msgstr ""
+
+#: templates/flashing.html:133 templates/generator.html:223
+msgid "Име на пресет"
+msgstr ""
+
+#: templates/flashing.html:134 templates/generator.html:224
+msgid "Запази"
+msgstr ""
+
+#: templates/flashing.html:138
+msgid "Запис като Детайл в каталога"
+msgstr ""
+
+#: templates/flashing.html:139
+msgid "Име на детайла"
+msgstr ""
+
+#: templates/flashing.html:144
+msgid "Без услуга за рязане"
+msgstr ""
+
+#: templates/flashing.html:150
+msgid "Без програма за огъване"
+msgstr ""
+
+#: templates/flashing.html:155
+msgid "Запиши като Детайл"
+msgstr ""
+
+#: templates/flashing.html:161
+msgid "Спецификация на огъвките"
+msgstr ""
+
+#: templates/flashing.html:163
+msgid "Изтегли DXF разгъвка"
+msgstr ""
+
+#: templates/flashing.html:164
+msgid "Печат на спецификацията"
+msgstr ""
+
+#: templates/flashing.html:170
+msgid "Сечение"
+msgstr ""
+
+#: templates/flashing.html:172
+msgid "Изометричен изглед"
+msgstr ""
+
+#: templates/flashing.html:174 templates/flashing.html:491
+msgid "Разгъвка"
+msgstr ""
+
+#: templates/flashing.html:177
+msgid "Огъвки"
+msgstr ""
+
+#: templates/flashing.html:179
+msgid "Страни"
+msgstr ""
+
+#: templates/flashing.html:182
+msgid ""
+"Посока: „нагоре“ = огъва се към гледащия разгъвката, „надолу“ = обратно "
+"(DXF слой BEND_UP / BEND_DOWN). Размерите на страните са външни. Позиция "
+"на линията = разстояние от левия ръб на разгъвката до средата на "
+"огъвката."
+msgstr ""
+
+#: templates/flashing.html:227 templates/flashing.html:228
+#: templates/flashing.html:246
+msgid "Страна"
+msgstr ""
+
+#: templates/flashing.html:227
+msgid "начало"
+msgstr ""
+
+#: templates/flashing.html:228
+msgid "край"
+msgstr ""
+
+#: templates/flashing.html:229 templates/flashing.html:493
+msgid "Ъгъл"
+msgstr ""
+
+#: templates/flashing.html:246
+msgid "Отляво"
+msgstr ""
+
+#: templates/flashing.html:246
+msgid "Отдясно"
+msgstr ""
+
+#: templates/flashing.html:247 templates/flashing.html:496
+msgid "От"
+msgstr ""
+
+#: templates/flashing.html:248 templates/flashing.html:496
+msgid "До"
+msgstr ""
+
+#: templates/flashing.html:250
+msgid "Отстъп от, мм"
+msgstr ""
+
+#: templates/flashing.html:251
+msgid "Отстъп до, мм"
+msgstr ""
+
+#: templates/flashing.html:252 templates/flashing.html:294
+msgid "По дължина, мм"
+msgstr ""
+
+#: templates/flashing.html:267
+msgid "линия"
+msgstr ""
+
+#: templates/flashing.html:269
+msgid "ръб долу"
+msgstr ""
+
+#: templates/flashing.html:270
+msgid "ръб горе"
+msgstr ""
+
+#: templates/flashing.html:270
+msgid "ширина"
+msgstr ""
+
+#: templates/flashing.html:290 templates/flashing.html:496
+msgid "Страна №"
+msgstr ""
+
+#: templates/flashing.html:291 templates/flashing.html:493
+msgid "Вид"
+msgstr ""
+
+#: templates/flashing.html:291
+msgid "Кръгъл"
+msgstr ""
+
+#: templates/flashing.html:291
+msgid "Правоъгълен"
+msgstr ""
+
+#: templates/flashing.html:293
+msgid "От ръба на стр., мм"
+msgstr ""
+
+#: templates/flashing.html:295 templates/library.html:197
+msgid "мм"
+msgstr ""
+
+#: templates/flashing.html:296
+msgid "Шир. × Виск."
+msgstr ""
+
+#: templates/flashing.html:414
+msgid "размер"
+msgstr ""
+
+#: templates/flashing.html:491
+msgid "огъвки"
+msgstr ""
+
+#: templates/flashing.html:492
+msgid "нагоре"
+msgstr ""
+
+#: templates/flashing.html:492
+msgid "надолу"
+msgstr ""
+
+#: templates/flashing.html:493
+msgid "Стойност"
+msgstr ""
+
+#: templates/flashing.html:493
+msgid "Посока"
+msgstr ""
+
+#: templates/flashing.html:493
+msgid "Позиция на линията"
+msgstr ""
+
+#: templates/flashing.html:493
+msgid "начало → край"
+msgstr ""
+
+#: templates/flashing.html:494
+msgid "подгъвка"
+msgstr ""
+
+#: templates/flashing.html:494
+msgid "огъвка"
+msgstr ""
+
+#: templates/flashing.html:496
+msgid "Зададен (вътрешен)"
+msgstr ""
+
+#: templates/flashing.html:496
+msgid "Външен размер"
+msgstr ""
+
+#: templates/flashing.html:496
+msgid "Права част"
 msgstr ""
 
 #: templates/forgot_password.html:7 templates/forgot_password.html:23
@@ -675,127 +1618,268 @@ msgstr ""
 msgid "Генератор на Панели"
 msgstr ""
 
-#: templates/generator.html:190
+#: templates/generator.html:206
 msgid "Стандартни размери"
 msgstr ""
 
-#: templates/generator.html:200
-msgid "Пресети"
-msgstr ""
-
-#: templates/generator.html:202 templates/generator.html:404
-msgid "Избери пресет"
-msgstr ""
-
-#: templates/generator.html:203
-msgid "Зареди"
-msgstr ""
-
-#: templates/generator.html:207
-msgid "Име на пресет"
-msgstr ""
-
-#: templates/generator.html:208
-msgid "Запази"
-msgstr ""
-
-#: templates/generator.html:211
+#: templates/generator.html:227
 msgid "Панел & Материал"
 msgstr ""
 
-#: templates/generator.html:212
+#: templates/generator.html:228
 msgid "Ширина (mm)"
 msgstr ""
 
-#: templates/generator.html:214
+#: templates/generator.html:230
 msgid "Височина (mm)"
 msgstr ""
 
-#: templates/generator.html:216
+#: templates/generator.html:232
 msgid "Дебелина (mm)"
 msgstr ""
 
-#: templates/generator.html:219
-msgid "Геометрия (Изберете няколко)"
+#: templates/generator.html:234
+msgid "Цвят по RAL"
 msgstr ""
 
-#: templates/generator.html:229
-msgid "Макс. Отвор (mm)"
+#: templates/generator.html:238
+msgid "По подразбиране (неутрален)"
 msgstr ""
 
-#: templates/generator.html:231
-msgid "Мин. Отвор (mm)"
+#: templates/generator.html:241
+msgid "Общи"
 msgstr ""
 
-#: templates/generator.html:233
-msgid "Луфт (Spacing mm)"
-msgstr ""
-
-#: templates/generator.html:235
-msgid "Ротация (°)"
-msgstr ""
-
-#: templates/generator.html:237
+#: templates/generator.html:242
 msgid "Рамка (Border mm)"
 msgstr ""
 
-#: templates/generator.html:240
-msgid "Градиент & Органичност"
-msgstr ""
-
-#: templates/generator.html:243
-msgid "Плътност: Горе -> Долу"
-msgstr ""
-
-#: templates/generator.html:244
-msgid "Плътност: Долу -> Горе"
-msgstr ""
-
 #: templates/generator.html:247
-msgid "Плътна Зона (%%)"
+msgid "Тип шарка"
 msgstr ""
 
 #: templates/generator.html:249
-msgid "Крива (Falloff)"
+msgid "Пчелна пита"
+msgstr ""
+
+#: templates/generator.html:250
+msgid "Дъжд"
 msgstr ""
 
 #: templates/generator.html:251
-msgid "Празнота (Sparseness %%)"
+msgid "Мозайка"
 msgstr ""
 
-#: templates/generator.html:253
-msgid "Разпръскване (Jitter %%)"
+#: templates/generator.html:252
+msgid "Триъгълници"
 msgstr ""
 
-#: templates/generator.html:255
-msgid "Горна Случайност (%%)"
+#: templates/generator.html:256
+msgid "Геометрия (Изберете няколко)"
 msgstr ""
 
-#: templates/generator.html:260
-msgid "Изтегли DXF Модел"
+#: templates/generator.html:266
+msgid "Макс. Отвор (mm)"
 msgstr ""
 
-#: templates/generator.html:262
-msgid "Изчисляване на цена"
+#: templates/generator.html:268
+msgid "Мин. Отвор (mm)"
 msgstr ""
 
-#: templates/generator.html:275
-msgid "Изчисли цена в Калкулатора"
+#: templates/generator.html:270
+msgid "Луфт (Spacing mm)"
+msgstr ""
+
+#: templates/generator.html:272
+msgid "Ротация (°)"
+msgstr ""
+
+#: templates/generator.html:274
+#, python-format
+msgid "Пълнота на Hex Cluster (%%)"
+msgstr ""
+
+#: templates/generator.html:276
+msgid "Разстояние между ромбовете (mm)"
+msgstr ""
+
+#: templates/generator.html:281
+msgid "Градиент & Органичност"
+msgstr ""
+
+#: templates/generator.html:284
+msgid "Плътност: Горе -> Долу"
 msgstr ""
 
 #: templates/generator.html:285
+msgid "Плътност: Долу -> Горе"
+msgstr ""
+
+#: templates/generator.html:288
+#, python-format
+msgid "Плътна Зона (%%)"
+msgstr ""
+
+#: templates/generator.html:290
+msgid "Крива (Falloff)"
+msgstr ""
+
+#: templates/generator.html:292
+#, python-format
+msgid "Празнота (Sparseness %%)"
+msgstr ""
+
+#: templates/generator.html:294
+#, python-format
+msgid "Разпръскване (Jitter %%)"
+msgstr ""
+
+#: templates/generator.html:296
+#, python-format
+msgid "Горна Случайност (%%)"
+msgstr ""
+
+#: templates/generator.html:301
+msgid "Дъжд - Прорези"
+msgstr ""
+
+#: templates/generator.html:303
+msgid "Вертикално"
+msgstr ""
+
+#: templates/generator.html:304
+msgid "Хоризонтално"
+msgstr ""
+
+#: templates/generator.html:306
+msgid "Ширина на прорез (mm)"
+msgstr ""
+
+#: templates/generator.html:308
+msgid "Мин. дължина (mm)"
+msgstr ""
+
+#: templates/generator.html:310
+msgid "Макс. дължина (mm)"
+msgstr ""
+
+#: templates/generator.html:312
+msgid "Разст. между колони (mm)"
+msgstr ""
+
+#: templates/generator.html:314
+msgid "Вертикален луфт (mm)"
+msgstr ""
+
+#: templates/generator.html:316
+#, python-format
+msgid "Плътност (%%)"
+msgstr ""
+
+#: templates/generator.html:318
+#, python-format
+msgid "Разместване на колони (%%)"
+msgstr ""
+
+#: templates/generator.html:323
+msgid "Мозайка - Елементи"
+msgstr ""
+
+#: templates/generator.html:325
+msgid "Квадрат"
+msgstr ""
+
+#: templates/generator.html:326
+msgid "Кръг"
+msgstr ""
+
+#: templates/generator.html:327
+msgid "Шестоъгълник"
+msgstr ""
+
+#: templates/generator.html:329
+msgid "Макс. елемент (mm)"
+msgstr ""
+
+#: templates/generator.html:331
+msgid "Мин. елемент (mm)"
+msgstr ""
+
+#: templates/generator.html:333
+msgid "Луфт между елементите (mm)"
+msgstr ""
+
+#: templates/generator.html:335 templates/generator.html:345
+#, python-format
+msgid "Плътност на запълване (%%)"
+msgstr ""
+
+#: templates/generator.html:340
+msgid "Триъгълници - Диагонали"
+msgstr ""
+
+#: templates/generator.html:341
+msgid "Размер на клетка (mm)"
+msgstr ""
+
+#: templates/generator.html:343
+msgid "Луфт между клетките (mm)"
+msgstr ""
+
+#: templates/generator.html:347
+#, python-format
+msgid "Дял пълни квадрати (%%)"
+msgstr ""
+
+#: templates/generator.html:349
+msgid "Луфт по диагонала (mm)"
+msgstr ""
+
+#: templates/generator.html:353
+msgid "Изтегли DXF Модел"
+msgstr ""
+
+#: templates/generator.html:361
+msgid "Изчисляване на цена"
+msgstr ""
+
+#: templates/generator.html:374 templates/upload.html:90
+msgid "Материал на клиента (цената без материал)"
+msgstr ""
+
+#: templates/generator.html:375
+msgid "Изчисли цена в Калкулатора"
+msgstr ""
+
+#: templates/generator.html:384
+msgid "+ Фон"
+msgstr ""
+
+#: templates/generator.html:385
+msgid "✕ Фон"
+msgstr ""
+
+#: templates/generator.html:386
+msgid "⟲ Нулирай"
+msgstr ""
+
+#: templates/generator.html:387
+msgid "⟲ Нулирай изглед"
+msgstr ""
+
+#: templates/generator.html:392
 msgid "Панел"
 msgstr ""
 
-#: templates/generator.html:286
+#: templates/generator.html:393
 msgid "Брой отвори"
 msgstr ""
 
-#: templates/generator.html:287
+#: templates/generator.html:394
 msgid "Линеен сряз"
 msgstr ""
 
-#: templates/generator.html:444
+#: templates/generator.html:919
 msgid "Възникна грешка при запазването."
 msgstr ""
 
@@ -803,54 +1887,54 @@ msgstr ""
 msgid "Индустриален ЦПУ Портал"
 msgstr ""
 
-#: templates/index.html:35
+#: templates/index.html:36
 msgid "ОПТИМИЗАЦИЯ НА ПРОИЗВОДСТВОТО"
 msgstr ""
 
-#: templates/index.html:36
+#: templates/index.html:37
 msgid "ИНДУСТРИАЛЕН"
 msgstr ""
 
-#: templates/index.html:36
+#: templates/index.html:37
 msgid "ЦПУ ПОРТАЛ"
 msgstr ""
 
-#: templates/index.html:37
+#: templates/index.html:38
 msgid ""
 "Автоматизирано изчисляване на производствени оферти и технически анализ "
 "на DXF чертежи. Системата осигурява точност при обработка на детайли и "
 "листов материал в реалния машинен парк на Трафком ООД - гр. Тетевен."
 msgstr ""
 
-#: templates/index.html:55
+#: templates/index.html:58
 msgid "Проект, съфинансиран от Европейския съюз - виж пълния постер (PDF)"
 msgstr ""
 
-#: templates/index.html:56
+#: templates/index.html:59
 msgid "Съфинансиран от Европейския съюз - постер на проект на ТРАФКОМ ООД"
 msgstr ""
 
-#: templates/index.html:63
+#: templates/index.html:66
 msgid "ТЕХНОЛОГИЧНО ОБОРУДВАНЕ"
 msgstr ""
 
-#: templates/index.html:64 templates/services.html:47
+#: templates/index.html:67 templates/services.html:52
 msgid "МАШИНЕН ПАРК"
 msgstr ""
 
-#: templates/index.html:112
+#: templates/index.html:115
 msgid "Пълен машинен парк"
 msgstr ""
 
-#: templates/index.html:119
+#: templates/index.html:122
 msgid "ЗА ФИРМАТА"
 msgstr ""
 
-#: templates/index.html:120
+#: templates/index.html:123
 msgid "ТРАФКОМ ООД"
 msgstr ""
 
-#: templates/index.html:125
+#: templates/index.html:128
 msgid ""
 "Основана през 1997 г. в гр. Тетевен, първоначално с производство на "
 "трансформатори и електроника за радиотехника. От 2021 г. разполага с "
@@ -859,25 +1943,116 @@ msgid ""
 "метали."
 msgstr ""
 
-#: templates/index.html:128
+#: templates/index.html:131
 msgid "Научете повече за нас"
 msgstr ""
 
-#: templates/login.html:7 templates/partials/navbar.html:123
+#: templates/library.html:111
+msgid "Услуги и цени на час"
+msgstr ""
+
+#: templates/library.html:112
+msgid ""
+"Часовите ставки, използвани при изчисляване на цената на чертежите "
+"по-долу."
+msgstr ""
+
+#: templates/library.html:117 templates/library.html:168
+msgid "Услуга"
+msgstr ""
+
+#: templates/library.html:118 templates/services.html:187
+msgid "Тип машина"
+msgstr ""
+
+#: templates/library.html:119 templates/services.html:190
+msgid "Цена на час"
+msgstr ""
+
+#: templates/library.html:139
+msgid "Вашата библиотека с изчисления"
+msgstr ""
+
+#: templates/library.html:140
+msgid ""
+"Списък на всички обработени от вас CAD чертежи, съобразени с размерите и "
+"материала."
+msgstr ""
+
+#: templates/library.html:141
+msgid "Кликнете върху име на файл за 2D визуализация."
+msgstr ""
+
+#: templates/library.html:144
+msgid "Нов чертеж"
+msgstr ""
+
+#: templates/library.html:147
+#, python-format
+msgid ""
+"Да се изтрият ли всички %(count)s файла от библиотеката? Действието е "
+"необратимо."
+msgstr ""
+
+#: templates/library.html:149
+msgid "Изтрий всички"
+msgstr ""
+
+#: templates/library.html:157
+msgid "Търсене по име на файл, материал..."
+msgstr ""
+
+#: templates/library.html:166
+msgid "Име на файл"
+msgstr ""
+
+#: templates/library.html:167
+msgid "Материал"
+msgstr ""
+
+#: templates/library.html:169
+msgid "Размери (Габарити)"
+msgstr ""
+
+#: templates/library.html:170
+msgid "Дължина на рязане"
+msgstr ""
+
+#: templates/library.html:171
+msgid "Изчислена цена"
+msgstr ""
+
+#: templates/library.html:204
+msgid "Изтрий"
+msgstr ""
+
+#: templates/library.html:211
+msgid "Вашата библиотека е празна."
+msgstr ""
+
+#: templates/library.html:211
+msgid "Качете първия си чертеж"
+msgstr ""
+
+#: templates/library.html:216 templates/my_orders.html:119
+msgid "Няма съвпадения."
+msgstr ""
+
+#: templates/login.html:7 templates/partials/navbar.html:194
 msgid "Вход"
 msgstr ""
 
-#: templates/login.html:24 templates/partials/navbar.html:12
+#: templates/login.html:24 templates/partials/navbar.html:20
 #: templates/register.html:24
 msgid "Приложения"
 msgstr ""
 
-#: templates/login.html:26 templates/partials/navbar.html:14
+#: templates/login.html:26 templates/partials/navbar.html:22
 #: templates/register.html:26 templates/upload.html:50
 msgid "DXF CNC Калкулатор"
 msgstr ""
 
-#: templates/login.html:27 templates/partials/navbar.html:15
+#: templates/login.html:27 templates/partials/navbar.html:23
 #: templates/register.html:27
 msgid "Параметричен Генератор"
 msgstr ""
@@ -896,10 +2071,6 @@ msgstr ""
 
 #: templates/login.html:60
 msgid "Въведете потребителско име..."
-msgstr ""
-
-#: templates/login.html:63 templates/register.html:68
-msgid "Парола"
 msgstr ""
 
 #: templates/login.html:64
@@ -945,7 +2116,7 @@ msgid "Потвърди"
 msgstr ""
 
 #: templates/my_orders.html:7 templates/my_orders.html:36
-#: templates/partials/navbar.html:26
+#: templates/partials/navbar.html:36
 msgid "Моите Поръчки"
 msgstr ""
 
@@ -953,19 +2124,19 @@ msgstr ""
 msgid "Търсене по № поръчка, клиент, артикул..."
 msgstr ""
 
-#: templates/my_orders.html:62 templates/order_create.html:124
+#: templates/my_orders.html:62 templates/order_create.html:134
 msgid "Артикул"
 msgstr ""
 
-#: templates/my_orders.html:63 templates/order_create.html:126
+#: templates/my_orders.html:63 templates/order_create.html:136
 msgid "Кол."
 msgstr ""
 
-#: templates/my_orders.html:64 templates/order_create.html:127
+#: templates/my_orders.html:64 templates/order_create.html:137
 msgid "Ед. цена"
 msgstr ""
 
-#: templates/my_orders.html:65 templates/order_create.html:128
+#: templates/my_orders.html:65 templates/order_create.html:138
 msgid "Общо"
 msgstr ""
 
@@ -973,11 +2144,11 @@ msgstr ""
 msgid "Прогрес"
 msgstr ""
 
-#: templates/my_orders.html:75 templates/order_create.html:648
+#: templates/my_orders.html:75 templates/order_create.html:759
 msgid "Продукт"
 msgstr ""
 
-#: templates/my_orders.html:77 templates/order_create.html:648
+#: templates/my_orders.html:77 templates/order_create.html:759
 msgid "Детайл"
 msgstr ""
 
@@ -1010,299 +2181,306 @@ msgstr ""
 msgid "Направете първата си поръчка"
 msgstr ""
 
-#: templates/order_create.html:7 templates/partials/navbar.html:25
+#: templates/order_create.html:7 templates/partials/navbar.html:35
 msgid "Нова Поръчка"
 msgstr ""
 
-#: templates/order_create.html:34
+#: templates/order_create.html:36
+msgid "Нямате достъп до избор на продукти и детайли."
+msgstr ""
+
+#: templates/order_create.html:39
 msgid "Добавяне на артикул към поръчката"
 msgstr ""
 
-#: templates/order_create.html:35
+#: templates/order_create.html:40
 msgid ""
 "Добавете един или няколко продукта / детайла, след което изпратете цялата"
 " поръчка наведнъж."
 msgstr ""
 
-#: templates/order_create.html:38
+#: templates/order_create.html:43
 msgid "Тип артикул"
 msgstr ""
 
-#: templates/order_create.html:40
+#: templates/order_create.html:45
 msgid "Цялостен продукт (Модул)"
 msgstr ""
 
-#: templates/order_create.html:41
+#: templates/order_create.html:46
 msgid "Отделен детайл (Компонент)"
 msgstr ""
 
-#: templates/order_create.html:48
+#: templates/order_create.html:53
 msgid "Продукт *"
 msgstr ""
 
-#: templates/order_create.html:54
+#: templates/order_create.html:59
 msgid "Продукти"
 msgstr ""
 
-#: templates/order_create.html:58
+#: templates/order_create.html:63
 msgid "Няма налични продукти"
 msgstr ""
 
-#: templates/order_create.html:65
+#: templates/order_create.html:70
 msgid "Детайл *"
 msgstr ""
 
-#: templates/order_create.html:71
+#: templates/order_create.html:76
 msgid "Детайли"
 msgstr ""
 
-#: templates/order_create.html:75
+#: templates/order_create.html:80
 msgid "Няма налични детайли"
 msgstr ""
 
-#: templates/order_create.html:81
+#: templates/order_create.html:86
 msgid "Количество"
 msgstr ""
 
-#: templates/order_create.html:85
+#: templates/order_create.html:90
+msgid "Материал на клиента"
+msgstr ""
+
+#: templates/order_create.html:93
 msgid "Добави"
 msgstr ""
 
-#: templates/order_create.html:90
+#: templates/order_create.html:99
 msgid "Операции за този детайл (незадължително - рязане, огъване, пробиване...)"
 msgstr ""
 
-#: templates/order_create.html:91
+#: templates/order_create.html:100
 msgid "Приложени само към детайла, който ще бъде добавен към количката по-долу."
 msgstr ""
 
-#: templates/order_create.html:94
+#: templates/order_create.html:103
 msgid "Изберете услуга"
 msgstr ""
 
-#: templates/order_create.html:96 templates/upload.html:67
+#: templates/order_create.html:105 templates/upload.html:67
 msgid "час"
 msgstr ""
 
-#: templates/order_create.html:99
+#: templates/order_create.html:108
 msgid "Описание (незадължително, напр. външно лазерно рязане)"
 msgstr ""
 
-#: templates/order_create.html:100
+#: templates/order_create.html:109
 msgid "Продължителност (мин)"
 msgstr ""
 
-#: templates/order_create.html:101
+#: templates/order_create.html:110
 msgid "Добави операция"
 msgstr ""
 
-#: templates/order_create.html:105 templates/order_create.html:489
+#: templates/order_create.html:114 templates/order_create.html:599
 msgid "Няма избрани операции за този детайл."
 msgstr ""
 
-#: templates/order_create.html:111
+#: templates/order_create.html:121
 msgid "Приложен PDF (незадължително - чертеж, спецификация...)"
 msgstr ""
 
-#: templates/order_create.html:119
+#: templates/order_create.html:129
 msgid "Съдържание на поръчката"
 msgstr ""
 
-#: templates/order_create.html:125
+#: templates/order_create.html:135
 msgid "Тип"
 msgstr ""
 
-#: templates/order_create.html:133 templates/order_create.html:625
+#: templates/order_create.html:143 templates/order_create.html:735
 msgid "Все още няма добавени артикули."
 msgstr ""
 
-#: templates/order_create.html:137
+#: templates/order_create.html:147
 msgid "Обща стойност:"
 msgstr ""
 
-#: templates/order_create.html:148
+#: templates/order_create.html:158
 msgid "Назначи машина (по избор)"
 msgstr ""
 
-#: templates/order_create.html:150 templates/upload.html:82
+#: templates/order_create.html:160 templates/upload.html:82
 msgid "Без конкретна машина"
 msgstr ""
 
-#: templates/order_create.html:152 templates/upload.html:84
-msgid "Свободна"
-msgstr ""
-
-#: templates/order_create.html:152 templates/upload.html:84
-msgid "Работи"
-msgstr ""
-
-#: templates/order_create.html:152 templates/upload.html:84
-msgid "Поддръжка"
-msgstr ""
-
-#: templates/order_create.html:158
+#: templates/order_create.html:168
 msgid "Клиент / Фирма *"
 msgstr ""
 
-#: templates/order_create.html:159 templates/order_create.html:172
+#: templates/order_create.html:170 templates/order_create.html:192
 msgid "Бързо създаване"
 msgstr ""
 
-#: templates/order_create.html:162
+#: templates/order_create.html:177
 msgid "Изберете клиент"
 msgstr ""
 
-#: templates/order_create.html:171
+#: templates/order_create.html:184
+msgid ""
+"Все още нямате свързан клиент - използвайте \"Бързо създаване\", за да "
+"добавите данните си за поръчки (ще остане свързан с профила ви и "
+"следващия път)."
+msgstr ""
+
+#: templates/order_create.html:191
 msgid "Куриер (по избор)"
 msgstr ""
 
-#: templates/order_create.html:175
+#: templates/order_create.html:195
 msgid "Без конкретен куриер"
 msgstr ""
 
-#: templates/order_create.html:182
+#: templates/order_create.html:202
 msgid "Изпрати Поръчка"
 msgstr ""
 
-#: templates/order_create.html:352
+#: templates/order_create.html:368
 msgid "Бързо създаване на клиент"
 msgstr ""
 
-#: templates/order_create.html:356
+#: templates/order_create.html:372
 msgid "Тип клиент"
 msgstr ""
 
-#: templates/order_create.html:359
+#: templates/order_create.html:375
 msgid "Физическо лице"
 msgstr ""
 
-#: templates/order_create.html:362
+#: templates/order_create.html:378
 msgid "Юридическо лице"
 msgstr ""
 
-#: templates/order_create.html:367 templates/order_create.html:410
+#: templates/order_create.html:383 templates/order_create.html:426
 msgid "Име *"
 msgstr ""
 
-#: templates/order_create.html:368
+#: templates/order_create.html:384
 msgid "напр. Иван Иванов / Фирма ЕООД"
 msgstr ""
 
-#: templates/order_create.html:376 templates/order_create.html:419
+#: templates/order_create.html:392 templates/order_create.html:435
 msgid "напр. 0888 123 456"
 msgstr ""
 
-#: templates/order_create.html:380 templates/order_create.html:422
+#: templates/order_create.html:396 templates/order_create.html:438
 msgid "ЕИК / Булстат"
 msgstr ""
 
-#: templates/order_create.html:382 templates/order_create.html:424
+#: templates/order_create.html:398 templates/order_create.html:440
 msgid "Точно 9 цифри"
 msgstr ""
 
-#: templates/order_create.html:385 templates/order_create.html:427
+#: templates/order_create.html:401 templates/order_create.html:443
 msgid "ИН по ДДС"
 msgstr ""
 
-#: templates/order_create.html:389 templates/order_create.html:431
+#: templates/order_create.html:405 templates/order_create.html:447
 msgid "Адрес на управление"
 msgstr ""
 
-#: templates/order_create.html:390 templates/order_create.html:432
+#: templates/order_create.html:406 templates/order_create.html:448
 msgid "напр. София, бул. ..."
 msgstr ""
 
-#: templates/order_create.html:393 templates/order_create.html:435
+#: templates/order_create.html:409 templates/order_create.html:451
 msgid "МОЛ"
 msgstr ""
 
-#: templates/order_create.html:394 templates/order_create.html:436
+#: templates/order_create.html:410 templates/order_create.html:452
 msgid "напр. Иван Иванов"
 msgstr ""
 
-#: templates/order_create.html:397 templates/order_create.html:740
-#: templates/order_create.html:757
+#: templates/order_create.html:413 templates/order_create.html:852
+#: templates/order_create.html:869
 msgid "Добави клиент"
 msgstr ""
 
-#: templates/order_create.html:406
+#: templates/order_create.html:422
 msgid "Бързо създаване на куриер"
 msgstr ""
 
-#: templates/order_create.html:411
+#: templates/order_create.html:427
 msgid "напр. Спиди / Еконт"
 msgstr ""
 
-#: templates/order_create.html:438 templates/order_create.html:777
-#: templates/order_create.html:793
+#: templates/order_create.html:454 templates/order_create.html:889
+#: templates/order_create.html:905
 msgid "Добави куриер"
 msgstr ""
 
-#: templates/order_create.html:464
+#: templates/order_create.html:574
 msgid "Моля изберете услуга."
 msgstr ""
 
-#: templates/order_create.html:465
+#: templates/order_create.html:575
 msgid "Моля въведете валидна продължителност в минути."
 msgstr ""
 
-#: templates/order_create.html:498 templates/order_create.html:658
+#: templates/order_create.html:608 templates/order_create.html:769
 msgid "Премахни"
 msgstr ""
 
-#: templates/order_create.html:502 templates/order_create.html:637
+#: templates/order_create.html:612 templates/order_create.html:748
 msgid "мин"
 msgstr ""
 
-#: templates/order_create.html:511
+#: templates/order_create.html:621
 msgid "Операции общо:"
 msgstr ""
 
-#: templates/order_create.html:511
+#: templates/order_create.html:621
 msgid "€ на брой (плюс базовата цена на детайла)"
 msgstr ""
 
-#: templates/order_create.html:534
+#: templates/order_create.html:645
 msgid "Моля въведете валидно количество."
 msgstr ""
 
-#: templates/order_create.html:540
+#: templates/order_create.html:651
 msgid "Няма избран продукт."
 msgstr ""
 
-#: templates/order_create.html:553
+#: templates/order_create.html:664
 msgid "Няма избран детайл."
 msgstr ""
 
-#: templates/order_create.html:591
+#: templates/order_create.html:701
 msgid "Качване на PDF файла..."
 msgstr ""
 
-#: templates/order_create.html:601
+#: templates/order_create.html:711
 msgid "Грешка при качване на PDF файла."
 msgstr ""
 
-#: templates/order_create.html:605
+#: templates/order_create.html:715
 msgid "Връзката със сървъра беше прекъсната при качване на PDF файла."
 msgstr ""
 
-#: templates/order_create.html:682
+#: templates/order_create.html:743
+msgid "материал на клиента"
+msgstr ""
+
+#: templates/order_create.html:793
 msgid "Моля изберете или създайте клиент."
 msgstr ""
 
-#: templates/order_create.html:730 templates/order_create.html:767
+#: templates/order_create.html:842 templates/order_create.html:879
 msgid "Обработване..."
 msgstr ""
 
-#: templates/order_create.html:751 templates/order_create.html:787
+#: templates/order_create.html:863 templates/order_create.html:899
 msgid "Грешка при създаване."
 msgstr ""
 
-#: templates/order_create.html:758 templates/order_create.html:794
+#: templates/order_create.html:870 templates/order_create.html:906
 msgid "Връзката със сървъра беше прекъсната."
 msgstr ""
 
-#: templates/partials/navbar.html:124 templates/register.html:7
+#: templates/partials/navbar.html:195 templates/register.html:7
 #: templates/register.html:41
 msgid "Регистрация"
 msgstr ""
@@ -1331,11 +2509,6 @@ msgstr ""
 msgid "Влезте оттук"
 msgstr ""
 
-#: templates/reset_password.html:7 templates/reset_password.html:20
-#: templates/reset_password.html:36
-msgid "Нова парола"
-msgstr ""
-
 #: templates/reset_password.html:37
 msgid "Поне 8 символа..."
 msgstr ""
@@ -1348,24 +2521,15 @@ msgstr ""
 msgid "Повторете паролата..."
 msgstr ""
 
-#: templates/reset_password.html:45
-msgid "Смени паролата"
-msgstr ""
-
-#: templates/partials/footer.html:15 templates/partials/navbar.html:19
-#: templates/services.html:7
-msgid "Услуги"
-msgstr ""
-
-#: templates/services.html:46
+#: templates/services.html:51
 msgid "МЕХАНИЧНА ОБРАБОТКА, ЛАЗЕР, ИЗМЕРВАНЕ"
 msgstr ""
 
-#: templates/services.html:47
+#: templates/services.html:52
 msgid "УСЛУГИ И"
 msgstr ""
 
-#: templates/services.html:48
+#: templates/services.html:53
 msgid ""
 "Високоточна механична обработка на стомани, алуминиеви сплави и цветни "
 "метали, 5-осно фрезоване и многоосно струговане, лазерно рязане, огъване "
@@ -1373,21 +2537,25 @@ msgid ""
 "парк."
 msgstr ""
 
-#: templates/services.html:115 templates/services.html:116
+#: templates/services.html:55
+msgid "Заявете оферта"
+msgstr ""
+
+#: templates/services.html:123 templates/services.html:124
 msgid "ПРОДУКТИ"
 msgstr ""
 
-#: templates/services.html:120
+#: templates/services.html:128
 msgid ""
 "Освен изработка на детайли по чертеж, предлагаме и следните готови "
 "продукти от собствено производство."
 msgstr ""
 
-#: templates/services.html:166 templates/services.html:167
+#: templates/services.html:174 templates/services.html:175
 msgid "ЦЕНИ НА УСЛУГИ"
 msgstr ""
 
-#: templates/services.html:171
+#: templates/services.html:179
 msgid ""
 "Часова ставка за изработка по услуга - използвана при изчисляване на "
 "цената на всеки чертеж/детайл."
@@ -1431,11 +2599,11 @@ msgstr ""
 msgid "Свържи с машина (незадължително)"
 msgstr ""
 
-#: templates/upload.html:89
+#: templates/upload.html:93
 msgid "Качи и изчисли"
 msgstr ""
 
-#: templates/upload.html:99
+#: templates/upload.html:103
 msgid "Моля изберете поне една услуга."
 msgstr ""
 
@@ -1479,19 +2647,15 @@ msgstr ""
 msgid "Напишете съобщение..."
 msgstr ""
 
-#: templates/partials/navbar.html:5
+#: templates/partials/navbar.html:13
 msgid "Отвори менюто"
 msgstr ""
 
-#: templates/partials/navbar.html:24
+#: templates/partials/navbar.html:34
 msgid "Лична Библиотека"
 msgstr ""
 
-#: templates/partials/navbar.html:120
-msgid "Профил"
-msgstr ""
-
-#: templates/partials/navbar.html:121
+#: templates/partials/navbar.html:192
 msgid "Изход"
 msgstr ""
 

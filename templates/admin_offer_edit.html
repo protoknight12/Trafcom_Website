@@ -230,7 +230,7 @@
                     <th></th>
                     <th>Наименование</th>
                     <th class="text-center">Кол-во</th>
-                    <th class="text-right">Ед. цена</th>
+                    <th class="text-right">Ед. цена в поръчката</th>
                 </tr>
                 </thead>
                 <tbody id="orderSelectorBody">
@@ -239,7 +239,7 @@
             </table>
         </div>
         <p class="text-small text-muted" id="orderSelectorNote"></p>
-        <form action="{{ url_for('admin_offer_create_order', offer_id=offer.id) }}" method="POST" class="admin-form" id="createOrderForm" target="_top">
+        <form action="{{ url_for('admin_offer_create_order', offer_id=offer.id) }}" method="POST" class="admin-form" id="createOrderForm" target="_top" data-once>
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="order_customer_name">Име на клиент</label>
@@ -265,6 +265,8 @@
     const CLIENT_PRICING = {{ client_pricing|tojson }};
     const OFFER_IMAGE_URL_PREFIX = {{ url_for('static', filename='uploads/offers/')|tojson }};
     const HAS_OFFER = {{ 'true' if offer else 'false' }};
+    // the SAVED discount - what admin_offer_create_order() reads
+    const SAVED_DISCOUNT = {{ (offer.discount_percent or 0) if offer else 0 }};
     let cart = {{ initial_items|tojson }};
     let pendingImageFilename = null;
     let selectedItemIds = new Set();
@@ -328,18 +330,42 @@
         return cid && CLIENT_PRICING[cid] ? CLIENT_PRICING[cid] : null;
     }
 
+    // Python's round(x, 2), so the preview rounds exactly where the server
+    // does: toFixed() is correctly rounded like round(), except that an exact
+    // tie (a .125/.375/.625/.875 fraction) goes to the even cent in Python.
+    // Copy of order_create.html's round2().
+    function round2(x) {
+        let cents = Math.round(Number(x.toFixed(2)) * 100);
+        if (Number.isInteger(x * 8) && (x * 8) % 2 !== 0 && cents % 2 !== 0) cents -= Math.sign(x);
+        return cents / 100;
+    }
+
+    // A standalone Detail's price - mirrors detail_price_for().
     function detailAdjustedPrice(basePrice) {
         const cp = selectedOfferClientPricing();
         if (!cp) return basePrice;
-        return applyClientAdjustment(basePrice, cp.detail_type, cp.detail_percent);
+        return round2(applyClientAdjustment(basePrice, cp.detail_type, cp.detail_percent));
     }
 
     // A Product's list sell price with the offer client's Продукти terms -
-    // mirrors calculate_product_pricing(client).
+    // calculate_product_pricing(client) as the server computed it
+    // (client_prices, see _offer_product_json()).
     function productAdjustedPrice(p) {
         const cp = selectedOfferClientPricing();
-        if (!cp) return p.price;
-        return applyClientAdjustment(p.price, cp.product_type, cp.product_percent);
+        if (!cp || !cp.product_type || !cp.product_percent) return p.price;
+        return p.client_prices[document.getElementById('client_id').value];
+    }
+
+    // OfferItem.line_total (null for a line without qty or price).
+    function lineTotal(item) {
+        return (item.quantity != null && item.unit_price != null) ? round2(item.quantity * item.unit_price) : null;
+    }
+
+    // Offer.subtotal / discount_amount / total, rounded where they round.
+    function offerTotals(items, discountPercent) {
+        const subtotal = round2(items.reduce(function (sum, item) { return sum + (lineTotal(item) || 0); }, 0));
+        const discount = round2(subtotal * discountPercent / 100);
+        return { subtotal: subtotal, discount: discount, total: round2(subtotal - discount) };
     }
 
     document.getElementById('item_product_id').addEventListener('change', function () {
@@ -567,8 +593,7 @@
         } else {
             cart.forEach(function (item, idx) {
                 const tr = document.createElement('tr');
-                const hasLineTotal = item.quantity != null && item.unit_price != null;
-                const lineTotal = hasLineTotal ? item.quantity * item.unit_price : null;
+                const total = lineTotal(item);
 
                 tr.appendChild(cell(escapeHtml(item.code)));
                 const thumbHtml = item.image_filename
@@ -581,8 +606,8 @@
                 tr.appendChild(cell(escapeHtml(item.dimensions)));
                 tr.appendChild(cell(item.quantity != null ? item.quantity : '', { className: 'text-center' }));
                 tr.appendChild(cell(escapeHtml(item.unit)));
-                tr.appendChild(cell(item.unit_price != null ? item.unit_price.toFixed(2) + ' €' : '', { className: 'text-right' }));
-                tr.appendChild(cell(hasLineTotal ? lineTotal.toFixed(2) + ' €' : '', { className: 'text-right' }));
+                tr.appendChild(cell(item.unit_price != null ? round2(item.unit_price).toFixed(2) + ' €' : '', { className: 'text-right' }));
+                tr.appendChild(cell(total != null ? total.toFixed(2) + ' €' : '', { className: 'text-right' }));
 
                 const actionTd = document.createElement('td');
                 actionTd.className = 'text-right';
@@ -620,20 +645,16 @@
             });
         }
 
-        const subtotal = cart.reduce(function (sum, item) {
-            return sum + ((item.quantity != null && item.unit_price != null) ? item.quantity * item.unit_price : 0);
-        }, 0);
         // Mirrors Offer.subtotal/discount_amount/total in app.py and the
         // print page's Сума/Отстъпка/ОБЩО breakdown - without this, the
         // running total shown here while still editing would ignore the
         // discount field entirely.
         const discountRaw = parseFloat(document.getElementById('discount_percent').value);
         const discountPercent = (!isNaN(discountRaw) && discountRaw > 0) ? discountRaw : 0;
-        const discountAmount = subtotal * discountPercent / 100;
-        const finalTotal = subtotal - discountAmount;
+        const totals = offerTotals(cart, discountPercent);
         document.getElementById('cartTotal').innerHTML = discountPercent
-            ? 'Сума: ' + subtotal.toFixed(2) + ' €<br>Отстъпка (-' + discountPercent + '%): -' + discountAmount.toFixed(2) + ' €<br><strong>ОБЩО: ' + finalTotal.toFixed(2) + ' €</strong>'
-            : subtotal.toFixed(2) + ' €';
+            ? 'Сума: ' + totals.subtotal.toFixed(2) + ' €<br>Отстъпка (-' + discountPercent + '%): -' + totals.discount.toFixed(2) + ' €<br><strong>ОБЩО: ' + totals.total.toFixed(2) + ' €</strong>'
+            : totals.subtotal.toFixed(2) + ' €';
         document.getElementById('submitOfferBtn').disabled = cart.length === 0;
 
         if (HAS_OFFER) renderOrderSelector();
@@ -684,12 +705,17 @@
                 qtyInput.id = 'qty-override-' + item.id;
                 qtyInput.value = qtyOverrides.hasOwnProperty(item.id)
                     ? qtyOverrides[item.id]
-                    : (item.quantity != null ? Math.max(1, Math.round(item.quantity)) : 1);
+                    : (item.quantity != null ? Math.max(1, Math.ceil(item.quantity - 1e-9)) : 1);   // up, like the server: 2.4 pieces quoted -> 3 ordered
                 qtyInput.addEventListener('input', function () { qtyOverrides[item.id] = qtyInput.value; });
                 qtyTd.appendChild(qtyInput);
                 tr.appendChild(qtyTd);
 
-                tr.appendChild(cell(item.unit_price != null ? item.unit_price.toFixed(2) + ' €' : '', { className: 'text-right' }));
+                // The price that will be frozen on the order: the quoted unit
+                // price minus the offer's whole-offer discount (server:
+                // admin_offer_create_order()). A line with no price is priced
+                // from the catalog at creation time, so nothing to show.
+                const orderPrice = item.unit_price != null ? round2(item.unit_price * (1 - SAVED_DISCOUNT / 100)) : null;
+                tr.appendChild(cell(orderPrice != null ? orderPrice.toFixed(2) + ' €' : '', { className: 'text-right' }));
                 body.appendChild(tr);
             });
         }

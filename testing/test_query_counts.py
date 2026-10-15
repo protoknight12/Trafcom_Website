@@ -12,7 +12,7 @@ Run with:
 """
 import os
 import tempfile
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 _db_fd, _db_path = tempfile.mkstemp(suffix='.db')
 os.close(_db_fd)
@@ -27,7 +27,7 @@ from app import (app as flask_app, db, limiter, User, MaterialPrice, Detail, Pro
                  ProductExtraCost, Operation, Service, Client, Supplier, Order, OrderItem,
                  OrderItemComponent, OrderItemAttachment, Offer, OfferItem, DeliveryNote,
                  DeliveryNoteItem, ClientDeliveryNote, ClientDeliveryNoteItem, Vehicle,
-                 VehicleInsuranceInstallment)
+                 VehicleInsuranceInstallment, ProductionOrder)
 
 SLACK = 3   # allowed growth in statements between 2 and 10 rows
 
@@ -38,9 +38,12 @@ def _seed_one(i, admin_id, material, services):
     supplier = Supplier(name=f'Доставчик {i}')
     db.session.add_all([client, supplier])
     db.session.flush()
+    own_material = MaterialPrice(key=f'qc_mat_{i}', display_name=f'QC Material {i}', cost_per_m2=10,
+                                 cutting_speed_mm_per_min=1, pierce_rate_per_min=0.1)
+    db.session.add(own_material)   # a material per row, so a per-row lazy load of Detail.material shows up
     details = []
     for k in range(2):
-        d = Detail(name=f'Детайл {i}-{k}', material_key=material.key, width=10, height=10, total_length=1,
+        d = Detail(name=f'Детайл {i}-{k}', material_key=own_material.key, width=10, height=10, total_length=1,
                    pierce_count=1, calculated_price=5.0, stock_quantity=0, owner_client_id=client.id,
                    geometry_json='[]')
         db.session.add(d)
@@ -48,6 +51,11 @@ def _seed_one(i, admin_id, material, services):
         for s_idx, svc in enumerate(services):
             db.session.add(Operation(detail_id=d.id, service_id=svc.id, sequence=s_idx, duration_minutes=3))
         details.append(d)
+    for status in ('pending', 'done'):
+        db.session.add(ProductionOrder(detail_id=details[0].id, material_id=own_material.id, quantity=2,
+                                       planned_material_qty=1.0, status=status, created_by_id=admin_id,
+                                       completed_by_id=admin_id if status == 'done' else None,
+                                       completed_at=datetime.utcnow() if status == 'done' else None))
     product = Product(name=f'Продукт {i}', markup_percent=10, owner_client_id=client.id)
     db.session.add(product)
     db.session.flush()
@@ -145,7 +153,9 @@ def _count_selects(url):
 
 
 PAGES = ['/orders', '/admin/production', '/admin/missing-stock', '/admin/offers', '/admin/products',
-         '/admin/details', '/admin/delivery-notes', '/admin/client-delivery-notes', '/admin/materials/1/history']
+         '/admin/details', '/admin/delivery-notes', '/admin/client-delivery-notes', '/admin/materials/1/history',
+         '/storage/details', '/storage/products', '/storage/materials', '/admin/production-orders',
+         '/admin/offers/new', '/admin/offers/1/edit']
 
 
 @pytest.fixture(scope='module')

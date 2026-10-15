@@ -225,23 +225,15 @@
     });
 
     const LIST_SELL_PRICE = {{ pricing.sell_price }};
-    // Each Client's Продукти discount/markup - see admin_product_offer().
+    // Each Client's Продукти discount/markup and the resulting price from
+    // calculate_product_pricing(client) - see admin_product_offer().
     const CLIENT_PRICING = {{ client_pricing|tojson }};
 
-    function applyClientAdjustment(amount, type, percent) {
-        if (!type || !percent) return amount;
-        const factor = percent / 100;
-        if (type === 'discount') return amount * (1 - factor);
-        if (type === 'markup') return amount * (1 + factor);
-        return amount;
-    }
-
     // The breakdown above stays the list one; the picked client's Продукти
-    // discount/markup is its own row on the final price - mirrors
-    // calculate_product_pricing(client).
+    // discount/markup is its own row on the final price.
     function recomputeOfferPricing(clientId) {
         const cp = clientId && CLIENT_PRICING[clientId] ? CLIENT_PRICING[clientId] : null;
-        const sellPrice = cp ? applyClientAdjustment(LIST_SELL_PRICE, cp.product_type, cp.product_percent) : LIST_SELL_PRICE;
+        const sellPrice = cp ? cp.product_price : LIST_SELL_PRICE;
         const diff = sellPrice - LIST_SELL_PRICE;
         const row = document.getElementById('offerClientAdjRow');
         row.style.display = Math.abs(diff) > 0.0001 ? '' : 'none';

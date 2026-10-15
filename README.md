@@ -17,6 +17,7 @@ orders through production tracking. The UI is in Bulgarian.
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Running it](#running-it)
+- [Deployment](#deployment)
 - [Project structure](#project-structure)
 - [Schema changes](#schema-changes)
 - [Tests](#tests)
@@ -34,7 +35,8 @@ orders through production tracking. The UI is in Bulgarian.
   laser cutting, 3-axis milling) with an EUR/hour rate and the machines
   that can run them; extra post-processing steps on a catalog `Detail`
   (`Operation` — milling, deburring, welding, ...) are costed by
-  duration × the linked service's rate.
+  duration × the linked service's rate, or by length for services priced
+  per metre.
 - **Catalog** — admin-curated `Detail` (single part) and `Product`
   (assembled from multiple Details + extra costs like paint/assembly, with
   markup) records, each with stock tracking and a printable barcode label.
@@ -74,8 +76,8 @@ orders through production tracking. The UI is in Bulgarian.
   read-only tools to look up catalog items, stock, orders, and prices in
   plain Bulgarian; degrades to a friendly "unavailable" message if no API
   key is configured.
-- **Activity log** — every state-changing admin/worker action is recorded
-  (who, what, when), exportable to `.xlsx`.
+- **Activity log** — every state-changing action by a logged-in user is
+  recorded (who, what, when), exportable to `.xlsx`.
 - **Missing-stock dashboard** — every open order that doesn't currently have
   enough Detail/Product stock to fulfill it, recomputed live rather than
   stored.
@@ -94,10 +96,32 @@ orders through production tracking. The UI is in Bulgarian.
   just the roughly 45-day on-device retention Gen2 meters offer natively;
   see
   [`docs/SHELLY_API.md`](https://github.com/protoknight12/Trafcom_Website/blob/main/docs/SHELLY_API.md).
+- **Press-brake programming (in progress)** — offline bend programming and
+  simulation for the shop's press brakes: unfolding sheet-metal parts into
+  flat patterns, choosing tools and bend sequences, and linking programs to
+  details and orders. See
+  [`docs/BENDING_MODULE.md`](https://github.com/protoknight12/Trafcom_Website/blob/main/docs/BENDING_MODULE.md).
+- **Sheet-metal flashing calculator** — flat patterns for L, U, Z and hat
+  profiles (with optional 180° hems), calculated live and downloadable as a
+  DXF ready for laser cutting.
+- **3D hall and plant map** — an interactive 3D model and floor plan of the
+  hall showing machines, panels, cable runs and the solar roof, each linked to
+  its machine record.
+- **Heat pump monitoring** — live readings and history from the heat pump,
+  plus a running-cost split into heating, cooling and standby.
+- **Solar inverter and battery monitoring** — Modbus-connected inverters and
+  battery stacks, polled and logged alongside the Shelly meters.
+- **Camera live view and object detection** — live camera streams, with
+  object detection running on the CPU and its results logged.
+- **LAN network inventory** — the shop network's devices, DHCP hosts and
+  links on a map, MAC-address tracing and a checklist-based security audit.
+- **ISO 9001 quality records** — controlled documents, internal audits,
+  corrective actions (CAPA), risk register, instrument calibration, training
+  records, management reviews and customer satisfaction.
 
 ## Requirements
 
-- Python 3
+- Python 3 (CI and the production server use 3.12)
 - PostgreSQL (reachable via `DATABASE_URL`)
 
 ## Installation
@@ -120,8 +144,11 @@ FLASK_DEBUG=0
 import if either is missing. `.env` is loaded automatically via
 `python-dotenv` and is gitignored.
 
-Everything else in `.env.example` is optional, each feature just degrades
-gracefully without it: `ANTHROPIC_API_KEY` (+ optional
+`.env.example` is the complete, commented list of environment variables
+(MQTT, camera detection tuning, reading retention and the rest are all there,
+so this README does not repeat them). Everything besides the two required
+values is optional, and each feature just degrades gracefully without it:
+`ANTHROPIC_API_KEY` (+ optional
 `ANTHROPIC_WORKSPACE_ID`) powers the AI chat assistant; `SMTP_HOST` /
 `PORT` / `USER` / `PASSWORD` / `FROM` control outgoing password-reset and
 email-verification mail (defaults to a local `localhost:25` transport with
@@ -135,7 +162,7 @@ python app.py
 
 This also creates any missing database tables (`db.create_all()` — it does
 **not** migrate existing ones, see [Schema changes](#schema-changes) below)
-and seeds default material prices and machine cards on first run, then
+and seeds default material types, prices, services and machine cards on first run, then
 opens `http://127.0.0.1:5000/` in your browser. Set `FLASK_DEBUG=1` for the
 interactive debugger and auto-reload during local dev — never in a public
 deployment.
@@ -151,20 +178,53 @@ For production, serve `wsgi.py` with gunicorn/waitress instead of running
 initialization block above, so run `python app.py` once by hand first to
 set up the database).
 
+## Deployment
+
+Production runs on Linux: gunicorn serves `wsgi:app` as a single worker
+process with 8 threads, on localhost port 8000, under the systemd unit in
+[`deploy/trafcom.service`](https://github.com/protoknight12/Trafcom_Website/blob/main/deploy/trafcom.service).
+nginx sits in front of it, serves `/static/` straight from disk and proxies
+everything else, including the camera stream. `gunicorn.conf.py` raises the
+worker timeout to 120 s.
+
+- [`deploy/update.sh`](https://github.com/protoknight12/Trafcom_Website/blob/main/deploy/update.sh)
+  — for releases that change the database or dependencies. It pulls the
+  code, dumps the database with `pg_dump` into `backups/` before anything
+  touches the schema (last 10 kept; `SKIP_BACKUP=1` skips the dump), installs
+  the requirements with the versions pinned in
+  [`deploy/constraints.txt`](https://github.com/protoknight12/Trafcom_Website/blob/main/deploy/constraints.txt),
+  stops the service, runs every new migration once via
+  `python -m migration.run_once`, starts the service again and waits for
+  `GET /health`. If a step fails, the service is started again.
+- [`deploy/update_quick.sh`](https://github.com/protoknight12/Trafcom_Website/blob/main/deploy/update_quick.sh)
+  — for code, template and static-only releases: pull, restart, wait for
+  `GET /health`.
+
+`GET /health` answers 200 while the database responds; it also reports the
+age of each background poller's last success.
+
+[`deploy/nginx_trafcombg.conf`](https://github.com/protoknight12/Trafcom_Website/blob/main/deploy/nginx_trafcombg.conf)
+is a reference copy of the nginx config. The scripts never touch nginx, so
+the live file on the server is edited by hand; keep this copy in step with it.
+
 ## Project structure
 
 <details>
 <summary>Click to expand</summary>
 
-- [`app.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/app.py) — models, DXF geometry/pricing logic, and all routes (single file)
+- [`app.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/app.py) — models, DXF geometry/pricing logic, and all routes (single file, by design; the routes are not split into blueprints)
+- [`bending/`](https://github.com/protoknight12/Trafcom_Website/tree/main/bending) — press-brake geometry package (unfolding, tools, sequencing, DXF), kept free of Flask so it can be used on its own
+- [`detection.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/detection.py) — camera object-detection, used by the detection worker in `app.py`
 - [`wsgi.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/wsgi.py) — production entrypoint (gunicorn/waitress)
 - [`gunicorn.conf.py`](https://github.com/protoknight12/Trafcom_Website/blob/main/gunicorn.conf.py) — bumps the worker timeout to 120s (`/admin/power/history` can take ~25s per day-chunk fetched, close to gunicorn's 30s default)
 - [`requirements.txt`](https://github.com/protoknight12/Trafcom_Website/blob/main/requirements.txt)
 - [`.env.example`](https://github.com/protoknight12/Trafcom_Website/blob/main/.env.example)
+- [`deploy/`](https://github.com/protoknight12/Trafcom_Website/tree/main/deploy) — systemd unit, nginx reference config and the update scripts (see [Deployment](#deployment))
+- [`.github/workflows/tests.yml`](https://github.com/protoknight12/Trafcom_Website/blob/main/.github/workflows/tests.yml) — CI test run
 - `uploads/` — private scratch folder for in-flight DXF uploads (not on GitHub — gitignored)
 
 <details>
-<summary><a href="https://github.com/protoknight12/Trafcom_Website/tree/main/templates"><code>templates/</code></a> — Jinja2 templates, one per page/route</summary>
+<summary><a href="https://github.com/protoknight12/Trafcom_Website/tree/main/templates"><code>templates/</code></a> — Jinja2 templates, one per page (the list below is a selection)</summary>
 
   - [`about.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/about.html)
   - [`account.html`](https://github.com/protoknight12/Trafcom_Website/blob/main/templates/account.html)
@@ -339,33 +399,46 @@ python -m migration.migrate_add_supplier_vat
 ```
 
 See each script's module docstring for what it does and when to run it.
+On a deployed server, `deploy/update.sh` runs every new `migration/migrate_*.py`
+exactly once through `python -m migration.run_once` (see [Deployment](#deployment)).
 
 ## Tests
 
-Most tests are plain `assert`-based scripts, run as modules from the repo
-root, e.g.:
-
 ```bash
-python -m testing.test_label_barcode
+pip install -r requirements-dev.txt   # installs pytest
+python -m testing.run_all
 ```
 
-A few use pytest instead, where the thing being tested needs real
-request/response behavior (redirects, status codes, session auth):
+`run_all` runs the whole suite: every `testing/test_*.py` file in its own
+process, so each file gets its own app and database. It exits non-zero if any
+file fails or times out. Pass part of a file name to run a subset
+(`python -m testing.run_all shelly`), and `-j N` sets how many files run in
+parallel. Most files are plain `assert` scripts (they pass if they finish
+without error); the request/response tests are pytest files.
+
+To run one file on its own:
 
 ```bash
-pip install pytest flask-wtf
-pytest testing/test_security_fixes.py -v
+python -m pytest testing/test_security_fixes.py -v
+python -m testing.test_label_barcode     # a plain assert script
 ```
 
-Tests always run against a throwaway SQLite database (`testing/__init__.py` forces it), never the database in `.env`, and are run one file at a time.
+Tests always use a throwaway SQLite database: `testing/__init__.py` points
+`DATABASE_URL` at a temporary file before `app` is imported, and the root
+`conftest.py` aborts any run whose database is not SQLite. They never touch
+the database in `.env`.
+
+GitHub Actions runs the whole suite on Python 3.12 on every push to `main`
+and on every pull request ([`.github/workflows/tests.yml`](https://github.com/protoknight12/Trafcom_Website/blob/main/.github/workflows/tests.yml)).
 
 ## Configuration notes
 
-- Rate limiting (`flask-limiter`) defaults to 300 requests/hour per IP for
-  each route, with tighter limits on `/login` and `/register`. The app trusts
+- Rate limiting (`flask-limiter`) defaults to 300 requests/hour per client IP,
+  counted separately for each route, with tighter limits on `/login` and `/register`. The app trusts
   one reverse-proxy hop (nginx) for the client address (`ProxyFix`, `x_for=1`).
   Storage is in-memory —
-  per-process only. If running more than one gunicorn/waitress worker,
+  per-process only (production runs a single worker, so that is fine there).
+  If running more than one gunicorn/waitress worker,
   switch to a shared store (e.g. Redis) or limits won't be enforced
   correctly across workers.
 - All state-changing requests require a CSRF token (`flask-wtf`).
