@@ -354,7 +354,8 @@ class DxfFile(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
     # Stores the extracted 2D geometry (lines/arcs/circles) as a JSON string,
     # so the viewer modal can render the drawing without re-parsing the DXF file.
-    geometry_json = db.Column(db.Text, nullable=True)
+    # Deferred: only get_geometry() reads it, so list queries must not pull megabytes.
+    geometry_json = db.deferred(db.Column(db.Text, nullable=True))
     machine_id = db.Column(db.Integer, db.ForeignKey('machine.id'), nullable=True)
     machine = db.relationship('Machine', backref='dxf_files')
     # Which billable Service(s) (hourly rate + machine type) priced the cut -
@@ -764,7 +765,9 @@ class Detail(db.Model):
     total_length = db.Column(db.Float, nullable=False)
     pierce_count = db.Column(db.Integer, nullable=False)
     calculated_price = db.Column(db.Float, nullable=False)
-    geometry_json = db.Column(db.Text, nullable=True)
+    # Deferred: written on DXF upload but never read by any page, and can be megabytes -
+    # every Detail list/lookup (and every relationship load) would otherwise drag it along.
+    geometry_json = db.deferred(db.Column(db.Text, nullable=True))
     # Which Service (hourly rate) priced this detail's cut - see
     # calculate_cnc_price(). Nullable for the same reason as DxfFile.service_id
     # (pre-refactor rows, and delivery-note-created bare-bones details that
@@ -2988,6 +2991,7 @@ def _machine_name_to_hall(target, value, oldvalue, initiator):
 
 def _next_hall_no():
     """Next sequential machine number (max + 1)."""
+    _lock_numbering('hall')
     return (db.session.query(db.func.max(HallMachine.no)).scalar() or 0) + 1
 
 
@@ -3533,9 +3537,9 @@ class CapaRecord(db.Model):
 
 
 def _next_capa_number():
-    """Sequential 'CAPA-0001' style numbering - same read-then-increment
-    tradeoff as _next_offer_number(), fine for this app's single-admin-at-a-
-    time usage."""
+    """Sequential 'CAPA-0001' style numbering (max + 1, serialized by
+    _lock_numbering() like _next_offer_number())."""
+    _lock_numbering('capa')
     last = db.session.query(db.func.max(CapaRecord.capa_no)).scalar()
     next_n = 1
     if last and last.startswith('CAPA-'):
@@ -3607,6 +3611,7 @@ class AuditFinding(db.Model):
 
 
 def _next_audit_number():
+    _lock_numbering('audit')
     last = db.session.query(db.func.max(InternalAudit.audit_no)).scalar()
     next_n = 1
     if last and last.startswith('AUD-'):
@@ -4031,11 +4036,12 @@ def _next_offer_number():
     """
     Zero-padded 11-digit sequential offer number (e.g. '00000000200') -
     starts at 200, continuing the shop's existing paper-offer numbering.
-    ponytail: read-then-use rather than a real DB sequence/lock - same
-    tradeoff as _next_erp_number(), fine for this app's single-admin-at-a-time
-    usage. Numbers sort lexicographically same as numerically since every
-    value is zero-padded to the same width.
+    Read-then-use, made safe for two admins at once by _lock_numbering() (the
+    caller inserts the offer in the same transaction). Numbers sort
+    lexicographically same as numerically since every value is zero-padded to
+    the same width.
     """
+    _lock_numbering('offer')
     last = db.session.query(db.func.max(Offer.number)).scalar()
     next_n = (int(last) + 1) if last else 200
     return f'{next_n:011d}'
@@ -5083,8 +5089,10 @@ def generate_order_number():
     Generates a unique, human-friendly order number like ORD-2026-4821.
     Retries on the (very unlikely) chance of a random collision; falls back
     to a guaranteed-unique uuid-based suffix if it somehow never finds a free
-    4-digit number.
+    4-digit number. _lock_numbering() keeps the "is it free?" check and the
+    caller's INSERT together, so two orders at once can't pick the same one.
     """
+    _lock_numbering('order')
     year = datetime.utcnow().year
     for _ in range(20):
         candidate = f"ORD-{year}-{random.randint(1000, 9999)}"
@@ -5255,8 +5263,10 @@ def inject_vehicle_alerts():
     itself every day until the date is renewed; no cron/email involved."""
     if not (current_user.is_authenticated and (current_user.is_admin or current_user.is_worker)):
         return {'vehicle_alerts': []}
+    if hasattr(g, '_vehicle_alerts'):   # one computation per request (a page can render several templates)
+        return {'vehicle_alerts': g._vehicle_alerts}
     alerts = []
-    for v in Vehicle.query.all():
+    for v in Vehicle.query.options(db.joinedload(Vehicle.installment_records)).all():
         for d in v.deadlines:
             if d['status'] in ('warning', 'expired'):
                 alerts.append({
@@ -5271,6 +5281,7 @@ def inject_vehicle_alerts():
                 'status': inst['status'], 'days': inst['days'],
             })
     alerts.sort(key=lambda a: a['days'])
+    g._vehicle_alerts = alerts
     return {'vehicle_alerts': alerts}
 
 
@@ -8732,6 +8743,9 @@ def admin_machines_merge():
         return redirect(url_for('list_machines'))
     name = keepH.name if keepH else keepM.name
     drop_name = dropH.name if dropH else dropM.name
+    if dropM and keepM and PressBrakeConfig.query.filter_by(machine_id=dropM.id).first()             and PressBrakeConfig.query.filter_by(machine_id=keepM.id).first():
+        flash('И двете машини имат настройки на абкант - изтрийте едните, преди да ги слеете.', 'danger')
+        return redirect(url_for('list_machines'))
     try:
         if dropH and keepH:
             for f in list(dropH.files):                                   # bytes live in machine_files/<hall machine id>/
@@ -8753,6 +8767,8 @@ def admin_machines_merge():
             Order.query.filter_by(machine_id=dropM.id).update({'machine_id': keepM.id})
             DxfFile.query.filter_by(machine_id=dropM.id).update({'machine_id': keepM.id})
             PanelComponent.query.filter_by(feeds_machine_id=dropM.id).update({'feeds_machine_id': keepM.id})
+            BendProgram.query.filter_by(machine_id=dropM.id).update({'machine_id': keepM.id})        # NOT NULL - would block the delete
+            PressBrakeConfig.query.filter_by(machine_id=dropM.id).update({'machine_id': keepM.id})   # keep has none (checked above)
             for rel in ('services', 'shelly_devices', 'modbus_devices'):
                 have = getattr(keepM, rel)
                 for x in list(getattr(dropM, rel)):
@@ -9529,6 +9545,28 @@ def account_update_email():
     return redirect(url_for('account'))
 
 
+@app.route('/account/password', methods=['POST'])
+@login_required
+@limiter.limit("10 per hour")
+def account_update_password():
+    if not check_password_hash(current_user.password, request.form.get('current_password', '').strip()):
+        flash(gettext('Грешна парола.'), 'danger')
+        return redirect(url_for('account'))
+    # stripped like login()/reset_password() strip it - a password saved with a stray space could never log in
+    password = request.form.get('password', '').strip()
+    if len(password) < 8:
+        flash(gettext('Паролата трябва да бъде поне 8 символа.'), 'danger')
+        return redirect(url_for('account'))
+    if password != request.form.get('password_confirm', '').strip():
+        flash(gettext('Паролите не съвпадат.'), 'danger')
+        return redirect(url_for('account'))
+    current_user.password = generate_password_hash(password, method='scrypt')
+    db.session.commit()  # also kills any outstanding reset link: _reset_token() is bound to the old hash
+    log_action('Сменена парола на акаунта')
+    flash(gettext('Паролата е сменена успешно.'), 'success')
+    return redirect(url_for('account'))
+
+
 @app.route('/account/email/resend-verification', methods=['POST'])
 @login_required
 @limiter.limit("5 per hour")
@@ -9554,7 +9592,9 @@ def account_2fa_setup():
     if request.method == 'POST':
         secret = session.get('pending_totp_secret')
         code = (request.form.get('code') or '').strip()
-        if not secret or not pyotp.TOTP(secret).verify(code, valid_window=1):
+        # same one-time path as login_2fa(), so the code that enables 2FA can't be replayed at the login step
+        from types import SimpleNamespace
+        if not secret or not _totp_accept(SimpleNamespace(id=current_user.id, totp_secret=secret), code):
             flash(gettext('Невалиден код. Опитайте отново.'), 'danger')
             return redirect(url_for('account_2fa_setup'))
         current_user.totp_secret = secret
@@ -9577,7 +9617,7 @@ def account_2fa_setup():
 @app.route('/account/2fa/disable', methods=['POST'])
 @login_required
 def account_2fa_disable():
-    if not check_password_hash(current_user.password, request.form.get('password', '')):
+    if not check_password_hash(current_user.password, request.form.get('password', '').strip()):
         flash(gettext('Грешна парола.'), 'danger')
         return redirect(url_for('account'))
     current_user.totp_secret = None
@@ -9718,8 +9758,22 @@ def get_geometry(file_id):
 @login_required
 def delete_account():
     # Потребителят трие сам своя профил
+    if not check_password_hash(current_user.password, request.form.get('password', '').strip()):
+        flash(gettext('Грешна парола.'), 'danger')
+        return redirect(url_for('account'))
+    if current_user.role == 'admin' and User.query.filter_by(role='admin').count() <= 1:
+        flash(gettext('Не можете да изтриете единствения администратор.'), 'danger')
+        return redirect(url_for('account'))
     user = User.query.get(current_user.id)
+    # same rule as admin_delete_user(): rows with no ON DELETE would make the DELETE fail (a 500)
+    used_in = _fk_references(user, skip=('dxf_file', 'generator_preset', 'flashing_preset'))
+    if used_in:
+        flash(gettext('Профилът има свързани записи (%(what)s) и не може да бъде изтрит. Свържете се с администратор.',
+                      what=', '.join(used_in)), 'danger')
+        return redirect(url_for('account'))
     logout_user()
+    GeneratorPreset.query.filter_by(user_id=user.id).delete()
+    FlashingPreset.query.filter_by(user_id=user.id).delete()
     db.session.delete(user)
     db.session.commit()
     return redirect(url_for('register'))
@@ -10001,12 +10055,17 @@ def admin_material_history(material_id):
     material = MaterialPrice.query.get_or_404(material_id)
 
     incoming = (DeliveryNoteItem.query.join(DeliveryNote)
+                .options(db.contains_eager(DeliveryNoteItem.delivery_note).joinedload(DeliveryNote.supplier))
                 .filter(DeliveryNoteItem.target_type == 'material', DeliveryNoteItem.target_id == material_id)
                 .all())
     outgoing = (ClientDeliveryNoteItem.query.join(ClientDeliveryNote)
+                .options(db.contains_eager(ClientDeliveryNoteItem.client_delivery_note).joinedload(ClientDeliveryNote.client))
                 .filter(ClientDeliveryNoteItem.target_type == 'material', ClientDeliveryNoteItem.target_id == material_id)
                 .all())
-    production_jobs = ProductionOrder.query.filter_by(material_id=material_id, status='done').all()
+    production_jobs = (ProductionOrder.query.filter_by(material_id=material_id, status='done')
+                       .options(db.joinedload(ProductionOrder.detail), db.joinedload(ProductionOrder.completed_by),
+                                db.joinedload(ProductionOrder.reversed_by))
+                       .all())
 
     movements = [
         {'date': item.delivery_note.note_date or item.delivery_note.created_at.date(),
@@ -10053,7 +10112,9 @@ def admin_details():
         flash('Нямате достъп до тази страница.')
         return redirect(url_for('dashboard'))
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
-    details = Detail.query.order_by(Detail.name).all()
+    details = (Detail.query.order_by(Detail.name)
+               .options(db.joinedload(Detail.material), db.joinedload(Detail.owner_client),
+                        db.selectinload(Detail.operations).joinedload(Operation.service)).all())
     services = Service.query.order_by(Service.name).all()
     services_data = [{'id': s.id, 'name': s.name, 'price_per_hour_eur': s.price_per_hour_eur} for s in services]
     clients = Client.query.order_by(Client.name).all()
@@ -10067,7 +10128,10 @@ def admin_products():
     if not current_user.is_admin:
         flash('Нямате достъп до тази страница.')
         return redirect(url_for('dashboard'))
-    products = Product.query.order_by(Product.name).all()
+    products = (Product.query.order_by(Product.name)
+                .options(db.joinedload(Product.owner_client), db.selectinload(Product.extra_costs),
+                         db.selectinload(Product.product_details).joinedload(ProductDetail.detail)
+                         .selectinload(Detail.operations).joinedload(Operation.service)).all())
     product_pricing = {p.id: calculate_product_pricing(p) for p in products}
     clients = Client.query.order_by(Client.name).all()
     return render_template('admin_products.html', products=products, product_pricing=product_pricing,
@@ -10580,6 +10644,44 @@ def _bump_stock(target, quantity):
     return target.stock_quantity
 
 
+def _lock_or_404(model, row_id):
+    """Loads one row with SELECT ... FOR UPDATE (404 if it is gone) - the first
+    thing a route does when it reads a document's state and then moves stock
+    on the strength of it (complete/delete a production job, production
+    report, edit/delete a delivery note). A second request for the same row
+    waits here until the first one commits and then sees what it left:
+    'done', the new quantity_produced, the rewritten lines, or no row at all.
+    populate_existing: a copy already in the session would otherwise keep its
+    old values and the lock would protect nothing. SQLite (the tests) has no
+    FOR UPDATE and simply ignores it."""
+    row = None if row_id is None else db.session.get(model, row_id, populate_existing=True, with_for_update=True)
+    if row is None:
+        abort(404)
+    return row
+
+
+# Keys for pg_advisory_xact_lock(), one per family of "max + 1" numbers. Plain
+# constants: they only have to differ from each other and from the detector's
+# 735100 (_detection_lock) - advisory locks share one key space per database.
+NUMBER_LOCK_KEYS = {'erp': 735201, 'offer': 735202, 'capa': 735203, 'audit': 735204, 'hall': 735205, 'order': 735206}
+
+
+def _lock_numbering(family):
+    """Makes "read the highest number, use the next one" safe: every request
+    allocating (or checking a typed) number of this family waits here until
+    the one before it has committed, so its own max()/conflict query already
+    sees that row. The lock ends with the transaction - the caller has to
+    insert and commit in the SAME transaction (no commit between getting the
+    number and adding the row). Re-entrant, so several numbers in one request
+    are fine. PostgreSQL only; any other database (SQLite in the tests, one
+    connection) needs nothing. no_autoflush: the lock must be taken before
+    this request's pending UPDATEs go out and take row locks, not after."""
+    if db.engine.dialect.name != 'postgresql':
+        return
+    with db.session.no_autoflush:
+        db.session.execute(db.text('SELECT pg_advisory_xact_lock(:key)'), {'key': NUMBER_LOCK_KEYS[family]})
+
+
 DELIVERY_NOTE_TARGET_MODELS = {'material': MaterialPrice, 'detail': Detail, 'product': Product}
 
 
@@ -10775,12 +10877,13 @@ def admin_delivery_notes():
     row - just with material/detail/product instead of product/detail.
     """
     suppliers = Supplier.query.order_by(Supplier.name).all()
-    notes = DeliveryNote.query.order_by(DeliveryNote.created_at.desc()).all()
+    notes = (DeliveryNote.query.order_by(DeliveryNote.created_at.desc())
+             .options(db.joinedload(DeliveryNote.supplier), db.selectinload(DeliveryNote.items)).all())
     # Ordered by type first so the template's |groupby('type') optgroups
     # (same structural-type sectioning as partials/material_options.html)
     # come out contiguous - Jinja's groupby needs pre-sorted input.
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
-    details = Detail.query.order_by(Detail.name).all()
+    details = Detail.query.order_by(Detail.name).options(db.joinedload(Detail.material)).all()
     products = Product.query.order_by(Product.name).all()
     # Plain dicts (not ORM rows) for the client-side |tojson item picker -
     # same convention as create_order()'s products_data/details_data. width/
@@ -10871,6 +10974,11 @@ def create_delivery_note():
         flash('Моля добавете поне един артикул към стоковата разписка.', 'danger')
         return redirect(url_for('admin_delivery_notes'))
 
+    # A new line allocates an ERP № (_find_or_create_delivery_target) after
+    # earlier lines already moved stock; taking the lock up front keeps the
+    # order "numbering lock, then stock rows" for every note (no deadlock) and
+    # stops two notes creating the same new catalog row twice.
+    _lock_numbering('erp')
     note = DeliveryNote(created_by_id=current_user.id)
     _set_delivery_note_header(note, 'supplier_id')
     db.session.add(note)
@@ -10904,12 +11012,13 @@ def edit_delivery_note(note_id):
     created by the original note are never deleted, just left with that stock
     taken back.
     """
-    note = DeliveryNote.query.get_or_404(note_id)
+    note = _lock_or_404(DeliveryNote, note_id)
     items = _delivery_note_form_items()
     if not items:
         flash('Разписката трябва да има поне един артикул.', 'danger')
         return redirect(url_for('admin_delivery_notes'))
 
+    _lock_numbering('erp')  # before any stock row - see create_delivery_note()
     kept = {it.id: {'type': it.target_type, 'target_id': it.target_id, 'unit_price': it.unit_price}
             for it in note.items}
     old_lines = _reverse_note_items(note.items, sign=1)
@@ -10936,7 +11045,7 @@ def delete_delivery_note(note_id):
     """Deletes a DeliveryNote the reverse way it was recorded: every line's
     intake is taken back out of stock. Catalog rows the note created (new
     materials/lots/details/products) stay, just without that stock."""
-    note = DeliveryNote.query.get_or_404(note_id)
+    note = _lock_or_404(DeliveryNote, note_id)
     return _delete_note(note, sign=1, label='Стокова разписка', endpoint='admin_delivery_notes')
 
 
@@ -10944,7 +11053,7 @@ def delete_delivery_note(note_id):
 @role_required(['admin', 'worker'])
 def delete_client_delivery_note(note_id):
     """Deletes a ClientDeliveryNote: everything it issued goes back into stock."""
-    note = ClientDeliveryNote.query.get_or_404(note_id)
+    note = _lock_or_404(ClientDeliveryNote, note_id)
     return _delete_note(note, sign=-1, label='Издадена стокова разписка', endpoint='admin_client_delivery_notes')
 
 
@@ -11117,9 +11226,11 @@ def admin_client_delivery_notes():
     create when stock is only leaving.
     """
     clients = Client.query.order_by(Client.name).all()
-    notes = ClientDeliveryNote.query.order_by(ClientDeliveryNote.created_at.desc()).all()
+    notes = (ClientDeliveryNote.query.order_by(ClientDeliveryNote.created_at.desc())
+             .options(db.joinedload(ClientDeliveryNote.client), db.selectinload(ClientDeliveryNote.items)).all())
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
-    details = Detail.query.order_by(Detail.name).all()
+    details = (Detail.query.order_by(Detail.name)
+               .options(db.selectinload(Detail.operations).joinedload(Operation.service)).all())
     products = Product.query.order_by(Product.name).all()
     materials_data = [{'id': m.id, 'name': format_material_option(m), 'price': None, 'stock': m.stock_quantity} for m in materials]
     details_data = [{'id': d.id, 'name': d.name, 'price': d.total_price, 'stock': d.stock_quantity} for d in details]
@@ -11175,7 +11286,7 @@ def create_client_delivery_note():
 def edit_client_delivery_note(note_id):
     """Rewrites a ClientDeliveryNote: the old lines' stock is given back,
     then the submitted lines are issued fresh - mirrors edit_delivery_note()."""
-    note = ClientDeliveryNote.query.get_or_404(note_id)
+    note = _lock_or_404(ClientDeliveryNote, note_id)
     items = _delivery_note_form_items()
     if not items:
         flash('Разписката трябва да има поне един артикул.', 'danger')
@@ -11314,6 +11425,37 @@ def _remove_files(paths):
                 os.remove(path)
         except OSError as e:
             app.logger.error('could not remove %s: %s', path, e)
+
+
+# Bulgarian names for what _fk_references() reports; a table missing here
+# shows under its own name.
+FK_TABLE_LABELS = {
+    'order': 'поръчки', 'offer': 'оферти', 'delivery_note': 'стокови разписки',
+    'client_delivery_note': 'издадени стокови разписки', 'production_order': 'задачи за производство',
+    'material_request': 'заявки за материал', 'detail_dxf_file': 'файлове към детайли',
+    'order_item_attachment': 'файлове към поръчки', 'quality_check': 'проверки на качеството',
+    'instrument_calibration_record': 'калибровки', 'capa_record': 'CAPA записи',
+    'controlled_document': 'документи', 'controlled_document_revision': 'ревизии на документи',
+    'internal_audit': 'одити', 'management_review': 'прегледи от ръководството',
+    'management_review_action': 'действия от прегледи', 'training_record': 'обучения',
+    'customer_satisfaction_record': 'анкети за удовлетвореност', 'risk_register_entry': 'рискове',
+    'bend_execution': 'изпълнения на програми за огъване',
+}
+
+
+def _fk_references(row, skip=()):
+    """What still points at `row` through a foreign key: one label per table
+    holding such a row. Read from the models, so a foreign key added later is
+    covered without touching this - for a row with too many references to
+    list by hand (a User). `skip`: tables the caller empties itself or the ORM
+    cascades to."""
+    found = []
+    for table in db.metadata.sorted_tables:
+        for fk in table.foreign_keys:
+            if fk.column.table is row.__table__ and table.name not in skip \
+                    and db.session.execute(db.select(fk.parent).where(fk.parent == getattr(row, fk.column.key)).limit(1)).first():
+                found.append(FK_TABLE_LABELS.get(table.name, table.name))
+    return list(dict.fromkeys(found))
 
 
 @app.route('/services/machine-cards/new')
@@ -11670,11 +11812,11 @@ def _parse_sheet_dimensions(form):
 def _next_erp_number():
     """
     Auto-generates the next unique ERP №: one past the current max across
-    Detail/Product/MaterialPrice combined (100001 if none exist yet).
-    ponytail: read-then-use rather than a real DB sequence/lock - fine for
-    this app's single-admin-at-a-time usage; add a proper sequence if
-    concurrent creates ever start racing on this.
+    Detail/Product/MaterialPrice/BendToolSegment combined (100001 if none
+    exist yet). Read-then-use; _lock_numbering() makes concurrent creates take
+    turns (a DB sequence can't span four tables plus hand-typed numbers).
     """
+    _lock_numbering('erp')
     maxes = [
         db.session.query(db.func.max(Detail.erp_number)).scalar(),
         db.session.query(db.func.max(Product.erp_number)).scalar(),
@@ -11731,6 +11873,7 @@ def _erp_number_conflict(erp_number, exclude_type=None, exclude_id=None):
     """
     if erp_number is None:
         return None
+    _lock_numbering('erp')  # a typed number must not race a generated one (or the same one typed twice)
 
     detail_q = Detail.query.filter(Detail.erp_number == erp_number)
     product_q = Product.query.filter(Product.erp_number == erp_number)
@@ -12215,12 +12358,14 @@ def admin_delete_service(service_id):
         DxfFile.query.filter(DxfFile.services.any(Service.id == service.id)).first()
         or Detail.query.filter_by(cutting_service_id=service.id).first()
         or Operation.query.filter_by(service_id=service.id).first()
+        or OrderItemOperation.query.filter_by(service_id=service.id).first()
     )
     if in_use:
         flash(f'Услугата "{service.name}" се използва и не може да бъде изтрита.', 'danger')
         return redirect(url_for('admin_services'))
 
     name = service.name
+    ClientServicePrice.query.filter_by(service_id=service.id).delete()  # a client's special rate for it means nothing without it
     db.session.delete(service)
     db.session.commit()
     log_action(f'Изтрита услуга "{name}"')
@@ -13094,6 +13239,15 @@ def admin_product_delete(product_id):
     product = Product.query.get_or_404(product_id)
     name = product.name
 
+    # Order and offer lines point at the product with no ON DELETE rule - the
+    # DELETE would fail on the foreign key (a 500). Same refusal as
+    # admin_delete_detail(); its own details/extra costs/images cascade.
+    used_in = [label for model, label in ((OrderItem, 'поръчка'), (OfferItem, 'оферта'))
+               if model.query.filter_by(product_id=product.id).first()]
+    if used_in:
+        flash(f'Продуктът "{name}" се използва в поне една {", ".join(used_in)} и не може да бъде изтрит.', 'danger')
+        return redirect(url_for('admin_products'))
+
     image_paths = [os.path.join(app.config['PRODUCT_IMAGES_FOLDER'], img.filename) for img in product.images]
 
     db.session.delete(product)  # Cascades database records
@@ -13267,6 +13421,15 @@ def admin_delete_user(user_id):
         flash('Не можете да изтриете собствения си профил оттук.', 'danger')
         return redirect(url_for('admin_users'))
 
+    # Everything this user created or is responsible for points at the row
+    # with no ON DELETE rule (orders, notes, offers, quality records ...) - the
+    # DELETE would fail in the database. Refuse and say what; the uploads go
+    # with the user (cascade), and so do the personal presets below.
+    used_in = _fk_references(user_to_delete, skip=('dxf_file', 'generator_preset', 'flashing_preset'))
+    if used_in:
+        flash(f'Потребителят "{user_to_delete.username}" има {", ".join(used_in)} и не може да бъде изтрит.', 'danger')
+        return redirect(url_for('admin_users'))
+
     try:
         # Note: uploaded DXF files are only ever written temporarily during
         # processing and removed immediately after (see dashboard()) - only
@@ -13274,6 +13437,8 @@ def admin_delete_user(user_id):
         # leftover files on disk to clean up here; deleting the user cascades
         # to their DxfFile rows via the model's cascade='all, delete-orphan'.
         deleted_username = user_to_delete.username
+        GeneratorPreset.query.filter_by(user_id=user_to_delete.id).delete()
+        FlashingPreset.query.filter_by(user_id=user_to_delete.id).delete()
         db.session.delete(user_to_delete)
         db.session.commit()
 
@@ -13493,32 +13658,50 @@ def create_order():
     deliverers = allowed_only('deliverers', Deliverer.query.order_by(Deliverer.name).all())
     # Pre-computed, JSON-friendly catalogs so the cart UI can add items and
     # show live prices/totals client-side without extra round-trips.
-    products_data = [
-        {
-            'id': p.id, 'name': localized(p, 'name'),
-            'price': calculate_product_pricing(p)['sell_price'],
-            # Unadjusted breakdown so the cart's client-side price preview can
-            # re-run calculate_product_pricing()'s own formula per selected
-            # client (see CLIENT_PRICING below) instead of just discounting
-            # the already-marked-up sell price.
-            'details_subtotal': calculate_product_pricing(p)['details_subtotal'],
-            # Same, but for the "Материал на клиента" option: services only (before the client's surcharge).
-            'details_ops_subtotal': round(sum(sum(op.cost for op in pd.detail.operations) * pd.quantity
-                                              for pd in p.product_details), 2),
-            'extra_costs_subtotal': calculate_product_pricing(p)['extra_costs_subtotal'],
-            'markup_percent': p.markup_percent,
-        }
-        for p in products
-    ]
-    details_data = [
-        {
-            'id': d.id,
-            'name': f"{localized(d, 'name')} ({localized(d.material, 'display_name')})" if d.material else localized(d, 'name'),
-            'price': d.total_price,
-            'ops_total': _detail_base_price(d, None, True)
-        }
-        for d in details
-    ]
+    def detail_label(d):
+        return f"{localized(d, 'name')} ({localized(d.material, 'display_name')})" if d.material else localized(d, 'name')
+
+    if current_user.is_staff:
+        # Staff price for whichever client they pick, so they get the
+        # unrounded breakdown and the page's JS re-runs
+        # calculate_product_pricing()/detail_price_for() per selected client
+        # (see CLIENT_PRICING below), rounding where those round.
+        ops_sum = {d.id: sum(op.cost for op in d.operations) for d in details}  # as _detail_base_price() sums it
+        products_data = [
+            {
+                'id': p.id, 'name': localized(p, 'name'),
+                'price': calculate_product_pricing(p)['sell_price'],
+                'details_subtotal': sum(pd.detail.total_price * pd.quantity for pd in p.product_details),
+                # For the "Материал на клиента" option: [services only, quantity] per detail.
+                'details_ops': [[ops_sum[pd.detail_id], pd.quantity] for pd in p.product_details],
+                'extra_costs_subtotal': sum(ec.amount for ec in p.extra_costs),
+                'markup_percent': p.markup_percent,
+            }
+            for p in products
+        ]
+        details_data = [{'id': d.id, 'name': detail_label(d), 'price': d.total_price, 'ops_total': ops_sum[d.id]}
+                        for d in details]
+    else:
+        # A customer only ever orders as their own client (see the POST branch),
+        # so they get finished prices - with shop material and with their own -
+        # and nothing of the cost structure behind them (markup, material vs.
+        # services split, list price before their terms).
+        products_data = [
+            {
+                'id': p.id, 'name': localized(p, 'name'),
+                'price': calculate_product_pricing(p, viewer_client)['sell_price'],
+                'price_own': calculate_product_pricing(p, viewer_client, True)['sell_price'],
+            }
+            for p in products
+        ]
+        details_data = [
+            {
+                'id': d.id, 'name': detail_label(d),
+                'price': detail_price_for(d, viewer_client),
+                'price_own': detail_price_for(d, viewer_client, True),
+            }
+            for d in details
+        ]
     # JSON-friendly service list so the per-detail operations picker can
     # preview an operation's cost client-side, same convention as
     # admin_details.html's ND_SERVICES.
@@ -13528,12 +13711,11 @@ def create_order():
     # the dropdown - mirrors _apply_adjustment()/_client_service_adjustment()
     # by hand, same convention as _generator_hole_polygon() mirroring its JS
     # counterpart.
+    # A customer's catalog prices above already carry their Детайли/Продукти
+    # terms, so of their own terms they only get what an order-time operation
+    # still needs (per-service + own-material surcharge).
     client_pricing = {
         c.id: {
-            'detail_type': c.detail_adjustment_type,
-            'detail_percent': c.detail_adjustment_percent,
-            'product_type': c.product_adjustment_type,
-            'product_percent': c.product_adjustment_percent,
             'own_material_percent': c.own_material_surcharge_percent,
             'services': {
                 sp.service_id: {'type': sp.adjustment_type, 'percent': sp.adjustment_percent}
@@ -13542,6 +13724,10 @@ def create_order():
         }
         for c in clients
     }
+    if current_user.is_staff:
+        for c in clients:
+            client_pricing[c.id].update(detail_type=c.detail_adjustment_type, detail_percent=c.detail_adjustment_percent,
+                                        product_type=c.product_adjustment_type, product_percent=c.product_adjustment_percent)
     return render_template('order_create.html', products=products_data, details=details_data,
                            machines=machines, materials=materials, services=services, services_data=services_data,
                            clients=clients, deliverers=deliverers, client_pricing=client_pricing,
@@ -13552,7 +13738,13 @@ def create_order():
 @app.route('/orders')
 @login_required
 def my_orders():
-    orders = Order.query.filter_by(user_id=current_user.id).order_by(Order.created_at.desc()).all()
+    orders = (Order.query.filter_by(user_id=current_user.id).order_by(Order.created_at.desc())
+              .options(db.joinedload(Order.machine),
+                       db.selectinload(Order.items).options(
+                           db.joinedload(OrderItem.product), db.joinedload(OrderItem.detail),
+                           db.selectinload(OrderItem.components),
+                           db.selectinload(OrderItem.operations).joinedload(OrderItemOperation.service)))
+              .all())
     return render_template('my_orders.html', orders=orders, active_page='my_orders')
 
 
@@ -13606,7 +13798,7 @@ def admin_production_report():
         # deleted from the catalog (detail_id nullable, only detail_name_snapshot
         # survives).
         if target_type == 'component':
-            component = OrderItemComponent.query.get_or_404(target_id)
+            component = _lock_or_404(OrderItemComponent, target_id)  # the delta below must start from the committed quantity_produced
             produced_qty = max(0, min(produced_qty, component.quantity_needed))
             stock_delta = produced_qty - component.quantity_produced
             component.quantity_produced = produced_qty
@@ -13616,7 +13808,7 @@ def admin_production_report():
             target_percent = component.percent_complete
             target_label = f'детайл "{component.detail.name}"' if component.detail else f'компонент #{target_id}'
         elif target_type == 'item':
-            order_item = OrderItem.query.get_or_404(target_id)
+            order_item = _lock_or_404(OrderItem, target_id)
             produced_qty = max(0, min(produced_qty, order_item.quantity_ordered))
             stock_delta = produced_qty - order_item.quantity_produced
             order_item.quantity_produced = produced_qty
@@ -13643,7 +13835,12 @@ def admin_production_report():
             'order_status_label': STATUS_LABELS.get(order.status, order.status)
         })
 
-    orders = Order.query.filter(Order.status != 'cancelled').order_by(Order.created_at.desc()).all()
+    orders = (Order.query.filter(Order.status != 'cancelled').order_by(Order.created_at.desc())
+              .options(db.joinedload(Order.user),
+                       db.selectinload(Order.items).options(
+                           db.joinedload(OrderItem.product), db.joinedload(OrderItem.detail),
+                           db.selectinload(OrderItem.components), db.selectinload(OrderItem.attachments)))
+              .all())
     machines = Machine.query.order_by(Machine.name).all()
     return render_template('production_report.html', orders=orders, machines=machines, active_page='production')
 
@@ -13659,7 +13856,10 @@ def admin_missing_stock():
     """
     open_orders = Order.query.filter(
         Order.status.in_(['new', 'in_production'])
-    ).order_by(Order.created_at.desc()).all()
+    ).order_by(Order.created_at.desc()).options(
+        db.joinedload(Order.user),
+        db.selectinload(Order.items).options(db.joinedload(OrderItem.product), db.joinedload(OrderItem.detail))
+    ).all()
 
     orders_with_shortfalls = []
     for order in open_orders:
@@ -13802,7 +14002,7 @@ def complete_production_order(order_id):
     _material_stock_delta() before being applied, since sheet stock is
     counted in whole sheets, not a running m² total.
     """
-    job = ProductionOrder.query.get_or_404(order_id)
+    job = _lock_or_404(ProductionOrder, order_id)
     if job.status == 'done':
         flash('Тази задача вече е завършена.', 'danger')
         return redirect(url_for('admin_production_orders'))
@@ -13844,7 +14044,7 @@ def delete_production_order(order_id):
     both the original "taken for production" and this reversing "returned
     from production" movement - see ProductionOrder's docstring.
     """
-    job = ProductionOrder.query.get_or_404(order_id)
+    job = _lock_or_404(ProductionOrder, order_id)
 
     if job.status == 'done':
         if job.reversed_at is not None:
@@ -16058,8 +16258,15 @@ def delete_machine(id):
     service just loses that one machine, other links/services are untouched.
     """
     machine = Machine.query.get_or_404(id)
+    # Both need a machine (machine_id NOT NULL) - nothing to detach them to.
+    used_in = [label for model, label in ((BendProgram, 'програми за огъване'), (PressBrakeConfig, 'настройки на абкант'))
+               if model.query.filter_by(machine_id=machine.id).first()]
+    if used_in:
+        flash(f'Машина "{machine.name}" има {", ".join(used_in)} и не може да бъде изтрита.', 'danger')
+        return redirect(url_for('list_machines'))
     try:
         HallMachine.query.filter_by(machine_id=machine.id).update({'machine_id': None})      # the dossier stays, just unlinked
+        PanelComponent.query.filter_by(feeds_machine_id=machine.id).update({'feeds_machine_id': None})  # the symbol stays on the schematic
         Order.query.filter_by(machine_id=machine.id).update({'machine_id': None})
         DxfFile.query.filter_by(machine_id=machine.id).update({'machine_id': None})
         db.session.execute(
@@ -16098,6 +16305,14 @@ def admin_delete_material(key):
             'и не може да бъде изтрит. Изтрийте или преместете тези детайли първо.',
             'danger'
         )
+        return redirect(url_for('admin_materials'))
+    # Restock requests and production jobs (reversed ones included - they are
+    # the stock history) point at it by id, also with no ON DELETE rule.
+    used_in = [label for model, label in ((MaterialRequest, 'заявка за материал'), (ProductionOrder, 'задача за производство'))
+               if model.query.filter_by(material_id=material.id).first()]
+    if used_in:
+        flash(f'Материалът "{material.display_name}" се използва в поне една {", ".join(used_in)} '
+              f'и не може да бъде изтрит.', 'danger')
         return redirect(url_for('admin_materials'))
     try:
         material_name = material.display_name
@@ -17243,6 +17458,43 @@ SHELLY_POLLER_INTERVAL = 60  # seconds - matches Gen2's own minute-resolution hi
 _shelly_poller_started = False
 
 
+# Opt-in retention of the reading logs (they only ever grow, ~half a million rows per meter per year). Unset / blank / 0 = keep everything.
+READINGS_KEEP_DAYS = int(os.environ.get('READINGS_KEEP_DAYS') or 0)
+READINGS_CLEANUP_BATCH = 5000        # rows per DELETE (and per commit)
+READINGS_CLEANUP_MAX_BATCHES = 200   # per table per run, so the first run on a huge backlog cannot hold the poller for long - the rest goes tomorrow
+_readings_cleanup_last = 0.0
+
+
+def _readings_cleanup(keep_days=None, now=None):
+    """Deletes rows older than `keep_days` (default READINGS_KEEP_DAYS; 0 = nothing) from the five reading-log tables, in bounded batches.
+    Returns the number of rows deleted. Needs an app context."""
+    days = READINGS_KEEP_DAYS if keep_days is None else keep_days
+    if days <= 0:
+        return 0
+    cutoff = int((time.time() if now is None else now) - days * 86400)
+    deleted = 0
+    for model in (ShellyReadingLog, SolisReadingLog, TemperatureReading, ConvectorLog, HeatPumpReading):
+        for _ in range(READINGS_CLEANUP_MAX_BATCHES):
+            ids = [i for (i,) in db.session.query(model.id).filter(model.ts < cutoff).order_by(model.id).limit(READINGS_CLEANUP_BATCH)]
+            if not ids:
+                break
+            db.session.query(model).filter(model.id.in_(ids)).delete(synchronize_session=False)
+            db.session.commit()
+            deleted += len(ids)
+    return deleted
+
+
+def _readings_cleanup_daily():
+    """Runs _readings_cleanup() at most once a day (per process); called from the Shelly poller loop. Does nothing while READINGS_KEEP_DAYS is 0."""
+    global _readings_cleanup_last
+    if READINGS_KEEP_DAYS <= 0 or time.time() - _readings_cleanup_last < 86400:
+        return
+    _readings_cleanup_last = time.time()      # set first: a failing run is retried tomorrow, not every minute
+    n = _readings_cleanup()
+    if n:
+        app.logger.info('readings retention: deleted %d rows older than %d days', n, READINGS_KEEP_DAYS)
+
+
 _temp_logged = {}      # sensor id -> last_seen already written
 
 
@@ -17342,7 +17594,7 @@ def start_shelly_history_poller(interval=SHELLY_POLLER_INTERVAL):
 
     def _loop():
         while True:
-            _poller_run_tick('shelly', lambda: _shelly_history_poll_tick())  # one bad tick (meter/DB hiccup) shouldn't kill the poller
+            _poller_run_tick('shelly', lambda: (_shelly_history_poll_tick(), _readings_cleanup_daily()))  # one bad tick (meter/DB hiccup) shouldn't kill the poller
             time.sleep(interval)
 
     threading.Thread(target=_loop, daemon=True, name='shelly-history-poller').start()
@@ -17642,22 +17894,24 @@ def _grid_share_rows(since):
     invs = {d.id for d in ModbusDevice.query.filter_by(device_type='solis_s6')}
     if not grid or grid.source_device_id not in invs:
         return []
-    ac = {i: [] for i in invs}
-    for r in SolisReadingLog.query.filter(SolisReadingLog.device_id.in_(invs), SolisReadingLog.ts >= since - HEATPUMP_COST_GAP)             .order_by(SolisReadingLog.ts):
-        ac[r.device_id].append(r)
+    ac = {i: [] for i in invs}      # (ts, ac_power) only - the multi-KB snapshot_json is read just for the CT inverter, below
+    for dev_id, ts, p in db.session.query(SolisReadingLog.device_id, SolisReadingLog.ts, SolisReadingLog.ac_power).filter(
+            SolisReadingLog.device_id.in_(invs), SolisReadingLog.ts >= since - HEATPUMP_COST_GAP).order_by(SolisReadingLog.ts).yield_per(5000):
+        ac[dev_id].append((ts, p))
 
-    stamps = {i: [x.ts for x in rows] for i, rows in ac.items()}
+    stamps = {i: [x[0] for x in rows] for i, rows in ac.items()}
 
     def near(i, ts):
         k = bisect_right(stamps[i], ts) - 1
-        return ac[i][k].ac_power if k >= 0 and ts - stamps[i][k] <= HEATPUMP_COST_GAP and ac[i][k].ac_power is not None else 0.0
+        return ac[i][k][1] if k >= 0 and ts - stamps[i][k] <= HEATPUMP_COST_GAP and ac[i][k][1] is not None else 0.0
     out = []
-    for r in ac[grid.source_device_id]:
-        m3 = json.loads(r.snapshot_json).get('meter_3p') or {}
+    for ts, snap in db.session.query(SolisReadingLog.ts, SolisReadingLog.snapshot_json).filter(
+            SolisReadingLog.device_id == grid.source_device_id, SolisReadingLog.ts >= since - HEATPUMP_COST_GAP).order_by(SolisReadingLog.ts).yield_per(2000):
+        m3 = json.loads(snap).get('meter_3p') or {}
         imp = abs(m3.get('active_power') or 0.0) if m3.get('direction') == 'import' else 0.0
-        load = imp + sum(near(i, r.ts) for i in invs)
+        load = imp + sum(near(i, ts) for i in invs)
         if load > 0:
-            out.append((r.ts, min(imp / load, 1.0)))
+            out.append((ts, min(imp / load, 1.0)))
     return out
 
 
@@ -17696,6 +17950,10 @@ def _heatpump_cost(energy_rows, pump_rows, cfg, share_rows=()):
             out['solar']['kwh'] += delta * (1 - g)
             out['solar']['cost'] += delta * (1 - g) * _heatpump_tariff(t1, cfg)   # what the grid would have charged: the saving
     return out
+
+
+from collections import namedtuple
+_LiteLog = namedtuple('_LiteLog', 'ts total_energy total_power')   # what _heatpump_energy_series() reads of a ShellyReadingLog row
 
 
 def _heatpump_energy_series(logs):
@@ -17759,6 +18017,14 @@ def _avg(vals):
     return round(sum(vals) / len(vals), 3) if vals else None
 
 
+COST_WINDOW_MAX_DAYS = 366   # a custom report window is shortened to this: the report reads every log row of the window in the one worker that also runs the pollers
+
+
+def _cost_notice():
+    """{'notice': ...} when _cost_window() shortened the request's custom window, else {} - splat into the report's jsonify()."""
+    return {'notice': 'Избраният период е по-дълъг от една година и е съкратен до последната година.'} if g.get('cost_window_clamped') else {}
+
+
 def _cost_window(cfg):
     """(since, until) unix seconds for the request's ?period= (today / 7d / 30d / month / billing / billing_prev / custom with from & to),
     or a Bulgarian error string for a bad custom range. Shared by the heat pump cost and the per-meter energy report."""
@@ -17779,6 +18045,8 @@ def _cost_window(cfg):
         if b < a:
             return 'Началната дата е след крайната.'
         start, end = a, b + timedelta(days=1)
+        if end - start > timedelta(days=COST_WINDOW_MAX_DAYS):    # keep the recent end, drop the oldest days
+            start, g.cost_window_clamped = end - timedelta(days=COST_WINDOW_MAX_DAYS), True
     return int(start.timestamp()), int(end.timestamp())
 
 
@@ -17793,14 +18061,15 @@ def admin_heatpump_cost():
     if isinstance(window, str):
         return jsonify(configured=True, error=window)
     since, until = window
-    logs = ShellyReadingLog.query.filter(ShellyReadingLog.host == cfg['meter'], ShellyReadingLog.ts >= since, ShellyReadingLog.ts <= until)         .order_by(ShellyReadingLog.ts).all()
+    logs = db.session.query(ShellyReadingLog.ts, ShellyReadingLog.total_energy, ShellyReadingLog.total_power).filter(
+        ShellyReadingLog.host == cfg['meter'], ShellyReadingLog.ts >= since, ShellyReadingLog.ts <= until).order_by(ShellyReadingLog.ts).all()
     energy = _heatpump_energy_series(logs)
-    pump = [(r.ts, json.loads(r.data_json)) for r in HeatPumpReading.query
-            .filter(HeatPumpReading.ts >= since - HEATPUMP_COST_GAP).order_by(HeatPumpReading.ts)]
+    pump = [(ts, json.loads(data)) for ts, data in db.session.query(HeatPumpReading.ts, HeatPumpReading.data_json)
+            .filter(HeatPumpReading.ts >= since - HEATPUMP_COST_GAP).order_by(HeatPumpReading.ts).yield_per(2000)]
     res = _heatpump_cost(energy, pump, cfg, _grid_share_rows(since))
     return jsonify(configured=True, categories={k: {m: round(v, 3 if m == 'kwh' else 2) for m, v in d.items()}
                                                 for k, d in res.items()},
-                   since=since, until=until, first_data=pump[0][0] if pump else None)
+                   since=since, until=until, first_data=pump[0][0] if pump else None, **_cost_notice())
 
 
 def _meter_log_keys(key):
@@ -17822,16 +18091,17 @@ def _solis_report(dev, cfg, since, until):
     at the tariff = what the grid charges). Both read the inverter's minute log (SolisReadingLog)."""
     grid = dev.device_type == 'solis_grid_meter'
     src = dev.source_device if grid else dev
-    rows = SolisReadingLog.query.filter(SolisReadingLog.device_id == (src.id if src else 0), SolisReadingLog.ts >= since,
-                                        SolisReadingLog.ts <= until).order_by(SolisReadingLog.ts).all()
+    rows = db.session.query(SolisReadingLog.ts, SolisReadingLog.ac_power, SolisReadingLog.pv_power, SolisReadingLog.temperature,
+                            SolisReadingLog.snapshot_json).filter(SolisReadingLog.device_id == (src.id if src else 0), SolisReadingLog.ts >= since,
+                                                                  SolisReadingLog.ts <= until).order_by(SolisReadingLog.ts)
     series = {}
     kwh = {'imp': 0.0, 'exp': 0.0, 'pv': 0.0}
     cost = {'imp': 0.0, 'pv': 0.0}
     prev = None
-    step = max(1, len(rows) // 600)
-    for i, r in enumerate(rows):
+    step = max(1, rows.count() // 600)
+    for i, r in enumerate(rows.yield_per(2000)):       # streamed: a long window never sits in memory as ORM rows
         try:
-            snap = json.loads(r.snapshot_json or '{}')
+            snap = json.loads(r.snapshot_json or '{}') if grid or not i % step else {}      # a plain inverter reads its JSON only for the charted rows
         except ValueError:
             snap = {}
         src_part = (snap.get('meter_3p') or {}) if grid else (snap.get('ac') or {})
@@ -17858,21 +18128,21 @@ def _solis_report(dev, cfg, since, until):
     cards = ([{'label': 'Внос от мрежата (плащаш)', 'tip': 'Енергия, взета от мрежата през външния CT, и цената ѝ по дневна/нощна тарифа.', 'kwh': kwh['imp'], 'cost': cost['imp']},
               {'label': 'Износ към мрежата', 'tip': 'Енергия, върната в мрежата. Изкупна цена не е зададена, затова без сума.', 'kwh': kwh['exp'], 'cost': None}]
              if grid else [{'label': 'Произведено от PV (спестено)', 'tip': tip_pv, 'kwh': kwh['pv'], 'cost': cost['pv']}])
-    return jsonify(series=series, since=since, until=until, priced=bool(cfg['price_day'] or cfg['price_night']), cost=None, cards=cards)
+    return jsonify(series=series, since=since, until=until, priced=bool(cfg['price_day'] or cfg['price_night']), cost=None, cards=cards, **_cost_notice())
 
 
 def _sensor_report(sensor_id, since, until):
     """energy-report for a TemperatureSensor ('sensor:<id>'): temperature / humidity / battery from its TemperatureReading log, no cost."""
     if not sensor_id.isdigit() or not db.session.get(TemperatureSensor, int(sensor_id)):
         abort(404)
-    rows = TemperatureReading.query.filter(TemperatureReading.sensor_id == int(sensor_id), TemperatureReading.ts >= since,
-                                           TemperatureReading.ts <= until).order_by(TemperatureReading.ts).all()
+    rows = db.session.query(TemperatureReading.ts, TemperatureReading.temperature, TemperatureReading.humidity, TemperatureReading.battery).filter(
+        TemperatureReading.sensor_id == int(sensor_id), TemperatureReading.ts >= since, TemperatureReading.ts <= until).order_by(TemperatureReading.ts).all()
     series = {'temp': [], 'hum': [], 'bat': []}
     for r in rows[::max(1, len(rows) // 600)]:
         series['temp'].append([r.ts, r.temperature])
         series['hum'].append([r.ts, r.humidity])
         series['bat'].append([r.ts, r.battery])
-    return jsonify(series=series, since=since, until=until, priced=True, cost=None, cards=[])
+    return jsonify(series=series, since=since, until=until, priced=True, cost=None, cards=[], **_cost_notice())
 
 
 def _battery_report(device_id, since, until):
@@ -17881,9 +18151,13 @@ def _battery_report(device_id, since, until):
     Power is + while charging."""
     if not device_id.isdigit() or not db.session.get(ModbusDevice, int(device_id)):
         abort(404)
-    rows = SolisReadingLog.query.filter(SolisReadingLog.device_id == int(device_id), SolisReadingLog.ts >= since, SolisReadingLog.ts <= until)         .order_by(SolisReadingLog.ts).all()
+    rows = db.session.query(SolisReadingLog.ts, SolisReadingLog.snapshot_json).filter(
+        SolisReadingLog.device_id == int(device_id), SolisReadingLog.ts >= since, SolisReadingLog.ts <= until).order_by(SolisReadingLog.ts)
     series = {}
-    for r in rows[::max(1, len(rows) // 600)]:
+    step = max(1, rows.count() // 600)
+    for i, r in enumerate(rows.yield_per(2000)):       # streamed, only every step-th row is parsed
+        if i % step:
+            continue
         try:
             snap = json.loads(r.snapshot_json or '{}')
         except ValueError:
@@ -17893,7 +18167,7 @@ def _battery_report(device_id, since, until):
         tot = lambda k: round(sum(x[k] for x in ports), 2) if ports and all(x.get(k) is not None for x in ports) else None
         _energy_point(series, r.ts, power=tot('power'), soc=avg('soc'), voltage=avg('voltage'), current=tot('current'),
                       temp=(snap.get('battery') or {}).get('temperature'), phases=[{'power': x.get('power'), 'voltage': x.get('voltage'), 'current': x.get('current')} for x in ports])
-    return jsonify(series=series, since=since, until=until, priced=True, cost=None, plabels={'a': 'порт 1', 'b': 'порт 2', 'c': ''})
+    return jsonify(series=series, since=since, until=until, priced=True, cost=None, plabels={'a': 'порт 1', 'b': 'порт 2', 'c': ''}, **_cost_notice())
 
 
 @app.route('/admin/energy-report')
@@ -17918,10 +18192,16 @@ def admin_energy_report():
     if modbus:
         return _solis_report(modbus, cfg, since, until)
     keys = _meter_log_keys(key)
-    logs = ShellyReadingLog.query.filter(ShellyReadingLog.host.in_(keys), ShellyReadingLog.ts >= since, ShellyReadingLog.ts <= until)         .order_by(ShellyReadingLog.ts).all()
+    q = db.session.query(ShellyReadingLog.ts, ShellyReadingLog.total_energy, ShellyReadingLog.total_power, ShellyReadingLog.channels_json).filter(
+        ShellyReadingLog.host.in_(keys), ShellyReadingLog.ts >= since, ShellyReadingLog.ts <= until).order_by(ShellyReadingLog.ts)
+    step = max(1, q.count() // 600)
+    logs, thin = [], []       # logs: the three numbers every row contributes to the cost; thin: the full rows (with channels JSON) that get charted
+    for i, r in enumerate(q.yield_per(2000)):
+        logs.append(_LiteLog(r.ts, r.total_energy, r.total_power))
+        if not i % step:
+            thin.append(r)
     cost = _heatpump_cost(_heatpump_energy_series(logs), [], cfg, _grid_share_rows(since))
     total = {'kwh': cost['unknown']['kwh'], 'cost': cost['unknown']['cost']}       # no pump rows: everything lands in 'unknown'
-    thin = logs[::max(1, len(logs) // 600)]
     series = {}
     for r in thin:
         try:
@@ -17933,7 +18213,7 @@ def admin_energy_report():
                       aprt=sum(c['aprt_power'] for c in ch if c.get('aprt_power') is not None) if any(c.get('aprt_power') is not None for c in ch) else None,
                       pf=_avg(c.get('pf') for c in ch), freq=_avg(c.get('freq') for c in ch))
     return jsonify(series=series, since=since, until=until, priced=bool(cfg['price_day'] or cfg['price_night']),
-                   cost={'total': total, 'grid': cost['grid'], 'solar': cost['solar'], 'src_unknown': cost['src_unknown']})
+                   cost={'total': total, 'grid': cost['grid'], 'solar': cost['solar'], 'src_unknown': cost['src_unknown']}, **_cost_notice())
 
 
 # ----- "Виж лог": the recorded rows of any device / machine, in a frame -----
@@ -23605,7 +23885,8 @@ def admin_solar_roof_assign():
 @app.route('/admin/offers')
 @role_required('admin')
 def admin_offers():
-    offers = Offer.query.order_by(Offer.created_at.desc()).all()
+    offers = (Offer.query.order_by(Offer.created_at.desc())
+              .options(db.joinedload(Offer.client), db.selectinload(Offer.items)).all())
     return render_template('admin_offers.html', offers=offers, active_page='admin_offers')
 
 

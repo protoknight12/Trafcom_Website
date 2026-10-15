@@ -52,6 +52,26 @@
     </div>
 
     <div class="admin-card" style="margin-top: 20px;">
+        <h3 style="margin-top: 0;">{{ _('Парола') }}</h3>
+        <form method="POST" action="{{ url_for('account_update_password') }}" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="current-password">{{ _('Текуща парола') }}</label>
+                <input type="password" id="current-password" name="current_password" required autocomplete="current-password">
+            </div>
+            <div class="form-group">
+                <label for="new-password">{{ _('Нова парола') }}</label>
+                <input type="password" id="new-password" name="password" required minlength="8" autocomplete="new-password">
+            </div>
+            <div class="form-group">
+                <label for="new-password-confirm">{{ _('Повторете новата парола') }}</label>
+                <input type="password" id="new-password-confirm" name="password_confirm" required minlength="8" autocomplete="new-password">
+            </div>
+            <button type="submit" class="btn-submit">{{ _('Смени паролата') }}</button>
+        </form>
+    </div>
+
+    <div class="admin-card" style="margin-top: 20px;">
         <h3 style="margin-top: 0;">{{ _('Двуфакторно удостоверяване (2FA)') }}</h3>
         {% if current_user.totp_secret %}
             <p class="section-subtitle">{{ _('Активирано е. При вход ще се изисква код от приложението за удостоверяване.') }}</p>
@@ -59,7 +79,7 @@
                 {% include 'partials/csrf_field.html' %}
                 <div class="form-group">
                     <label for="disable-password">{{ _('Парола (за потвърждение)') }}</label>
-                    <input type="password" id="disable-password" name="password" required>
+                    <input type="password" id="disable-password" name="password" required autocomplete="current-password">
                 </div>
                 <button type="submit" class="btn-secondary">{{ _('Изключи 2FA') }}</button>
             </form>

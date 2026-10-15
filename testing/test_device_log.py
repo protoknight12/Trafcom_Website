@@ -133,7 +133,7 @@ def test_convector_log_only_on_change(client):
 def test_energy_report(client):
     _, sh, dt, so = _seed()
     _login(client, 'dl_admin')
-    rep = lambda key, extra='': client.get(f'/admin/energy-report?key={key}&period=custom&from=1970-01-05&to=2030-01-01{extra}')
+    rep = lambda key, extra='': client.get(f'/admin/energy-report?key={key}&period=custom&from=1970-01-05&to=1970-12-31{extra}')
     j = rep('10.0.0.5').get_json()
     assert len(j['series']['power']) > 0 and j['series']['power'][0][1] == 100 and 'solar' in j['cost']
     assert j['cost']['total']['kwh'] > 0
@@ -165,7 +165,7 @@ def test_convector_power_and_battery_report(client):
     _login(client, 'dl_admin')
     r = client.get(f'/admin/energy-report?key=conv:{cid}&period=today')
     assert r.status_code == 200 and 'cost' in r.get_json()
-    j = client.get(f'/admin/energy-report?key=battery:{so}&period=custom&from=1970-01-05&to=2030-01-01').get_json()
+    j = client.get(f'/admin/energy-report?key=battery:{so}&period=custom&from=1970-01-05&to=1970-12-31').get_json()
     row = [p for p in j['series']['power'] if p[1] == 400]
     assert row and j['cost'] is None and [p[1] for p in j['series']['soc']].count(60.0) == 1
 
@@ -181,7 +181,7 @@ def test_grid_meter_report(client):
             {'meter_3p': {'active_power': -3600.0, 'voltage_a': 230.0, 'current_a': 5.0}})))
         db.session.commit()
     _login(client, 'dl_admin')
-    j = client.get('/admin/energy-report?key=10.0.0.7:503&period=custom&from=1970-01-05&to=2030-01-01').get_json()
+    j = client.get('/admin/energy-report?key=10.0.0.7:503&period=custom&from=1970-01-05&to=1970-12-31').get_json()
     assert j['cards'][0]['kwh'] > 0.05 and j['series']['voltage'][-1][1] == 230.0 and j['series']['power'][-1][1] == -3600
 
 
@@ -192,7 +192,7 @@ def test_sensor_report(client):
         db.session.add(TemperatureReading(sensor_id=sid, ts=3_000_000, temperature=21.0, humidity=40.0, battery=80.0))
         db.session.commit()
     _login(client, 'dl_admin')
-    j = client.get(f'/admin/energy-report?key=sensor:{sid}&period=custom&from=1970-01-05&to=2030-01-01').get_json()
+    j = client.get(f'/admin/energy-report?key=sensor:{sid}&period=custom&from=1970-01-05&to=1970-12-31').get_json()
     assert 21.0 in [p[1] for p in j['series']['temp']] and 40.0 in [p[1] for p in j['series']['hum']] and j['cost'] is None
     assert client.get('/admin/energy-report?key=sensor:99999').status_code == 404
     assert 'data-energy-panel' in client.get('/admin/temperature-sensors').get_data(as_text=True)

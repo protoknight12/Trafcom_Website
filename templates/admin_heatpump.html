@@ -418,7 +418,7 @@
                 var span = 'Период: ' + fmt(j.since) + ' - ' + fmt(Math.min(j.until, Date.now() / 1000)) + '. ';
                 note.textContent = span + (j.first_data && j.first_data > j.since
                     ? 'Данните за термопомпата започват от ' + new Date(j.first_data * 1000).toLocaleString('bg-BG') + ' - преди това периодът не може да се раздели.'
-                    : '');
+                    : '') + (j.notice ? ' ' + j.notice : '');
             });
     }
     var today = new Date().toISOString().slice(0, 10);

@@ -5,8 +5,10 @@ set -e
 
 cd /opt/trafcom
 git pull
+# git pull may have just replaced this very script - start over once with the new copy (see update.sh)
+if [ -z "$UPDATE_REEXEC" ]; then UPDATE_REEXEC=1 exec bash /opt/trafcom/deploy/update_quick.sh "$@"; fi
 
 sudo systemctl restart trafcom
 sudo systemctl status trafcom --no-pager
-# -f: a 500 from the app fails the update instead of looking like success; retries cover the app's start-up time
-curl -fsS -o /dev/null --retry 15 --retry-delay 1 --retry-connrefused http://127.0.0.1:8000 && echo "== site is up =="
+# /health answers 200 once the app is up and the database responds; -f turns anything else into a failed update
+curl -fsS -o /dev/null --retry 30 --retry-delay 1 --retry-connrefused http://127.0.0.1:8000/health && echo "== site is up =="

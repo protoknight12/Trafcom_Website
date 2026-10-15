@@ -160,7 +160,7 @@ var EnergyPanel = (function () {
             } else {
                 q('.ep-grid').innerHTML = (j.cards || []).map(function (k) { return card(k.label, k.tip, k.cost, k.kwh); }).join('');
             }
-            q('.ep-note').textContent = j.priced ? '' : 'Цените на тока не са зададени - задай ги в страницата на термопомпата, за да се изчисляват разходът и спестяването.';
+            q('.ep-note').textContent = (j.priced ? '' : 'Цените на тока не са зададени - задай ги в страницата на термопомпата, за да се изчисляват разходът и спестяването. ') + (j.notice || '');
             legend(); layout = draw(q('canvas'), j.series, S.on, j.plabels);
         }
         function load(force) {

@@ -3,7 +3,12 @@ set -e
 
 cd /opt/trafcom
 git pull
-venv/bin/pip install -r requirements.txt
+# git pull may have just replaced this very script, but bash goes on running the old copy it already read -
+# start over once with the new one, so a change to update.sh takes effect in the release that brings it
+if [ -z "$UPDATE_REEXEC" ]; then UPDATE_REEXEC=1 exec bash /opt/trafcom/deploy/update.sh "$@"; fi
+
+# -c: the versions that are known to work on this server (see the file's header for how to change one)
+venv/bin/pip install -r requirements.txt -c deploy/constraints.txt
 
 # Database dump before anything touches the schema - a failed dump aborts the update here,
 # with the site still running the old code. SKIP_BACKUP=1 deploy/update.sh to go without.
@@ -37,5 +42,6 @@ venv/bin/python -m migration.run_once
 trap - ERR
 sudo systemctl restart trafcom
 sudo systemctl status trafcom --no-pager
-# -f: a 500 from the app fails the update instead of looking like success; retries cover the app's start-up time
-curl -fsS -o /dev/null --retry 15 --retry-delay 1 --retry-connrefused http://127.0.0.1:8000 && echo "== site is up =="
+# /health answers 200 once the app is up and the database responds (503 if it does not); -f turns anything else into a
+# failed update instead of looking like success; the retries cover the app's start-up time
+curl -fsS -o /dev/null --retry 30 --retry-delay 1 --retry-connrefused http://127.0.0.1:8000/health && echo "== site is up =="

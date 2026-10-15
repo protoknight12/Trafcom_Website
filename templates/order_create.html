@@ -483,12 +483,13 @@
         return cid && CLIENT_PRICING[cid] ? CLIENT_PRICING[cid] : null;
     }
 
-    // A Detail's/quick-created item's list price, discounted/marked-up by
-    // the currently selected client's Детайли terms (see detail_price_for()).
-    function detailAdjustedPrice(basePrice) {
-        const cp = selectedClientPricing();
-        if (!cp) return basePrice;
-        return applyClientAdjustment(basePrice, cp.detail_type, cp.detail_percent);
+    // Python's round(x, 2), so the preview rounds exactly where the server
+    // does: toFixed() is correctly rounded like round(), except that an exact
+    // tie (a .125/.375/.625/.875 fraction) goes to the even cent in Python.
+    function round2(x) {
+        let cents = Math.round(Number(x.toFixed(2)) * 100);
+        if (Number.isInteger(x * 8) && (x * 8) % 2 !== 0 && cents % 2 !== 0) cents -= Math.sign(x);
+        return cents / 100;
     }
 
     // "Материал на клиента": services x (1 + the client's surcharge), no
@@ -498,27 +499,56 @@
         return 1 + ((cp && cp.own_material_percent) || 0) / 100;
     }
 
-    // A Product's list sell price with the selected client's Продукти
-    // terms - mirrors calculate_product_pricing(client).
-    function productAdjustedPrice(p, ownMaterial) {
+    // A standalone Detail's price - mirrors detail_price_for(). A customer's
+    // page carries both finished prices (price / price_own) from the server;
+    // staff re-run the formula for the selected client's Детайли terms.
+    function detailAdjustedPrice(d, ownMaterial) {
+        if (d.price_own !== undefined) return ownMaterial ? d.price_own : d.price;
         const cp = selectedClientPricing();
-        let price = p.price;
-        if (ownMaterial) {
-            price = (p.details_ops_subtotal + p.extra_costs_subtotal) * ownMaterialFactor() * (1 + p.markup_percent / 100);
-        }
-        if (!cp) return price;
-        return applyClientAdjustment(price, cp.product_type, cp.product_percent);
+        const base = ownMaterial ? round2(d.ops_total * ownMaterialFactor()) : d.price;
+        return cp ? round2(applyClientAdjustment(base, cp.detail_type, cp.detail_percent)) : base;
     }
 
+    // A Product's sell price - mirrors calculate_product_pricing(). Same
+    // split: finished prices for a customer, the formula (with the selected
+    // client's Продукти terms) for staff.
+    function productAdjustedPrice(p, ownMaterial) {
+        if (p.price_own !== undefined) return ownMaterial ? p.price_own : p.price;
+        const cp = selectedClientPricing();
+        // The list price as the server priced it - also all there is for a
+        // product quick-created on this page a moment ago (no breakdown yet).
+        if (!ownMaterial && (!cp || p.details_subtotal === undefined)) {
+            return cp ? round2(applyClientAdjustment(p.price, cp.product_type, cp.product_percent)) : p.price;
+        }
+        const factor = ownMaterialFactor();
+        const details = ownMaterial
+            ? (p.details_ops || []).reduce(function (sum, row) { return sum + round2(row[0] * factor) * row[1]; }, 0)
+            : p.details_subtotal;
+        const total = details + (ownMaterial ? p.extra_costs_subtotal * factor : p.extra_costs_subtotal);
+        const price = total + total * (p.markup_percent / 100);
+        return round2(cp ? applyClientAdjustment(price, cp.product_type, cp.product_percent) : price);
+    }
+
+    // One order-time operation - mirrors _order_item_operations_cost().
     function pendingOpCost(serviceId, durationMinutes) {
         const service = SERVICES_DATA.find(function (s) { return s.id === serviceId; });
         if (!service) return 0;
-        let rate = service.price_per_hour_eur;
+        const cost = durationMinutes * (service.price_per_hour_eur / 60);
         const cp = selectedClientPricing();
-        if (cp && cp.services[serviceId]) {
-            rate = applyClientAdjustment(rate, cp.services[serviceId].type, cp.services[serviceId].percent);
-        }
-        return durationMinutes * (rate / 60);
+        const adj = cp && cp.services[serviceId];
+        return adj ? applyClientAdjustment(cost, adj.type, adj.percent) : cost;
+    }
+
+    // A standalone-Detail cart line: the Detail plus its order-time
+    // operations, rounded where create_order() rounds.
+    function detailLinePrice(d, ownMaterial, operations) {
+        const price = detailAdjustedPrice(d, ownMaterial);
+        if (!operations || operations.length === 0) return price;
+        let opsCost = round2(operations.reduce(function (sum, op) {
+            return sum + pendingOpCost(op.serviceId, op.durationMinutes);
+        }, 0));
+        if (ownMaterial) opsCost *= ownMaterialFactor();
+        return round2(price + opsCost);
     }
 
     // Cart items don't keep a frozen unit price - they're re-priced against
@@ -531,12 +561,7 @@
             return p ? productAdjustedPrice(p, item.ownMaterial) : (item.unitPrice || 0);
         }
         const d = DETAILS.find(function (x) { return x.id === item.id; });
-        if (!d) return item.unitPrice || 0;
-        const opsCost = (item.operations || []).reduce(function (sum, op) {
-            return sum + pendingOpCost(op.serviceId, op.durationMinutes);
-        }, 0);
-        if (item.ownMaterial) return detailAdjustedPrice(d.ops_total * ownMaterialFactor()) + opsCost * ownMaterialFactor();
-        return detailAdjustedPrice(d.price) + opsCost;
+        return d ? detailLinePrice(d, item.ownMaterial, item.operations) : (item.unitPrice || 0);
     }
 
     function addPendingOperation() {
@@ -641,13 +666,10 @@
             const d = DETAILS.find(function (x) { return x.id === id; });
             if (!d) return;
 
-            const opsCost = pendingDetailOps.reduce(function (sum, op) { return sum + pendingOpCost(op.serviceId, op.durationMinutes); }, 0);
             const operations = pendingDetailOps.map(function (op) {
                 return { serviceId: op.serviceId, serviceName: op.serviceName, description: op.description, durationMinutes: op.durationMinutes };
             });
-            const unitPrice = ownMaterial
-                ? detailAdjustedPrice(d.ops_total * ownMaterialFactor()) + opsCost * ownMaterialFactor()
-                : detailAdjustedPrice(d.price) + opsCost;
+            const unitPrice = detailLinePrice(d, ownMaterial, operations);
 
             const pdfInput = document.getElementById('pending_op_pdf');
             const pdfFile = pdfInput.files[0];
@@ -714,7 +736,7 @@
         } else {
             cart.forEach(function (item, idx) {
                 const unitPrice = liveUnitPrice(item);
-                const lineTotal = (unitPrice * item.qty).toFixed(2);
+                const lineTotal = round2(unitPrice * item.qty).toFixed(2);  // OrderItem.line_total
                 const tr = document.createElement('tr');
 
                 const nameTd = document.createElement('td');
@@ -753,8 +775,8 @@
             });
         }
 
-        const total = cart.reduce(function (sum, item) { return sum + liveUnitPrice(item) * item.qty; }, 0);
-        document.getElementById('cartTotal').textContent = total.toFixed(2) + ' €';
+        const total = cart.reduce(function (sum, item) { return sum + round2(liveUnitPrice(item) * item.qty); }, 0);
+        document.getElementById('cartTotal').textContent = round2(total).toFixed(2) + ' €';  // Order.total_price
         document.getElementById('submitOrderBtn').disabled = cart.length === 0;
     }
 
