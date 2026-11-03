@@ -70,6 +70,7 @@
             const groupIndex = {};
             const plain = [];
             optionEls.forEach(function (opt) {
+                if (opt.hidden) return; // a page filtering its options (e.g. by owner) hides them
                 if (!opt.dataset.name) {
                     plain.push({ kind: 'plain', opt: opt });
                     return;

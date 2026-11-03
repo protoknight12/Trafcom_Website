@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     {% include 'partials/favicon.html' %}
-    <title>Стокова разписка № {{ note.id }}</title>
+    <title>{% if note.client %}Приемо-предавателен протокол{% else %}Стокова разписка{% endif %} № {{ note.id }}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@700&display=swap" rel="stylesheet">
@@ -52,10 +52,18 @@
 <div class="offer-sheet">
     <h1>ТРАФКОМ ООД</h1>
     <p class="offer-address">гр. Тетевен, ул Александър Стамболийски 36, trafcom@tafcombg.com, +359 886 762276</p>
+    {% if note.client %}
+    <p class="offer-number">ПРИЕМО-ПРЕДАВАТЕЛЕН ПРОТОКОЛ № {{ note.id }}<br><span style="font-weight: 400; font-size: 0.95rem;">приемане на съхранение</span></p>
+    <p class="offer-client">Предал: {{ note.client.name }}</p>{{ legal_lines(note.client) }}
+    <p class="offer-client">Приел: ТРАФКОМ ООД</p>
+    {% if note.note_number %}<p class="offer-client">Реф. №: {{ note.note_number }}</p>{% endif %}
+    {% if note.note_date %}<p class="offer-client">Дата на приемане: {{ note.note_date.strftime('%d.%m.%Y') }}</p>{% endif %}
+    {% else %}
     <p class="offer-number">СТОКОВА РАЗПИСКА № {{ note.id }}</p>
     {% if note.supplier %}<p class="offer-client">Доставчик: {{ note.supplier.name }}</p>{{ legal_lines(note.supplier) }}{% endif %}
     {% if note.note_number %}<p class="offer-client">Фактура № / Наша реф.: {{ note.note_number }}</p>{% endif %}
     {% if note.note_date %}<p class="offer-client">Дата на доставка: {{ note.note_date.strftime('%d.%m.%Y') }}</p>{% endif %}
+    {% endif %}
 
     <table>
         <thead>
@@ -65,8 +73,10 @@
             <th>Размери</th>
             <th>Описание</th>
             <th>Кол-во</th>
+            {% if not note.client %}
             <th>Ед. цена<br>(EUR без ДДС)</th>
             <th>Обща цена<br>(EUR без ДДС)</th>
+            {% endif %}
         </tr>
         </thead>
         <tbody>
@@ -86,25 +96,37 @@
             </td>
             <td>{{ item.notes or '' }}</td>
             <td class="text-center">{{ '%g'|format(item.quantity) }}</td>
+            {% if not note.client %}
             <td class="text-right">{{ '%.2f'|format(item.unit_price) if item.unit_price is not none else '' }}</td>
             <td class="text-right">{{ '%.2f'|format(line_total) if item.unit_price is not none else '' }}</td>
+            {% endif %}
         </tr>
         {% endfor %}
+        {% if not note.client %}
         <tr class="offer-total-row">
             <td colspan="6" class="text-right">ОБЩО:</td>
             <td class="text-right">{{ '%.2f'|format(ns.total) }} EUR</td>
         </tr>
+        {% endif %}
         </tbody>
     </table>
 
+    {% if not note.client %}
     <div class="offer-terms">
         <p>Всички цени са в EUR без включен ДДС</p>
     </div>
+    {% endif %}
 
     <div class="offer-signoff">
         <span>Дата: {{ (note.created_at|local).strftime('%d.%m.%Y') if note.created_at else '' }}</span>
         <span>Съставил: {{ note.created_by.username if note.created_by else '' }}</span>
     </div>
+    {% if note.client %}
+    <div class="offer-signoff" style="margin-top: 56px;">
+        <span>Предал: ……………………………</span>
+        <span>Приел: ……………………………</span>
+    </div>
+    {% endif %}
 </div>
 </body>
 </html>

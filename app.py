@@ -490,6 +490,13 @@ class MaterialPrice(db.Model):
     # stock_quantity drops to/below this). Nullable: most materials don't
     # need one, and None means "no threshold set".
     min_quantity = db.Column(db.Float, nullable=True)
+    # Whose property this lot is: NULL = ours (Трафком), a Client id = material
+    # the client left with us for storage / working - same private-to-one-client
+    # convention as Detail/Product.owner_client_id. Client lots are never
+    # priced (cost_per_m2 0, price_per_unit NULL) and never offered as "our
+    # material" - see own_materials_query().
+    owner_client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True, index=True)
+    owner_client = db.relationship('Client', foreign_keys=[owner_client_id])
 
 
 class MaterialType(db.Model):
@@ -1272,12 +1279,16 @@ class DeliveryNote(db.Model):
     """
     id = db.Column(db.Integer, primary_key=True)
     supplier_id = db.Column(db.Integer, db.ForeignKey('supplier.id'), nullable=True)
+    # Receipt FROM a client leaving material for storage (instead of a supplier
+    # delivery) - never set together with supplier_id.
+    client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True)
     note_number = db.Column(db.String(100), nullable=True)  # Фактура № / Наша реф.
     note_date = db.Column(db.Date, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
 
     supplier = db.relationship('Supplier')
+    client = db.relationship('Client')
     created_by = db.relationship('User')
     items = db.relationship('DeliveryNoteItem', backref='delivery_note', cascade='all, delete-orphan', lazy=True)
 
@@ -1322,6 +1333,10 @@ class ClientDeliveryNote(db.Model):
     """
     id = db.Column(db.Integer, primary_key=True)
     client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True)
+    # 'return' = issue/return to the client (the original behaviour), 'consume'
+    # = manual write-off of the client's stored material for production
+    # (see CLIENT_NOTE_KINDS). Set on create only.
+    kind = db.Column(db.String(10), nullable=False, default='return')
     note_number = db.Column(db.String(100), nullable=True)
     note_date = db.Column(db.Date, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -1349,8 +1364,22 @@ class ClientDeliveryNoteItem(db.Model):
     quantity = db.Column(db.Float, nullable=False)
     unit_price = db.Column(db.Float, nullable=True)
     notes = db.Column(db.String(255), nullable=True)
+    # Leftover returned to stock by a 'consume' line (no remnant = scrap), in
+    # the lot's own stock unit; width/height only for sheet lots, where the
+    # remnant becomes a new client lot. remnant_material_id is the lot that
+    # received it, so editing/deleting the note can take it back out.
+    remnant_qty = db.Column(db.Float, nullable=True)
+    remnant_width = db.Column(db.Float, nullable=True)
+    remnant_height = db.Column(db.Float, nullable=True)
+    remnant_material_id = db.Column(db.Integer, db.ForeignKey('material_price.id'), nullable=True)
     __table_args__ = (db.Index('ix_client_delivery_note_item_target', 'target_type', 'target_id'),)
 
+
+# ClientDeliveryNote.kind slugs
+CLIENT_NOTE_KINDS = {
+    'return': 'Връщане / издаване на клиент',
+    'consume': 'Изписване за производство',
+}
 
 # Request status slugs, same ASCII-slug-as-CSS-class convention as
 # STATUS_LABELS (Order.status) above.
@@ -5354,7 +5383,16 @@ def format_material_option(material):
     printing "#None ".
     """
     id_prefix = f"#{material.id} " if material.id is not None else ''
-    return f"{id_prefix}{localized(material, 'display_name')} ({material.brand or '-'}, {_format_material_dims(material)})"
+    owner = f" [клиент: {material.owner_client.name if material.owner_client else f'#{material.owner_client_id}'}]" if material.owner_client_id else ''
+    return f"{id_prefix}{localized(material, 'display_name')} ({material.brand or '-'}, {_format_material_dims(material)}){owner}"
+
+
+def own_materials_query():
+    """MaterialPrice rows that are OURS (owner_client_id NULL). Every picker
+    that chooses a material for pricing / a Detail / production must use this
+    instead of MaterialPrice.query, so a client's stored lot is never offered
+    as our material."""
+    return MaterialPrice.query.filter(MaterialPrice.owner_client_id.is_(None))
 
 
 # Timestamps are stored as naive UTC (datetime.utcnow); people read local time. Convert only on display - never what is stored.
@@ -5377,6 +5415,7 @@ app.jinja_env.globals['get_text'] = get_text
 # translations are added by hand in translations/*/LC_MESSAGES/messages.po.
 app.jinja_env.globals['material_type_label'] = lambda key: gettext(material_type_labels().get(key, key))
 app.jinja_env.globals['material_unit_short'] = material_unit_short
+app.jinja_env.globals['material_price_unit'] = material_price_unit
 app.jinja_env.globals['material_types_js'] = material_types_js
 
 # "+ Добави нов" next to an entity <select> (static/js/form_dialog.js, the
@@ -5570,7 +5609,7 @@ def contact():
 def generator():
     # Requires login, same as every other app (matches the "apps require an
     # account, the public site doesn't" design used across the project).
-    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    materials = own_materials_query().order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     services = allowed_only('services', Service.query.order_by(Service.name).all())
     return render_template('generator.html', materials=materials, services=services, active_page='generator')
 
@@ -5967,7 +6006,7 @@ def admin_bending():
                            locations=ToolStorageLocation.query.order_by(ToolStorageLocation.zone, ToolStorageLocation.cabinet).all(),
                            machines=Machine.query.order_by(Machine.name).all(),
                            program_count=BendProgram.query.count(), springbacks=BendSpringbackCorrection.query.order_by(BendSpringbackCorrection.material_key, BendSpringbackCorrection.thickness_mm, BendSpringbackCorrection.v_mm).all(),
-                           material_names={m.key: m.display_name for m in MaterialPrice.query}, active_page='admin_bending')
+                           material_names={m.key: m.display_name for m in own_materials_query()}, active_page='admin_bending')
 
 
 STEP_IMPORT_MAX_BYTES = 200 * 1024 * 1024   # an assembly export is big; the global 16 MB cap stays for everything else
@@ -5998,7 +6037,7 @@ def _step_review(path):
 
 
 def _step_material_choices(rows):
-    sheets = [m for m in MaterialPrice.query.order_by(MaterialPrice.display_name) if material_price_unit(m.type) == 'm2']
+    sheets = [m for m in own_materials_query().order_by(MaterialPrice.display_name) if material_price_unit(m.type) == 'm2']
     for r in rows:
         r['materials'] = sorted(sheets, key=lambda m: abs((m.thickness_mm or 0) - (r['thickness'] or 0)))
     return sheets
@@ -6076,7 +6115,7 @@ def admin_bending_step_create():
         if not 0 <= i < len(parts):
             continue
         name = request.form.get(f'name_{i}', '').strip() or parts[i]['name']
-        mat = MaterialPrice.query.filter_by(key=request.form.get(f'material_{i}', '')).first()
+        mat = own_materials_query().filter_by(key=request.form.get(f'material_{i}', '')).first()
         if not mat:
             errors.append(f'{name}: изберете материал.')
             continue
@@ -7878,7 +7917,7 @@ def _flashing_dxf(u):
 @login_required
 @app_access_required('flashing')
 def flashing():
-    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    materials = own_materials_query().order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     services = allowed_only('services', Service.query.order_by(Service.name).all())
     bd_keys = [k for (k,) in db.session.query(BendDeduction.material_type).distinct()]
     bd_materials = MaterialType.query.filter(MaterialType.key.in_(bd_keys)).all() if bd_keys else []
@@ -9743,7 +9782,7 @@ def process_dxf_upload(file, material_key, service_ids, machine_id=None, own_mat
         if width is None or total_length is None:
             return None, None, dxf_report.get('error') or 'Грешка при обработката на DXF структурата.'
 
-        material_row = MaterialPrice.query.filter_by(key=material_key).first()
+        material_row = own_materials_query().filter_by(key=material_key).first()
         if not material_row:
             return None, None, 'Невалиден избор на материал.'
 
@@ -9786,7 +9825,7 @@ def dashboard():
     # Pure library view now - uploading/calculating a new DXF lives on its
     # own page (see upload()) so the two don't get conflated in the nav.
     user_uploads = DxfFile.query.filter_by(user_id=current_user.id).order_by(DxfFile.id.desc()).all()
-    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    materials = own_materials_query().order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     services = allowed_only('services', Service.query.order_by(Service.name).all())
     return render_template('library.html', uploads=user_uploads, materials=materials, services=services, active_page='dashboard')
 
@@ -9883,7 +9922,7 @@ def upload():
             return redirect(request.url)
 
     machines = allowed_only('machines', Machine.query.all())
-    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    materials = own_materials_query().order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     services = allowed_only('services', Service.query.order_by(Service.name).all())
     return render_template('upload.html', machines=machines, materials=materials, services=services, active_page='upload')
 
@@ -10010,7 +10049,11 @@ def admin_materials():
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     material_types = MaterialType.query.order_by(MaterialType.sort_order, MaterialType.id).all()
     type_usage = dict(db.session.query(MaterialPrice.type, db.func.count(MaterialPrice.id)).group_by(MaterialPrice.type).all())
-    return render_template('admin_materials.html', materials=materials, material_types=material_types,
+    # Owner filter: clients that own at least one lot (Трафком is always offered).
+    clients = (Client.query.filter(Client.id.in_(
+        db.session.query(MaterialPrice.owner_client_id).filter(MaterialPrice.owner_client_id.isnot(None))))
+        .order_by(Client.name).all())
+    return render_template('admin_materials.html', materials=materials, material_types=material_types, clients=clients,
                            type_usage=type_usage, PRICE_UNIT_LABELS=PRICE_UNIT_LABELS, active_page='admin_materials')
 
 
@@ -10118,12 +10161,20 @@ def admin_material_history(material_id):
     material = MaterialPrice.query.get_or_404(material_id)
 
     incoming = (DeliveryNoteItem.query.join(DeliveryNote)
-                .options(db.contains_eager(DeliveryNoteItem.delivery_note).joinedload(DeliveryNote.supplier))
+                .options(db.contains_eager(DeliveryNoteItem.delivery_note).joinedload(DeliveryNote.supplier),
+                         db.contains_eager(DeliveryNoteItem.delivery_note).joinedload(DeliveryNote.client))
                 .filter(DeliveryNoteItem.target_type == 'material', DeliveryNoteItem.target_id == material_id)
                 .all())
     outgoing = (ClientDeliveryNoteItem.query.join(ClientDeliveryNote)
                 .options(db.contains_eager(ClientDeliveryNoteItem.client_delivery_note).joinedload(ClientDeliveryNote.client))
                 .filter(ClientDeliveryNoteItem.target_type == 'material', ClientDeliveryNoteItem.target_id == material_id)
+                .all())
+    # Remnant put back into THIS lot by a consume line (a new sheet lot, or the same
+    # linear lot) - an 'in' besides the consume line's own 'out' above.
+    remnants = (ClientDeliveryNoteItem.query.join(ClientDeliveryNote)
+                .options(db.contains_eager(ClientDeliveryNoteItem.client_delivery_note).joinedload(ClientDeliveryNote.client))
+                .filter(ClientDeliveryNoteItem.remnant_material_id == material_id,
+                        ClientDeliveryNoteItem.remnant_qty > 0)
                 .all())
     production_jobs = (ProductionOrder.query.filter_by(material_id=material_id, status='done')
                        .options(db.joinedload(ProductionOrder.detail), db.joinedload(ProductionOrder.completed_by),
@@ -10133,17 +10184,28 @@ def admin_material_history(material_id):
     movements = [
         {'date': item.delivery_note.note_date or to_local(item.delivery_note.created_at).date(),
          'created_at': item.delivery_note.created_at,
-         'kind': 'delivery', 'direction': 'in', 'quantity': item.quantity,
-         'party': item.delivery_note.supplier.name if item.delivery_note.supplier else '-',
+         'kind': 'client_receipt' if item.delivery_note.client_id else 'delivery',
+         'direction': 'in', 'quantity': item.quantity,
+         'party': (item.delivery_note.client.name if item.delivery_note.client_id and item.delivery_note.client
+                   else item.delivery_note.supplier.name if item.delivery_note.supplier else '-'),
          'note_number': item.delivery_note.note_number, 'unit_price': item.unit_price, 'notes': item.notes}
         for item in incoming
     ] + [
         {'date': item.client_delivery_note.note_date or to_local(item.client_delivery_note.created_at).date(),
          'created_at': item.client_delivery_note.created_at,
-         'kind': 'client', 'direction': 'out', 'quantity': item.quantity,
+         'kind': item.client_delivery_note.kind if item.client_delivery_note.kind in CLIENT_NOTE_KINDS else 'return',
+         'direction': 'out', 'quantity': item.quantity,
          'party': item.client_delivery_note.client.name if item.client_delivery_note.client else '-',
          'note_number': item.client_delivery_note.note_number, 'unit_price': item.unit_price, 'notes': item.notes}
         for item in outgoing
+    ] + [
+        {'date': item.client_delivery_note.note_date or to_local(item.client_delivery_note.created_at).date(),
+         'created_at': item.client_delivery_note.created_at,
+         'kind': 'remnant', 'direction': 'in', 'quantity': item.remnant_qty,
+         'party': item.client_delivery_note.client.name if item.client_delivery_note.client else '-',
+         'note_number': item.client_delivery_note.note_number, 'unit_price': None,
+         'notes': f'остатък от "{item.description_snapshot}"'}
+        for item in remnants
     ]
     for job in production_jobs:
         taken_qty = _material_stock_delta(material, job.actual_material_qty)
@@ -10174,7 +10236,7 @@ def admin_details():
     if not current_user.is_admin:
         flash('Нямате достъп до тази страница.')
         return redirect(url_for('dashboard'))
-    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    materials = own_materials_query().order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     details = (Detail.query.order_by(Detail.name)
                .options(db.joinedload(Detail.material), db.joinedload(Detail.owner_client),
                         db.selectinload(Detail.operations).joinedload(Operation.service)).all())
@@ -10235,7 +10297,19 @@ def storage_dashboard():
 @app.route('/storage/materials')
 @role_required(['admin', 'worker'])
 def storage_materials():
-    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    # ?owner= all (default) | own (Трафком) | client:<id>; anything else = all.
+    owner_filter = request.args.get('owner', 'all')
+    query = MaterialPrice.query.options(db.joinedload(MaterialPrice.owner_client))
+    if owner_filter == 'own':
+        query = query.filter(MaterialPrice.owner_client_id.is_(None))
+    elif owner_filter.startswith('client:') and owner_filter[7:].isdigit():
+        query = query.filter(MaterialPrice.owner_client_id == int(owner_filter[7:]))
+    else:
+        owner_filter = 'all'
+    materials = query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    clients = (Client.query.filter(Client.id.in_(
+        db.session.query(MaterialPrice.owner_client_id).filter(MaterialPrice.owner_client_id.isnot(None))))
+        .order_by(Client.name).all())
     # Group price-lots of "the same" material (name + dims + type - the same
     # fields _find_or_create_delivery_target matches on minus price/notes)
     # into one expandable row instead of a flat list of near-duplicates - see
@@ -10245,8 +10319,9 @@ def storage_materials():
     groups_by_key = {}
     material_groups = []
     for material in materials:
+        # The owner is part of the key: a client's lot is never summed with ours.
         key = (material.display_name, material.sheet_width_mm, material.sheet_length_mm,
-               material.thickness_mm, material.height_mm, material.type)
+               material.thickness_mm, material.height_mm, material.type, material.owner_client_id)
         group = groups_by_key.get(key)
         if group is None:
             group = {'lots': []}
@@ -10262,7 +10337,9 @@ def storage_materials():
         group['label'] = f"{first.display_name} ({_format_material_dims(first)})"
         group['unit'] = material_unit_short(first.type)
         group['total_stock'] = sum(lot.stock_quantity for lot in lots)
-        group['total_value'] = sum(lot.cost_per_m2 * _material_available_qty(lot) for lot in lots)
+        # Client-owned stock is not ours: it carries no value.
+        group['total_value'] = (0 if first.owner_client_id else
+                                sum(lot.cost_per_m2 * _material_available_qty(lot) for lot in lots))
         group['min_price'] = min(lot.cost_per_m2 for lot in lots)
         group['max_price'] = max(lot.cost_per_m2 for lot in lots)
         # Worst case across lots, same red/yellow thresholds a plain row uses.
@@ -10273,7 +10350,8 @@ def storage_materials():
         else:
             group['row_bg'] = None
 
-    return render_template('storage_materials.html', material_groups=material_groups, active_page='storage')
+    return render_template('storage_materials.html', material_groups=material_groups, clients=clients,
+                           owner_filter=owner_filter, active_page='storage')
 
 
 @app.route('/storage/requests')
@@ -10281,7 +10359,7 @@ def storage_materials():
 def storage_requests():
     requests_list = MaterialRequest.query.order_by(MaterialRequest.created_at.desc()).all()
     suppliers = Supplier.query.order_by(Supplier.name).all()
-    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    materials = own_materials_query().order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     return render_template(
         'storage_requests.html', requests=requests_list, suppliers=suppliers, materials=materials,
         status_labels=REQUEST_STATUS_LABELS, active_page='storage'
@@ -10309,7 +10387,7 @@ def create_material_request():
     for row in items:
         if not isinstance(row, dict):
             continue
-        material = MaterialPrice.query.get(row.get('material_id'))
+        material = own_materials_query().filter_by(id=row.get('material_id')).first()
         quantity = row.get('quantity')
         if not material or not isinstance(quantity, (int, float)) or quantity <= 0:
             continue
@@ -10466,6 +10544,8 @@ def admin_delete_client(client_id):
         (Offer, Offer.client_id, 'оферти'), (ClientDeliveryNote, ClientDeliveryNote.client_id, 'издадени стокови разписки'),
         (CustomerSatisfactionRecord, CustomerSatisfactionRecord.client_id, 'анкети за удовлетвореност'),
         (Detail, Detail.owner_client_id, 'собствени детайли'), (Product, Product.owner_client_id, 'собствени продукти'),
+        (MaterialPrice, MaterialPrice.owner_client_id, 'партиди материал на съхранение'),
+        (DeliveryNote, DeliveryNote.client_id, 'приемания на съхранение'),
     ) if model.query.filter(column == client.id).first()]
     if used_in:
         flash(f'Клиентът "{client.name}" има {", ".join(used_in)} и не може да бъде изтрит.', 'danger')
@@ -10750,7 +10830,7 @@ DELIVERY_NOTE_TARGET_MODELS = {'material': MaterialPrice, 'detail': Detail, 'pro
 
 def _find_or_create_delivery_target(item_type, name, brand, width, height, thickness, unit_price, material_key,
                                      cost_per_m2=None, cutting_speed_mm_per_min=None, pierce_rate_per_min=None, components=None,
-                                     material_type='sheets', notes=None):
+                                     material_type='sheets', notes=None, owner_client_id=None):
     """
     Resolves one delivery-note line to a catalog row: reuses an existing
     Material/Detail/Product only if every descriptive field matches exactly,
@@ -10805,6 +10885,11 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
     derives cost_per_m2 from it using this line's own width/height, and the
     raw unit_price itself is kept as the new row's price_per_unit (same
     "singular price" column admin_materials.html edits) - see MaterialPrice.
+
+    owner_client_id (a receipt FROM a client): matching and creation are
+    scoped to that owner - a client's lot never merges with ours or with
+    another client's. Such a lot is never priced (unit_price ignored, cost 0)
+    and a Detail/Product line is accepted without a price (0).
     """
     name = (name or '').strip()
     brand = (brand or '').strip() or None
@@ -10812,6 +10897,9 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
     price_per_unit = None
 
     if item_type == 'material':
+        if owner_client_id:
+            unit_price = None
+            cost_per_m2 = None
         material_type = material_type if material_type in material_type_labels() else 'sheets'
         # A restock line from the delivery-note dropdown carries material_key -
         # the exact row the admin picked - so trust that directly instead of
@@ -10830,13 +10918,14 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
         if material_key:
             picked = MaterialPrice.query.filter_by(key=material_key).first()
             if picked and (picked.display_name, picked.notes, picked.sheet_width_mm,
-                            picked.sheet_length_mm, picked.thickness_mm, picked.type) == \
-                          (name, notes, width, height, thickness, material_type):
+                            picked.sheet_length_mm, picked.thickness_mm, picked.type, picked.owner_client_id) == \
+                          (name, notes, width, height, thickness, material_type, owner_client_id):
                 existing = picked
-        if existing is None and not material_key:
+        if existing is None:
             existing = MaterialPrice.query.filter_by(
                 display_name=name, notes=notes, sheet_width_mm=width,
-                sheet_length_mm=height, thickness_mm=thickness, type=material_type
+                sheet_length_mm=height, thickness_mm=thickness, type=material_type,
+                owner_client_id=owner_client_id
             ).first()
         # The intake price on this line IS the material's price - admins no
         # longer enter one on admin_materials.html (see admin_add_material).
@@ -10868,7 +10957,7 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
         if material_key and (cutting_speed_mm_per_min is None or pierce_rate_per_min is None):
             source = MaterialPrice.query.filter_by(key=material_key).first()
             if source:
-                if cost_per_m2 is None:
+                if cost_per_m2 is None and not owner_client_id:
                     cost_per_m2 = source.cost_per_m2
                 cutting_speed_mm_per_min = source.cutting_speed_mm_per_min
                 pierce_rate_per_min = source.pierce_rate_per_min
@@ -10889,6 +10978,7 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
             cutting_speed_mm_per_min=cutting_speed_mm_per_min,
             pierce_rate_per_min=pierce_rate_per_min, sheet_width_mm=width, sheet_length_mm=height,
             thickness_mm=thickness, brand=brand, notes=notes, type=material_type, erp_number=_next_erp_number(),
+            owner_client_id=owner_client_id,
         )
         db.session.add(new_row)
         db.session.flush()
@@ -10896,30 +10986,32 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
         return new_row
 
     if item_type == 'detail':
-        if not material_key or not MaterialPrice.query.filter_by(key=material_key).first():
-            return None
+        lot = MaterialPrice.query.filter_by(key=material_key).first() if material_key else None
+        if not lot or lot.owner_client_id not in (None, owner_client_id):
+            return None   # a client's Detail may sit on our material or its own lot, never on another client's
         existing = Detail.query.filter_by(
             name=name, material_key=material_key, width=width or 0.0,
-            height=height or 0.0, calculated_price=unit_price or 0.0
+            height=height or 0.0, calculated_price=unit_price or 0.0,
+            owner_client_id=owner_client_id
         ).first()
         if existing:
             return existing
-        if unit_price is None:
+        if unit_price is None and not owner_client_id:
             return None
         new_row = Detail(
             name=name, material_key=material_key, width=width or 0.0, height=height or 0.0,
-            total_length=0.0, pierce_count=0, calculated_price=unit_price,
-            erp_number=_next_erp_number(),
+            total_length=0.0, pierce_count=0, calculated_price=unit_price or 0.0,
+            erp_number=_next_erp_number(), owner_client_id=owner_client_id,
         )
         db.session.add(new_row)
         db.session.flush()
         return new_row
 
     if item_type == 'product':
-        existing = Product.query.filter_by(name=name).first()
+        existing = Product.query.filter_by(name=name, owner_client_id=owner_client_id).first()
         if existing:
             return existing
-        new_row = Product(name=name, erp_number=_next_erp_number())
+        new_row = Product(name=name, erp_number=_next_erp_number(), owner_client_id=owner_client_id)
         db.session.add(new_row)
         db.session.flush()
         for detail_id, quantity in (components or {}).items():
@@ -10940,8 +11032,10 @@ def admin_delivery_notes():
     row - just with material/detail/product instead of product/detail.
     """
     suppliers = Supplier.query.order_by(Supplier.name).all()
+    clients = Client.query.order_by(Client.name).all()  # receipt from a client (материали на съхранение)
     notes = (DeliveryNote.query.order_by(DeliveryNote.created_at.desc())
-             .options(db.joinedload(DeliveryNote.supplier), db.selectinload(DeliveryNote.items)).all())
+             .options(db.joinedload(DeliveryNote.supplier), db.joinedload(DeliveryNote.client),
+                      db.selectinload(DeliveryNote.items)).all())
     # Ordered by type first so the template's |groupby('type') optgroups
     # (same structural-type sectioning as partials/material_options.html)
     # come out contiguous - Jinja's groupby needs pre-sorted input.
@@ -10981,7 +11075,7 @@ def admin_delivery_notes():
             rows.append(row)
         note_rows[note.id] = rows
     return render_template(
-        'admin_delivery_notes.html', suppliers=suppliers, notes=notes, note_rows=note_rows,
+        'admin_delivery_notes.html', suppliers=suppliers, clients=clients, notes=notes, note_rows=note_rows,
         materials=materials, details=details, products=products, services=services,
         materials_data=materials_data, details_data=details_data, products_data=products_data,
         active_page='admin_delivery_notes'
@@ -11042,23 +11136,34 @@ def create_delivery_note():
     # earlier lines already moved stock; taking the lock up front keeps the
     # order "numbering lock, then stock rows" for every note (no deadlock) and
     # stops two notes creating the same new catalog row twice.
+    supplier_raw = request.form.get('supplier_id', '')
+    client_raw = request.form.get('client_id', '')
+    if supplier_raw.isdigit() and client_raw.isdigit():
+        flash('Разписката е или от доставчик, или от клиент - не и двете.', 'danger')
+        return redirect(url_for('admin_delivery_notes'))
+    if client_raw.isdigit() and not db.session.get(Client, int(client_raw)):
+        flash('Клиентът не беше намерен.', 'danger')
+        return redirect(url_for('admin_delivery_notes'))
+
     _lock_numbering('erp')
     note = DeliveryNote(created_by_id=current_user.id)
-    _set_delivery_note_header(note, 'supplier_id')
+    _set_delivery_note_header(note, 'client_id' if client_raw.isdigit() else 'supplier_id')
     db.session.add(note)
     db.session.flush()
 
-    added_any, log_parts, log_detail_lines = _apply_delivery_note_items(note, items)
+    added_any, log_parts, log_detail_lines, rejected = _apply_delivery_note_items(note, items)
     if not added_any:
         db.session.rollback()
         flash('Няма валидни артикули за добавяне.', 'danger')
         return redirect(url_for('admin_delivery_notes'))
 
     db.session.commit()
-    supplier_name = note.supplier.name if note.supplier else '-'
-    header = f'Стокова разписка №{note.id} (доставчик: {supplier_name}, № {note.note_number or "-"}, дата {note.note_date or "-"})'
-    log_action(f'Стокова разписка №{note.id}: ' + ', '.join(log_parts), details=header + '\n' + '\n'.join(log_detail_lines))
-    flash('Стоковата разписка беше записана и наличностите бяха обновени.', 'success')
+    header = _delivery_note_header_text(note)
+    log_action(f'{_delivery_note_kind_label(note)} №{note.id}: ' + ', '.join(log_parts), details=header + '\n' + '\n'.join(log_detail_lines))
+    if rejected:
+        flash(' '.join(rejected), 'warning')
+    flash('Приемането на съхранение беше записано и наличностите бяха обновени.' if note.client_id
+          else 'Стоковата разписка беше записана и наличностите бяха обновени.', 'success')
     return redirect(url_for('admin_delivery_notes'))
 
 
@@ -11086,21 +11191,29 @@ def edit_delivery_note(note_id):
     _lock_numbering('erp')  # before any stock row - see create_delivery_note()
     kept = {it.id: {'type': it.target_type, 'target_id': it.target_id, 'unit_price': it.unit_price}
             for it in note.items}
+    touched = _note_targets(note.items)  # new lines only add stock; taking the old ones back can go below zero
     old_lines = _reverse_note_items(note.items, sign=1)
-    _set_delivery_note_header(note, 'supplier_id')
+    # A receipt from a client keeps its client (and stays a client receipt): the
+    # posted party is ignored, only number and date change.
+    _set_delivery_note_header(note, 'client_id' if note.client_id else 'supplier_id', lock_party=bool(note.client_id))
 
-    added_any, log_parts, log_detail_lines = _apply_delivery_note_items(note, items, kept)
+    added_any, log_parts, log_detail_lines, rejected = _apply_delivery_note_items(note, items, kept)
     if not added_any:
         db.session.rollback()
         flash('Няма валидни артикули - разписката не е променена.', 'danger')
         return redirect(url_for('admin_delivery_notes'))
+    refusal = _negative_client_lots_refusal(touched, 'admin_delivery_notes', details=bool(note.client_id))
+    if refusal:
+        return refusal
 
     db.session.commit()
-    supplier_name = note.supplier.name if note.supplier else '-'
-    header = f'Стокова разписка №{note.id} (доставчик: {supplier_name}, № {note.note_number or "-"}, дата {note.note_date or "-"})'
-    log_action(f'Редактирана стокова разписка №{note.id}: ' + ', '.join(log_parts),
+    header = _delivery_note_header_text(note)
+    log_action(f'Редактирана {_delivery_note_kind_label(note).lower()} №{note.id}: ' + ', '.join(log_parts),
                details=header + '\nПреди:\n' + '\n'.join(old_lines) + '\nСлед:\n' + '\n'.join(log_detail_lines))
-    flash('Стоковата разписка беше редактирана и наличностите бяха преизчислени.', 'success')
+    if rejected:
+        flash(' '.join(rejected), 'warning')
+    flash('Приемането на съхранение беше редактирано и наличностите бяха преизчислени.' if note.client_id
+          else 'Стоковата разписка беше редактирана и наличностите бяха преизчислени.', 'success')
     return redirect(url_for('admin_delivery_notes'))
 
 
@@ -11127,7 +11240,13 @@ def delete_client_delivery_note(note_id):
 def _delete_note(note, sign, label, endpoint):
     party = getattr(note, 'supplier', None) or getattr(note, 'client', None)
     header = f'{label} №{note.id} ({party.name if party else "-"}, № {note.note_number or "-"}, дата {note.note_date or "-"})'
+    touched = _note_targets(note.items)
     lines = _reverse_note_items(note.items, sign=sign)
+    # Detail rows count only for a client receipt / a consume note (see _negative_client_lots)
+    stored_parts = bool(getattr(note, 'client_id', None)) if isinstance(note, DeliveryNote) else note.kind == 'consume'
+    refusal = _negative_client_lots_refusal(touched, endpoint, details=stored_parts)
+    if refusal:
+        return refusal
     db.session.delete(note)
     db.session.commit()
     log_action(f'Изтрита {label[0].lower() + label[1:]} №{note.id} (наличностите са върнати)',
@@ -11144,10 +11263,24 @@ def _delivery_note_form_items():
     return items if isinstance(items, list) else []
 
 
-def _set_delivery_note_header(note, party_field):
-    """supplier_id / client_id + number + date from the create/edit form."""
-    party_raw = request.form.get(party_field, '')
-    setattr(note, party_field, int(party_raw) if party_raw.isdigit() else None)
+def _delivery_note_kind_label(note):
+    return 'Приемане на съхранение' if note.client_id else 'Стокова разписка'
+
+
+def _delivery_note_header_text(note):
+    """One-line description of a DeliveryNote for the activity log."""
+    number_date = f'№ {note.note_number or "-"}, дата {note.note_date or "-"}'
+    if note.client_id:
+        return f'Приемане на съхранение №{note.id} (клиент: {note.client.name if note.client else "-"}, {number_date})'
+    return f'Стокова разписка №{note.id} (доставчик: {note.supplier.name if note.supplier else "-"}, {number_date})'
+
+
+def _set_delivery_note_header(note, party_field, lock_party=False):
+    """supplier_id / client_id + number + date from the create/edit form.
+    lock_party leaves the party column alone (only number and date change)."""
+    if not lock_party:
+        party_raw = request.form.get(party_field, '')
+        setattr(note, party_field, int(party_raw) if party_raw.isdigit() else None)
     note.note_number = request.form.get('note_number', '').strip() or None
     note_date_raw = request.form.get('note_date', '').strip()
     note.note_date = datetime.strptime(note_date_raw, '%Y-%m-%d').date() if note_date_raw else None
@@ -11156,17 +11289,66 @@ def _set_delivery_note_header(note, party_field):
 def _reverse_note_items(items, sign):
     """Takes back the stock movement of each (Client)DeliveryNoteItem
     (sign=1: it was an intake, so stock goes down; -1: it was issued) and
-    deletes the lines. Returns log lines describing what they were."""
+    deletes the lines. Returns log lines describing what they were.
+    A consume line's remnant (ClientDeliveryNoteItem.remnant_material_id) is
+    taken back out of the lot that received it."""
     lines = []
     for it in list(items):
         target = DELIVERY_NOTE_TARGET_MODELS[it.target_type].query.get(it.target_id)
         if target:
             _bump_stock(target, -sign * it.quantity)
+        remnant_id = getattr(it, 'remnant_material_id', None)
+        remnant = MaterialPrice.query.get(remnant_id) if remnant_id and it.remnant_qty else None
+        if remnant:
+            _bump_stock(remnant, sign * it.remnant_qty)
         price = f' @ {it.unit_price:g} €' if it.unit_price is not None else ''
-        lines.append(f'{it.description_snapshot} x {it.quantity:g}{price}')
+        remnant_text = f', остатък {it.remnant_qty:g}' if remnant else ''
+        lines.append(f'{it.description_snapshot} x {it.quantity:g}{price}{remnant_text}')
         db.session.delete(it)
     db.session.flush()
     return lines
+
+
+def _note_targets(items):
+    """(target_type, id) of every catalog row a note's lines move, remnant
+    lots included - what _negative_client_lots() checks."""
+    targets = {(it.target_type, it.target_id) for it in items}
+    targets |= {('material', it.remnant_material_id) for it in items if getattr(it, 'remnant_material_id', None)}
+    return targets
+
+
+def _negative_client_lots(touched, details=True):
+    """Names of the client-owned rows (MaterialPrice / Detail with
+    owner_client_id) among `touched` ((target_type, id) pairs) whose stock is
+    now below zero. `details=False` skips Detail rows: a private Detail is
+    also an ordinary part we make for a client, so only a document that moves
+    client-stored parts (a consume note, a client receipt) checks them. Call it after the movements and before commit():
+    _bump_stock() flushes, so the query sees the new totals. Only the rows the
+    document touched are checked - a row that was already negative before
+    (old data) never blocks an unrelated document. Our own rows are never
+    reported (they keep the non-blocking behaviour)."""
+    names = []
+    for model, label in ((MaterialPrice, format_material_option), (Detail, lambda d: d.name)):
+        if model is Detail and not details:
+            continue
+        kind = 'material' if model is MaterialPrice else 'detail'
+        ids = {row_id for target_type, row_id in touched if target_type == kind and row_id}
+        if ids:
+            names += [label(row) for row in model.query.filter(
+                model.id.in_(ids), model.owner_client_id.isnot(None),
+                model.stock_quantity < -PRODUCTION_STOCK_TOLERANCE).order_by(model.id)]
+    return names
+
+
+def _negative_client_lots_refusal(touched, endpoint, details=True):
+    """Rolls the request back and returns a redirect to `endpoint` when the
+    document would leave a client's lot below zero, else None."""
+    names = _negative_client_lots(touched, details)
+    if not names:
+        return None
+    db.session.rollback()
+    flash(f'Отказано: наличността на клиентска партида би станала отрицателна ({", ".join(names)}).', 'danger')
+    return redirect(url_for(endpoint))
 
 
 def _apply_delivery_note_items(note, items, kept=None):
@@ -11178,6 +11360,7 @@ def _apply_delivery_note_items(note, items, kept=None):
     added_any = False
     log_parts = []
     log_detail_lines = []
+    rejected = []  # Bulgarian sentences for lines the matcher refused
     for row in items:
         if not isinstance(row, dict):
             continue
@@ -11201,7 +11384,8 @@ def _apply_delivery_note_items(note, items, kept=None):
             except (TypeError, ValueError):
                 return None
 
-        unit_price = _optional_float('unit_price')
+        # A receipt from a client is not a purchase: no price is recorded.
+        unit_price = None if note.client_id else _optional_float('unit_price')
         width = _optional_float('width')
         height = _optional_float('height')
         thickness = _optional_float('thickness')
@@ -11247,9 +11431,11 @@ def _apply_delivery_note_items(note, items, kept=None):
             target = _find_or_create_delivery_target(
                 item_type, name, brand, width, height, thickness, unit_price, material_key,
                 cost_per_m2=cost_per_m2, cutting_speed_mm_per_min=cutting_speed_mm_per_min, pierce_rate_per_min=pierce_rate_per_min,
-                components=components, material_type=material_type, notes=notes
+                components=components, material_type=material_type, notes=notes,
+                owner_client_id=note.client_id
             )
         if not target:
+            rejected.append(f'Редът "{name}" не беше записан (липсват данни за нов материал).')
             continue
 
         description = target.display_name if item_type == 'material' else target.name
@@ -11265,7 +11451,7 @@ def _apply_delivery_note_items(note, items, kept=None):
         price_note = f', цена {unit_price:g} €' if unit_price is not None else ''
         notes_note = f', бележка: {row.get("notes")}' if (row.get('notes') or '').strip() else ''
         log_detail_lines.append(f'{item_type_labels.get(item_type, item_type)} "{description}": +{quantity:g} бр. → нова наличност {target.stock_quantity:g}{price_note}{notes_note}')
-    return added_any, log_parts, log_detail_lines
+    return added_any, log_parts, log_detail_lines, rejected
 
 
 @app.route('/admin/delivery-notes/<int:note_id>/print')
@@ -11299,17 +11485,24 @@ def admin_client_delivery_notes():
     details = (Detail.query.order_by(Detail.name)
                .options(db.selectinload(Detail.operations).joinedload(Operation.service)).all())
     products = Product.query.order_by(Product.name).all()
-    materials_data = [{'id': m.id, 'name': format_material_option(m), 'price': None, 'stock': m.stock_quantity} for m in materials]
-    details_data = [{'id': d.id, 'name': d.name, 'price': d.total_price, 'stock': d.stock_quantity} for d in details]
-    products_data = [{'id': p.id, 'name': p.name, 'price': None, 'stock': p.stock_quantity} for p in products]
+    # `owner` (client id or None) lets the form offer only the client's own rows on a 'consume' note;
+    # `unit` tells it whether a remnant needs dimensions (sheet lots, 'm2').
+    materials_data = [{'id': m.id, 'name': format_material_option(m), 'price': None, 'stock': m.stock_quantity,
+                       'owner': m.owner_client_id, 'unit': material_price_unit(m.type)} for m in materials]
+    details_data = [{'id': d.id, 'name': d.name, 'price': d.total_price, 'stock': d.stock_quantity,
+                     'owner': d.owner_client_id} for d in details]
+    products_data = [{'id': p.id, 'name': p.name, 'price': None, 'stock': p.stock_quantity,
+                      'owner': p.owner_client_id} for p in products]
     # for each note's "Редактирай" (edit_client_delivery_note)
     note_rows = {note.id: [{'type': it.target_type, 'target_id': it.target_id, 'name': it.description_snapshot,
-                            'qty': it.quantity, 'unit_price': it.unit_price, 'notes': it.notes}
+                            'qty': it.quantity, 'unit_price': it.unit_price, 'notes': it.notes,
+                            'remnant_qty': it.remnant_qty, 'remnant_width': it.remnant_width,
+                            'remnant_height': it.remnant_height}
                            for it in note.items] for note in notes}
     return render_template(
         'admin_client_delivery_notes.html', clients=clients, notes=notes, note_rows=note_rows, materials=materials,
         materials_data=materials_data, details_data=details_data, products_data=products_data,
-        active_page='admin_client_delivery_notes'
+        kinds=CLIENT_NOTE_KINDS, active_page='admin_client_delivery_notes'
     )
 
 
@@ -11320,32 +11513,38 @@ def create_client_delivery_note():
     """
     Records a client delivery note and decrements stock_quantity on every
     referenced Material/Detail/Product - the mirror of create_delivery_note().
-    items_json follows [{type, target_id, qty, unit_price, notes}] - target_id
-    is required and must resolve to an existing row (see
-    admin_client_delivery_notes()'s docstring for why, unlike
-    create_delivery_note() there's no _find_or_create_delivery_target here).
+    items_json follows [{type, target_id, qty, unit_price, notes,
+    remnant_qty, remnant_width, remnant_height}] - target_id is required and
+    must resolve to an existing row (see admin_client_delivery_notes()'s
+    docstring for why, unlike create_delivery_note() there's no
+    _find_or_create_delivery_target here - except for a sheet remnant, see
+    _apply_client_delivery_note_items()). The remnant keys only count on a
+    material line of a 'consume' note. `kind` (CLIENT_NOTE_KINDS, anything
+    else -> 'return') and the client are set here only, never on edit.
     """
     items = _delivery_note_form_items()
     if not items:
         flash('Моля добавете поне един артикул към стоковата разписка.', 'danger')
         return redirect(url_for('admin_client_delivery_notes'))
 
-    note = ClientDeliveryNote(created_by_id=current_user.id)
+    kind = request.form.get('kind')
+    note = ClientDeliveryNote(created_by_id=current_user.id, kind=kind if kind in CLIENT_NOTE_KINDS else 'return')
+    if note.kind == 'consume':
+        _lock_numbering('erp')  # a sheet remnant may become a new lot (ERP №) - before any stock row, see create_delivery_note()
     _set_delivery_note_header(note, 'client_id')
     db.session.add(note)
     db.session.flush()
 
-    added_any, log_parts, log_detail_lines = _apply_client_delivery_note_items(note, items)
-    if not added_any:
-        db.session.rollback()
-        flash('Няма валидни артикули за добавяне.', 'danger')
-        return redirect(url_for('admin_client_delivery_notes'))
+    added_any, log_parts, log_detail_lines, errors = _apply_client_delivery_note_items(note, items)
+    refusal = _client_note_refusal(note, added_any, errors, 'Няма валидни артикули за добавяне.', set())
+    if refusal:
+        return refusal
 
     db.session.commit()
-    client_name = note.client.name if note.client else '-'
-    header = f'Стокова разписка (издадена) №{note.id} (клиент: {client_name}, № {note.note_number or "-"}, дата {note.note_date or "-"})'
-    log_action(f'Издадена стокова разписка №{note.id}: ' + ', '.join(log_parts), details=header + '\n' + '\n'.join(log_detail_lines))
-    flash('Стоковата разписка беше записана и наличностите бяха обновени.', 'success')
+    log_action(f'{_client_note_kind_label(note)} №{note.id}: ' + ', '.join(log_parts),
+               details=_client_note_header_text(note) + '\n' + '\n'.join(log_detail_lines))
+    flash('Изписването беше записано и наличностите бяха обновени.' if note.kind == 'consume'
+          else 'Стоковата разписка беше записана и наличностите бяха обновени.', 'success')
     return redirect(url_for('admin_client_delivery_notes'))
 
 
@@ -11354,36 +11553,90 @@ def create_client_delivery_note():
 @retry_on_db_busy
 def edit_client_delivery_note(note_id):
     """Rewrites a ClientDeliveryNote: the old lines' stock is given back,
-    then the submitted lines are issued fresh - mirrors edit_delivery_note()."""
+    then the submitted lines are issued fresh - mirrors edit_delivery_note().
+    The note's kind and client stay as created (posted values are ignored)."""
     note = _lock_or_404(ClientDeliveryNote, note_id)
     items = _delivery_note_form_items()
     if not items:
         flash('Разписката трябва да има поне един артикул.', 'danger')
         return redirect(url_for('admin_client_delivery_notes'))
 
+    if note.kind == 'consume':
+        _lock_numbering('erp')  # before any stock row - see create_client_delivery_note()
+    touched = _note_targets(note.items)
     old_lines = _reverse_note_items(note.items, sign=-1)
-    _set_delivery_note_header(note, 'client_id')
-    added_any, log_parts, log_detail_lines = _apply_client_delivery_note_items(note, items)
-    if not added_any:
-        db.session.rollback()
-        flash('Няма валидни артикули - разписката не е променена.', 'danger')
-        return redirect(url_for('admin_client_delivery_notes'))
+    _set_delivery_note_header(note, 'client_id', lock_party=True)
+    added_any, log_parts, log_detail_lines, errors = _apply_client_delivery_note_items(note, items)
+    refusal = _client_note_refusal(note, added_any, errors, 'Няма валидни артикули - разписката не е променена.', touched)
+    if refusal:
+        return refusal
 
     db.session.commit()
-    client_name = note.client.name if note.client else '-'
-    header = f'Стокова разписка (издадена) №{note.id} (клиент: {client_name}, № {note.note_number or "-"}, дата {note.note_date or "-"})'
-    log_action(f'Редактирана издадена стокова разписка №{note.id}: ' + ', '.join(log_parts),
-               details=header + '\nПреди:\n' + '\n'.join(old_lines) + '\nСлед:\n' + '\n'.join(log_detail_lines))
+    edited = 'Редактирано изписване за производство' if note.kind == 'consume' else 'Редактирана издадена стокова разписка'
+    log_action(f'{edited} №{note.id}: ' + ', '.join(log_parts),
+               details=_client_note_header_text(note) + '\nПреди:\n' + '\n'.join(old_lines) + '\nСлед:\n' + '\n'.join(log_detail_lines))
     flash('Стоковата разписка беше редактирана и наличностите бяха преизчислени.', 'success')
     return redirect(url_for('admin_client_delivery_notes'))
 
 
+def _client_note_kind_label(note):
+    return 'Изписване за производство' if note.kind == 'consume' else 'Издадена стокова разписка'
+
+
+def _client_note_header_text(note):
+    """One-line description of a ClientDeliveryNote for the activity log."""
+    kind = 'Изписване за производство' if note.kind == 'consume' else 'Стокова разписка (издадена)'
+    return (f'{kind} №{note.id} (клиент: {note.client.name if note.client else "-"}, '
+            f'№ {note.note_number or "-"}, дата {note.note_date or "-"})')
+
+
+def _client_note_refusal(note, added_any, errors, empty_message, touched):
+    """After _apply_client_delivery_note_items(): rolls back and returns a
+    redirect when a line broke a rule, nothing was added, or a client's lot
+    would go below zero (`touched` = rows the old lines moved, on edit);
+    otherwise None and the caller commits."""
+    if errors or not added_any:
+        db.session.rollback()
+        for message in errors or [empty_message]:
+            flash(message, 'danger')
+        return redirect(url_for('admin_client_delivery_notes'))
+    touched = touched | _note_targets(ClientDeliveryNoteItem.query.filter_by(client_delivery_note_id=note.id).all())
+    return _negative_client_lots_refusal(touched, 'admin_client_delivery_notes', details=note.kind == 'consume')
+
+
 def _apply_client_delivery_note_items(note, items):
-    """The line loop behind create/edit_client_delivery_note()."""
+    """The line loop behind create/edit_client_delivery_note(). Returns
+    (added_any, log_parts, log_detail_lines, errors) - errors are Bulgarian
+    sentences; any error means the caller rolls the whole note back.
+
+    Ownership: a 'consume' note (writing off a client's stored material for
+    production) needs a client, and every line must be that client's own row
+    (owner_client_id). A 'return' note with a client may issue our stock or
+    that client's own rows, never another client's; without a client it
+    works as before.
+
+    Remnant (only a material line of a 'consume' note; remnant_qty > 0,
+    otherwise the rest is scrap): a sheet lot (price unit 'm2') needs
+    remnant_width/remnant_height and the remnant becomes the client's own
+    "<name> - остатък" lot (found again by the same dims next time); a
+    linear/per-piece lot just takes remnant_qty back. remnant_material_id
+    records which lot got it, for _reverse_note_items()."""
     item_type_labels = {'material': 'материал', 'detail': 'детайл', 'product': 'продукт'}
     added_any = False
     log_parts = []
     log_detail_lines = []
+    errors = []
+    consume = note.kind == 'consume'
+    if consume and not note.client_id:
+        return False, log_parts, log_detail_lines, ['Изписването изисква клиент.']
+
+    def _positive(row, key):
+        try:
+            value = float(row.get(key))
+        except (TypeError, ValueError):
+            return None
+        return value if 0 < value < float('inf') else None
+
     for row in items:
         if not isinstance(row, dict):
             continue
@@ -11409,18 +11662,54 @@ def _apply_client_delivery_note_items(note, items):
             unit_price = None
 
         description = target.display_name if item_type == 'material' else target.name
+        if consume and target.owner_client_id != note.client_id:
+            errors.append(f'"{description}" не е партида на клиента.')
+            continue
+        if not consume and target.owner_client_id not in (None, note.client_id):
+            errors.append(f'"{description}" принадлежи на друг клиент.')
+            continue
+
+        remnant_qty = _positive(row, 'remnant_qty') if consume and item_type == 'material' else None
+        remnant_width = remnant_height = remnant_lot = None
+        if remnant_qty and material_price_unit(target.type) == 'm2':
+            remnant_width, remnant_height = _positive(row, 'remnant_width'), _positive(row, 'remnant_height')
+            if not (remnant_width and remnant_height):
+                errors.append(f'Остатъкът от "{description}" трябва да има ширина и дължина.')
+                continue
+            remnant_lot = _find_or_create_delivery_target(
+                'material', f'{target.display_name} - остатък', target.brand, remnant_width, remnant_height,
+                target.thickness_mm, None, target.key, material_type=target.type, notes=None,
+                owner_client_id=note.client_id)
+            if not remnant_lot:
+                errors.append(f'Остатъкът от "{description}" не можа да бъде записан.')
+                continue
+            if remnant_lot.height_mm is None:
+                remnant_lot.height_mm = target.height_mm
+        elif remnant_qty:
+            if remnant_qty >= quantity:
+                errors.append(f'Остатъкът от "{description}" не може да е повече от изразходваното.')
+                continue
+            remnant_lot = target  # linear/per-piece stock is one running total - the remnant goes back into it
+
         db.session.add(ClientDeliveryNoteItem(
             client_delivery_note_id=note.id, target_type=item_type, target_id=target.id,
             description_snapshot=description, quantity=quantity, unit_price=unit_price,
             notes=(row.get('notes') or '').strip() or None,
+            remnant_qty=remnant_qty, remnant_width=remnant_width, remnant_height=remnant_height,
+            remnant_material_id=remnant_lot.id if remnant_lot else None,
         ))
         _bump_stock(target, -quantity)
+        remnant_note = ''
+        if remnant_lot:
+            _bump_stock(remnant_lot, remnant_qty)
+            dims = f' ({remnant_width:g}x{remnant_height:g})' if remnant_width else ''
+            remnant_note = f', остатък {remnant_qty:g}{dims}'
         added_any = True
-        log_parts.append(f'{item_type_labels.get(item_type, item_type)} "{description}" -{quantity:g} (нова наличност {target.stock_quantity:g})')
+        log_parts.append(f'{item_type_labels.get(item_type, item_type)} "{description}" -{quantity:g}{remnant_note} (нова наличност {target.stock_quantity:g})')
         price_note = f', цена {unit_price:g} €' if unit_price is not None else ''
         notes_note = f', бележка: {row.get("notes")}' if (row.get('notes') or '').strip() else ''
-        log_detail_lines.append(f'{item_type_labels.get(item_type, item_type)} "{description}": -{quantity:g} бр. → нова наличност {target.stock_quantity:g}{price_note}{notes_note}')
-    return added_any, log_parts, log_detail_lines
+        log_detail_lines.append(f'{item_type_labels.get(item_type, item_type)} "{description}": -{quantity:g} бр.{remnant_note} → нова наличност {target.stock_quantity:g}{price_note}{notes_note}')
+    return added_any, log_parts, log_detail_lines, errors
 
 
 @app.route('/admin/client-delivery-notes/<int:note_id>/print')
@@ -12500,7 +12789,7 @@ def admin_add_detail():
         flash(f'ERP № {erp_number} вече се използва от {conflict}.', 'danger')
         return redirect(url_for('admin_details'))
 
-    if not MaterialPrice.query.filter_by(key=material_key).first():
+    if not own_materials_query().filter_by(key=material_key).first():
         flash('Невалиден избор на материал.', 'danger')
         return redirect(url_for('admin_details'))
 
@@ -12638,7 +12927,7 @@ def detail_dxf_dashboard(detail_id):
         return redirect(url_for('dashboard'))
     files = DetailDxfFile.query.filter_by(detail_id=detail_id).order_by(DetailDxfFile.uploaded_at.desc()).all()
     services = allowed_only('services', Service.query.order_by(Service.name).all())
-    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    materials = own_materials_query().order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     # Plain dicts for the client-side pending-operations cart (see
     # detail_dxf_dashboard.html) to compute a live running total without a
     # round-trip per row - same convention as order_create()'s products_data.
@@ -12666,7 +12955,7 @@ def admin_update_detail_material(detail_id):
 
     detail = Detail.query.get_or_404(detail_id)
     material_key = request.form.get('material', '')
-    material = MaterialPrice.query.filter_by(key=material_key).first()
+    material = own_materials_query().filter_by(key=material_key).first()
     if not material:
         flash('Невалиден избор на материал.', 'danger')
         return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
@@ -13200,7 +13489,7 @@ def admin_product_edit(product_id):
 
     product = Product.query.get_or_404(product_id)
     all_details = Detail.query.order_by(Detail.name).all()
-    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    materials = own_materials_query().order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     services = Service.query.order_by(Service.name).all()
     clients = Client.query.order_by(Client.name).all()
     pricing = calculate_product_pricing(product)
@@ -13714,7 +14003,7 @@ def create_order():
         products = [p for p in products if catalog_item_allowed(p, viewer_client)]
         details = [d for d in details if catalog_item_allowed(d, viewer_client)]
     machines = allowed_only('machines', Machine.query.order_by(Machine.name).all())
-    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    materials = own_materials_query().order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     services = allowed_only('services', Service.query.order_by(Service.name).all())
     # Non-staff can only ever place an order as their own linked client (see
     # the client_id override in the POST branch above) - so the picker only
@@ -13966,7 +14255,7 @@ def admin_production_orders():
     """
     details = Detail.query.order_by(Detail.name).options(db.joinedload(Detail.material)).all()
     # every price lot once, cheapest first; each detail picks its own lots out of this list below
-    all_lots = MaterialPrice.query.order_by(MaterialPrice.cost_per_m2).all()
+    all_lots = own_materials_query().order_by(MaterialPrice.cost_per_m2).all()
     details_data = [{
         'id': d.id,
         'name': d.name,
@@ -14024,6 +14313,9 @@ def create_production_order():
     """
     detail = Detail.query.get_or_404(request.form.get('detail_id', type=int))
     material = MaterialPrice.query.get_or_404(request.form.get('material_id', type=int))
+    if material.owner_client_id:   # a client's lot is not ours to build stock from
+        flash('Клиентска партида не може да се ползва за производствена задача.', 'danger')
+        return redirect(url_for('admin_production_orders'))
     quantity = request.form.get('quantity', type=int)
     if not quantity or quantity < 1:
         flash('Моля въведете валидно количество за производство.', 'danger')
@@ -15864,7 +16156,7 @@ def api_quick_create_detail():
     if conflict:
         return jsonify({'status': 'error', 'message': f'ERP № {erp_number} вече се използва от {conflict}.'}), 400
 
-    mat = MaterialPrice.query.filter_by(key=material_key).first()
+    mat = own_materials_query().filter_by(key=material_key).first()
     if not mat:
         return jsonify({'status': 'error', 'message': 'Невалиден избор на материал.'}), 400
 
@@ -16399,10 +16691,15 @@ def admin_delete_material(key):
             'danger'
         )
         return redirect(url_for('admin_materials'))
+    if material.owner_client_id and (material.stock_quantity or 0) > 0:
+        flash('Партида на клиент с наличност не може да се изтрие.', 'danger')
+        return redirect(url_for('admin_materials'))
     # Restock requests and production jobs (reversed ones included - they are
     # the stock history) point at it by id, also with no ON DELETE rule.
     used_in = [label for model, label in ((MaterialRequest, 'заявка за материал'), (ProductionOrder, 'задача за производство'))
                if model.query.filter_by(material_id=material.id).first()]
+    if ClientDeliveryNoteItem.query.filter_by(remnant_material_id=material.id).first():
+        used_in.append('издадена стокова разписка (остатък)')
     if used_in:
         flash(f'Материалът "{material.display_name}" се използва в поне една {", ".join(used_in)} '
               f'и не може да бъде изтрит.', 'danger')
@@ -24595,7 +24892,7 @@ def search_catalog(query: str) -> str:
     if not query:
         return 'Няма подадена дума за търсене.'
     results = []
-    for m in _fuzzy_match(MaterialPrice.query.all(), lambda x: x.display_name, query, limit=5):
+    for m in _fuzzy_match(own_materials_query().all(), lambda x: x.display_name, query, limit=5):
         results.append(f'Материал: {format_material_option(m)} - наличност: {m.stock_quantity:g}')
     for d in _fuzzy_match(_chat_catalog(Detail), lambda x: x.name, query, limit=5):
         results.append(f'Детайл: {d.name} - наличност: {d.stock_quantity:g} бр.')
@@ -24629,7 +24926,7 @@ def most_expensive_items(limit: int = 5) -> str:
     limit = max(1, min(limit, 20))
     results = []
     if current_user.is_staff:   # cost_per_m2 е доставната цена - клиентът не я вижда, а и подредбата по нея би я издала
-        for m in MaterialPrice.query.order_by(MaterialPrice.cost_per_m2.desc()).limit(limit):
+        for m in own_materials_query().order_by(MaterialPrice.cost_per_m2.desc()).limit(limit):
             results.append(f'Материал: {format_material_option(m)} - {m.cost_per_m2:g} €/м² - наличност: {m.stock_quantity:g}')
     for d in sorted(_chat_catalog(Detail), key=lambda x: x.calculated_price or 0, reverse=True)[:limit]:
         results.append(f'Детайл: {d.name} - {d.calculated_price:g} € - наличност: {d.stock_quantity:g} бр.')
@@ -24649,7 +24946,7 @@ def list_materials(material_type: str = '', offset: int = 0) -> str:
         material_type: По избор - един от: sheets, rods, profiles, pipes, other. Празно за всички типове.
         offset: Колко записа да пропусне - за следваща страница при повече от 30 резултата.
     """
-    q = MaterialPrice.query
+    q = own_materials_query()
     material_type = (material_type or '').strip()
     if material_type:
         q = q.filter_by(type=material_type)
@@ -24672,7 +24969,7 @@ def get_material_details(name: str) -> str:
     Args:
         name: Име или част от името на материала.
     """
-    matches = _fuzzy_match(MaterialPrice.query.all(), lambda x: x.display_name, name, limit=1)
+    matches = _fuzzy_match(own_materials_query().all(), lambda x: x.display_name, name, limit=1)
     if not matches:
         return f"Не намерих материал с име '{name}'."
     material = matches[0]

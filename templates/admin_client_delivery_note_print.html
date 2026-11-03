@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     {% include 'partials/favicon.html' %}
-    <title>Стокова разписка № {{ note.id }}</title>
+    <title>{% if note.kind == 'consume' %}Протокол за изписване{% else %}Приемо-предавателен протокол{% endif %} № {{ note.id }}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@700&display=swap" rel="stylesheet">
@@ -52,19 +52,36 @@
 <div class="offer-sheet">
     <h1>ТРАФКОМ ООД</h1>
     <p class="offer-address">гр. Тетевен, ул Александър Стамболийски 36, trafcom@tafcombg.com, +359 886 762276</p>
-    <p class="offer-number">СТОКОВА РАЗПИСКА № {{ note.id }}</p>
-    {% if note.client %}<p class="offer-client">Клиент: {{ note.client.name }}</p>{{ legal_lines(note.client) }}{% endif %}
+    {% set consume = note.kind == 'consume' %}
+    {% set priced = note.items|selectattr('unit_price')|list %}
+    {% if consume %}
+    <p class="offer-number">ПРОТОКОЛ ЗА ИЗПИСВАНЕ № {{ note.id }}<br><span style="font-weight: 400; font-size: 0.95rem;">изписване на материал на клиента за производство</span></p>
+    {% if note.client %}<p class="offer-client">Собственик: {{ note.client.name }}</p>{{ legal_lines(note.client) }}{% endif %}
+    {% else %}
+    <p class="offer-number">ПРИЕМО-ПРЕДАВАТЕЛЕН ПРОТОКОЛ № {{ note.id }}<br><span style="font-weight: 400; font-size: 0.95rem;">връщане</span></p>
+    <p class="offer-client">Предал: ТРАФКОМ ООД</p>
+    <p class="offer-client">Приел: {{ note.client.name if note.client else '-' }}</p>{% if note.client %}{{ legal_lines(note.client) }}{% endif %}
+    {% endif %}
     {% if note.note_number %}<p class="offer-client">Фактура № / Наша реф.: {{ note.note_number }}</p>{% endif %}
-    {% if note.note_date %}<p class="offer-client">Дата на издаване: {{ note.note_date.strftime('%d.%m.%Y') }}</p>{% endif %}
+    {% if note.note_date %}<p class="offer-client">Дата: {{ note.note_date.strftime('%d.%m.%Y') }}</p>{% endif %}
 
     <table>
         <thead>
         <tr>
             <th>Наименование</th>
+            {% if consume %}
+            <th>Изразходвано</th>
+            <th>Остатък<br>(размери, кол.)</th>
+            <th>Отпадък</th>
+            <th>Бележка</th>
+            {% else %}
             <th>Описание</th>
             <th>Кол-во</th>
+            {% endif %}
+            {% if priced %}
             <th>Ед. цена<br>(EUR без ДДС)</th>
             <th>Обща цена<br>(EUR без ДДС)</th>
+            {% endif %}
         </tr>
         </thead>
         <tbody>
@@ -74,26 +91,47 @@
         {% set ns.total = ns.total + line_total %}
         <tr>
             <td>{{ item.description_snapshot }}</td>
+            {% if consume %}
+            <td class="text-center">{{ '%g'|format(item.quantity) }}</td>
+            <td class="text-center">
+                {%- if item.remnant_qty -%}
+                {% if item.remnant_width %}{{ '%g'|format(item.remnant_width) }} × {{ '%g'|format(item.remnant_height) }} мм, {% endif %}{{ '%g'|format(item.remnant_qty) }}
+                {%- else %}-{% endif -%}
+            </td>
+            <td class="text-center">{{ 'не' if item.remnant_qty else 'да' }}</td>
+            <td>{{ item.notes or '' }}</td>
+            {% else %}
             <td>{{ item.notes or '' }}</td>
             <td class="text-center">{{ '%g'|format(item.quantity) }}</td>
+            {% endif %}
+            {% if priced %}
             <td class="text-right">{{ '%.2f'|format(item.unit_price) if item.unit_price is not none else '' }}</td>
             <td class="text-right">{{ '%.2f'|format(line_total) if item.unit_price is not none else '' }}</td>
+            {% endif %}
         </tr>
         {% endfor %}
+        {% if priced %}
         <tr class="offer-total-row">
-            <td colspan="4" class="text-right">ОБЩО:</td>
+            <td colspan="{{ 6 if consume else 4 }}" class="text-right">ОБЩО:</td>
             <td class="text-right">{{ '%.2f'|format(ns.total) }} EUR</td>
         </tr>
+        {% endif %}
         </tbody>
     </table>
 
+    {% if priced %}
     <div class="offer-terms">
         <p>Всички цени са в EUR без включен ДДС</p>
     </div>
+    {% endif %}
 
     <div class="offer-signoff">
         <span>Дата: {{ (note.created_at|local).strftime('%d.%m.%Y') if note.created_at else '' }}</span>
         <span>Съставил: {{ note.created_by.username if note.created_by else '' }}</span>
+    </div>
+    <div class="offer-signoff" style="margin-top: 56px;">
+        <span>Предал: ……………………………</span>
+        <span>Приел: ……………………………</span>
     </div>
 </div>
 </body>

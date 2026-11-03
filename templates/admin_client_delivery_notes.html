@@ -32,7 +32,7 @@
     {% if current_user.is_admin %}
     <section class="admin-card" id="clientDeliveryNoteSection" data-dialog-section="+ Нова стокова разписка">
         <h3 data-dialog-title>Нова стокова разписка към клиент</h3>
-        <p class="section-subtitle">Изберете клиента и артикулите, които напускат склада - всеки ред намалява наличността на съответния материал, детайл или продукт. Могат да се избират само артикули, които вече са в каталога.</p>
+        <p class="section-subtitle">Изберете клиента и артикулите, които напускат склада - всеки ред намалява наличността на съответния материал, детайл или продукт. Могат да се избират само артикули, които вече са в каталога. При вид „Изписване за производство“ се предлагат само партидите на избрания клиент; върнатият остатък от лист става нова партида на клиента, без остатък редът е отпадък.</p>
 
         <form action="{{ url_for('create_client_delivery_note') }}" method="POST" id="clientDeliveryNoteForm" data-once>
             {% include 'partials/csrf_field.html' %}
@@ -46,6 +46,14 @@
                         <option value="">-- Без клиент --</option>
                         {% for c in clients %}
                         <option value="{{ c.id }}">{{ c.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="kind">Вид</label>
+                    <select id="kind" name="kind">
+                        {% for k, label in kinds.items() %}
+                        <option value="{{ k }}">{{ label }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -79,7 +87,8 @@
                             <option value="{{ m.id }}" data-price="" data-stock="{{ m.stock_quantity or 0 }}"
                                     data-name="{{ m.display_name }}" data-w="{{ m.sheet_width_mm if m.sheet_width_mm is not none else '' }}"
                                     data-h="{{ m.sheet_length_mm if m.sheet_length_mm is not none else '' }}" data-t="{{ m.thickness_mm if m.thickness_mm is not none else '' }}"
-                                    data-type="{{ m.type }}" data-id="{{ m.id }}" data-brand="{{ m.brand or '' }}">{{ format_material_option(m) }} (наличност: {{ '%g'|format(m.stock_quantity or 0) }})</option>
+                                    data-type="{{ m.type }}" data-id="{{ m.id }}" data-brand="{{ m.brand or '' }}"
+                                    data-owner="{{ m.owner_client_id or '' }}" data-unit="{{ material_price_unit(m.type) }}">{{ format_material_option(m) }} (наличност: {{ '%g'|format(m.stock_quantity or 0) }})</option>
                             {% endfor %}
                         </optgroup>
                         {% endfor %}
@@ -90,7 +99,7 @@
                     <select id="cdn_detail_select" data-create="{{ create_url('detail') }}">
                         <option value="">-- Изберете детайл --</option>
                         {% for d in details_data %}
-                        <option value="{{ d.id }}" data-price="{{ d.price if d.price is not none else '' }}" data-stock="{{ d.stock if d.stock is not none else 0 }}">{{ d.name }} (наличност: {{ '%g'|format(d.stock or 0) }})</option>
+                        <option value="{{ d.id }}" data-price="{{ d.price if d.price is not none else '' }}" data-stock="{{ d.stock if d.stock is not none else 0 }}" data-owner="{{ d.owner or '' }}">{{ d.name }} (наличност: {{ '%g'|format(d.stock or 0) }})</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -99,7 +108,7 @@
                     <select id="cdn_product_select" data-create="{{ create_url('product') }}">
                         <option value="">-- Изберете продукт --</option>
                         {% for p in products_data %}
-                        <option value="{{ p.id }}" data-price="{{ p.price if p.price is not none else '' }}" data-stock="{{ p.stock if p.stock is not none else 0 }}">{{ p.name }} (наличност: {{ '%g'|format(p.stock or 0) }})</option>
+                        <option value="{{ p.id }}" data-price="{{ p.price if p.price is not none else '' }}" data-stock="{{ p.stock if p.stock is not none else 0 }}" data-owner="{{ p.owner or '' }}">{{ p.name }} (наличност: {{ '%g'|format(p.stock or 0) }})</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -115,6 +124,18 @@
                     <label for="cdn_notes">Описание (по избор)</label>
                     <input type="text" id="cdn_notes" placeholder="напр. партида, забележка">
                 </div>
+                <div class="form-group qty-field" id="cdn_remnant_box" style="display: none;">
+                    <label for="cdn_remnant_qty">Остатък (кол.)</label>
+                    <input type="number" id="cdn_remnant_qty" min="0" step="0.01" placeholder="няма = отпадък">
+                </div>
+                <div class="form-group qty-field cdn-remnant-dims" style="display: none;">
+                    <label for="cdn_remnant_width">Остатък ширина (мм)</label>
+                    <input type="number" id="cdn_remnant_width" min="0" step="0.1">
+                </div>
+                <div class="form-group qty-field cdn-remnant-dims" style="display: none;">
+                    <label for="cdn_remnant_height">Остатък дължина (мм)</label>
+                    <input type="number" id="cdn_remnant_height" min="0" step="0.1">
+                </div>
                 <div class="form-group" style="flex: 0 0 auto;">
                     <button type="button" class="btn-secondary" id="cdnAddRowBtn" onclick="addClientDeliveryRow()" style="padding: 12px 20px;">+ Добави</button>
                 </div>
@@ -127,13 +148,14 @@
                         <th>Артикул</th>
                         <th>Тип</th>
                         <th class="text-center">Кол.</th>
+                        <th class="text-center">Остатък</th>
                         <th class="text-right">Ед. цена</th>
                         <th>Описание</th>
                         <th class="text-right">Действие</th>
                     </tr>
                     </thead>
                     <tbody id="cdnTableBody">
-                        <tr id="cdnEmptyRow"><td colspan="6" class="text-center no-data">Все още няма добавени артикули.</td></tr>
+                        <tr id="cdnEmptyRow"><td colspan="7" class="text-center no-data">Все още няма добавени артикули.</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -211,13 +233,15 @@
                 {% for note in notes %}
                 <tr>
                     <td>{{ (note.created_at|local).strftime('%d.%m.%Y %H:%M') }}</td>
-                    <td>{{ note.client.name if note.client else '-' }}</td>
+                    <td>{{ note.client.name if note.client else '-' }}
+                        {%- if note.kind == 'consume' %}<div style="font-size: 0.8rem; color: var(--text-muted);">{{ kinds[note.kind] }}</div>{% endif %}</td>
                     <td>{{ note.note_number or '-' }}</td>
                     <td>
                         {% for item in note.items %}
                         <div>
                             {{ item.description_snapshot }} &times; {{ item.quantity }}
                             {%- if item.unit_price %} @ {{ "%.2f"|format(item.unit_price) }} €{% endif %}
+                            {%- if item.remnant_qty %}, остатък {{ '%g'|format(item.remnant_qty) }}{% if item.remnant_width %} ({{ '%g'|format(item.remnant_width) }}×{{ '%g'|format(item.remnant_height) }}){% endif %}{% endif %}
                             {%- if item.notes %} - {{ item.notes }}{% endif %}
                         </div>
                         {% endfor %}
@@ -228,7 +252,7 @@
                                 data-dialog="clientDeliveryNoteSection-dialog" data-note-id="{{ note.id }}"
                                 data-action="{{ url_for('edit_client_delivery_note', note_id=note.id) }}"
                                 data-title="Редакция на стокова разписка №{{ note.id }}"
-                                data-values='{{ {"client_id": note.client_id or "", "note_number": note.note_number or "", "note_date": note.note_date.isoformat() if note.note_date else ""}|tojson|forceescape }}'>Редактирай</button>
+                                data-values='{{ {"client_id": note.client_id or "", "kind": note.kind, "note_number": note.note_number or "", "note_date": note.note_date.isoformat() if note.note_date else ""}|tojson|forceescape }}'>Редактирай</button>
                         {% endif %}
                         <a href="{{ url_for('admin_client_delivery_note_print', note_id=note.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Печат</a>
                         {% if current_user.is_admin %}
@@ -292,6 +316,7 @@
                 opt.textContent = data.client.name;
                 sel.appendChild(opt);
                 sel.value = data.client.id;
+                sel.dispatchEvent(new Event('change'));
                 closeQuickClientModal();
             } else {
                 errDiv.textContent = data.message || 'Грешка при създаване.';
@@ -331,11 +356,69 @@
             document.getElementById('detail_selector').style.display = this.value === 'detail' ? 'block' : 'none';
             document.getElementById('product_selector').style.display = this.value === 'product' ? 'block' : 'none';
             fillPriceFromSelection();
+            updateRemnantFields();
         });
     });
     ['cdn_material_select', 'cdn_detail_select', 'cdn_product_select'].forEach(function (id) {
         document.getElementById(id).addEventListener('change', fillPriceFromSelection);
     });
+    document.getElementById('cdn_material_select').addEventListener('change', updateRemnantFields);
+
+    // Вид "consume": only the chosen client's own lots/parts are offered and a
+    // material line may record a remnant (dimensions only for sheet lots).
+    const cdnForm = document.getElementById('clientDeliveryNoteForm');
+    function cdnKind() { return document.getElementById('kind').value; }
+    function updateRemnantFields() {
+        const type = document.querySelector('input[name="cdn_item_type"]:checked').value;
+        const on = cdnKind() === 'consume' && type === 'material';
+        document.getElementById('cdn_remnant_box').style.display = on ? 'block' : 'none';
+        const sel = document.getElementById('cdn_material_select');
+        const opt = sel.options[sel.selectedIndex];
+        const sheet = on && !!opt && opt.dataset.unit === 'm2';
+        document.querySelectorAll('.cdn-remnant-dims').forEach(function (el) { el.style.display = sheet ? 'block' : 'none'; });
+    }
+    function applyOwnerFilter() {
+        const consume = cdnKind() === 'consume';
+        const owner = document.getElementById('client_id').value;
+        ['cdn_material_select', 'cdn_detail_select', 'cdn_product_select'].forEach(function (id) {
+            const sel = document.getElementById(id);
+            Array.from(sel.options).forEach(function (o) {
+                if (!o.value) return;
+                const hide = consume && (!owner || o.dataset.owner !== owner);
+                o.hidden = hide;
+                o.disabled = hide;
+            });
+            const cur = sel.options[sel.selectedIndex];
+            if (cur && cur.hidden) {
+                sel.value = '';
+                sel.dispatchEvent(new Event('change'));
+            }
+        });
+        updateRemnantFields();
+    }
+    // Changing the kind, or the client of a consume note, clears the lines
+    // already added (they were picked for the old owner) - after a confirm.
+    const cdnParty = { kind: 'return', client: '' };
+    function onPartyChange(e) {
+        const kindNow = cdnKind();
+        const clientNow = document.getElementById('client_id').value;
+        const dlg = cdnForm.closest('dialog');
+        const matters = kindNow !== cdnParty.kind || (kindNow === 'consume' && clientNow !== cdnParty.client);
+        if (dlg && dlg.open && matters && cdnItems.length) {
+            if (!confirm('Добавените редове ще бъдат изчистени. Продължавате ли?')) {
+                e.target.value = e.target.id === 'kind' ? cdnParty.kind : cdnParty.client;
+                return;
+            }
+            cdnItems = [];
+            stopCdnRowEdit();
+            renderCdnTable();
+        }
+        cdnParty.kind = kindNow;
+        cdnParty.client = clientNow;
+        applyOwnerFilter();
+    }
+    document.getElementById('kind').addEventListener('change', onPartyChange);
+    document.getElementById('client_id').addEventListener('change', onPartyChange);
 
     function addClientDeliveryRow() {
         const type = document.querySelector('input[name="cdn_item_type"]:checked').value;
@@ -358,13 +441,26 @@
             qty: qty, unit_price: unitPrice,
             notes: document.getElementById('cdn_notes').value.trim() || null,
         };
+        const remnantQty = parseFloat(document.getElementById('cdn_remnant_qty').value);
+        if (type === 'material' && cdnKind() === 'consume' && remnantQty > 0) {
+            newRow.remnant_qty = remnantQty;
+            if (opt.dataset.unit === 'm2') {
+                const rw = parseFloat(document.getElementById('cdn_remnant_width').value);
+                const rh = parseFloat(document.getElementById('cdn_remnant_height').value);
+                if (!(rw > 0 && rh > 0)) { alert('Остатъкът от лист трябва да има ширина и дължина.'); return; }
+                newRow.remnant_width = rw;
+                newRow.remnant_height = rh;
+            }
+        }
         if (cdnEditingIndex !== null) {
             cdnItems[cdnEditingIndex] = newRow;
             stopCdnRowEdit();
         } else {
             cdnItems.push(newRow);
         }
-        document.getElementById('cdn_notes').value = '';
+        ['cdn_notes', 'cdn_remnant_qty', 'cdn_remnant_width', 'cdn_remnant_height'].forEach(function (id) {
+            document.getElementById(id).value = '';
+        });
         renderCdnTable();
     }
 
@@ -392,6 +488,9 @@
         document.getElementById('cdn_qty').value = item.qty;
         document.getElementById('cdn_price').value = item.unit_price != null ? item.unit_price : '';
         document.getElementById('cdn_notes').value = item.notes || '';
+        document.getElementById('cdn_remnant_qty').value = item.remnant_qty || '';
+        document.getElementById('cdn_remnant_width').value = item.remnant_width || '';
+        document.getElementById('cdn_remnant_height').value = item.remnant_height || '';
         cdnEditingIndex = index;
         document.getElementById('cdnAddRowBtn').textContent = 'Запази реда';
         document.getElementById('cdn_qty').focus();
@@ -404,9 +503,20 @@
         if (e.target.id !== 'clientDeliveryNoteSection-dialog') return;
         const noteId = e.detail.button.dataset.noteId;
         cdnItems = noteId ? JSON.parse(JSON.stringify(NOTE_ROWS[noteId] || [])) : [];
+        // kind and client are fixed once the note exists (the server ignores them on edit)
+        document.getElementById('kind').disabled = !!noteId;
+        document.getElementById('client_id').disabled = !!noteId;
+        cdnParty.kind = cdnKind();
+        cdnParty.client = document.getElementById('client_id').value;
+        applyOwnerFilter();
         stopCdnRowEdit();
         renderCdnTable();
     });
+
+    function remnantText(item) {
+        if (!item.remnant_qty) return '-';
+        return item.remnant_width ? item.remnant_qty + ' бр. ' + item.remnant_width + '×' + item.remnant_height : String(item.remnant_qty);
+    }
 
     const TYPE_LABELS = { material: 'Материал', detail: 'Детайл', product: 'Продукт' };
 
@@ -415,13 +525,14 @@
         body.innerHTML = '';
 
         if (cdnItems.length === 0) {
-            body.innerHTML = '<tr id="cdnEmptyRow"><td colspan="6" class="text-center no-data">Все още няма добавени артикули.</td></tr>';
+            body.innerHTML = '<tr id="cdnEmptyRow"><td colspan="7" class="text-center no-data">Все още няма добавени артикули.</td></tr>';
         } else {
             cdnItems.forEach(function (item, idx) {
                 const tr = document.createElement('tr');
                 tr.appendChild(cell(item.name));
                 tr.appendChild(cell(TYPE_LABELS[item.type]));
                 tr.appendChild(cell(item.qty, { className: 'text-center' }));
+                tr.appendChild(cell(remnantText(item), { className: 'text-center' }));
                 tr.appendChild(cell(item.unit_price != null ? item.unit_price.toFixed(2) + ' €' : '-', { className: 'text-right' }));
                 tr.appendChild(cell(item.notes || '-'));
 
@@ -456,9 +567,16 @@
             alert('Моля добавете поне един артикул към разписката.');
             return;
         }
+        const consume = cdnKind() === 'consume';
         document.getElementById('itemsJsonInput').value = JSON.stringify(
             cdnItems.map(function (c) {
-                return { type: c.type, target_id: c.target_id, qty: c.qty, unit_price: c.unit_price, notes: c.notes };
+                const row = { type: c.type, target_id: c.target_id, qty: c.qty, unit_price: c.unit_price, notes: c.notes };
+                if (consume && c.type === 'material' && c.remnant_qty) {
+                    row.remnant_qty = c.remnant_qty;
+                    row.remnant_width = c.remnant_width || null;
+                    row.remnant_height = c.remnant_height || null;
+                }
+                return row;
             })
         );
     });

@@ -36,6 +36,7 @@ INDEXES = (  # (table, columns)
     ('solis_reading_log', ('device_id', 'ts')),
     ('temperature_reading', ('sensor_id', 'ts')),
     ('convector_log', ('convector_id', 'ts')),
+    ('material_price', ('owner_client_id',)),
 )
 
 with app.app_context():

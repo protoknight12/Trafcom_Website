@@ -47,17 +47,29 @@
             </div>
         </div>
 
-        {% if material_groups %}
-        <div class="form-group" style="margin-top: 16px; max-width: 360px;">
-            <input type="text" id="materialSearchInput" placeholder="Търсене по име, марка, тип...">
+        <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-top: 16px;">
+            {% if material_groups %}
+            <div class="form-group" style="margin: 0; max-width: 360px; flex: 1 1 260px;">
+                <input type="text" id="materialSearchInput" placeholder="Търсене по име, марка, тип...">
+            </div>
+            {% endif %}
+            {#- Собственик: all / own / client:<id> - applied server-side by storage_materials(). #}
+            <select id="ownerFilter" aria-label="Собственик" style="flex: 0 1 220px;"
+                    onchange="location.href = '?owner=' + encodeURIComponent(this.value)">
+                <option value="all" {% if owner_filter == 'all' %}selected{% endif %}>Всички собственици</option>
+                <option value="own" {% if owner_filter == 'own' %}selected{% endif %}>Трафком</option>
+                {% for c in clients %}
+                <option value="client:{{ c.id }}" {% if owner_filter == 'client:' ~ c.id %}selected{% endif %}>{{ c.name }}</option>
+                {% endfor %}
+            </select>
         </div>
-        {% endif %}
 
         <div class="table-responsive" style="margin-top: 16px;">
             <table class="data-table">
                 <thead>
                 <tr>
                     <th>Материал</th>
+                    <th>Собственик</th>
                     <th>Тип</th>
                     <th class="text-center">Наличност</th>
                     <th class="text-right">Ед. цена</th>
@@ -80,16 +92,18 @@
                 {% endif %}
                 <tr data-search="{{ (format_material_option(material) ~ ' ' ~ material_type_label(material.type)) | lower }}" {% if row_bg %}style="background-color: {{ row_bg }};"{% endif %}>
                     <td><a href="{{ url_for('admin_material_history', material_id=material.id) }}">{{ format_material_option(material) }}</a></td>
+                    <td>{{ material.owner_client.name if material.owner_client_id and material.owner_client else 'Трафком' }}</td>
                     <td>{{ material_type_label(material.type) }}</td>
                     <td class="text-center">{{ material.stock_quantity|round(2) }}</td>
-                    <td class="text-right">{{ "%.2f"|format(material.cost_per_m2) }} €/{{ unit }}</td>
-                    <td class="text-right">{{ "%.2f €"|format(material.price_per_unit) if material.price_per_unit is not none else '—' }}</td>
+                    {#- A client's material is not ours: no price, no value. #}
+                    <td class="text-right">{{ '—' if material.owner_client_id else "%.2f"|format(material.cost_per_m2) ~ ' €/' ~ unit }}</td>
+                    <td class="text-right">{{ "%.2f €"|format(material.price_per_unit) if material.price_per_unit is not none and not material.owner_client_id else '—' }}</td>
                     {#- Total value = unit price x AVAILABLE quantity (not the raw
                     stock_quantity shown above) - sheet/other stock is a whole-sheet
                     count, not a running m² total, so the real €-value of what's on
                     hand is price x (count x one sheet's own area) - see
                     material_available_qty()/_material_available_qty() in app.py. #}
-                    <td class="text-right">{{ "%.2f"|format(material.cost_per_m2 * material_available_qty(material)) }} €</td>
+                    <td class="text-right">{{ '—' if material.owner_client_id else "%.2f"|format(material.cost_per_m2 * material_available_qty(material)) ~ ' €' }}</td>
                 </tr>
                 {% else %}
                 {#- Several price-lots of the same name/dims/type (see
@@ -102,28 +116,30 @@
                 {% set group_search = ns.search_parts|join(' ') ~ ' ' ~ material_type_label(lots[0].type) %}
                 <tr class="group-toggle-row" data-search="{{ group_search|lower }}" {% if group.row_bg %}style="background-color: {{ group.row_bg }};"{% endif %}>
                     <td><span class="toggle-chevron">▶</span>{{ group.label }}<span class="lot-count-badge">{{ lots|length }} партиди</span></td>
+                    <td>{{ lots[0].owner_client.name if lots[0].owner_client_id and lots[0].owner_client else 'Трафком' }}</td>
                     <td>{{ material_type_label(lots[0].type) }}</td>
                     <td class="text-center">{{ group.total_stock|round(2) }}</td>
-                    <td class="text-right">{{ "%.2f"|format(group.min_price) }}–{{ "%.2f"|format(group.max_price) }} €/{{ group.unit }}</td>
+                    <td class="text-right">{{ '—' if lots[0].owner_client_id else "%.2f"|format(group.min_price) ~ '–' ~ "%.2f"|format(group.max_price) ~ ' €/' ~ group.unit }}</td>
                     <td class="text-right">—</td>
-                    <td class="text-right">{{ "%.2f"|format(group.total_value) }} €</td>
+                    <td class="text-right">{{ '—' if lots[0].owner_client_id else "%.2f"|format(group.total_value) ~ ' €' }}</td>
                 </tr>
                 {% for lot in lots %}
                 <tr class="lot-row" data-group-lot hidden>
                     <td><a href="{{ url_for('admin_material_history', material_id=lot.id) }}">{{ format_material_option(lot) }}</a></td>
+                    <td>{{ lot.owner_client.name if lot.owner_client_id and lot.owner_client else 'Трафком' }}</td>
                     <td>{{ material_type_label(lot.type) }}</td>
                     <td class="text-center">{{ lot.stock_quantity|round(2) }}</td>
-                    <td class="text-right">{{ "%.2f"|format(lot.cost_per_m2) }} €/{{ unit }}</td>
-                    <td class="text-right">{{ "%.2f €"|format(lot.price_per_unit) if lot.price_per_unit is not none else '—' }}</td>
-                    <td class="text-right">{{ "%.2f"|format(lot.cost_per_m2 * material_available_qty(lot)) }} €</td>
+                    <td class="text-right">{{ '—' if lot.owner_client_id else "%.2f"|format(lot.cost_per_m2) ~ ' €/' ~ unit }}</td>
+                    <td class="text-right">{{ "%.2f €"|format(lot.price_per_unit) if lot.price_per_unit is not none and not lot.owner_client_id else '—' }}</td>
+                    <td class="text-right">{{ '—' if lot.owner_client_id else "%.2f"|format(lot.cost_per_m2 * material_available_qty(lot)) ~ ' €' }}</td>
                 </tr>
                 {% endfor %}
                 {% endif %}
                 {% else %}
-                <tr><td colspan="6" class="text-center no-data">Няма добавени материали.</td></tr>
+                <tr><td colspan="7" class="text-center no-data">Няма добавени материали.</td></tr>
                 {% endfor %}
                 {% if material_groups %}
-                <tr class="search-empty-row" hidden><td colspan="6" class="text-center no-data">Няма съвпадения.</td></tr>
+                <tr class="search-empty-row" hidden><td colspan="7" class="text-center no-data">Няма съвпадения.</td></tr>
                 {% endif %}
                 </tbody>
             </table>

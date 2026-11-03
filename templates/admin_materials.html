@@ -159,6 +159,11 @@
                 <option value="">Всички дебелини</option>
                 {% for t in thicknesses %}<option value="{{ t }}">{{ t|round(2) }} мм</option>{% endfor %}
             </select>
+            <select id="filterOwner" style="flex: 1 1 160px;">
+                <option value="">Всички собственици</option>
+                <option value="own">Трафком</option>
+                {% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+            </select>
             <select id="filterStatus" style="flex: 1 1 160px;">
                 <option value="">Всички наличности</option>
                 <option value="instock">Налични</option>
@@ -220,20 +225,21 @@
                 {% for material in group %}
                 {% set avail = material_available_qty(material) or 0 %}
                 <tr data-search="{{ ('#' ~ material.id ~ ' ' ~ material.display_name ~ ' ' ~ (material.brand or '') ~ ' ' ~ (material.notes or '') ~ ' ' ~ (material.erp_number or '') ~ ' ' ~ (material.code_number or '')) | lower }}"
-                    data-type="{{ material.type }}" data-brand="{{ (material.brand or '')|lower }}"
+                    data-type="{{ material.type }}" data-owner="{{ material.owner_client_id or 'own' }}" data-brand="{{ (material.brand or '')|lower }}"
                     data-thickness="{{ material.thickness_mm if material.thickness_mm else '' }}"
                     data-out="{{ 1 if (material.stock_quantity or 0) <= 0 else 0 }}"
                     data-low="{{ 1 if material.min_quantity is not none and (material.stock_quantity or 0) <= material.min_quantity else 0 }}"
-                    data-noprice="{{ 0 if material.cost_per_m2 else 1 }}"
+                    data-noprice="{{ 0 if material.cost_per_m2 or material.owner_client_id else 1 }}"
                     data-value="{{ '%.2f'|format((material.cost_per_m2 or 0) * avail) }}">
                     <td>#{{ material.id }}</td>
                     <td>
                         <strong>{{ material.display_name }}</strong>
+                        {% if material.owner_client_id %}<div class="text-muted" style="font-size:0.8rem;">Собственик: {{ material.owner_client.name if material.owner_client else '—' }}</div>{% endif %}
                         {% if material.display_name_en or material.display_name_de %}<div class="text-muted" style="font-size:0.8rem;">{{ [material.display_name_en, material.display_name_de]|select|join(' / ') }}</div>{% endif %}
                     </td>
                     <td>{{ material.brand or '—' }}</td>
                     <td>{{ material.notes or '—' }}</td>
-                    <td>{% if material.cost_per_m2 %}{{ '%.2f'|format(material.cost_per_m2) }}{% else %}<span style="color: var(--warning-text); white-space: nowrap;" title="Материалът още не е заприходен със стокова разписка">⚠ няма доставна цена</span>{% endif %}</td>
+                    <td>{% if material.cost_per_m2 %}{{ '%.2f'|format(material.cost_per_m2) }}{% elif material.owner_client_id %}—{% else %}<span style="color: var(--warning-text); white-space: nowrap;" title="Материалът още не е заприходен със стокова разписка">⚠ няма доставна цена</span>{% endif %}</td>
                     <td>{{ '%.2f'|format(material.price_per_unit) if material.price_per_unit is not none else '—' }}</td>
                     <td>{{ '%g'|format(material.cutting_speed_mm_per_min) if material.cutting_speed_mm_per_min is not none else '—' }}</td>
                     <td>{{ '%.2f'|format(60.0 / material.pierce_rate_per_min) if material.pierce_rate_per_min else '—' }}</td>
@@ -479,6 +485,7 @@
         const fBrand = document.getElementById('filterBrand');
         const fThick = document.getElementById('filterThickness');
         const fStatus = document.getElementById('filterStatus');
+        const fOwner = document.getElementById('filterOwner');
         const rows = Array.from(document.querySelectorAll('tr[data-type]'));
         const summaryBody = document.querySelector('#materialsSummary tbody');
 
@@ -487,6 +494,7 @@
             if (text && r.dataset.search.indexOf(text) === -1) return false;
             if (fType.value && r.dataset.type !== fType.value) return false;
             if (fBrand.value && r.dataset.brand !== fBrand.value) return false;
+            if (fOwner.value && r.dataset.owner !== fOwner.value) return false;
             if (fThick.value && parseFloat(r.dataset.thickness) !== parseFloat(fThick.value)) return false;
             switch (fStatus.value) {
                 case 'instock': return r.dataset.out === '0';
@@ -517,7 +525,8 @@
                 if (!ok) return;
                 const t = totals[r.dataset.type] = totals[r.dataset.type] || { n: 0, out: 0, low: 0, noprice: 0, value: 0 };
                 t.n++; t.out += +r.dataset.out; t.low += +r.dataset.low; t.noprice += +r.dataset.noprice;
-                t.value += parseFloat(r.dataset.value) || 0;
+                // Client-owned stock is not ours: it carries no value.
+                if (r.dataset.owner === 'own') t.value += parseFloat(r.dataset.value) || 0;
             });
             // Hide a whole type section when nothing in it survives the filter.
             document.querySelectorAll('[data-type-table]').forEach(function (box) {
@@ -538,9 +547,9 @@
 
         let timer = null;
         q.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(apply, 120); });
-        [fType, fBrand, fThick, fStatus].forEach(function (el) { el.addEventListener('change', apply); });
+        [fType, fBrand, fThick, fStatus, fOwner].forEach(function (el) { el.addEventListener('change', apply); });
         document.getElementById('filterReset').addEventListener('click', function () {
-            q.value = ''; fType.value = ''; fBrand.value = ''; fThick.value = ''; fStatus.value = '';
+            q.value = ''; fType.value = ''; fBrand.value = ''; fThick.value = ''; fStatus.value = ''; fOwner.value = '';
             apply();
         });
         apply();

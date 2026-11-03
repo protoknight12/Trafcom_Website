@@ -61,17 +61,33 @@
     {% if current_user.is_admin %}
     <section class="admin-card" id="deliveryNoteSection" data-dialog-section="+ Нова стокова разписка">
         <h3 data-dialog-title>Нова стокова разписка</h3>
-        <p class="section-subtitle">Въведете данните от фактурата/стоковата разписка на доставчика - всеки ред увеличава наличността на съответния материал, детайл или продукт.</p>
+        <p class="section-subtitle">Въведете данните от фактурата/стоковата разписка на доставчика - всеки ред увеличава наличността на съответния материал, детайл или продукт. При „Клиент (на съхранение)“ стоката остава собственост на клиента и не се оценява.</p>
 
         <form action="{{ url_for('create_delivery_note') }}" method="POST" id="deliveryNoteForm" data-once>
             {% include 'partials/csrf_field.html' %}
             <div class="add-item-row" style="margin-bottom: 16px;">
-                <div class="form-group">
+                <div class="form-group" style="flex: 0 0 auto;">
+                    <label>Приемане</label>
+                    <div class="item-type-toggle">
+                        <label><input type="radio" name="dn_party" value="supplier" checked> От доставчик</label>
+                        <label><input type="radio" name="dn_party" value="client"> От клиент (на съхранение)</label>
+                    </div>
+                </div>
+                <div class="form-group" id="dn_supplier_group">
                     <label for="supplier_id">Доставчик</label>
                     <select id="supplier_id" data-create="{{ create_url('supplier') }}" name="supplier_id">
                         <option value="">-- Без доставчик --</option>
                         {% for s in suppliers %}
                         <option value="{{ s.id }}">{{ s.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group" id="dn_client_group" style="display: none;">
+                    <label for="client_id">Клиент *</label>
+                    <select id="client_id" data-create="{{ create_url('client') }}" name="client_id">
+                        <option value="">-- Изберете клиент --</option>
+                        {% for c in clients %}
+                        <option value="{{ c.id }}">{{ c.name }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -142,7 +158,7 @@
                     <label for="dn_qty">Количество</label>
                     <input type="number" id="dn_qty" value="1" min="0.01" step="0.01">
                 </div>
-                <div class="form-group qty-field">
+                <div class="form-group qty-field" id="dn_price_group">
                     <label for="dn_price">Цена за бройка (€, по избор)</label>
                     <input type="number" id="dn_price" min="0" step="0.01">
                 </div>
@@ -359,7 +375,7 @@
                 <thead>
                 <tr>
                     <th>Дата на записване</th>
-                    <th>Доставчик</th>
+                    <th>Доставчик / клиент</th>
                     <th>Фактура №</th>
                     <th>Артикули</th>
                     <th></th>
@@ -369,7 +385,7 @@
                 {% for note in notes %}
                 <tr>
                     <td>{{ (note.created_at|local).strftime('%d.%m.%Y %H:%M') }}</td>
-                    <td>{{ note.supplier.name if note.supplier else '-' }}</td>
+                    <td>{% if note.client %}{{ note.client.name }} (съхранение){% else %}{{ note.supplier.name if note.supplier else '-' }}{% endif %}</td>
                     <td>{{ note.note_number or '-' }}</td>
                     <td>
                         {% for item in note.items %}
@@ -393,7 +409,7 @@
                                 data-dialog="deliveryNoteSection-dialog" data-note-id="{{ note.id }}"
                                 data-action="{{ url_for('edit_delivery_note', note_id=note.id) }}"
                                 data-title="Редакция на стокова разписка №{{ note.id }}"
-                                data-values='{{ {"supplier_id": note.supplier_id or "", "note_number": note.note_number or "", "note_date": note.note_date.isoformat() if note.note_date else ""}|tojson|forceescape }}'>Редактирай</button>
+                                data-values='{{ {"dn_party": "client" if note.client_id else "supplier", "supplier_id": note.supplier_id or "", "client_id": note.client_id or "", "note_number": note.note_number or "", "note_date": note.note_date.isoformat() if note.note_date else ""}|tojson|forceescape }}'>Редактирай</button>
                         {% endif %}
                         <a href="{{ url_for('admin_delivery_note_print', note_id=note.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Печат</a>
                         {% if current_user.is_admin %}
@@ -425,6 +441,23 @@
     const PRODUCTS = {{ products_data|tojson }};
     let dnItems = [];
     let dnProductComponents = [];
+
+    // Receipt party: supplier (priced purchase) or client (their property, no price).
+    // Only the chosen party's select keeps a value, so exactly one id is posted.
+    function dnIsClientParty() {
+        return document.querySelector('input[name="dn_party"]:checked').value === 'client';
+    }
+    function applyDnParty() {
+        const isClient = dnIsClientParty();
+        document.getElementById('dn_supplier_group').style.display = isClient ? 'none' : '';
+        document.getElementById('dn_client_group').style.display = isClient ? '' : 'none';
+        document.getElementById(isClient ? 'supplier_id' : 'client_id').value = '';
+        document.getElementById('dn_price_group').style.display = isClient ? 'none' : '';
+        if (isClient) document.getElementById('dn_price').value = '';
+    }
+    document.querySelectorAll('input[name="dn_party"]').forEach(function (radio) {
+        radio.addEventListener('change', applyDnParty);
+    });
 
     function addDnProductComponent() {
         const sel = document.getElementById('dn_product_detail_id');
@@ -764,7 +797,7 @@
         document.getElementById('dn_height').value = item && item.height != null ? item.height : '';
         document.getElementById('dn_thickness').value = item && item.thickness != null ? item.thickness : '';
         document.getElementById('dn_brand').value = item && item.brand ? item.brand : '';
-        document.getElementById('dn_price').value = item && item.price != null ? item.price : '';
+        document.getElementById('dn_price').value = item && item.price != null && !dnIsClientParty() ? item.price : '';
         if (type === 'detail') {
             document.getElementById('dn_detail_material_id').value = item && item.material_key ? item.material_key : '';
         }
@@ -798,12 +831,13 @@
             document.getElementById('detail_material_row').style.display = radio.value === 'detail' ? 'flex' : 'none';
         }
     });
+    applyDnParty();
     fillParamsFromSelection();
 
     function addDeliveryRow() {
         const type = document.querySelector('input[name="dn_item_type"]:checked').value;
         const qty = parseFloat(document.getElementById('dn_qty').value);
-        const priceRaw = document.getElementById('dn_price').value;
+        const priceRaw = dnIsClientParty() ? '' : document.getElementById('dn_price').value;
         const unitPrice = priceRaw === '' ? null : parseFloat(priceRaw);
 
         if (!qty || qty <= 0) {
@@ -828,7 +862,7 @@
         if (type === 'detail') {
             materialKey = document.getElementById('dn_detail_material_id').value;
             if (!materialKey) { alert('Моля изберете материал за детайла.'); return; }
-            if (isNewItem && unitPrice === null) {
+            if (isNewItem && unitPrice === null && !dnIsClientParty()) {
                 alert('Моля въведете ед. цена за новия детайл - иначе ще влезе в каталога с цена 0.00 €.');
                 return;
             }
@@ -931,6 +965,13 @@
         if (e.target.id !== 'deliveryNoteSection-dialog') return;
         const noteId = e.detail.button.dataset.noteId;
         dnItems = noteId ? JSON.parse(JSON.stringify(NOTE_ROWS[noteId] || [])) : [];
+        // Editing: the side (supplier / client) is fixed; a client receipt also keeps its
+        // client, a supplier receipt may still change supplier.
+        const wasClient = !!(noteId && e.detail.values && e.detail.values.dn_party === 'client');
+        document.querySelectorAll('input[name="dn_party"]').forEach(function (r) { r.disabled = !!noteId; });
+        document.getElementById('client_id').disabled = !!noteId;
+        document.getElementById('supplier_id').disabled = wasClient;
+        applyDnParty();
         stopDnRowEdit();
         renderDnTable();
     });
