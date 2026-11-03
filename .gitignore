@@ -55,3 +55,11 @@ venv/
 *.dump
 .env.*
 !.env.example
+
+# Claude Code local setup (hooks, skills, agents, MCP) - internal procedures, not part of the public site repo
+.claude/settings.json
+.claude/settings.local.json
+.claude/hooks/
+.claude/skills/
+.claude/agents/
+.mcp.json
