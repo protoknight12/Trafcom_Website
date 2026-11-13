@@ -141,3 +141,31 @@ def test_create_order_for_owner_freezes_stored_price(setup):
                                   'cart_json': json.dumps([{'type': 'detail', 'id': d.id, 'qty': 1}])})
     item = OrderItem.query.one()
     assert item.unit_price == d.total_price == 110
+
+
+def test_breakdown_shows_owner_rate(setup):
+    with flask_app.app_context():
+        d = db.session.get(Detail, setup['detail'].id)
+        assert d.material_price_breakdown == '1.000 м² × 100.00 €/м²'
+        d.owner_client_id = setup['a'].id
+        db.session.commit()
+        db.session.refresh(d)
+        assert d.material_price_breakdown == '1.000 м² × 110.00 €/м², +10% на клиента'
+        d.owner_client_id = setup['b'].id
+        db.session.commit()
+        db.session.refresh(d)
+        assert d.material_price_breakdown == '1.000 м² × 90.00 €/м², -10% на клиента'
+
+
+def test_data_step_reprices_existing_owned_details(setup):
+    import runpy
+    with flask_app.app_context():
+        d = db.session.get(Detail, setup['detail'].id)
+        d.owner_client_id = setup['a'].id          # owned before the rule: price still the plain 100
+        manual = Detail(name='Ръчна', material_key='steel', width=0, height=0, total_length=0, pierce_count=0, calculated_price=7, owner_client_id=setup['a'].id)
+        db.session.add(manual)
+        db.session.commit()
+    runpy.run_module('migration.data_reprice_owned_details', run_name='__main__')
+    with flask_app.app_context():
+        assert db.session.get(Detail, setup['detail'].id).calculated_price == 110.0
+        assert Detail.query.filter_by(name='Ръчна').one().calculated_price == 7

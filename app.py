@@ -848,12 +848,20 @@ class Detail(db.Model):
             return None
         width, height = self.effective_width, self.effective_height
         unit = material_price_unit(self.material.type)
+        rate = self.material.cost_per_m2
+        suffix = ''
+        owner = self.owner_client
+        if owner and owner.material_adjustment_percent:
+            # the owner's Материали terms are in calculated_price, so the rate shown is the adjusted one
+            rate = _apply_adjustment(rate, owner.material_adjustment_type, owner.material_adjustment_percent)
+            sign = '-' if owner.material_adjustment_type == 'discount' else '+'
+            suffix = f", {sign}{owner.material_adjustment_percent:g}% на клиента"
         if unit == 'm':
-            return f"{height:.0f} мм × {self.material.cost_per_m2:.2f} €/м"
+            return f"{height:.0f} мм × {rate:.2f} €/м{suffix}"
         if unit == 'pcs':
-            return f"1 бр × {self.material.cost_per_m2:.2f} €/бр"
+            return f"1 бр × {rate:.2f} €/бр{suffix}"
         area_m2 = (width * height) / 1_000_000
-        return f"{area_m2:.3f} м² × {self.material.cost_per_m2:.2f} €/м²"
+        return f"{area_m2:.3f} м² × {rate:.2f} €/м²{suffix}"
 
 
 class DetailDxfFile(db.Model):
