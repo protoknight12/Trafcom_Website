@@ -272,6 +272,25 @@
     }
     document.getElementById('detail_file').addEventListener('change', applyDetailManualPriceVisibility);
     applyDetailManualPriceVisibility();
+
+    // A private detail may be cut from its owner's stored lot: show only our lots (data-owner="")
+    // and the chosen owner's; material_picker.js skips hidden options.
+    function applyDetailMaterialOwner() {
+        const owner = document.getElementById('detail_owner_client_id').value;
+        const select = document.getElementById('detail_material');
+        Array.prototype.forEach.call(select.options, function (o) {
+            const show = !o.dataset.owner || o.dataset.owner === owner;
+            o.hidden = !show;
+            o.disabled = !show;
+        });
+        if (select.selectedIndex < 0 || select.options[select.selectedIndex].disabled) {
+            const first = Array.prototype.find.call(select.options, function (o) { return !o.disabled; });
+            select.value = first ? first.value : '';
+        }
+    }
+    document.getElementById('detail_owner_client_id').addEventListener('change', applyDetailMaterialOwner);
+    document.getElementById('detail_material').form.addEventListener('reset', function () { setTimeout(applyDetailMaterialOwner, 0); });
+    applyDetailMaterialOwner();
 </script>
 
 <script>

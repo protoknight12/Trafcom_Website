@@ -75,7 +75,7 @@
                     plain.push({ kind: 'plain', opt: opt });
                     return;
                 }
-                const key = [opt.dataset.name, opt.dataset.w, opt.dataset.h, opt.dataset.t, opt.dataset.type].join('|');
+                const key = [opt.dataset.name, opt.dataset.w, opt.dataset.h, opt.dataset.t, opt.dataset.type, opt.dataset.owner].join('|');
                 let group = groupIndex[key];
                 if (!group) {
                     group = { kind: 'group', name: opt.dataset.name, w: opt.dataset.w, h: opt.dataset.h, t: opt.dataset.t, type: opt.dataset.type, opts: [] };

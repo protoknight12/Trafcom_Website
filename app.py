@@ -833,8 +833,17 @@ class Detail(db.Model):
         deburring, ...) attached to this detail - see Operation. What Product
         pricing (calculate_product_pricing) and the catalog listing actually
         charge for a detail, as opposed to calculated_price which is frozen
-        to just the original cut."""
+        to just the original cut. A detail cut from its owner's own stored
+        lot (client_material) is only its Operations times the owner's
+        own-material surcharge - same rule as the order-time checkbox."""
+        if self.client_material:
+            return round(sum(op.cost for op in self.operations) * _own_material_factor(self.owner_client), 2)
         return round(self.calculated_price + sum(op.cost for op in self.operations), 2)
+
+    @property
+    def client_material(self):
+        """True when the detail is cut from its owner's own stored lot (MaterialPrice.owner_client_id set)."""
+        return bool(self.material and self.material.owner_client_id)
 
     @property
     def material_price_breakdown(self):
@@ -846,6 +855,9 @@ class Detail(db.Model):
         itself."""
         if not self.material:
             return None
+        if self.client_material:
+            p = (self.owner_client.own_material_surcharge_percent or 0) if self.owner_client else 0
+            return 'материал на клиента' + (f', +{p:g}% върху операциите' if p else '')
         width, height = self.effective_width, self.effective_height
         unit = material_price_unit(self.material.type)
         rate = self.material.cost_per_m2
@@ -4931,6 +4943,8 @@ def _material_cost(width, height, material, client=None):
     _detail_material_price()). A frozen list price can't be decomposed back
     into a material portion per client, so those are priced at write time.
     """
+    if material.owner_client_id:
+        return 0.0   # the client's own stored lot - we charge nothing for the material
     unit = material_price_unit(material.type)
     if unit == 'm':
         cost = (height / 1000) * material.cost_per_m2
@@ -5417,6 +5431,14 @@ def own_materials_query():
     instead of MaterialPrice.query, so a client's stored lot is never offered
     as our material."""
     return MaterialPrice.query.filter(MaterialPrice.owner_client_id.is_(None))
+
+
+def detail_materials_query(owner_client_id):
+    """Materials a Detail may be cut from: our lots, plus the lots stored by the detail's owner (none for a public detail)."""
+    if not owner_client_id:
+        return own_materials_query()
+    return MaterialPrice.query.filter(db.or_(MaterialPrice.owner_client_id.is_(None),
+                                             MaterialPrice.owner_client_id == owner_client_id))
 
 
 # Timestamps are stored as naive UTC (datetime.utcnow); people read local time. Convert only on display - never what is stored.
@@ -10260,7 +10282,9 @@ def admin_details():
     if not current_user.is_admin:
         flash('Нямате достъп до тази страница.')
         return redirect(url_for('dashboard'))
-    materials = own_materials_query().order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    # our lots + every client's stored lot: the add dialog hides the ones that do not belong to the chosen owner
+    # (data-owner, see admin_details.html); admin_add_detail() re-checks with detail_materials_query().
+    materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     details = (Detail.query.order_by(Detail.name)
                .options(db.joinedload(Detail.material), db.joinedload(Detail.owner_client),
                         db.selectinload(Detail.operations).joinedload(Operation.service)).all())
@@ -10280,7 +10304,9 @@ def admin_products():
     products = (Product.query.order_by(Product.name)
                 .options(db.joinedload(Product.owner_client), db.selectinload(Product.extra_costs),
                          db.selectinload(Product.product_details).joinedload(ProductDetail.detail)
-                         .selectinload(Detail.operations).joinedload(Operation.service)).all())
+                         .selectinload(Detail.operations).joinedload(Operation.service),
+                         db.selectinload(Product.product_details).joinedload(ProductDetail.detail)
+                         .joinedload(Detail.material)).all())
     product_pricing = {p.id: calculate_product_pricing(p) for p in products}
     clients = Client.query.order_by(Client.name).all()
     return render_template('admin_products.html', products=products, product_pricing=product_pricing,
@@ -11507,7 +11533,8 @@ def admin_client_delivery_notes():
              .options(db.joinedload(ClientDeliveryNote.client), db.selectinload(ClientDeliveryNote.items)).all())
     materials = MaterialPrice.query.order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     details = (Detail.query.order_by(Detail.name)
-               .options(db.selectinload(Detail.operations).joinedload(Operation.service)).all())
+               .options(db.selectinload(Detail.operations).joinedload(Operation.service),
+                        db.joinedload(Detail.material)).all())
     products = Product.query.order_by(Product.name).all()
     # `owner` (client id or None) lets the form offer only the client's own rows on a 'consume' note;
     # `unit` tells it whether a remnant needs dimensions (sheet lots, 'm2').
@@ -12813,7 +12840,8 @@ def admin_add_detail():
         flash(f'ERP № {erp_number} вече се използва от {conflict}.', 'danger')
         return redirect(url_for('admin_details'))
 
-    if not own_materials_query().filter_by(key=material_key).first():
+    material_row = detail_materials_query(owner_client_id).filter_by(key=material_key).first()
+    if not material_row:
         flash('Невалиден избор на материал.', 'danger')
         return redirect(url_for('admin_details'))
 
@@ -12847,6 +12875,9 @@ def admin_add_detail():
             return redirect(url_for('admin_details'))
         if manual_price < 0:
             flash('Цената не може да бъде отрицателна.', 'danger')
+            return redirect(url_for('admin_details'))
+        if material_row.owner_client_id and manual_price > 0:
+            flash('Детайл от материал на клиента няма ръчна цена - качете DXF или добавете операции.', 'danger')
             return redirect(url_for('admin_details'))
 
     pdf_file = request.files.get('pdf_file')
@@ -12952,7 +12983,7 @@ def detail_dxf_dashboard(detail_id):
         return redirect(url_for('dashboard'))
     files = DetailDxfFile.query.filter_by(detail_id=detail_id).order_by(DetailDxfFile.uploaded_at.desc()).all()
     services = allowed_only('services', Service.query.order_by(Service.name).all())
-    materials = own_materials_query().order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    materials = detail_materials_query(detail.owner_client_id).order_by(MaterialPrice.type, MaterialPrice.display_name).all()
     # Plain dicts for the client-side pending-operations cart (see
     # detail_dxf_dashboard.html) to compute a live running total without a
     # round-trip per row - same convention as order_create()'s products_data.
@@ -12980,7 +13011,7 @@ def admin_update_detail_material(detail_id):
 
     detail = Detail.query.get_or_404(detail_id)
     material_key = request.form.get('material', '')
-    material = own_materials_query().filter_by(key=material_key).first()
+    material = detail_materials_query(detail.owner_client_id).filter_by(key=material_key).first()
     if not material:
         flash('Невалиден избор на материал.', 'danger')
         return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
@@ -13457,6 +13488,9 @@ def admin_update_detail_owner(detail_id):
     client_id = int(client_id_raw) if client_id_raw.isdigit() else None
     if client_id and not db.session.get(Client, client_id):
         flash('Невалиден клиент.', 'danger')
+        return redirect(url_for('admin_details'))
+    if detail.client_material and client_id != detail.material.owner_client_id:
+        flash(f'Детайлът ползва материал на клиента {detail.material.owner_client.name} - първо сменете материала.', 'danger')
         return redirect(url_for('admin_details'))
 
     old_owner = detail.owner_client.name if detail.owner_client else '(публичен)'
@@ -14284,7 +14318,10 @@ def admin_production_orders():
     JSON for the wizard's client-side math - same *_data-as-JSON convention
     as admin_delivery_notes().
     """
-    details = Detail.query.order_by(Detail.name).options(db.joinedload(Detail.material)).all()
+    # a client-material detail is cut from the client's own lot and written off with a "Протокол за изписване",
+    # never a production job on our stock (create_production_order() refuses a client lot too)
+    details = [d for d in Detail.query.order_by(Detail.name).options(db.joinedload(Detail.material)).all()
+               if not d.client_material]
     # every price lot once, cheapest first; each detail picks its own lots out of this list below
     all_lots = own_materials_query().order_by(MaterialPrice.cost_per_m2).all()
     details_data = [{
@@ -24462,10 +24499,12 @@ def _offer_picker_context():
     products = [_offer_product_json(p, clients) for p in Product.query.order_by(Product.name).options(
         db.selectinload(Product.extra_costs),
         db.selectinload(Product.product_details).joinedload(ProductDetail.detail)
-        .selectinload(Detail.operations).joinedload(Operation.service)).all()]
+        .selectinload(Detail.operations).joinedload(Operation.service),
+        db.selectinload(Product.product_details).joinedload(ProductDetail.detail)
+        .joinedload(Detail.material)).all()]
     details = [{'id': d.id, 'name': d.name, 'price': d.total_price, 'owner_client_id': d.owner_client_id}
                for d in Detail.query.order_by(Detail.name).options(
-        db.selectinload(Detail.operations).joinedload(Operation.service)).all()]
+        db.selectinload(Detail.operations).joinedload(Operation.service), db.joinedload(Detail.material)).all()]
     client_pricing = {
         c.id: {'detail_type': c.detail_adjustment_type, 'detail_percent': c.detail_adjustment_percent,
                'product_type': c.product_adjustment_type, 'product_percent': c.product_adjustment_percent}
@@ -24960,8 +24999,8 @@ def most_expensive_items(limit: int = 5) -> str:
     if current_user.is_staff:   # cost_per_m2 е доставната цена - клиентът не я вижда, а и подредбата по нея би я издала
         for m in own_materials_query().order_by(MaterialPrice.cost_per_m2.desc()).limit(limit):
             results.append(f'Материал: {format_material_option(m)} - {m.cost_per_m2:g} €/м² - наличност: {m.stock_quantity:g}')
-    for d in sorted(_chat_catalog(Detail), key=lambda x: x.calculated_price or 0, reverse=True)[:limit]:
-        results.append(f'Детайл: {d.name} - {d.calculated_price:g} € - наличност: {d.stock_quantity:g} бр.')
+    for d in sorted(_chat_catalog(Detail), key=lambda x: x.total_price or 0, reverse=True)[:limit]:
+        results.append(f'Детайл: {d.name} - {d.total_price:g} € - наличност: {d.stock_quantity:g} бр.')
     if not results:
         return 'Няма данни в каталога.'
     return '\n'.join(results)

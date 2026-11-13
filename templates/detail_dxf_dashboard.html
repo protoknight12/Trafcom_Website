@@ -194,7 +194,7 @@
                     {% for type_key, group in materials|groupby('type') %}
                     <optgroup label="{{ material_type_label(type_key) }}">
                         {% for material in group %}
-                        <option value="{{ material.key }}" data-type="{{ material.type }}"
+                        <option value="{{ material.key }}" data-owner="{{ material.owner_client_id or '' }}" data-type="{{ material.type }}"
                                 data-thickness="{{ material.thickness_mm if material.thickness_mm is not none else '' }}"
                                 {% if material.key == detail.material_key %}selected{% endif %}>{{ format_material_option(material) }}</option>
                         {% endfor %}
@@ -457,8 +457,17 @@
                     </td>
                 </tr>
                 {% endif %}
+                {% set client_pct = (detail.owner_client.own_material_surcharge_percent or 0) if (detail.client_material and detail.owner_client) else 0 %}
+                {% if client_pct %}
                 <tr>
-                    <td colspan="3" class="text-right"><strong>Обща цена (материал + операции):</strong></td>
+                    <td colspan="3" class="text-right"><strong>Надценка „материал на клиента“ (+{{ '%g'|format(client_pct) }}%):</strong></td>
+                    <td colspan="2">
+                        <strong>{{ "%.2f"|format(detail.total_price - detail.operations|sum(attribute='cost')) }} €</strong>
+                    </td>
+                </tr>
+                {% endif %}
+                <tr>
+                    <td colspan="3" class="text-right"><strong>{{ 'Обща цена (операции × надценка)' if client_pct else 'Обща цена (материал + операции)' }}:</strong></td>
                     <td colspan="2">
                         <strong>{{ "%.2f"|format(detail.total_price) }} €</strong>
                     </td>
@@ -479,6 +488,17 @@
     <script>
         const OP_SERVICES = {{ services_data|tojson }};
         const OP_BASE_TOTAL = {{ detail.total_price }};
+        // "Материал на клиента": the saved total is (operations) x (1 + owner's surcharge), so the preview
+        // multiplies the pending operations the same way (see Detail.total_price).
+        const CLIENT_MATERIAL = {{ 'true' if detail.client_material else 'false' }};
+        const OWN_FACTOR = {{ (1 + ((detail.owner_client.own_material_surcharge_percent or 0) / 100)) if (detail.client_material and detail.owner_client) else 1 }};
+        const OPS_SUM = {{ detail.operations|sum(attribute='cost') }};
+        // Same rounding as Python's round(x, 2) - copied from order_create.html.
+        function round2(x) {
+            let cents = Math.round(Number(x.toFixed(2)) * 100);
+            if (Number.isInteger(x * 8) && (x * 8) % 2 !== 0 && cents % 2 !== 0) cents -= Math.sign(x);
+            return cents / 100;
+        }
         const OP_DEFAULT_LENGTH_MM = {{ detail.total_length if detail.total_length else 'null' }};
         const OP_PIERCE_COUNT = {{ detail.pierce_count if detail.pierce_count else 0 }};
         const OP_CUTTING_SPEED_MM_PER_MIN = {{ detail.material.cutting_speed_mm_per_min if detail.material and detail.material.cutting_speed_mm_per_min else 'null' }};
@@ -586,7 +606,8 @@
             }
 
             document.getElementById('saveOperationsBtn').disabled = pendingOps.length === 0;
-            document.getElementById('opCurrentTotal').textContent = (OP_BASE_TOTAL + pendingTotal).toFixed(2) + ' €';
+            document.getElementById('opCurrentTotal').textContent =
+                (CLIENT_MATERIAL ? round2((OPS_SUM + pendingTotal) * OWN_FACTOR) : OP_BASE_TOTAL + pendingTotal).toFixed(2) + ' €';
         }
 
         document.getElementById('addOperationsForm').addEventListener('submit', function () {
