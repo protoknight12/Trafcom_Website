@@ -506,7 +506,10 @@
         if (d.price_own !== undefined) return ownMaterial ? d.price_own : d.price;
         const cp = selectedClientPricing();
         const base = ownMaterial ? round2(d.ops_total * ownMaterialFactor()) : d.price;
-        return cp ? round2(applyClientAdjustment(base, cp.detail_type, cp.detail_percent)) : base;
+        // The owner of a private detail pays its stored price: it already carries his Материали terms.
+        const sel = document.getElementById('client_id');
+        const isOwner = d.owner_client_id != null && sel && parseInt(sel.value, 10) === d.owner_client_id;
+        return cp && !isOwner ? round2(applyClientAdjustment(base, cp.detail_type, cp.detail_percent)) : base;
     }
 
     // A Product's sell price - mirrors calculate_product_pricing(). Same

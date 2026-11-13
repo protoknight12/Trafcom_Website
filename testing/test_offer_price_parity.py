@@ -239,7 +239,7 @@ const out = [];
 for (const cid of [''].concat(CIDS)) {
     document.getElementById('client_id').value = String(cid);
     PRODUCTS.forEach(function (p) { out.push(['product', cid, p.id, productAdjustedPrice(p).toFixed(2)]); });
-    DETAILS.forEach(function (d) { out.push(['detail', cid, d.id, detailAdjustedPrice(d.price).toFixed(2)]); });
+    DETAILS.forEach(function (d) { out.push(['detail', cid, d.id, detailAdjustedPrice(d).toFixed(2)]); });
 }
 console.log(JSON.stringify(out));
 """.replace('CIDS', json.dumps(client_ids))
@@ -356,7 +356,7 @@ def test_prefilled_price_is_what_create_order_freezes(browser, catalog):
 document.getElementById('client_id').value = '{cid}';
 const p = PRODUCTS.find(function (x) {{ return x.id === {pid}; }});
 const d = DETAILS.find(function (x) {{ return x.id === {did}; }});
-console.log(JSON.stringify([productAdjustedPrice(p).toFixed(2), detailAdjustedPrice(d.price).toFixed(2)]));
+console.log(JSON.stringify([productAdjustedPrice(p).toFixed(2), detailAdjustedPrice(d).toFixed(2)]));
 """)
     browser.post('/admin/offers/new', data={'client_id': str(cid), 'items_json': _items_json([
         {'type': 'product', 'name': 'QA P5', 'product_id': pid, 'quantity': 1, 'unit_price': prices[0]},

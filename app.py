@@ -4816,9 +4816,11 @@ def detail_price_for(detail, client, own_material=False):
     """A Detail's total_price adjusted for one client's "Детайли"
     discount/markup - what a linked client actually sees/pays for a
     standalone catalog Detail (order_create.html, DXF-upload-adjacent
-    displays). None/unlinked client -> unchanged list price."""
+    displays). None/unlinked client -> unchanged list price. The owner
+    of a private Detail pays its stored price as is: it already carries his
+    Материали terms (calculate_material_price()), so no Детайли on top."""
     base = _detail_base_price(detail, client, own_material)
-    if not client:
+    if not client or detail.owner_client_id == client.id:
         return base
     return round(_apply_adjustment(base, client.detail_adjustment_type, client.detail_adjustment_percent), 2)
 
@@ -4915,9 +4917,11 @@ def _material_cost(width, height, material, client=None):
     real area, same reasoning as diameter * length for rods/pipes). Sheets
     are the only type where cost_per_m2 is genuinely an area rate.
 
-    `client`, when given, applies its "Материали" discount/markup - only
-    meaningful here (the live calculator); a Detail/Product's already-frozen
-    list price can't be decomposed back into a material portion per client.
+    `client`, when given, applies its "Материали" discount/markup: the live
+    calculator passes the viewer, and a Detail owned by a client stores its
+    material price with the owner's terms (calculate_material_price() /
+    _detail_material_price()). A frozen list price can't be decomposed back
+    into a material portion per client, so those are priced at write time.
     """
     unit = material_price_unit(material.type)
     if unit == 'm':
@@ -5065,7 +5069,7 @@ def calculate_cnc_price(width, height, total_length, pierce_count, material_key,
     return round(total_calculated_euro, 2)
 
 
-def calculate_material_price(width, height, material_key):
+def calculate_material_price(width, height, material_key, client=None):
     """
     Material-only price for a Detail's base cut: just raw-stock cost (see
     _material_cost) - no BASE_SETUP_FEE, no cutting cost. A Detail's cutting
@@ -5076,11 +5080,23 @@ def calculate_material_price(width, height, material_key):
     only; the DxfFile/personal-upload calculator keeps using
     calculate_cnc_price()/calculate_cnc_price_multi_service(), which still
     charge BASE_SETUP_FEE + cutting time.
+
+    `client` = the Detail's owner: his Материали discount/markup is baked
+    into the stored price (None = public part, plain delivery price).
     """
     material = MaterialPrice.query.filter_by(key=material_key).first()
     if not material:
         return 0.0
-    return round(_material_cost(width, height, material), 2)
+    return round(_material_cost(width, height, material, client), 2)
+
+
+def _detail_material_price(detail):
+    """Material price of an existing Detail with its owner's Материали terms
+    (plain price when public). Width/height unset -> price left as is."""
+    if detail.width is None or detail.height is None:
+        return detail.calculated_price
+    return calculate_material_price(detail.effective_width, detail.effective_height,
+                                    detail.material_key, detail.owner_client)
 
 
 def calculate_cnc_price_multi_service(width, height, total_length, pierce_count, material_key, service_ids, client=None,
@@ -12854,7 +12870,8 @@ def admin_add_detail():
                 os.remove(stored_path)
                 return redirect(url_for('admin_details'))
 
-            price = calculate_material_price(width, height, material_key)
+            price = calculate_material_price(width, height, material_key,
+                                             db.session.get(Client, owner_client_id) if owner_client_id else None)
             new_detail = Detail(
                 name=name, material_key=material_key, width=width, height=height,
                 total_length=total_length, pierce_count=pierce_count,
@@ -12983,7 +13000,7 @@ def admin_update_detail_material(detail_id):
     detail.thickness_mm = thickness
     detail.extra_width_mm = extra_width
     detail.extra_height_mm = extra_height
-    detail.calculated_price = calculate_material_price(width + (extra_width or 0), height + (extra_height or 0), material_key)
+    detail.calculated_price = _detail_material_price(detail)
     log_action(describe_changes(f'детайл "{detail.name}"', detail, {
         'material_key': 'материал', 'width': 'ширина мм', 'height': 'височина мм',
         'thickness_mm': 'дебелина мм', 'extra_width_mm': 'доп. ширина мм',
@@ -13049,7 +13066,7 @@ def upload_detail_dxf(detail_id):
             detail.total_length = total_length
             detail.pierce_count = pierce_count
             detail.geometry_json = json.dumps(shapes)
-            detail.calculated_price = calculate_material_price(width, height, detail.material_key)
+            detail.calculated_price = _detail_material_price(detail)
 
     db.session.commit()
     flash(gettext('Файлът беше качен успешно.'), 'success')
@@ -13435,10 +13452,15 @@ def admin_update_detail_owner(detail_id):
         return redirect(url_for('admin_details'))
 
     old_owner = detail.owner_client.name if detail.owner_client else '(публичен)'
+    old_price = detail.calculated_price
     detail.owner_client_id = client_id
+    db.session.flush()
+    db.session.refresh(detail, ['owner_client'])   # the relationship still holds the old owner until reloaded
+    if detail.width and detail.height and detail.material:   # a manual-price detail has no geometry to re-price
+        detail.calculated_price = _detail_material_price(detail)
     db.session.commit()
     new_owner = detail.owner_client.name if detail.owner_client else '(публичен)'
-    log_action(f'Собственик на детайл "{detail.name}": {old_owner} → {new_owner}')
+    log_action(f'Собственик на детайл "{detail.name}": {old_owner} → {new_owner} (цена {old_price:g} → {detail.calculated_price:g} €)')
     flash(f'Собственикът на "{detail.name}" беше обновен успешно.', 'success')
     return redirect(url_for('admin_details'))
 
@@ -14039,7 +14061,8 @@ def create_order():
             }
             for p in products
         ]
-        details_data = [{'id': d.id, 'name': detail_label(d), 'price': d.total_price, 'ops_total': ops_sum[d.id]}
+        details_data = [{'id': d.id, 'name': detail_label(d), 'price': d.total_price, 'ops_total': ops_sum[d.id],
+                         'owner_client_id': d.owner_client_id}
                         for d in details]
     else:
         # A customer only ever orders as their own client (see the POST branch),
@@ -16215,7 +16238,7 @@ def api_quick_create_detail():
             if dup_mode == 'version':   # new revision of the existing Detail: its own material/service/ERP stay, geometry and price follow the new DXF
                 dup.width, dup.height, dup.total_length, dup.pierce_count = width, height, total_length, pierce_count
                 dup.geometry_json = json.dumps(shapes)
-                dup.calculated_price = calculate_material_price(width, height, dup.material_key)
+                dup.calculated_price = _detail_material_price(dup)
                 for op in dup.operations:
                     if op.sequence == 0 and op.length_mm is not None and op.service_id == dup.cutting_service_id:
                         op.length_mm = round(total_length, 2)   # the base cut follows the new length
@@ -24432,7 +24455,8 @@ def _offer_picker_context():
         db.selectinload(Product.extra_costs),
         db.selectinload(Product.product_details).joinedload(ProductDetail.detail)
         .selectinload(Detail.operations).joinedload(Operation.service)).all()]
-    details = [{'id': d.id, 'name': d.name, 'price': d.total_price} for d in Detail.query.order_by(Detail.name).options(
+    details = [{'id': d.id, 'name': d.name, 'price': d.total_price, 'owner_client_id': d.owner_client_id}
+               for d in Detail.query.order_by(Detail.name).options(
         db.selectinload(Detail.operations).joinedload(Operation.service)).all()]
     client_pricing = {
         c.id: {'detail_type': c.detail_adjustment_type, 'detail_percent': c.detail_adjustment_percent,

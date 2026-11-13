@@ -341,10 +341,11 @@
     }
 
     // A standalone Detail's price - mirrors detail_price_for().
-    function detailAdjustedPrice(basePrice) {
+    // The owner of a private detail pays its stored price (already carries his Материали terms).
+    function detailAdjustedPrice(d) {
         const cp = selectedOfferClientPricing();
-        if (!cp) return basePrice;
-        return round2(applyClientAdjustment(basePrice, cp.detail_type, cp.detail_percent));
+        if (!cp || d.owner_client_id === parseInt(document.getElementById('client_id').value, 10)) return d.price;
+        return round2(applyClientAdjustment(d.price, cp.detail_type, cp.detail_percent));
     }
 
     // A Product's list sell price with the offer client's Продукти terms -
@@ -374,7 +375,7 @@
     });
     document.getElementById('item_detail_id').addEventListener('change', function () {
         const d = DETAILS.find(function (x) { return x.id === parseInt(this.value, 10); }.bind(this));
-        if (d) document.getElementById('item_unit_price').value = detailAdjustedPrice(d.price).toFixed(2);
+        if (d) document.getElementById('item_unit_price').value = detailAdjustedPrice(d).toFixed(2);
     });
     // Re-fill the staged price if the admin switches the offer's client
     // after already picking a catalog row (before it's added to the cart).
@@ -388,7 +389,7 @@
         } else if (type === 'detail') {
             const detailSel = document.getElementById('item_detail_id');
             const d = detailSel.value ? DETAILS.find(function (x) { return x.id === parseInt(detailSel.value, 10); }) : null;
-            if (d) document.getElementById('item_unit_price').value = detailAdjustedPrice(d.price).toFixed(2);
+            if (d) document.getElementById('item_unit_price').value = detailAdjustedPrice(d).toFixed(2);
         }
     });
 
