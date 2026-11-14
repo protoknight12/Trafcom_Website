@@ -58,6 +58,16 @@
                     <button type="submit" class="btn-secondary">Потвърди и задели материал</button>
                 </form>
                 {% endif %}
+                {#- Sheet lots this order finished cutting, rest of the sheets not decided yet - see _pending_remnants(). #}
+                <div id="remnants-{{ order.id }}">
+                    {% for g in remnants.get(order.id, []) %}
+                    <div class="remnant-pending" data-material-id="{{ g.material_id }}" style="margin-top: 4px;">
+                        <span class="status-badge status-new">Остатък: чака решение ({{ g.material_name }}, {{ g.sheets }} л.)</span>
+                        <button type="button" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;"
+                                data-remnant='{{ g|tojson|forceescape }}' onclick="openRemnantDialog(JSON.parse(this.dataset.remnant))">Реши за остатъка</button>
+                    </div>
+                    {% endfor %}
+                </div>
             </div>
             <div style="display: flex; align-items: center; gap: 8px; margin-left: auto; margin-right: 16px;">
                 <label for="machine_select_{{ order.id }}" style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">Машина:</label>
@@ -158,6 +168,21 @@
     {% else %}
     <div class="admin-card text-center no-data">Няма регистрирани поръчки.</div>
     {% endfor %}
+
+    {#- What became of the rest of each sheet - posted to admin_order_remnants(). #}
+    <dialog id="remnantDialog" class="form-dialog">
+        <button type="button" class="dialog-close" aria-label="Затвори" onclick="this.closest('dialog').close()">&times;</button>
+        <form id="remnantForm" novalidate>
+            <h3 style="margin-top: 0;">Остатък от листовете</h3>
+            <p class="text-muted text-small" id="remnantInfo"></p>
+            <div id="remnantRows"></div>
+            <div class="alert alert-danger" id="remnantError" hidden></div>
+            <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px;">
+                <button type="button" class="btn-secondary" onclick="this.closest('dialog').close()">По-късно</button>
+                <button type="submit" class="btn-submit btn-inline" id="remnantSave">Запази</button>
+            </div>
+        </form>
+    </dialog>
 </main>
 
 <script>
@@ -232,12 +257,135 @@
                     badge.className = 'status-badge status-' + data.order_status;
                     badge.textContent = data.order_status_label;
                 }
+
+                if (data.remnant_prompt) {
+                    addRemnantBadge(data.remnant_prompt);   // stays when the worker picks "По-късно"
+                    openRemnantDialog(data.remnant_prompt);
+                }
             })
             .catch(function (error) {
                 console.error('Error updating production:', error);
                 alert('Връзката със сървъра беше прекъсната.');
             });
     }
+
+    // Remnant dialog: one row per sheet used ("Лист 1 от N"), scrap or back to stock with
+    // its size. Built with textContent only - the material name comes from the DB.
+    let remnantGroup = null;
+
+    function addRemnantBadge(g) {
+        const box = document.getElementById('remnants-' + g.order_id);
+        if (!box || box.querySelector('[data-material-id="' + g.material_id + '"]')) return;
+        const wrap = document.createElement('div');
+        wrap.className = 'remnant-pending';
+        wrap.dataset.materialId = g.material_id;
+        wrap.style.marginTop = '4px';
+        const badge = document.createElement('span');
+        badge.className = 'status-badge status-new';
+        badge.textContent = 'Остатък: чака решение (' + g.material_name + ', ' + g.sheets + ' л.)';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn-secondary';
+        btn.style.cssText = 'padding: 4px 10px; font-size: 0.78rem;';
+        btn.textContent = 'Реши за остатъка';
+        btn.addEventListener('click', function () { openRemnantDialog(g); });
+        wrap.append(badge, ' ', btn);
+        box.appendChild(wrap);
+    }
+
+    function openRemnantDialog(g) {
+        remnantGroup = g;
+        const size = (g.default_w && g.default_h) ? g.default_w + ' x ' + g.default_h + ' mm' : '';
+        document.getElementById('remnantInfo').textContent = g.material_name + (size ? ' - лист ' + size : '')
+            + '. Използвани листа: ' + g.sheets + '. Какво става с остатъка от всеки лист?';
+        const rows = document.getElementById('remnantRows');
+        rows.replaceChildren();
+        for (let i = 1; i <= g.sheets; i++) {
+            const row = document.createElement('fieldset');
+            row.className = 'remnant-sheet';
+            row.style.cssText = 'border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; margin-bottom: 8px;';
+            const legend = document.createElement('legend');
+            legend.textContent = 'Лист ' + i + ' от ' + g.sheets;
+            row.appendChild(legend);
+            const dims = document.createElement('div');
+            dims.style.cssText = 'display: flex; gap: 12px; margin-top: 6px;';
+            dims.hidden = true;
+            [['scrap', 'Брак'], ['return', 'Връща се в склада']].forEach(function (opt) {
+                const label = document.createElement('label');
+                label.style.marginRight = '16px';
+                const radio = document.createElement('input');
+                radio.type = 'radio';
+                radio.name = 'sheet_' + i;
+                radio.value = opt[0];
+                radio.checked = opt[0] === 'scrap';
+                radio.addEventListener('change', function () { dims.hidden = radio.value !== 'return'; });
+                label.append(radio, ' ' + opt[1]);
+                row.appendChild(label);
+            });
+            [['width', 'Ширина (mm)', g.default_w], ['height', 'Височина (mm)', g.default_h]].forEach(function (f) {
+                const label = document.createElement('label');
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.min = '1';
+                input.step = 'any';
+                input.dataset.field = f[0];
+                input.style.cssText = 'width: 110px; margin-left: 6px;';
+                if (f[2]) input.placeholder = 'до ' + f[2];
+                label.append(f[1], input);
+                dims.appendChild(label);
+            });
+            row.appendChild(dims);
+            rows.appendChild(row);
+        }
+        document.getElementById('remnantError').hidden = true;
+        document.getElementById('remnantDialog').showModal();
+    }
+
+    document.getElementById('remnantForm').addEventListener('submit', function (e) {
+        e.preventDefault();
+        const g = remnantGroup;
+        const errorEl = document.getElementById('remnantError');
+        const sheets = [];
+        const limits = [g.default_w, g.default_h].filter(Boolean).sort(function (a, b) { return a - b; });
+        let error = '';
+        document.querySelectorAll('#remnantRows .remnant-sheet').forEach(function (row, idx) {
+            const action = row.querySelector('input[type=radio]:checked').value;
+            if (action === 'scrap') { sheets.push({action: 'scrap'}); return; }
+            const w = parseFloat(row.querySelector('[data-field=width]').value);
+            const h = parseFloat(row.querySelector('[data-field=height]').value);
+            const sorted = [w, h].sort(function (a, b) { return a - b; });
+            if (!(w > 0 && h > 0)) error = error || ('Лист ' + (idx + 1) + ': въведете ширина и височина на остатъка (> 0).');
+            else if (limits.length === 2 && (sorted[0] > limits[0] || sorted[1] > limits[1]))
+                error = error || ('Лист ' + (idx + 1) + ': остатъкът е по-голям от листа.');
+            sheets.push({action: 'return', width: w, height: h});
+        });
+        if (error) { errorEl.textContent = error; errorEl.hidden = false; return; }
+
+        const formData = new FormData();
+        formData.append('csrf_token', window.CSRF_TOKEN);
+        formData.append('order_id', g.order_id);
+        formData.append('material_id', g.material_id);
+        formData.append('sheets', JSON.stringify(sheets));
+        const saveBtn = document.getElementById('remnantSave');
+        saveBtn.disabled = true;
+        fetch('/admin/production/remnants', { method: 'POST', body: formData })
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+                if (data.status !== 'success') {
+                    errorEl.textContent = data.message || 'Възникна грешка при записа.';
+                    errorEl.hidden = false;
+                    return;
+                }
+                const pending = document.querySelector('#remnants-' + g.order_id + ' [data-material-id="' + g.material_id + '"]');
+                if (pending) pending.remove();
+                document.getElementById('remnantDialog').close();
+            })
+            .catch(function () {
+                errorEl.textContent = 'Връзката със сървъра беше прекъсната.';
+                errorEl.hidden = false;
+            })
+            .finally(function () { saveBtn.disabled = false; });
+    });
 
     function assignMachine(orderId, selectEl) {
         const machineId = selectEl.value;

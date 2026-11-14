@@ -1199,6 +1199,46 @@ class OrderMaterialReservation(db.Model):
     material = db.relationship('MaterialPrice')
 
 
+class OrderMaterialRemnant(db.Model):
+    """
+    What became of the rest of the sheets an Order cut from one sheet lot
+    (price unit 'm2'), decided once the order's lines on that lot are all
+    produced (_pending_remnants(), admin_order_remnants()). The whole sheets
+    are written off: `extra_taken` = what was taken on top of the lines'
+    material_consumed to make `sheets` whole sheets. Of those, `scrap_count`
+    are scrap and every other sheet came back as a "<name> - остатък" lot -
+    returned_json = [{width, height, material_id}] one entry per returned
+    sheet (material_id = the remnant lot that received it).
+    """
+    __table_args__ = (db.UniqueConstraint('order_id', 'material_id', name='uq_order_material_remnant'),)
+    id = db.Column(db.Integer, primary_key=True)
+    order_id = db.Column(db.Integer, db.ForeignKey('order.id'), nullable=False, index=True)
+    material_id = db.Column(db.Integer, db.ForeignKey('material_price.id'), nullable=False, index=True)
+    sheets = db.Column(db.Integer, nullable=False)
+    scrap_count = db.Column(db.Integer, nullable=False)
+    extra_taken = db.Column(db.Float, nullable=False, default=0.0)
+    returned_json = db.Column(db.Text, nullable=False, default='[]')
+    decided_at = db.Column(db.DateTime, default=datetime.utcnow)
+    decided_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+
+    order = db.relationship('Order')
+    material = db.relationship('MaterialPrice')
+    decided_by = db.relationship('User')
+
+    @property
+    def returned(self):
+        return json.loads(self.returned_json or '[]')
+
+
+def _remnant_decisions_returning_to(material_id):
+    """OrderMaterialRemnant rows that put at least one returned sheet into lot `material_id`."""
+    # LIKE only narrows (12 also matches 123); the exact check is in Python
+    rows = (OrderMaterialRemnant.query
+            .filter(OrderMaterialRemnant.returned_json.like(f'%"material_id": {material_id}%'))
+            .options(db.joinedload(OrderMaterialRemnant.order), db.joinedload(OrderMaterialRemnant.material)))
+    return [r for r in rows if any(s.get('material_id') == material_id for s in r.returned)]
+
+
 class OrderItemOperation(db.Model):
     """
     An ad-hoc processing step (cutting, bending, drilling...) picked at
@@ -5252,6 +5292,55 @@ def _reserve_order_material(order):
             warnings.append(f'Поръчка {order.order_number}: материалът "{name}" не стига - липсват '
                             f'{round(missing, 3):g}. Създадена е заявка за материал.')
     return warnings
+
+
+def _pending_remnants(orders):
+    """
+    {order_id: [{order_id, material_id, material_name, sheets, consumed,
+    default_w, default_h}]} - the sheet lots each order has finished cutting
+    and nobody has decided yet what became of the rest of the sheets
+    (OrderMaterialRemnant). One group per (order, lot): sheets of a lot are
+    shared by the order's details (nesting). A group is ready when every line
+    of the order on that lot - consumed_material_id == lot, or not produced
+    yet and its detail is cut from that lot - is fully produced and something
+    was taken (material_consumed). Only lots with price unit 'm2' and a known
+    sheet size (stock counted in sheets - without a size it is m², see
+    _material_stock_delta()); "материал на клиента" lines never take a lot.
+    sheets = whole sheets used = ceil(consumed), at least 1. Three queries
+    whatever the number of orders (the report renders it for all of them);
+    needs order.items / components / their detail loaded.
+    """
+    rows_by_order = {}
+    for order in orders:
+        rows = rows_by_order[order.id] = []
+        for item in order.items:
+            if not item.own_material:
+                rows += ([(c, c.detail, c.quantity_needed) for c in item.components] if item.product_id
+                         else [(item, item.detail, item.quantity_ordered)])
+    lot_ids = {r.consumed_material_id for rows in rows_by_order.values() for r, _, _ in rows if r.consumed_material_id}
+    if not lot_ids:
+        return {}
+    lots = {m.id: m for m in MaterialPrice.query.filter(MaterialPrice.id.in_(lot_ids))}
+    decided = {(o, m) for o, m in db.session.query(OrderMaterialRemnant.order_id, OrderMaterialRemnant.material_id)
+               .filter(OrderMaterialRemnant.material_id.in_(lot_ids))}
+    result = {}
+    for order in orders:
+        rows = rows_by_order[order.id]
+        for lot_id in sorted({r.consumed_material_id for r, _, _ in rows if r.consumed_material_id}):
+            lot = lots[lot_id]
+            if ((order.id, lot_id) in decided or material_price_unit(lot.type) != 'm2'
+                    or not _material_sheet_area_m2(lot)):
+                continue
+            group = [(r, target) for r, detail, target in rows
+                     if r.consumed_material_id == lot_id
+                     or (not r.consumed_material_id and detail and detail.material_key == lot.key)]
+            consumed = sum(r.material_consumed or 0 for r, _ in group if r.consumed_material_id == lot_id)
+            if consumed > PRODUCTION_STOCK_TOLERANCE and all(r.quantity_produced >= target for r, target in group):
+                result.setdefault(order.id, []).append({
+                    'order_id': order.id, 'material_id': lot_id, 'material_name': format_material_option(lot),
+                    'sheets': max(1, math.ceil(consumed - PRODUCTION_STOCK_TOLERANCE)), 'consumed': consumed,
+                    'default_w': lot.sheet_width_mm, 'default_h': lot.sheet_length_mm})
+    return result
 
 
 def calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id, client=None):
@@ -10398,7 +10487,10 @@ def admin_material_history(material_id):
     OrderItemComponent / standalone-detail OrderItem that took material from
     this lot ('order_production', the frozen net material_consumed - see
     _consume_detail_material(); dated by the order, the row has no timestamp
-    of its own). Quantities are shown in the stock's own unit (_material_stock_delta()'s output - sheet count for sheets/other,
+    of its own) - plus a sheet remnant decision (OrderMaterialRemnant): the
+    true-up to whole sheets on the cut lot ('order_scrap', or
+    'order_production' when every sheet came back) and the returned sheets on
+    the remnant lot ('order_remnant_return'). Quantities are shown in the stock's own unit (_material_stock_delta()'s output - sheet count for sheets/other,
     not the raw m² actually used/returned) so they add up against
     stock_quantity the same way delivery-note quantities do. Same
     admin+worker access as storage_materials() (the "склад" page this is
@@ -10486,6 +10578,26 @@ def admin_material_history(material_id):
             'kind': 'order_production', 'direction': 'out', 'quantity': row.material_consumed,
             'party': order.customer_name, 'note_number': order.order_number, 'unit_price': None,
             'notes': f'{row.quantity_produced} бр. "{name}"',
+        })
+    # Sheet remnant decisions (admin_order_remnants()): on this lot the true-up to whole sheets
+    # ('order_scrap' when any sheet was scrapped), on a remnant lot the returned sheets it received.
+    for r in (OrderMaterialRemnant.query.filter(OrderMaterialRemnant.material_id == material_id,
+                                                OrderMaterialRemnant.extra_taken > 0)
+              .options(db.joinedload(OrderMaterialRemnant.order))):
+        movements.append({
+            'date': to_local(r.decided_at).date(), 'created_at': r.decided_at,
+            'kind': 'order_scrap' if r.scrap_count else 'order_production', 'direction': 'out',
+            'quantity': r.extra_taken, 'party': r.order.customer_name, 'note_number': r.order.order_number,
+            'unit_price': None,
+            'notes': f'до {r.sheets} цели листа: {r.scrap_count} брак, {r.sheets - r.scrap_count} върнати като остатък',
+        })
+    for r in _remnant_decisions_returning_to(material_id):
+        sizes = [f'{s["width"]:g}x{s["height"]:g} mm' for s in r.returned if s.get('material_id') == material_id]
+        movements.append({
+            'date': to_local(r.decided_at).date(), 'created_at': r.decided_at,
+            'kind': 'order_remnant_return', 'direction': 'in', 'quantity': len(sizes),
+            'party': r.order.customer_name, 'note_number': r.order.order_number, 'unit_price': None,
+            'notes': f'остатък {", ".join(sizes)} от "{r.material.display_name}"',
         })
     movements.sort(key=lambda m: m['created_at'], reverse=True)
 
@@ -11879,6 +11991,25 @@ def _client_note_refusal(note, added_any, errors, empty_message, touched):
     return _negative_client_lots_refusal(touched, 'admin_client_delivery_notes', details=note.kind == 'consume')
 
 
+def _sheet_remnant_lot(source, width, height):
+    """The "<name> - остатък" lot a leftover piece (width x height mm) of sheet
+    lot `source` goes into - a client's consume line
+    (_apply_client_delivery_note_items()) and an order's sheet remnant
+    (admin_order_remnants()). Same owner, brand, thickness, type and cutting
+    speeds as `source`, found again by the same size next time
+    (_find_or_create_delivery_target()). Our lot keeps source's €/m²: the
+    piece's own area at that rate is its unit price, so a remnant lot of the
+    same size at another rate becomes its own price lot. None when it cannot
+    be created."""
+    lot = _find_or_create_delivery_target(
+        'material', f'{source.display_name} - остатък', source.brand, width, height, source.thickness_mm,
+        None if source.owner_client_id else (source.cost_per_m2 or 0) * width * height / 1_000_000,
+        source.key, material_type=source.type, notes=None, owner_client_id=source.owner_client_id)
+    if lot and lot.height_mm is None:
+        lot.height_mm = source.height_mm
+    return lot
+
+
 def _apply_client_delivery_note_items(note, items):
     """The line loop behind create/edit_client_delivery_note(). Returns
     (added_any, log_parts, log_detail_lines, errors) - errors are Bulgarian
@@ -11951,15 +12082,10 @@ def _apply_client_delivery_note_items(note, items):
             if not (remnant_width and remnant_height):
                 errors.append(f'Остатъкът от "{description}" трябва да има ширина и дължина.')
                 continue
-            remnant_lot = _find_or_create_delivery_target(
-                'material', f'{target.display_name} - остатък', target.brand, remnant_width, remnant_height,
-                target.thickness_mm, None, target.key, material_type=target.type, notes=None,
-                owner_client_id=note.client_id)
+            remnant_lot = _sheet_remnant_lot(target, remnant_width, remnant_height)  # target is the client's own lot (checked above)
             if not remnant_lot:
                 errors.append(f'Остатъкът от "{description}" не можа да бъде записан.')
                 continue
-            if remnant_lot.height_mm is None:
-                remnant_lot.height_mm = target.height_mm
         elif remnant_qty:
             if remnant_qty >= quantity:
                 errors.append(f'Остатъкът от "{description}" не може да е повече от изразходваното.')
@@ -14518,6 +14644,14 @@ def admin_production_report():
             stock_note += f', материал "{material.display_name}" - нова наличност {material.stock_quantity:g}'
         log_action(f'Изработени {produced_qty} бр. от {target_label} (поръчка {order.order_number}){stock_note}')
 
+        # This entry finished the order's lines on a sheet lot -> the page asks what became of
+        # the rest of the sheets (admin_order_remnants()); "По-късно" leaves the badge on the card.
+        # ponytail: a correction downward after the decision does not undo it - the sheets stay written off
+        remnant_prompt = None
+        if material and stock_delta > 0:
+            remnant_prompt = next((g for g in _pending_remnants([order]).get(order.id, [])
+                                   if g['material_id'] == material.id), None)
+
         return jsonify({
             'status': 'success',
             'produced_qty': produced_qty,
@@ -14525,18 +14659,98 @@ def admin_production_report():
             'item_percent': order_item.percent_complete,
             'order_percent': order.percent_complete,
             'order_status': order.status,
-            'order_status_label': STATUS_LABELS.get(order.status, order.status)
+            'order_status_label': STATUS_LABELS.get(order.status, order.status),
+            'remnant_prompt': remnant_prompt,
         })
 
     orders = (Order.query.filter(Order.status != 'cancelled').order_by(Order.created_at.desc())
               .options(db.joinedload(Order.user),
                        db.selectinload(Order.items).options(
                            db.joinedload(OrderItem.product), db.joinedload(OrderItem.detail),
-                           db.selectinload(OrderItem.components), db.selectinload(OrderItem.attachments)))
+                           db.selectinload(OrderItem.components).joinedload(OrderItemComponent.detail),
+                           db.selectinload(OrderItem.attachments)))
               .all())
     machines = Machine.query.order_by(Machine.name).all()
     return render_template('production_report.html', orders=orders, machines=machines,
-                           reservations=_open_material_reservations(), active_page='production')
+                           reservations=_open_material_reservations(), remnants=_pending_remnants(orders),
+                           active_page='production')
+
+
+@app.route('/admin/production/remnants', methods=['POST'])
+@role_required(['admin', 'worker'])
+@retry_on_db_busy(json_reply=True)
+def admin_order_remnants():
+    """
+    The decision behind the production report's "Остатък" dialog for one
+    ready (order, sheet lot) group (_pending_remnants()): `sheets` is a JSON
+    list, one {action: 'scrap'|'return', width, height} per sheet used. In one
+    transaction the lot gives up whole sheets - what the lines consumed is
+    trued up to `sheets` (extra_taken) - every returned sheet goes into stock
+    as a "<name> - остатък" lot of the entered size (_sheet_remnant_lot(), same
+    owner and €/m²), scrap stays written off, and an OrderMaterialRemnant
+    records it so the group is never asked again. A client's lot may not go
+    below zero.
+    """
+    def refuse(message):
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': message}), 400
+
+    try:
+        order_id, material_id = int(request.form.get('order_id')), int(request.form.get('material_id'))
+        sheets = json.loads(request.form.get('sheets') or '')
+    except (TypeError, ValueError):
+        return refuse('Невалидни данни.')
+    if not isinstance(sheets, list) or not all(isinstance(s, dict) and s.get('action') in ('scrap', 'return')
+                                               for s in sheets):
+        return refuse('За всеки лист изберете "Брак" или "Връща се в склада".')
+    if any(s['action'] == 'return' for s in sheets):
+        _lock_numbering('erp')  # a remnant may become a new lot (ERP №) - before any row lock, see create_delivery_note()
+    order = _lock_or_404(Order, order_id)
+    lot = _lock_or_404(MaterialPrice, material_id)
+    group = next((g for g in _pending_remnants([order]).get(order.id, []) if g['material_id'] == lot.id), None)
+    if not group:
+        return refuse('Няма остатък за решение по тази поръчка и материал - вече е решено или производството не е завършено.')
+    if len(sheets) != group['sheets']:
+        return refuse(f'Очакват се {group["sheets"]} листа.')
+    sheet_size = sorted((lot.sheet_width_mm, lot.sheet_length_mm))
+    returned = []
+    for number, s in enumerate(sheets, 1):
+        if s['action'] != 'return':
+            continue
+        try:
+            width, height = float(s.get('width')), float(s.get('height'))
+        except (TypeError, ValueError):
+            width = height = 0
+        if not (0 < width < float('inf') and 0 < height < float('inf')):
+            return refuse(f'Лист {number}: ширината и височината на остатъка трябва да са по-големи от 0.')
+        small, big = sorted((width, height))
+        if small > sheet_size[0] or big > sheet_size[1]:
+            return refuse(f'Лист {number}: остатъкът {width:g}x{height:g} mm е по-голям от листа '
+                          f'({lot.sheet_width_mm:g}x{lot.sheet_length_mm:g} mm).')
+        returned.append((width, height))
+
+    extra = group['sheets'] - group['consumed']
+    if extra > PRODUCTION_STOCK_TOLERANCE:
+        _bump_stock(lot, -extra)
+    created = []
+    for width, height in returned:
+        remnant = _sheet_remnant_lot(lot, width, height)
+        if not remnant:
+            return refuse(f'Остатъкът {width:g}x{height:g} mm не можа да бъде записан.')
+        _bump_stock(remnant, 1)
+        created.append({'width': width, 'height': height, 'material_id': remnant.id})
+    names = _negative_client_lots({('material', lot.id)}, details=False)
+    if names:
+        return refuse(f'Отказано: наличността на клиентска партида би станала отрицателна ({", ".join(names)}).')
+    scrap = group['sheets'] - len(created)
+    db.session.add(OrderMaterialRemnant(order_id=order.id, material_id=lot.id, sheets=group['sheets'],
+                                        scrap_count=scrap, extra_taken=max(0.0, extra),
+                                        returned_json=json.dumps(created), decided_by_id=current_user.id))
+    db.session.commit()
+    sizes = ': ' + ', '.join(f'{s["width"]:g}x{s["height"]:g}' for s in created) if created else ''
+    log_action(f'Остатък по поръчка {order.order_number}: {group["sheets"]} листа "{lot.display_name}", '
+               f'{scrap} брак, {len(created)} върнати{sizes}')
+    return jsonify({'status': 'success', 'message': f'Записано: {scrap} брак, {len(created)} върнати в склада.'})
 
 
 @app.route('/admin/orders/<int:order_id>/confirm-material', methods=['POST'])
@@ -17053,8 +17267,11 @@ def admin_delete_material(key):
     # Restock requests and production jobs (reversed ones included - they are
     # the stock history) point at it by id, also with no ON DELETE rule.
     used_in = [label for model, label in ((MaterialRequest, 'заявка за материал'), (ProductionOrder, 'задача за производство'),
-                                          (OrderMaterialReservation, 'поръчка (заделен материал)'))
+                                          (OrderMaterialReservation, 'поръчка (заделен материал)'),
+                                          (OrderMaterialRemnant, 'поръчка (остатък от лист)'))
                if model.query.filter_by(material_id=material.id).first()]
+    if _remnant_decisions_returning_to(material.id):
+        used_in.append('поръчка (върнат остатък)')
     if ClientDeliveryNoteItem.query.filter_by(remnant_material_id=material.id).first():
         used_in.append('издадена стокова разписка (остатък)')
     if (OrderItem.query.filter_by(consumed_material_id=material.id).first()
