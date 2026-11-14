@@ -38,7 +38,7 @@
     <p class="section-subtitle" style="margin-top: -10px;">Прогресът на всеки продукт се изчислява по неговите съставни детайли - въведете реално изработените бройки за всеки компонент.</p>
 
     {% for order in orders %}
-    <section class="admin-card">
+    <section class="admin-card" id="order-{{ order.id }}">
         <div class="order-card-header">
             <div>
                 <strong style="font-size: 1.1rem;">{{ order.order_number }}</strong> &nbsp;—&nbsp; {{ order.customer_name }}

@@ -42,6 +42,7 @@
                     <th>Клиент</th>
                     <th>Дата</th>
                     <th>Валидна до</th>
+                    <th>Поръчка</th>
                     <th class="text-right">Сума</th>
                     <th class="text-right">Редакция</th>
                     <th class="text-right">Печат</th>
@@ -57,6 +58,7 @@
                     <td>{{ offer.client.name if offer.client else '-' }}</td>
                     <td>{{ (offer.created_at|local).strftime('%d.%m.%Y') }}</td>
                     <td>{{ offer.valid_until.strftime('%d.%m.%Y') if offer.valid_until else '-' }}</td>
+                    <td>{% if offer.order %}<a href="{{ url_for('admin_production_report') }}#order-{{ offer.order.id }}">Поръчка № {{ offer.order.order_number }}</a>{% else %}-{% endif %}</td>
                     <td class="text-right">{{ '%.2f'|format(offer.total) }} €</td>
                     <td class="text-right"><a href="{{ url_for('admin_offer_edit', offer_id=offer.id) }}" data-frame data-frame-scope="/admin/offers/" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Редакция</a></td>
                     <td class="text-right"><a href="{{ url_for('admin_offer_print', offer_id=offer.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;" target="_blank">Печат / PDF</a></td>
@@ -75,10 +77,10 @@
                     </td>
                 </tr>
                 {% else %}
-                <tr><td colspan="10" class="text-center no-data">Все още няма създадени оферти.</td></tr>
+                <tr><td colspan="11" class="text-center no-data">Все още няма създадени оферти.</td></tr>
                 {% endfor %}
                 {% if offers %}
-                <tr class="search-empty-row" hidden><td colspan="10" class="text-center no-data">Няма съвпадения.</td></tr>
+                <tr class="search-empty-row" hidden><td colspan="11" class="text-center no-data">Няма съвпадения.</td></tr>
                 {% endif %}
                 </tbody>
             </table>

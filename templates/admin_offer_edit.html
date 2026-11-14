@@ -57,6 +57,7 @@
                 <tr><th>Подписал</th><td data-summary="signed_by"></td></tr>
                 <tr><th>Валидна до</th><td data-summary="valid_until"></td></tr>
                 <tr><th>Отстъпка</th><td data-summary="discount_percent"></td></tr>
+                {% if offer and offer.order %}<tr><th>Поръчка</th><td><a href="{{ url_for('admin_production_report') }}#order-{{ offer.order.id }}">Поръчка № {{ offer.order.order_number }}</a></td></tr>{% endif %}
                 <tr><th>Условия / бележки</th><td data-summary="footer_notes" style="white-space: pre-line;"></td></tr>
                 </tbody>
             </table>
@@ -239,7 +240,7 @@
             </table>
         </div>
         <p class="text-small text-muted" id="orderSelectorNote"></p>
-        <form action="{{ url_for('admin_offer_create_order', offer_id=offer.id) }}" method="POST" class="admin-form" id="createOrderForm" target="_top" data-once>
+        <form action="{{ url_for('admin_offer_create_order', offer_id=offer.id) }}" method="POST" class="admin-form" id="createOrderForm" target="_top" data-once{% if offer.order %} data-confirm="От тази оферта вече е създадена поръчка № {{ offer.order.order_number }}. Да се създаде още една?"{% endif %}>
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="order_customer_name">Име на клиент</label>

@@ -1079,6 +1079,11 @@ class OrderItem(db.Model):
     unit_price = db.Column(db.Float, nullable=False, default=0.0)
     # Priced with the client's own material - see _own_material_factor().
     own_material = db.Column(db.Boolean, nullable=False, default=False)
+    # Raw material taken from stock by producing this line for the order (net, in the
+    # lot's stock units as applied to stock_quantity) and the lot it came from - frozen
+    # on the first consumption, see _consume_detail_material().
+    material_consumed = db.Column(db.Float, nullable=False, default=0.0)
+    consumed_material_id = db.Column(db.Integer, db.ForeignKey('material_price.id'), nullable=True, index=True)
 
     product = db.relationship('Product')
     detail = db.relationship('Detail')
@@ -1149,6 +1154,11 @@ class OrderItemComponent(db.Model):
     detail_name_snapshot = db.Column(db.String(150), nullable=False)
     quantity_needed = db.Column(db.Integer, nullable=False)
     quantity_produced = db.Column(db.Integer, default=0, nullable=False)
+    # Raw material taken from stock by producing this line for the order (net, in the
+    # lot's stock units as applied to stock_quantity) and the lot it came from - frozen
+    # on the first consumption, see _consume_detail_material().
+    material_consumed = db.Column(db.Float, nullable=False, default=0.0)
+    consumed_material_id = db.Column(db.Integer, db.ForeignKey('material_price.id'), nullable=True, index=True)
 
     order_item = db.relationship('OrderItem', backref=db.backref('components', cascade='all, delete-orphan', lazy=True))
     detail = db.relationship('Detail')
@@ -3114,9 +3124,13 @@ class Offer(db.Model):
     discount_percent = db.Column(db.Float, nullable=True)
     created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    # The Order created from this offer by admin_offer_create_order() (the latest one,
+    # if it was done more than once); NULL = no order made from it yet.
+    order_id = db.Column(db.Integer, db.ForeignKey('order.id'), nullable=True, index=True)
 
     client = db.relationship('Client')
     created_by = db.relationship('User')
+    order = db.relationship('Order', foreign_keys=[order_id])
 
     @property
     def subtotal(self):
@@ -5060,6 +5074,43 @@ def _material_stock_delta(material, native_qty):
     return native_qty
 
 
+def _consume_detail_material(row, detail, stock_delta):
+    """
+    Production by order (admin_production_report()): `row` (an
+    OrderItemComponent or a standalone-detail OrderItem, quantity_produced
+    already moved by `stock_delta`) made that many more pieces of `detail`,
+    so its raw material leaves the lot it is cut from - our lots and a
+    client's stored lots alike. Per piece _detail_material_unit_qty(), the
+    same need the production wizard uses, converted to the lot's stock unit
+    with _material_stock_delta() like complete_production_order(). The lot
+    is frozen on the row at the first consumption (consumed_material_id) and
+    the net taken is kept in material_consumed - what admin_material_history()
+    shows - so a detail moved to another material later still takes from and
+    returns to the same lot. A correction downward gives back its share of
+    what was taken (not a figure from the detail's current size), so going
+    back to 0 returns exactly material_consumed. Returns the locked
+    MaterialPrice it moved, or None when there is nothing to move (no
+    detail, a zero-size detail - manual price, no DXF - or a correction of
+    production recorded before this existed, which never took anything).
+    """
+    if not stock_delta or not detail or not detail.material:
+        return None
+    material = _lock_or_404(MaterialPrice, row.consumed_material_id or detail.material.id)
+    if stock_delta > 0:
+        if material_price_unit(material.type) != material_price_unit(detail.material.type):
+            return None   # detail moved to a material in another unit (m2/m/pcs): nothing sane to take from the frozen lot
+        converted = _material_stock_delta(material, _detail_material_unit_qty(detail) * stock_delta)
+    else:
+        # ratio first: a return to 0 is x * -1.0 == -x exactly, so material_consumed ends at 0, not at a float crumb
+        converted = (row.material_consumed or 0) * (stock_delta / (row.quantity_produced - stock_delta))
+    if not converted:
+        return None
+    _bump_stock(material, -converted)
+    row.material_consumed = (row.material_consumed or 0) + converted
+    row.consumed_material_id = material.id
+    return material
+
+
 def calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id, client=None):
     """
     Time-based pricing engine for a single service - used by the personal
@@ -5198,9 +5249,10 @@ def order_missing_items(order):
     see CLAUDE.md order-fulfillment task) and returns only the lines that
     fall short. Recomputed on demand rather than snapshotted at order-
     creation time, so it stays correct as stock is replenished or other
-    orders are placed - stock_quantity is never reserved/decremented
-    anywhere in this app (see _bump_stock), so "available" here just means
-    "on hand right now", same as everywhere else stock_quantity is read.
+    orders are placed - an Order never reserves stock (only producing its
+    lines moves stock, see admin_production_report() and _bump_stock), so
+    "available" here just means "on hand right now", same as everywhere else
+    stock_quantity is read.
     Returns a list of {item_name, needed, available, missing} dicts.
     """
     shortfalls = []
@@ -10197,8 +10249,11 @@ def admin_material_history(material_id):
     rows against this material, split into up to two movements each: the
     original "taken for production" (at completed_at) and, if the job was
     later deleted/undone (see ProductionOrder.reversed_at), a "returned from
-    production" (at reversed_at). Quantities are shown in the stock's own
-    unit (_material_stock_delta()'s output - sheet count for sheets/other,
+    production" (at reversed_at) - and production by order: every
+    OrderItemComponent / standalone-detail OrderItem that took material from
+    this lot ('order_production', the frozen net material_consumed - see
+    _consume_detail_material(); dated by the order, the row has no timestamp
+    of its own). Quantities are shown in the stock's own unit (_material_stock_delta()'s output - sheet count for sheets/other,
     not the raw m² actually used/returned) so they add up against
     stock_quantity the same way delivery-note quantities do. Same
     admin+worker access as storage_materials() (the "склад" page this is
@@ -10226,6 +10281,15 @@ def admin_material_history(material_id):
                        .options(db.joinedload(ProductionOrder.detail), db.joinedload(ProductionOrder.completed_by),
                                 db.joinedload(ProductionOrder.reversed_by))
                        .all())
+    order_components = (OrderItemComponent.query
+                        .filter(OrderItemComponent.consumed_material_id == material_id,
+                                OrderItemComponent.material_consumed != 0)
+                        .options(db.joinedload(OrderItemComponent.order_item).joinedload(OrderItem.order))
+                        .all())
+    order_items = (OrderItem.query
+                   .filter(OrderItem.consumed_material_id == material_id, OrderItem.material_consumed != 0)
+                   .options(db.joinedload(OrderItem.order), db.joinedload(OrderItem.detail))
+                   .all())
 
     movements = [
         {'date': item.delivery_note.note_date or to_local(item.delivery_note.created_at).date(),
@@ -10270,6 +10334,14 @@ def admin_material_history(material_id):
                 'party': 'Производство', 'note_number': None, 'unit_price': None,
                 'notes': f'изтрита задача - {job.quantity} бр. "{job.detail.name}" ({reversed_by})',
             })
+    for row, order, name in ([(c, c.order_item.order, c.detail_name_snapshot) for c in order_components]
+                             + [(i, i.order, i.detail.name if i.detail else '-') for i in order_items]):
+        movements.append({
+            'date': to_local(order.created_at).date(), 'created_at': order.created_at,
+            'kind': 'order_production', 'direction': 'out', 'quantity': row.material_consumed,
+            'party': order.customer_name, 'note_number': order.order_number, 'unit_price': None,
+            'notes': f'{row.quantity_produced} бр. "{name}"',
+        })
     movements.sort(key=lambda m: m['created_at'], reverse=True)
 
     return render_template('admin_material_history.html', material=material, movements=movements,
@@ -14220,9 +14292,14 @@ def admin_production_report():
         # Detail's (or component-less Product's - OrderItem.stock_target)
         # stock_quantity by the same delta - same _bump_stock() used
         # by delivery-note intake, just triggered by production instead of a
-        # goods-received note. No-op for a component whose source Detail was since
+        # goods-received note. A Detail's raw material moves the other way at
+        # the same time (_consume_detail_material(); a component-less Product
+        # has no material, and a "материал на клиента" line - own_material -
+        # was cut from material the customer brought, not from a lot). No-op
+        # for a component whose source Detail was since
         # deleted from the catalog (detail_id nullable, only detail_name_snapshot
         # survives).
+        material = None
         if target_type == 'component':
             component = _lock_or_404(OrderItemComponent, target_id)  # the delta below must start from the committed quantity_produced
             produced_qty = max(0, min(produced_qty, component.quantity_needed))
@@ -14230,6 +14307,8 @@ def admin_production_report():
             component.quantity_produced = produced_qty
             if stock_delta and component.detail:
                 _bump_stock(component.detail, stock_delta)
+                if not component.order_item.own_material:
+                    material = _consume_detail_material(component, component.detail, stock_delta)
             order_item = component.order_item
             target_percent = component.percent_complete
             target_label = f'детайл "{component.detail.name}"' if component.detail else f'компонент #{target_id}'
@@ -14240,15 +14319,27 @@ def admin_production_report():
             order_item.quantity_produced = produced_qty
             if stock_delta and order_item.stock_target:
                 _bump_stock(order_item.stock_target, stock_delta)
+                if not order_item.own_material:
+                    material = _consume_detail_material(order_item, order_item.detail, stock_delta)
             target_percent = order_item.percent_complete
             target_label = f'артикул "{order_item.item_name}"'
         else:
             return jsonify({'status': 'error', 'message': 'Невалиден тип на артикула.'}), 400
 
+        # A client's stored lot may not go below zero (our lots stay non-blocking). Only
+        # checked when taking material: a correction that returns it is never refused.
+        names = _negative_client_lots({('material', material.id)}, details=False) if material and stock_delta > 0 else []
+        if names:
+            db.session.rollback()
+            return jsonify({'status': 'error', 'message': f'Отказано: наличността на клиентска партида би станала '
+                                                          f'отрицателна ({", ".join(names)}).'}), 400
+
         order = order_item.order
         refresh_order_status(order)
         db.session.commit()
         stock_note = f' - наличността е коригирана с {stock_delta:+d} бр.' if stock_delta else ''
+        if material:
+            stock_note += f', материал "{material.display_name}" - нова наличност {material.stock_quantity:g}'
         log_action(f'Изработени {produced_qty} бр. от {target_label} (поръчка {order.order_number}){stock_note}')
 
         return jsonify({
@@ -14318,8 +14409,9 @@ def admin_production_orders():
     JSON for the wizard's client-side math - same *_data-as-JSON convention
     as admin_delivery_notes().
     """
-    # a client-material detail is cut from the client's own lot and written off with a "Протокол за изписване",
-    # never a production job on our stock (create_production_order() refuses a client lot too)
+    # a client-material detail is cut from the client's own lot - written off with a "Протокол за изписване" or
+    # automatically when produced for an order (admin_production_report()), never a production job on our
+    # stock (create_production_order() refuses a client lot too)
     details = [d for d in Detail.query.order_by(Detail.name).options(db.joinedload(Detail.material)).all()
                if not d.client_material]
     # every price lot once, cheapest first; each detail picks its own lots out of this list below
@@ -16768,6 +16860,9 @@ def admin_delete_material(key):
                if model.query.filter_by(material_id=material.id).first()]
     if ClientDeliveryNoteItem.query.filter_by(remnant_material_id=material.id).first():
         used_in.append('издадена стокова разписка (остатък)')
+    if (OrderItem.query.filter_by(consumed_material_id=material.id).first()
+            or OrderItemComponent.query.filter_by(consumed_material_id=material.id).first()):
+        used_in.append('поръчка (изразходван материал)')
     if used_in:
         flash(f'Материалът "{material.display_name}" се използва в поне една {", ".join(used_in)} '
               f'и не може да бъде изтрит.', 'danger')
@@ -24437,7 +24532,7 @@ def admin_solar_roof_assign():
 @role_required('admin')
 def admin_offers():
     offers = (Offer.query.order_by(Offer.created_at.desc())
-              .options(db.joinedload(Offer.client), db.selectinload(Offer.items)).all())
+              .options(db.joinedload(Offer.client), db.joinedload(Offer.order), db.selectinload(Offer.items)).all())
     return render_template('admin_offers.html', offers=offers, active_page='admin_offers')
 
 
@@ -24769,6 +24864,7 @@ def admin_offer_create_order(offer_id):
         flash('Избраните редове вече не съответстват на съществуващи продукти/детайли.', 'danger')
         return redirect(url_for('admin_offer_edit', offer_id=offer.id))
 
+    offer.order_id = new_order.id
     db.session.commit()
     log_action(f'Създадена поръчка {new_order.order_number} от оферта № {offer.number} за "{customer_name}" ({len(selected)} артикул(и))')
     flash(f'Поръчка {new_order.order_number} беше създадена от офертата.', 'success')

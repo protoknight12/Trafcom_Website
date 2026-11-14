@@ -34,7 +34,7 @@ import pytest
 from werkzeug.security import generate_password_hash
 
 from app import (app as flask_app, db, User, MaterialPrice, Detail, Product, ProductDetail,
-                  Offer, OfferItem, Order, OrderItem, OrderItemComponent, Service, Operation, limiter)
+                  Offer, OfferItem, Order, OrderItem, OrderItemComponent, Service, Operation, ActivityLog, limiter)
 
 
 @pytest.fixture
@@ -254,3 +254,36 @@ def test_create_order_rejects_only_text_items(client):
     assert res.status_code == 200
     with flask_app.app_context():
         assert Order.query.count() == 0
+
+def test_create_order_links_offer_to_order_and_shows_it(client):
+    c, offer_id, product_item_id, _d, _t, _p, _dd = client
+    page = f'/admin/offers/{offer_id}/edit'
+    assert 'вече е създадена поръчка' not in c.get(page).get_data(as_text=True)
+    c.post(f'/admin/offers/{offer_id}/create-order', data={'customer_name': 'QA Link', 'item_ids': [str(product_item_id)]})
+    with flask_app.app_context():
+        order = Order.query.filter_by(customer_name='QA Link').one()
+        assert db.session.get(Offer, offer_id).order_id == order.id
+        number = order.order_number
+    assert f'Поръчка № {number}' in c.get('/admin/offers').get_data(as_text=True)
+    html = c.get(page).get_data(as_text=True)
+    assert f'Поръчка № {number}' in html
+    assert f'вече е създадена поръчка № {number}' in html  # data-confirm on the create-order form
+
+
+def test_data_step_links_offers_from_activity_log(client):
+    import runpy
+    c, offer_id, *_ = client
+    with flask_app.app_context():
+        order = Order(order_number='ORD-BACKFILL', customer_name='QA Old', status='new',
+                      user_id=User.query.filter_by(username='qa_admin').one().id)
+        db.session.add(order)
+        db.session.add(ActivityLog(username='qa_admin', role='admin',
+                                   action='Създадена поръчка ORD-BACKFILL от оферта № 00000000900 за "QA Old" (1 артикул(и))'))
+        db.session.add(ActivityLog(username='qa_admin', role='admin',
+                                   action='Създадена поръчка ORD-GONE от оферта № 00000000900 за "X" (1 артикул(и))'))
+        db.session.commit()
+        order_id = order.id
+    runpy.run_module('migration.data_backfill_offer_orders', run_name='__main__')
+    runpy.run_module('migration.data_backfill_offer_orders', run_name='__main__')  # idempotent
+    with flask_app.app_context():
+        assert db.session.get(Offer, offer_id).order_id == order_id

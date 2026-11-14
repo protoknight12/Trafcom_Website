@@ -31,7 +31,7 @@
             {{ material_type_label(material.type) }} &middot;
             {{ "%.2f"|format(material.cost_per_m2) }} €/{{ material_unit_short(material.type) }} &middot;
             Текуща наличност: {{ material.stock_quantity|round(2) }}.
-            Всяко постъпление (от доставчик или на съхранение от клиент) и всяко издаване (връщане, изписване, остатък), записани през складовите разписки.
+            Всяко постъпление (от доставчик или на съхранение от клиент) и всяко издаване (връщане, изписване, остатък), записани през складовите разписки, и изразходваното в производството (задачи и поръчки).
         </p>
         <p><a href="{{ url_for('storage_materials') }}" class="btn-secondary">&larr; Обратно към материалите</a></p>
 
@@ -66,6 +66,8 @@
                         <span class="alert-warning" style="padding: 2px 8px; border-radius: 4px;">Взето за производство</span>
                         {% elif m.kind == 'production_return' %}
                         <span class="alert-success" style="padding: 2px 8px; border-radius: 4px;">Върнато от производство</span>
+                        {% elif m.kind == 'order_production' %}
+                        <span class="alert-warning" style="padding: 2px 8px; border-radius: 4px;">Производство по поръчка</span>
                         {% elif m.direction == 'in' %}
                         <span class="alert-success" style="padding: 2px 8px; border-radius: 4px;">Постъпление</span>
                         {% else %}

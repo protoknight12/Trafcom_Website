@@ -40,6 +40,7 @@ ONCE = (
     'data_shelly_gen1_energy_x60',    # Gen1 meters' logged energy was 60x too low (Wh read as Watt-minutes): rescale the old ShellyReadingLog rows
     'data_close_registration',        # owner's decision 2026-10-15: new accounts only through an admin (checkbox on /admin/users reopens it)
     'data_reprice_owned_details',     # owned Details created before the owner-pricing rule get the owner's Материали terms in calculated_price
+    'data_backfill_offer_orders',     # offers turned into orders before offer.order_id existed get linked to them from the ActivityLog
 )
 
 
