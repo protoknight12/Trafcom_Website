@@ -352,9 +352,11 @@
 
     document.querySelectorAll('input[name="cdn_item_type"]').forEach(function (radio) {
         radio.addEventListener('change', function () {
-            document.getElementById('material_selector').style.display = this.value === 'material' ? 'block' : 'none';
-            document.getElementById('detail_selector').style.display = this.value === 'detail' ? 'block' : 'none';
-            document.getElementById('product_selector').style.display = this.value === 'product' ? 'block' : 'none';
+            // The CHECKED radio, not this: form_dialog.js fires 'change' on every radio after a reset.
+            const type = document.querySelector('input[name="cdn_item_type"]:checked').value;
+            document.getElementById('material_selector').style.display = type === 'material' ? 'block' : 'none';
+            document.getElementById('detail_selector').style.display = type === 'detail' ? 'block' : 'none';
+            document.getElementById('product_selector').style.display = type === 'product' ? 'block' : 'none';
             fillPriceFromSelection();
             updateRemnantFields();
         });

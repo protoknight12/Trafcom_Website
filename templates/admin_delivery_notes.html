@@ -803,12 +803,18 @@
         }
     }
 
+    // Reads the CHECKED radio, not the event target: form_dialog.js fires
+    // 'change' on every radio after a reset, so the last one (product) used to win.
+    function applyDnItemType() {
+        const type = document.querySelector('input[name="dn_item_type"]:checked').value;
+        document.getElementById('material_selector').style.display = type === 'material' ? 'block' : 'none';
+        document.getElementById('detail_selector').style.display = type === 'detail' ? 'block' : 'none';
+        document.getElementById('product_selector').style.display = type === 'product' ? 'block' : 'none';
+        document.getElementById('detail_material_row').style.display = type === 'detail' ? 'flex' : 'none';
+    }
     document.querySelectorAll('input[name="dn_item_type"]').forEach(function (radio) {
         radio.addEventListener('change', function () {
-            document.getElementById('material_selector').style.display = this.value === 'material' ? 'block' : 'none';
-            document.getElementById('detail_selector').style.display = this.value === 'detail' ? 'block' : 'none';
-            document.getElementById('product_selector').style.display = this.value === 'product' ? 'block' : 'none';
-            document.getElementById('detail_material_row').style.display = this.value === 'detail' ? 'flex' : 'none';
+            applyDnItemType();
             fillParamsFromSelection();
         });
     });
@@ -823,14 +829,7 @@
         const radio = type && document.querySelector('input[name="dn_item_type"][value="' + type + '"]');
         if (radio) radio.checked = true;
     })();
-    document.querySelectorAll('input[name="dn_item_type"]').forEach(function (radio) {
-        if (radio.checked) {
-            document.getElementById('material_selector').style.display = radio.value === 'material' ? 'block' : 'none';
-            document.getElementById('detail_selector').style.display = radio.value === 'detail' ? 'block' : 'none';
-            document.getElementById('product_selector').style.display = radio.value === 'product' ? 'block' : 'none';
-            document.getElementById('detail_material_row').style.display = radio.value === 'detail' ? 'flex' : 'none';
-        }
-    });
+    applyDnItemType();
     applyDnParty();
     fillParamsFromSelection();
 
