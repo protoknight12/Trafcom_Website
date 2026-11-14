@@ -165,6 +165,23 @@ def test_untouched_order_is_hard_deleted(c, ids):
     assert not os.path.exists(path)
 
 
+def test_cancelled_order_is_listed_and_deleting_it_frees_the_product(c, ids):
+    order_id = _order(c, [{'type': 'product', 'id': ids['product'], 'qty': 1}])
+    with flask_app.app_context():
+        db.session.get(Order, order_id).status = 'cancelled'
+        db.session.commit()
+    g.pop('_login_user', None)
+    page = c.get('/admin/production').get_data(as_text=True)
+    assert 'Отказани поръчки' in page and f'/admin/orders/{order_id}/delete' in page
+    g.pop('_login_user', None)
+    refused = c.post(f"/admin/products/{ids['product']}/delete", follow_redirects=True).get_data(as_text=True)
+    assert 'не може да бъде изтрит' in refused
+    assert 'е изтрита' in _delete(c, order_id)
+    g.pop('_login_user', None)
+    done = c.post(f"/admin/products/{ids['product']}/delete", follow_redirects=True).get_data(as_text=True)
+    assert 'беше изтрит' in done
+
+
 def test_produced_order_is_reversed_and_hidden(c, ids):
     order_id = _order(c, [{'type': 'detail', 'id': ids['detail'], 'qty': 5}])
     (item,) = _items(order_id)

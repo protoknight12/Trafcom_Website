@@ -237,6 +237,32 @@
     <div class="admin-card text-center no-data">Няма регистрирани поръчки.</div>
     {% endfor %}
 
+    {% if cancelled_orders %}
+    <section class="admin-card" id="cancelled-orders">
+        <h3 style="margin-top: 0;">Отказани поръчки</h3>
+        <p class="text-small text-muted">Не се показват в отчета, но пазят редовете си - продукт или детайл от тях не може да се изтрие, докато не изтриете поръчката.</p>
+        <table class="admin-table">
+            <thead><tr><th>Поръчка</th><th>Клиент</th><th>Дата</th><th></th></tr></thead>
+            <tbody>
+            {% for order in cancelled_orders %}
+            <tr id="order-{{ order.id }}">
+                <td>{{ order.order_number }}</td>
+                <td>{{ order.client.name if order.client else '—' }}</td>
+                <td>{{ (order.created_at|local).strftime('%d.%m.%Y') }}</td>
+                <td class="text-right">
+                    <form method="POST" action="{{ url_for('admin_delete_order', order_id=order.id) }}" data-once
+                          data-confirm="Изтриване на отказана поръчка {{ order.order_number }}?">
+                        {% include 'partials/csrf_field.html' %}
+                        <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Изтрий</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </section>
+    {% endif %}
+
     {#- What became of the rest of each sheet - posted to admin_order_remnants(). #}
     <dialog id="remnantDialog" class="form-dialog">
         <button type="button" class="dialog-close" aria-label="Затвори" onclick="this.closest('dialog').close()">&times;</button>

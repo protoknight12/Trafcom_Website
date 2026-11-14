@@ -15157,7 +15157,12 @@ def admin_production_report():
                            db.selectinload(OrderItem.attachments)))
               .all())
     machines = Machine.query.order_by(Machine.name).all()
+    # Cancelled orders are not in the report above, but they still hold their lines (a product
+    # used by one cannot be deleted) - listed at the bottom so an admin can delete them.
+    cancelled_orders = (live_orders().filter(Order.status == 'cancelled')
+                        .order_by(Order.created_at.desc()).all()) if current_user.is_admin else []
     return render_template('production_report.html', orders=orders, machines=machines,
+                           cancelled_orders=cancelled_orders,
                            reservations=_open_material_reservations(), remnants=_pending_remnants(orders),
                            cut_plans=_order_cut_groups(orders), active_page='production')
 
