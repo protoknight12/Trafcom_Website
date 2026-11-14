@@ -1,6 +1,7 @@
 """
 pytest: an Order reserves its raw material when it is placed (OrderMaterialReservation, from
-create_order() and admin_offer_create_order() alike), coverage is computed live, first come first
+create_order() for staff and admin_offer_create_order(); a customer's order only after staff press
+admin_confirm_order_material()), coverage is computed live, first come first
 served (_open_material_reservations()), a shortage at creation raises one MaterialRequest per short lot
 naming the order (not for a client's own lot), production on an uncovered lot is refused
 (admin_production_report(), increases only), consumption shrinks what is still reserved, a cancelled
@@ -47,7 +48,8 @@ def ids():
         seed_material_types()
         admin = User(username='qa_admin', password=generate_password_hash('irrelevant123'), role='admin')
         owner = Client(name='Клиент А')
-        db.session.add_all([admin, owner])
+        db.session.add_all([admin, owner,
+                            User(username='qa_customer', password=generate_password_hash('irrelevant123'), role='regular_user')])
         db.session.flush()
         # cost 0 = never priced: the delivery note test bumps this very lot instead of splitting a new one
         ours = MaterialPrice(key='steel', display_name='Стомана 2мм', cost_per_m2=0, type='sheets', thickness_mm=2.0,
@@ -79,8 +81,24 @@ def c(ids):
     return client
 
 
+@pytest.fixture
+def customer(ids):
+    client = _as(flask_app.test_client())
+    client.post('/login', data={'username': 'qa_customer', 'password': 'irrelevant123'})
+    return client
+
+
+def _as(client):
+    """The fixtures keep one app context open, so flask-login's cached user (g) would leak between two
+    test clients - drop it before switching between the admin and the customer client."""
+    from flask import g
+    g.pop('_login_user', None)
+    return client
+
+
 def _order(c, cart, client_id=''):
     """Places an order through create_order(); returns (order id, redirect response)."""
+    _as(c)
     before = {o.id for o in _all(Order)}
     res = c.post('/orders/new', data={'customer_name': 'QA', 'cart_json': json.dumps(cart), 'client_id': client_id})
     assert res.status_code == 302
@@ -109,7 +127,7 @@ def _item(order_id):
 
 
 def _produce(c, item_id, qty, target_type='item'):
-    return c.post('/admin/production', data={'target_type': target_type, 'target_id': item_id, 'produced_qty': str(qty)})
+    return _as(c).post('/admin/production', data={'target_type': target_type, 'target_id': item_id, 'produced_qty': str(qty)})
 
 
 def _flashes(c):
@@ -220,9 +238,61 @@ def test_delivery_note_covers_a_waiting_order(c, ids):
     assert _produce(c, _item(second), 7).get_json()['status'] == 'success'
 
 
+def test_customer_order_reserves_nothing_until_staff_confirm(c, customer, ids):
+    order_id, _ = _order(customer, [{'type': 'detail', 'id': ids['detail'], 'qty': 100000}])   # far beyond the stock
+    assert _reserved(order_id) == {} and _all(MaterialRequest) == []
+    assert 'Потвърди и задели материал' in _as(c).get('/admin/production').get_data(as_text=True)
+    assert _produce(c, _item(order_id), 1).get_json()['status'] == 'success'   # never blocked without rows
+
+    other, _ = _order(customer, [{'type': 'detail', 'id': ids['detail'], 'qty': 5}])
+    res = _as(c).post(f'/admin/orders/{other}/confirm-material')
+    assert res.status_code == 302
+    assert _reserved(other) == pytest.approx({ids['ours']: 0.5})
+    assert _flashes(c)[0] == f'Материалът за поръчка {_number(other)} е заделен.'
+    html = _as(c).get('/admin/production').get_data(as_text=True)
+    assert html.count('Материал заделен') == 1
+
+
+def test_staff_order_still_reserves_at_creation(c, ids):
+    order_id, _ = _order(c, [{'type': 'detail', 'id': ids['detail'], 'qty': 3}])
+    assert _reserved(order_id) == pytest.approx({ids['ours']: 0.3})
+
+
+def test_confirm_raises_request_on_shortage_and_twice_is_a_noop(c, customer, ids):
+    order_id, _ = _order(customer, [{'type': 'detail', 'id': ids['detail'], 'qty': 15}])   # 1.5 sheets, 1 in stock
+    assert _as(c).post(f'/admin/orders/{order_id}/confirm-material').status_code == 302
+    (req,) = _all(MaterialRequest)
+    assert req.material_id == ids['ours'] and req.quantity == pytest.approx(0.5) and _number(order_id) in req.note
+    assert _reserved(order_id) == pytest.approx({ids['ours']: 1.5})
+    assert any('не стига' in m for m in _flashes(c))
+    from app import ActivityLog
+    with flask_app.app_context():
+        assert ActivityLog.query.filter(ActivityLog.action.like('%Потвърден и заделен материал%')).count() == 1
+    assert _as(c).post(f'/admin/orders/{order_id}/confirm-material').status_code == 302
+    assert len(_all(MaterialRequest)) == 1 and _reserved(order_id) == pytest.approx({ids['ours']: 1.5})
+    assert any('вече е заделен' in m for m in _flashes(c))
+
+
+def test_confirm_refused_for_non_staff_and_closed_orders(c, customer, ids):
+    order_id, _ = _order(customer, [{'type': 'detail', 'id': ids['detail'], 'qty': 5}])
+    assert _as(customer).post(f'/admin/orders/{order_id}/confirm-material').status_code in (302, 403)
+    assert _reserved(order_id) == {}
+    for status in ('completed', 'cancelled'):
+        with flask_app.app_context():
+            db.session.get(Order, order_id).status = status
+            db.session.commit()
+        assert _as(c).post(f'/admin/orders/{order_id}/confirm-material').status_code == 302
+        assert _reserved(order_id) == {}
+
+
+def _number(order_id):
+    with flask_app.app_context():
+        return db.session.get(Order, order_id).order_number
+
+
 def test_production_report_and_storage_show_the_reservation(c, ids):
     first, _ = _order(c, [{'type': 'detail', 'id': ids['detail'], 'qty': 7}])
     second, _ = _order(c, [{'type': 'detail', 'id': ids['detail'], 'qty': 7}])
-    html = c.get('/admin/production').get_data(as_text=True)
+    html = _as(c).get('/admin/production').get_data(as_text=True)
     assert html.count('Материал заделен') == 1 and html.count('Чака материал:') == 1
     assert 'Заделено: 1.4' in c.get('/storage/materials').get_data(as_text=True)

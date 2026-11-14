@@ -14259,7 +14259,9 @@ def create_order():
             flash(gettext('Невалидни артикули в поръчката.'), 'danger')
             return redirect(url_for('create_order'))
 
-        material_warnings = _reserve_order_material(new_order)
+        # A customer's order reserves nothing until staff confirm it (admin_confirm_order_material()):
+        # otherwise any account could hold the material with a huge quantity and flood the requests.
+        material_warnings = _reserve_order_material(new_order) if current_user.is_staff else []
         db.session.commit()
         order_items = OrderItem.query.filter_by(order_id=new_order.id).all()
         header = f'Поръчка {new_order.order_number} за "{customer_name}"'
@@ -14535,6 +14537,25 @@ def admin_production_report():
     machines = Machine.query.order_by(Machine.name).all()
     return render_template('production_report.html', orders=orders, machines=machines,
                            reservations=_open_material_reservations(), active_page='production')
+
+
+@app.route('/admin/orders/<int:order_id>/confirm-material', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_confirm_order_material(order_id):
+    """Staff reserve the material of a customer's order (create_order() does not for a non-staff user)."""
+    order = _lock_or_404(Order, order_id)
+    if order.status in ('completed', 'cancelled'):
+        flash('Поръчката е приключена или отказана - материал не се заделя.', 'danger')
+    elif OrderMaterialReservation.query.filter_by(order_id=order.id).first():
+        flash(f'Материалът за поръчка {order.order_number} вече е заделен.', 'info')
+    else:
+        warnings = _reserve_order_material(order)
+        db.session.commit()
+        log_action(f'Потвърден и заделен материал за поръчка {order.order_number}')
+        flash(f'Материалът за поръчка {order.order_number} е заделен.', 'success')
+        for warning in warnings:
+            flash(warning, 'warning')
+    return redirect(url_for('admin_production_report') + f'#order-{order.id}')
 
 
 @app.route('/admin/missing-stock')
