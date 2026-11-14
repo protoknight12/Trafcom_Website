@@ -265,6 +265,8 @@
                                     "weight_kg": material.weight_kg, "min_quantity": material.min_quantity,
                                     "erp_number": material.erp_number, "code_number": material.code_number
                                 }|tojson|forceescape }}'>Редактирай</button>
+                        <button type="button" class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;" title="Нов материал по образец на този"
+                                onclick="openMaterialDialog(this.previousElementSibling, true)">Дублирай</button>
                     </td>
                     <td class="text-right">
                         <form action="{{ url_for('print_label', target_type='material', target_id=material.id) }}" method="GET" style="display:flex; gap:4px; align-items:center; justify-content:flex-end;">
@@ -430,16 +432,19 @@
     };
     const ADD_ACTION = document.getElementById('materialForm').action;
 
-    function openMaterialDialog(btn) {
+    // copy=true: the row is a template for a NEW material (add action, ERP №/КД № cleared).
+    function openMaterialDialog(btn, copy) {
         const form = document.getElementById('materialForm');
         form.reset();
         const data = btn ? JSON.parse(btn.dataset.material) : null;
-        form.action = btn ? btn.dataset.action : ADD_ACTION;
-        document.getElementById('materialDialogTitle').textContent = data ? 'Редакция: ' + data.display_name : 'Нов материал';
-        document.getElementById('materialFormSubmit').textContent = data ? 'Запази' : 'Добави материал';
+        form.action = (btn && !copy) ? btn.dataset.action : ADD_ACTION;
+        document.getElementById('materialDialogTitle').textContent = !data ? 'Нов материал'
+            : copy ? 'Нов материал (копие от ' + data.display_name + ')' : 'Редакция: ' + data.display_name;
+        document.getElementById('materialFormSubmit').textContent = (data && !copy) ? 'Запази' : 'Добави материал';
         if (data) {
             Object.keys(FIELD_IDS).forEach(function (k) {
-                document.getElementById(FIELD_IDS[k]).value = data[k] == null ? '' : data[k];
+                const v = (copy && (k === 'erp_number' || k === 'code_number')) ? null : data[k];
+                document.getElementById(FIELD_IDS[k]).value = v == null ? '' : v;
             });
         }
         applyMaterialDimensionLabels();
