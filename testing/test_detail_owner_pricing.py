@@ -169,3 +169,16 @@ def test_data_step_reprices_existing_owned_details(setup):
     with flask_app.app_context():
         assert db.session.get(Detail, setup['detail'].id).calculated_price == 110.0
         assert Detail.query.filter_by(name='Ръчна').one().calculated_price == 7
+
+
+def test_admin_details_owner_filter(setup):
+    s = setup
+    s['detail'].owner_client_id = s['a'].id
+    db.session.add(Detail(name='Публичен', material_key='steel', width=1, height=1, total_length=0, pierce_count=0, calculated_price=0))
+    db.session.commit()
+    html = _admin().get('/admin/details').get_data(as_text=True)
+    assert 'id="adminDetailsOwnerFilter"' in html
+    assert f'<option value="{s["a"].id}">Собственик А</option>' in html
+    assert f'<tr data-owner="{s["a"].id}"' in html
+    assert '<tr data-owner="public"' in html
+    assert 'row.dataset.owner === ownerSel.value' in html

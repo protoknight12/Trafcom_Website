@@ -106,8 +106,13 @@
         </form>
 
         {% if details %}
-        <div class="form-group" style="max-width: 360px;">
-            <input type="text" id="adminDetailsSearchInput" placeholder="Търсене по име, материал, ERP №...">
+        <div style="display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center;">
+            <input type="text" id="adminDetailsSearchInput" placeholder="Търсене по име, материал, ERP №..." style="flex: 2 1 220px;">
+            <select id="adminDetailsOwnerFilter" style="flex: 1 1 180px;" title="Филтър по собственик - запазва се до следваща промяна">
+                <option value="">Всички собственици</option>
+                <option value="public">Публични</option>
+                {% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+            </select>
         </div>
         {% endif %}
 
@@ -129,7 +134,7 @@
                 </thead>
                 <tbody id="adminDetailsTableBody">
                 {% for detail in details %}
-                <tr data-search="{{ (detail.name ~ ' ' ~ (detail.material.display_name if detail.material else '') ~ ' ' ~ (detail.erp_number or '') ~ ' ' ~ (detail.code_number or '')) | lower }}">
+                <tr data-owner="{{ detail.owner_client_id or 'public' }}" data-search="{{ (detail.name ~ ' ' ~ (detail.material.display_name if detail.material else '') ~ ' ' ~ (detail.erp_number or '') ~ ' ' ~ (detail.code_number or '')) | lower }}">
                     <td><strong><a href="{{ url_for('detail_dxf_dashboard', detail_id=detail.id) }}">{{ detail.name }}</a></strong></td>
                     <td><span class="badge badge-user">{{ detail.material.display_name if detail.material else 'Неизвестен' }}</span></td>
                     <td>{{ format_cut_dimensions(detail.width, detail.height, detail.material.type if detail.material else 'sheets') }}</td>
@@ -187,7 +192,24 @@
 </main>
 
 <script src="{{ url_for('static', filename='js/table_search.js') }}"></script>
-<script>initTableSearch('adminDetailsSearchInput', 'adminDetailsTableBody');</script>
+<script>
+    // Owner filter is remembered per browser (localStorage) until changed.
+    (function () {
+        const OWNER_KEY = 'adminDetailsOwnerFilter';
+        const ownerSel = document.getElementById('adminDetailsOwnerFilter');
+        if (!ownerSel) { initTableSearch('adminDetailsSearchInput', 'adminDetailsTableBody'); return; }
+        try { ownerSel.value = localStorage.getItem(OWNER_KEY) || ''; } catch (e) {}
+        if (ownerSel.selectedIndex < 0) ownerSel.value = '';   // client deleted since
+        const search = initTableSearch('adminDetailsSearchInput', 'adminDetailsTableBody', function (row) {
+            return !ownerSel.value || row.dataset.owner === ownerSel.value;
+        });
+        ownerSel.addEventListener('change', function () {
+            try { localStorage.setItem(OWNER_KEY, ownerSel.value); } catch (e) {}
+            if (search) search.apply();
+        });
+        if (search) search.apply();
+    })();
+</script>
 <script src="{{ url_for('static', filename='js/material_picker.js') }}"></script>
 <script>
     const ND_SERVICES = {{ services_data|tojson }};

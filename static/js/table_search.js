@@ -6,7 +6,9 @@
 // ponytail: plain DOM filtering, fine up to a few thousand rendered items;
 // past that, switch to server-side search + pagination instead of loading
 // everything into one page.
-function initTableSearch(inputId, containerIds) {
+// Optional third argument: extra(row) -> bool, ANDed with the text match (a
+// page's own select filter). Returns {apply} so the page can re-run it.
+function initTableSearch(inputId, containerIds, extra) {
     const input = document.getElementById(inputId);
     if (!input) return;
     const ids = Array.isArray(containerIds) ? containerIds : [containerIds];
@@ -26,7 +28,7 @@ function initTableSearch(inputId, containerIds) {
         const q = input.value.trim().toLowerCase();
         let visible = 0;
         rows.forEach(function (row) {
-            const match = !q || row.dataset.search.indexOf(q) !== -1;
+            const match = (!q || row.dataset.search.indexOf(q) !== -1) && (!extra || extra(row));
             row.hidden = !match;
             if (match) visible++;
         });
@@ -37,4 +39,5 @@ function initTableSearch(inputId, containerIds) {
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(applyFilter, 120);
     });
+    return { apply: applyFilter };
 }
