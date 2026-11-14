@@ -1,5 +1,5 @@
 from bisect import bisect_right
-from collections import deque
+from collections import Counter, deque
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import os
@@ -1031,8 +1031,12 @@ class Order(db.Model):
     # client's name, so none of those templates need to change.
     client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True, index=True)
     deliverer_id = db.Column(db.Integer, db.ForeignKey('deliverer.id'), nullable=True)
+    # Soft delete (admin_delete_order()): an order that moved stock is kept with its movements
+    # reversed, so admin_material_history() still shows both; hidden everywhere else (live_orders()).
+    deleted_at = db.Column(db.DateTime, nullable=True)
+    deleted_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
 
-    user = db.relationship('User', backref=db.backref('orders', lazy=True))
+    user = db.relationship('User', foreign_keys=[user_id], backref=db.backref('orders', lazy=True))
     machine = db.relationship('Machine', backref='orders')
     client = db.relationship('Client')
     deliverer = db.relationship('Deliverer')
@@ -5561,6 +5565,47 @@ def generate_order_number():
         if not Order.query.filter_by(order_number=candidate).first():
             return candidate
     return f"ORD-{year}-{uuid.uuid4().hex[:8].upper()}"
+
+
+def live_orders():
+    """Order.query without the soft-deleted orders (admin_delete_order()) - every order list,
+    report, count and lookup starts here, so a deleted order shows up nowhere but the material history."""
+    return Order.query.filter(Order.deleted_at.is_(None))
+
+
+def _item_lots(item):
+    """Ids of the lots an order line takes material from (frozen consumed_material_id, else the
+    line's material) - empty for a "материал на клиента" line or a component-less product."""
+    if item.own_material:
+        return set()
+    rows = item.components if item.product_id else [item]
+    return {r.consumed_material_id or getattr(_line_material(r, r.detail), 'id', None) for r in rows} - {None}
+
+
+def _decided_lot_refusal(order, item):
+    """Bulgarian refusal when `item` takes material from a sheet lot whose remnant this order already
+    decided (OrderMaterialRemnant) - those sheets are written off, the group's lines stay as they are."""
+    decided = {m for (m,) in db.session.query(OrderMaterialRemnant.material_id).filter_by(order_id=order.id)}
+    lot_id = next(iter(sorted(_item_lots(item) & decided)), None)
+    if lot_id is None:
+        return None
+    return (f'Остатъкът от листовете "{format_material_option(db.session.get(MaterialPrice, lot_id))}" по поръчка '
+            f'{order.order_number} вече е решен - редовете върху този материал не могат да се променят.')
+
+
+def _sync_order_reservation(order, needs_before):
+    """After a line edit (admin_order_edit() and its add/remove routes): moves the order's
+    OrderMaterialReservation rows by what its needs changed (_order_material_needs() now minus
+    `needs_before`), via _reserve_order_material(changes=...) - a MaterialRequest only for a lot whose
+    need grew and is short. An order without reservation rows (a customer's order not confirmed yet, or
+    one placed before reservations existed) keeps none. Returns the warnings to flash."""
+    if not OrderMaterialReservation.query.filter_by(order_id=order.id).first():
+        return []
+    db.session.expire(order, ['items'])
+    after = _order_material_needs(order)
+    changes = {m: after.get(m, 0) - needs_before.get(m, 0) for m in set(after) | set(needs_before)}
+    changes = {m: q for m, q in changes.items() if abs(q) > PRODUCTION_STOCK_TOLERANCE}
+    return _reserve_order_material(order, changes) if changes else []
 
 
 def refresh_order_status(order):
@@ -10389,7 +10434,7 @@ def admin_dashboard():
         'clients': Client.query.count(),
         'deliverers': Deliverer.query.count(),
         'suppliers': Supplier.query.count(),
-        'orders': Order.query.count(),
+        'orders': live_orders().count(),
         'quality_checks': QualityCheck.query.count(),
         'documents': ControlledDocument.query.count(),
         'capa': CapaRecord.query.count(),
@@ -10598,7 +10643,8 @@ def admin_material_history(material_id):
     of its own) - plus a sheet remnant decision (OrderMaterialRemnant): the
     true-up to whole sheets on the cut lot ('order_scrap', or
     'order_production' when every sheet came back) and the returned sheets on
-    the remnant lot ('order_remnant_return'). Quantities are shown in the stock's own unit (_material_stock_delta()'s output - sheet count for sheets/other,
+    the remnant lot ('order_remnant_return'); a deleted order (admin_delete_order()) adds
+    the reversal of each of those ('order_production_reversal', at deleted_at). Quantities are shown in the stock's own unit (_material_stock_delta()'s output - sheet count for sheets/other,
     not the raw m² actually used/returned) so they add up against
     stock_quantity the same way delivery-note quantities do. Same
     admin+worker access as storage_materials() (the "склад" page this is
@@ -10679,9 +10725,18 @@ def admin_material_history(material_id):
                 'party': 'Производство', 'note_number': None, 'unit_price': None,
                 'notes': f'изтрита задача - {job.quantity} бр. "{job.detail.name}" ({reversed_by})',
             })
+    def add_order_movement(order, movement):
+        """An order's movement, plus its reversal when the order was deleted (admin_delete_order())."""
+        movements.append(movement)
+        if order.deleted_at is not None:
+            movements.append(dict(movement, date=to_local(order.deleted_at).date(), created_at=order.deleted_at,
+                                  kind='order_production_reversal',
+                                  direction='in' if movement['direction'] == 'out' else 'out',
+                                  notes=f'изтрита поръчка - {movement["notes"]}'))
+
     for row, order, name in ([(c, c.order_item.order, c.detail_name_snapshot) for c in order_components]
                              + [(i, i.order, i.detail.name if i.detail else '-') for i in order_items]):
-        movements.append({
+        add_order_movement(order, {
             'date': to_local(order.created_at).date(), 'created_at': order.created_at,
             'kind': 'order_production', 'direction': 'out', 'quantity': row.material_consumed,
             'party': order.customer_name, 'note_number': order.order_number, 'unit_price': None,
@@ -10692,7 +10747,7 @@ def admin_material_history(material_id):
     for r in (OrderMaterialRemnant.query.filter(OrderMaterialRemnant.material_id == material_id,
                                                 OrderMaterialRemnant.extra_taken > 0)
               .options(db.joinedload(OrderMaterialRemnant.order))):
-        movements.append({
+        add_order_movement(r.order, {
             'date': to_local(r.decided_at).date(), 'created_at': r.decided_at,
             'kind': 'order_scrap' if r.scrap_count else 'order_production', 'direction': 'out',
             'quantity': r.extra_taken, 'party': r.order.customer_name, 'note_number': r.order.order_number,
@@ -10701,7 +10756,7 @@ def admin_material_history(material_id):
         })
     for r in _remnant_decisions_returning_to(material_id):
         sizes = [f'{s["width"]:g}x{s["height"]:g} mm' for s in r.returned if s.get('material_id') == material_id]
-        movements.append({
+        add_order_movement(r.order, {
             'date': to_local(r.decided_at).date(), 'created_at': r.decided_at,
             'kind': 'order_remnant_return', 'direction': 'in', 'quantity': len(sizes),
             'party': r.order.customer_name, 'note_number': r.order.order_number, 'unit_price': None,
@@ -14411,6 +14466,82 @@ def upload_order_item_pdf():
     })
 
 
+def _add_order_line(order, row, pricing_client):
+    """One cart row ({type, id, qty, own_material, material_key, operations, attachment}) -> a new,
+    flushed OrderItem on `order`, priced server-side for `pricing_client` and frozen: a product with the
+    OrderItemComponent snapshot of its current recipe, a standalone detail in its chosen allowed material
+    with its order-time operations and staged PDF. Shared by create_order() and admin_order_add_line().
+    Returns (item, error): (None, None) = row skipped (malformed, unknown, outside a customer's catalog),
+    (None, message) = invalid material, the caller rolls the request back."""
+    if not isinstance(row, dict):
+        return None, None
+    try:
+        item_type = row.get('type')
+        item_id = int(row.get('id'))
+        qty = int(row.get('qty', 1))
+    except (TypeError, ValueError):
+        return None, None
+    if qty < 1:
+        return None, None
+
+    own_material = bool(row.get('own_material'))
+    if item_type == 'product':
+        product = Product.query.get(item_id)
+        if not product:
+            return None, None
+        if not current_user.is_staff and not catalog_item_allowed(product, current_user.client):
+            return None, None
+        pricing = calculate_product_pricing(product, pricing_client, own_material)
+        order_item = OrderItem(
+            order_id=order.id, product_id=product.id, own_material=own_material,
+            quantity_ordered=qty, unit_price=pricing['sell_price']
+        )
+        db.session.add(order_item)
+        db.session.flush()  # need order_item.id for its components
+
+        # Freeze the product's current recipe into per-detail
+        # production targets for this order line.
+        for pd in product.product_details:
+            db.session.add(OrderItemComponent(
+                order_item_id=order_item.id,
+                detail_id=pd.detail_id,
+                detail_name_snapshot=pd.detail.name,
+                quantity_needed=pd.quantity * qty
+            ))
+        return order_item, None
+
+    if item_type == 'detail':
+        detail = Detail.query.get(item_id)
+        if not detail:
+            return None, None
+        if not current_user.is_staff and not catalog_item_allowed(detail, current_user.client):
+            return None, None
+        # The material picked on the page: re-checked here and priced server-side, never the posted price.
+        raw_key = row.get('material_key')
+        material = _detail_material_choice(detail, raw_key.strip() if isinstance(raw_key, str) else raw_key)
+        if material is None:
+            return None, f'Невалиден материал за детайл "{localized(detail, "name")}".'
+        material_key = None if material.key == detail.material_key else material.key
+        order_item = OrderItem(
+            order_id=order.id, detail_id=detail.id, material_key=material_key,
+            quantity_ordered=qty, unit_price=detail_price_for(detail, pricing_client, own_material, material_key),
+            own_material=own_material
+        )
+        db.session.add(order_item)
+        db.session.flush()  # need order_item.id for its operations
+
+        op_rows = row.get('operations')
+        if isinstance(op_rows, list) and op_rows:
+            ops_cost_per_unit = _order_item_operations_cost(order_item, op_rows, pricing_client)
+            if own_material:
+                ops_cost_per_unit *= _own_material_factor(pricing_client)
+            order_item.unit_price = round(order_item.unit_price + ops_cost_per_unit, 2)
+
+        _link_order_item_attachment(order_item, row.get('attachment'))
+        return order_item, None
+    return None, None
+
+
 # МАРШРУТ ЗА ОБИКНОВЕНИ ПОТРЕБИТЕЛИ - СЪЗДАВАНЕ НА ПОРЪЧКА (кошница с няколко артикула)
 @app.route('/orders/new', methods=['GET', 'POST'])
 @login_required
@@ -14474,74 +14605,12 @@ def create_order():
 
         added_any = False
         for row in cart:
-            if not isinstance(row, dict):
-                continue
-            try:
-                item_type = row.get('type')
-                item_id = int(row.get('id'))
-                qty = int(row.get('qty', 1))
-            except (TypeError, ValueError):
-                continue
-            if qty < 1:
-                continue
-
-            own_material = bool(row.get('own_material'))
-            if item_type == 'product':
-                product = Product.query.get(item_id)
-                if not product:
-                    continue
-                if not current_user.is_staff and not catalog_item_allowed(product, current_user.client):
-                    continue
-                pricing = calculate_product_pricing(product, pricing_client, own_material)
-                order_item = OrderItem(
-                    order_id=new_order.id, product_id=product.id, own_material=own_material,
-                    quantity_ordered=qty, unit_price=pricing['sell_price']
-                )
-                db.session.add(order_item)
-                db.session.flush()  # need order_item.id for its components
-
-                # Freeze the product's current recipe into per-detail
-                # production targets for this order line.
-                for pd in product.product_details:
-                    db.session.add(OrderItemComponent(
-                        order_item_id=order_item.id,
-                        detail_id=pd.detail_id,
-                        detail_name_snapshot=pd.detail.name,
-                        quantity_needed=pd.quantity * qty
-                    ))
-                added_any = True
-
-            elif item_type == 'detail':
-                detail = Detail.query.get(item_id)
-                if not detail:
-                    continue
-                if not current_user.is_staff and not catalog_item_allowed(detail, current_user.client):
-                    continue
-                # The material picked on the page: re-checked here and priced server-side, never the posted price.
-                raw_key = row.get('material_key')
-                material = _detail_material_choice(detail, raw_key.strip() if isinstance(raw_key, str) else raw_key)
-                if material is None:
-                    db.session.rollback()
-                    flash(f'Невалиден материал за детайл "{localized(detail, "name")}".', 'danger')
-                    return redirect(url_for('create_order'))
-                material_key = None if material.key == detail.material_key else material.key
-                order_item = OrderItem(
-                    order_id=new_order.id, detail_id=detail.id, material_key=material_key,
-                    quantity_ordered=qty, unit_price=detail_price_for(detail, pricing_client, own_material, material_key),
-                    own_material=own_material
-                )
-                db.session.add(order_item)
-                db.session.flush()  # need order_item.id for its operations
-
-                op_rows = row.get('operations')
-                if isinstance(op_rows, list) and op_rows:
-                    ops_cost_per_unit = _order_item_operations_cost(order_item, op_rows, pricing_client)
-                    if own_material:
-                        ops_cost_per_unit *= _own_material_factor(pricing_client)
-                    order_item.unit_price = round(order_item.unit_price + ops_cost_per_unit, 2)
-
-                _link_order_item_attachment(order_item, row.get('attachment'))
-                added_any = True
+            order_item, error = _add_order_line(new_order, row, pricing_client)
+            if error:
+                db.session.rollback()
+                flash(error, 'danger')
+                return redirect(url_for('create_order'))
+            added_any = added_any or order_item is not None
 
         if not added_any:
             db.session.rollback()
@@ -14692,7 +14761,7 @@ def create_order():
 @app.route('/orders')
 @login_required
 def my_orders():
-    orders = (Order.query.filter_by(user_id=current_user.id).order_by(Order.created_at.desc())
+    orders = (live_orders().filter_by(user_id=current_user.id).order_by(Order.created_at.desc())
               .options(db.joinedload(Order.machine),
                        db.selectinload(Order.items).options(
                            db.joinedload(OrderItem.product), db.joinedload(OrderItem.detail),
@@ -14705,7 +14774,7 @@ def my_orders():
 @app.route('/orders/<int:order_id>/cancel', methods=['POST'])
 @login_required
 def cancel_order(order_id):
-    order = Order.query.get_or_404(order_id)
+    order = live_orders().filter_by(id=order_id).first_or_404()
 
     if order.user_id != current_user.id and not current_user.is_admin:
         flash(gettext('Нямате достъп до тази поръчка.'), 'danger')
@@ -14783,6 +14852,9 @@ def admin_production_report():
             target_label = f'артикул "{order_item.item_name}"'
         else:
             return jsonify({'status': 'error', 'message': 'Невалиден тип на артикула.'}), 400
+        if order_item.order.deleted_at:
+            db.session.rollback()
+            return jsonify({'status': 'error', 'message': 'Поръчката е изтрита.'}), 400
 
         # Making more pieces waits until the lot covers this order's reservation (first come
         # first served, see _open_material_reservations()); a correction downward never waits.
@@ -14837,7 +14909,7 @@ def admin_production_report():
             'remnant_prompt': remnant_prompt,
         })
 
-    orders = (Order.query.filter(Order.status != 'cancelled').order_by(Order.created_at.desc())
+    orders = (live_orders().filter(Order.status != 'cancelled').order_by(Order.created_at.desc())
               .options(db.joinedload(Order.user),
                        db.selectinload(Order.items).options(
                            db.joinedload(OrderItem.product), db.joinedload(OrderItem.material),
@@ -14884,6 +14956,8 @@ def admin_order_remnants():
     if any(s['action'] == 'return' for s in sheets):
         _lock_numbering('erp')  # a remnant may become a new lot (ERP №) - before any row lock, see create_delivery_note()
     order = _lock_or_404(Order, order_id)
+    if order.deleted_at:
+        return refuse('Поръчката е изтрита.')
     lot = _lock_or_404(MaterialPrice, material_id)
     group = next((g for g in _pending_remnants([order]).get(order.id, []) if g['material_id'] == lot.id), None)
     if not group:
@@ -14936,8 +15010,8 @@ def admin_order_remnants():
 def admin_confirm_order_material(order_id):
     """Staff reserve the material of a customer's order (create_order() does not for a non-staff user)."""
     order = _lock_or_404(Order, order_id)
-    if order.status in ('completed', 'cancelled'):
-        flash('Поръчката е приключена или отказана - материал не се заделя.', 'danger')
+    if order.status in ('completed', 'cancelled') or order.deleted_at:
+        flash('Поръчката е приключена, отказана или изтрита - материал не се заделя.', 'danger')
     elif OrderMaterialReservation.query.filter_by(order_id=order.id).first():
         flash(f'Материалът за поръчка {order.order_number} вече е заделен.', 'info')
     else:
@@ -14967,7 +15041,7 @@ def admin_order_item_material(item_id):
     order = item.order
     back = redirect(url_for('admin_production_report') + f'#order-{order.id}')
     detail = item.detail
-    if not detail or item.product_id or order.status in ('completed', 'cancelled'):
+    if not detail or item.product_id or order.status in ('completed', 'cancelled') or order.deleted_at:
         flash('Материалът на този ред не може да се сменя.', 'danger')
         return back
     if item.quantity_produced or item.material_consumed or item.consumed_material_id:
@@ -15004,6 +15078,320 @@ def admin_order_item_material(item_id):
     return back
 
 
+def _component_ratio(component, item):
+    """Pieces of the component per product on the line (the recipe frozen at order time)."""
+    return component.quantity_needed // item.quantity_ordered if item.quantity_ordered else 0
+
+
+def _order_line_state(item):
+    """(lowest quantity the line may be set to, whether production already moved stock on it)."""
+    rows = item.components if item.product_id else []
+    touched = bool(item.quantity_produced or item.material_consumed
+                   or any(c.quantity_produced or c.material_consumed for c in rows))
+    floor = max([item.quantity_produced] + [math.ceil(c.quantity_produced / _component_ratio(c, item))
+                                            for c in rows if _component_ratio(c, item)])
+    return max(1, floor), touched
+
+
+def _lock_order_lines(order):
+    """Locks the order's lines and their components (ids ascending) - the production report locks
+    the same rows before it moves their quantity_produced."""
+    items = [_lock_or_404(OrderItem, i) for i in sorted(i.id for i in order.items)]
+    for item in items:
+        for c_id in sorted(c.id for c in item.components):
+            _lock_or_404(OrderItemComponent, c_id)
+    return items
+
+
+def _order_pricing_client(order):
+    """The client an order's lines are priced for - as create_order() picked it."""
+    return order.client or (order.user.client if order.user else None)
+
+
+def _editable_order_or_redirect(order_id):
+    """(locked order, None) when the admin may edit it, else (None, redirect with a flash)."""
+    order = _lock_or_404(Order, order_id)
+    if order.deleted_at:
+        abort(404)
+    if order.status == 'cancelled':
+        flash(f'Поръчка {order.order_number} е отказана и не може да се редактира.', 'danger')
+        return None, redirect(url_for('admin_production_report'))
+    return order, None
+
+
+@app.route('/admin/orders/<int:order_id>/edit', methods=['GET', 'POST'])
+@role_required('admin')
+def admin_order_edit(order_id):
+    """
+    Admin edit of a placed order, opened in a frame dialog from the production report: the
+    fields create_order() sets (customer name, Client, Deliverer, machine) and each line's
+    quantity. A quantity never goes below what is already produced (a product line: below what
+    its components' produced pieces need) and keeps the line's frozen unit_price; a product
+    line's components scale by their frozen per-product ratio. Lines on a sheet lot whose
+    remnant is already decided cannot change (_decided_lot_refusal()). Afterwards the
+    reservation follows the new needs (_sync_order_reservation()) and the status is
+    recomputed (a completed order may reopen). Adding/removing lines:
+    admin_order_add_line() / admin_order_remove_line(); a line's material:
+    admin_order_item_material(). A cancelled order is not editable.
+    """
+    if request.method == 'GET':
+        order = live_orders().filter_by(id=order_id).first_or_404()
+        if order.status == 'cancelled':
+            flash(f'Поръчка {order.order_number} е отказана и не може да се редактира.', 'danger')
+            return redirect(url_for('admin_production_report'))
+        details = (Detail.query.order_by(Detail.name)
+                   .options(db.joinedload(Detail.material),
+                            db.selectinload(Detail.alt_materials).joinedload(DetailMaterial.material)).all())
+        return render_template('admin_order_edit.html', order=order,
+                               line_state={item.id: _order_line_state(item) for item in order.items},
+                               products=Product.query.order_by(Product.name).all(), details=details,
+                               clients=Client.query.order_by(Client.name).all(),
+                               deliverers=Deliverer.query.order_by(Deliverer.name).all(),
+                               machines=Machine.query.order_by(Machine.name).all(),
+                               services=Service.query.order_by(Service.name).all(),
+                               active_page='production')
+
+    order, refused = _editable_order_or_redirect(order_id)
+    if refused:
+        return refused
+    back = redirect(url_for('admin_order_edit', order_id=order.id))
+
+    def refuse(message):
+        db.session.rollback()
+        flash(message, 'danger')
+        return back
+
+    customer_name = request.form.get('customer_name', '').strip()
+    if not customer_name:
+        return refuse('Моля въведете име на клиент.')
+    picked = {}
+    for field, model in (('client_id', Client), ('deliverer_id', Deliverer), ('machine_id', Machine)):
+        raw = request.form.get(field, '')
+        row = db.session.get(model, int(raw)) if raw.isdigit() else None
+        picked[field] = row.id if row else None
+
+    items = _lock_order_lines(order)
+    needs_before = _order_material_needs(order)
+    line_logs = []
+    for item in items:
+        raw = request.form.get(f'qty_{item.id}')
+        if raw is None:
+            continue
+        try:
+            qty = int(raw)
+        except ValueError:
+            return refuse(f'Невалидно количество за "{item.item_name}".')
+        if qty == item.quantity_ordered:
+            continue
+        floor, _ = _order_line_state(item)
+        if qty < floor:
+            return refuse(f'"{item.item_name}": количеството не може да е под {floor} бр. - толкова вече са изработени.')
+        message = _decided_lot_refusal(order, item)
+        if message:
+            return refuse(message)
+        for c in item.components:
+            c.quantity_needed = _component_ratio(c, item) * qty
+        line_logs.append(f'{item.item_name}: {item.quantity_ordered} → {qty} бр.')
+        item.quantity_ordered = qty
+
+    order.customer_name = customer_name
+    order.client_id, order.deliverer_id, order.machine_id = picked['client_id'], picked['deliverer_id'], picked['machine_id']
+    summary = describe_changes(f'Редактирана поръчка {order.order_number}', order,
+                               {'customer_name': 'клиент', 'client_id': 'клиент (каталог) №',
+                                'deliverer_id': 'куриер №', 'machine_id': 'машина №'})
+    warnings = _sync_order_reservation(order, needs_before)
+    refresh_order_status(order)
+    db.session.commit()
+    log_action(summary + (f'; {"; ".join(line_logs)}' if line_logs else ''))
+    flash(f'Поръчка {order.order_number} е запазена.', 'success')
+    for warning in warnings:
+        flash(warning, 'warning')
+    return back
+
+
+@app.route('/admin/orders/<int:order_id>/lines/add', methods=['POST'])
+@role_required('admin')
+def admin_order_add_line(order_id):
+    """A new product / standalone-detail line on a placed order, built and priced by the same
+    _add_order_line() as create_order() (for the order's client - _order_pricing_client()),
+    including "материал на клиента", a detail's allowed material and order-time operations;
+    then the reservation and status follow (see admin_order_edit())."""
+    order, refused = _editable_order_or_redirect(order_id)
+    if refused:
+        return refused
+    back = redirect(url_for('admin_order_edit', order_id=order.id))
+    item_type, _, item_id = request.form.get('item', '').partition(':')
+    operations = [{'service_id': s, 'duration_minutes': d, 'description': t}
+                  for s, d, t in zip(request.form.getlist('op_service_id'), request.form.getlist('op_duration'),
+                                     request.form.getlist('op_description')) if s and d]
+    row = {'type': item_type, 'id': item_id, 'qty': request.form.get('qty', '1'),
+           'own_material': bool(request.form.get('own_material')),
+           'material_key': request.form.get('material_key') or None, 'operations': operations}
+    needs_before = _order_material_needs(order)
+    item, error = _add_order_line(order, row, _order_pricing_client(order))
+    if item is None:
+        db.session.rollback()
+        flash(error or 'Изберете продукт или детайл и количество поне 1.', 'danger')
+        return back
+    message = _decided_lot_refusal(order, item)
+    if message:
+        db.session.rollback()
+        flash(message, 'danger')
+        return back
+    warnings = _sync_order_reservation(order, needs_before)
+    db.session.expire(order, ['items'])
+    refresh_order_status(order)
+    db.session.commit()
+    log_action(f'Поръчка {order.order_number}: добавен ред {item.item_name} - {item.quantity_ordered} бр. x '
+               f'{item.unit_price:g} €')
+    flash(f'Добавен ред "{item.item_name}".', 'success')
+    for warning in warnings:
+        flash(warning, 'warning')
+    return back
+
+
+@app.route('/admin/order-items/<int:item_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_order_remove_line(item_id):
+    """Removes a line nothing was produced or consumed on (a line with production stays - the
+    whole order can still be deleted, admin_delete_order()); not the order's last line. Its
+    reference PDFs are removed after the commit."""
+    line = db.session.get(OrderItem, item_id) or abort(404)
+    order, refused = _editable_order_or_redirect(line.order_id)
+    if refused:
+        return refused
+    back = redirect(url_for('admin_order_edit', order_id=order.id))
+    items = _lock_order_lines(order)
+    needs_before = _order_material_needs(order)
+    item = next(i for i in items if i.id == item_id)
+    if _order_line_state(item)[1]:
+        flash(f'По реда "{item.item_name}" вече има производство - не може да се премахне.', 'danger')
+        return back
+    if len(items) == 1:
+        flash('Това е последният ред на поръчката - изтрийте цялата поръчка.', 'danger')
+        return back
+    message = _decided_lot_refusal(order, item)
+    if message:
+        flash(message, 'danger')
+        return back
+    files = [os.path.join(app.config['ORDER_ITEM_FILE_FOLDER'], a.filename) for a in item.attachments]
+    name = item.item_name
+    db.session.delete(item)
+    db.session.flush()
+    warnings = _sync_order_reservation(order, needs_before)
+    db.session.expire(order, ['items'])
+    refresh_order_status(order)
+    db.session.commit()
+    _remove_files(files)
+    log_action(f'Поръчка {order.order_number}: премахнат ред {name}')
+    flash(f'Редът "{name}" е премахнат.', 'success')
+    for warning in warnings:
+        flash(warning, 'warning')
+    return back
+
+
+def _remnant_lot_used(lot, count):
+    """True when a sheet-remnant lot can no longer give back the `count` sheets an order's remnant
+    decision put in it: its stock is below that, or anything has taken from it since (an order's
+    production, a production job, an issued/consume note, another remnant decision on it)."""
+    if (lot.stock_quantity or 0) < count - PRODUCTION_STOCK_TOLERANCE:
+        return True
+    return any(q.first() for q in (
+        OrderItem.query.filter(OrderItem.consumed_material_id == lot.id),
+        OrderItemComponent.query.filter(OrderItemComponent.consumed_material_id == lot.id),
+        ProductionOrder.query.filter_by(material_id=lot.id, status='done', reversed_at=None),
+        ClientDeliveryNoteItem.query.filter_by(target_type='material', target_id=lot.id),
+        OrderMaterialRemnant.query.filter_by(material_id=lot.id)))
+
+
+@app.route('/admin/orders/<int:order_id>/delete', methods=['POST'])
+@role_required('admin')
+@retry_on_db_busy
+def admin_delete_order(order_id):
+    """
+    Deletes an order, ProductionOrder-style. One that never moved stock (nothing produced or
+    consumed, no remnant decision) is hard-deleted with its lines, components, operations,
+    attachments and reservation. One that did is reversed and soft-deleted (deleted_at /
+    deleted_by_id, rows kept frozen for admin_material_history(), hidden everywhere through
+    live_orders()): every produced Detail / component-less Product loses its quantity_produced,
+    every lot gets its material_consumed back, a sheet remnant decision gives back its true-up
+    (extra_taken) and takes its returned sheets out of the remnant lots again - refused when
+    such a lot was used since (_remnant_lot_used()) - and the reservation is released. Our
+    rows may go negative (shipped goods); a client's lot / Detail may not
+    (_negative_client_lots_refusal()). Delivery notes issued for the order stay as they are.
+    Either way the offer it came from (Offer.order_id) is freed to create a new order, and the
+    reference PDFs are removed after the commit (hard delete only).
+    """
+    order = _lock_or_404(Order, order_id)
+    if order.deleted_at:
+        flash(f'Поръчка {order.order_number} вече е изтрита.', 'danger')
+        return redirect(url_for('admin_production_report'))
+    items = _lock_order_lines(order)
+    rows = [(item, item.stock_target) for item in items] + [(c, c.detail) for item in items for c in item.components]
+    remnants = OrderMaterialRemnant.query.filter_by(order_id=order.id).order_by(OrderMaterialRemnant.id).all()
+    moved = remnants or any(r.quantity_produced or r.material_consumed for r, _ in rows)
+    Offer.query.filter_by(order_id=order.id).update({'order_id': None})
+
+    if not moved:   # lines, components, operations, attachments and reservations go with it (ORM cascade)
+        used_in = _fk_references(order, skip=('order_item', 'order_material_reservation'))
+        if used_in:
+            db.session.rollback()
+            flash(f'Поръчка {order.order_number} се използва в: {", ".join(used_in)} - не може да бъде изтрита.', 'danger')
+            return redirect(url_for('admin_production_report'))
+        files = [os.path.join(app.config['ORDER_ITEM_FILE_FOLDER'], a.filename) for item in items for a in item.attachments]
+        number = order.order_number
+        db.session.delete(order)
+        db.session.commit()
+        _remove_files(files)
+        log_action(f'Изтрита поръчка {number} (без производство)')
+        flash(f'Поръчка {number} е изтрита.', 'success')
+        return redirect(url_for('admin_production_report'))
+
+    # every lot / detail / product it moves, locked in one stable order (ids ascending per table)
+    returned = [Counter(s['material_id'] for s in r.returned) for r in remnants]
+    lot_ids = ({r.consumed_material_id for r, _ in rows if r.material_consumed and r.consumed_material_id}
+               | {r.material_id for r in remnants} | {m for counts in returned for m in counts})
+    lots = {m: _lock_or_404(MaterialPrice, m) for m in sorted(lot_ids)}
+    targets = {}
+    for model in (Detail, Product):
+        for t_id in sorted({t.id for r, t in rows if isinstance(t, model) and r.quantity_produced}):
+            targets[(model, t_id)] = _lock_or_404(model, t_id)
+
+    for r, counts in zip(remnants, returned):
+        for lot_id, count in sorted(counts.items()):
+            if _remnant_lot_used(lots[lot_id], count):
+                db.session.rollback()
+                flash(f'Отказано: остатъкът "{format_material_option(lots[lot_id])}" от поръчка {order.order_number} '
+                      f'вече е използван или преместен - поръчката не може да бъде изтрита.', 'danger')
+                return redirect(url_for('admin_production_report'))
+            _bump_stock(lots[lot_id], -count)
+        if r.extra_taken:
+            _bump_stock(lots[r.material_id], r.extra_taken)
+    lines = []
+    for r, target in rows:
+        if r.quantity_produced and target:
+            _bump_stock(targets[(type(target), target.id)], -r.quantity_produced)
+            lines.append(f'{target.name}: -{r.quantity_produced} бр.')
+        if r.material_consumed and r.consumed_material_id:
+            _bump_stock(lots[r.consumed_material_id], r.material_consumed)
+            lines.append(f'{lots[r.consumed_material_id].display_name}: +{r.material_consumed:g}')
+    touched = {('material', m) for m in lots} | {('detail', t_id) for model, t_id in targets if model is Detail}
+    refusal = _negative_client_lots_refusal(touched, 'admin_production_report')
+    if refusal:
+        return refusal
+    for reservation in list(order.material_reservations):   # released - the material is back in the lots
+        db.session.delete(reservation)
+    order.deleted_at = datetime.utcnow()
+    order.deleted_by_id = current_user.id
+    db.session.commit()
+    log_action(f'Изтрита поръчка {order.order_number} с производство - наличностите са върнати'
+               + (f', {len(remnants)} решение(я) за остатък сторнирани' if remnants else ''),
+               details='\n'.join(lines))
+    flash(f'Поръчка {order.order_number} е изтрита - изработеното е извадено от склада, материалът е върнат '
+          f'в партидите. Издадените стокови разписки не са променени.', 'success')
+    return redirect(url_for('admin_production_report'))
+
+
 @app.route('/admin/missing-stock')
 @role_required(['admin', 'worker'])
 def admin_missing_stock():
@@ -15013,7 +15401,7 @@ def admin_missing_stock():
     see order_missing_items() for what "enough" means. Recomputed live on
     every load rather than stored, so it's never stale.
     """
-    open_orders = Order.query.filter(
+    open_orders = live_orders().filter(
         Order.status.in_(['new', 'in_production'])
     ).order_by(Order.created_at.desc()).options(
         db.joinedload(Order.user),
@@ -17352,7 +17740,7 @@ def admin_assign_machine(order_id):
     if not current_user.is_admin and current_user.role != 'worker':
         return jsonify({'status': 'error', 'message': 'Нямате достъп.'}), 403
 
-    order = Order.query.get_or_404(order_id)
+    order = live_orders().filter_by(id=order_id).first_or_404()
     machine_id_raw = request.form.get('machine_id', '')
 
     if machine_id_raw and machine_id_raw.isdigit():
@@ -25859,7 +26247,7 @@ def my_orders(offset: int = 0) -> str:
     Args:
         offset: Колко записа да пропусне - за следваща страница при повече от 15 поръчки.
     """
-    q = Order.query.filter_by(user_id=current_user.id).order_by(Order.created_at.desc())
+    q = live_orders().filter_by(user_id=current_user.id).order_by(Order.created_at.desc())
     total = q.count()
     offset = max(0, offset)
     page_size = 15
@@ -25883,7 +26271,7 @@ def order_status(order_number: str) -> str:
     Args:
         order_number: Номерът на поръчката, напр. "2026-0042".
     """
-    order = Order.query.filter_by(order_number=order_number, user_id=current_user.id).first()
+    order = live_orders().filter_by(order_number=order_number, user_id=current_user.id).first()
     if not order:
         return f"Нямате поръчка с номер '{order_number}'."
     lines = [f'№ {order.order_number} - {order.status_label} - {order.percent_complete:g}% завършена - {order.total_price:g} €']
@@ -25900,7 +26288,7 @@ def order_missing_stock(order_number: str) -> str:
     Args:
         order_number: Номерът на поръчката.
     """
-    order = Order.query.filter_by(order_number=order_number, user_id=current_user.id).first()
+    order = live_orders().filter_by(order_number=order_number, user_id=current_user.id).first()
     if not order:
         return f"Нямате поръчка с номер '{order_number}'."
     shortfalls = order_missing_items(order)

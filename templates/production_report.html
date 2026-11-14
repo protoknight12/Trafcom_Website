@@ -79,6 +79,16 @@
                 </select>
             </div>
             <span class="status-badge status-{{ order.status }}" id="order-status-{{ order.id }}">{{ order.status_label }}</span>
+            {% if current_user.is_admin %}
+            <div style="display: flex; gap: 6px;">
+                <a href="{{ url_for('admin_order_edit', order_id=order.id) }}" data-frame="stay" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem; text-decoration: none;">Редактирай</a>
+                <form method="POST" action="{{ url_for('admin_delete_order', order_id=order.id) }}" data-once
+                      data-confirm="Изтриване на поръчка {{ order.order_number }}? Изработеното се изважда от склада, изразходваният материал се връща в партидите, а издадените стокови разписки остават непроменени.">
+                    {% include 'partials/csrf_field.html' %}
+                    <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Изтрий</button>
+                </form>
+            </div>
+            {% endif %}
         </div>
 
         <div style="margin-bottom: 16px; max-width: 320px;">
