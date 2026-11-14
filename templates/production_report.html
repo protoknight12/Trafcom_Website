@@ -16,6 +16,7 @@
         .progress-bar { background: #28a745; height: 100%; transition: width 0.3s ease; }
         .qty-updater { width: 80px; padding: 6px; border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); text-align: center; background-color: var(--bg-input); color: var(--text-main); }
         .qty-updater:disabled { opacity: 0.5; cursor: not-allowed; }
+        .alert[hidden], #remnantDialog [hidden] { display: none !important; }   /* beats .alert / inline display */
         .order-card-header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
     </style>
 </head>
@@ -61,13 +62,38 @@
                 {#- Sheet lots this order finished cutting, rest of the sheets not decided yet - see _pending_remnants(). #}
                 <div id="remnants-{{ order.id }}">
                     {% for g in remnants.get(order.id, []) %}
-                    <div class="remnant-pending" data-material-id="{{ g.material_id }}" style="margin-top: 4px;">
-                        <span class="status-badge status-new">Остатък: чака решение ({{ g.material_name }}, {{ g.sheets }} л.)</span>
+                    <div class="remnant-pending" data-remnant-key="{{ g.material_id }}-{{ g.cut_sheet_id or '' }}" style="margin-top: 4px;">
+                        <span class="status-badge status-new">Остатък: чака решение ({{ g.material_name }}, {% if g.cut_sheet_id %}лист {{ g.seq }}{% else %}{{ g.sheets }} л.{% endif %})</span>
                         <button type="button" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;"
                                 data-remnant='{{ g|tojson|forceescape }}' onclick="openRemnantDialog(JSON.parse(this.dataset.remnant))">Реши за остатъка</button>
                     </div>
                     {% endfor %}
                 </div>
+                {#- Cutting plan per sheet lot ("разкрой по листове") - see _order_cut_groups(), admin_cut_sheet(). #}
+                {% for g in cut_plans.get(order.id, []) %}
+                {% if g.sheets or (order.status != 'completed' and not g.blocked) %}
+                <div class="cut-plan" style="margin-top: 6px;">
+                    {% if order.status != 'completed' and not g.blocked %}
+                    <button type="button" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;"
+                            data-plan='{{ g|tojson|forceescape }}' onclick="openCutPlan(JSON.parse(this.dataset.plan))">Разкрой по листове ({{ g.material_name }})</button>
+                    {% else %}
+                    <span class="text-small text-muted">Разкрой по листове ({{ g.material_name }})</span>
+                    {% endif %}
+                    {% for s in g.sheets %}
+                    <div class="text-small" style="margin-top: 3px;">Лист {{ s.seq }}: {{ s.label }}
+                        {% if s.status == 'planned' %}
+                        <button type="button" class="btn-secondary" style="padding: 2px 8px; font-size: 0.75rem;"
+                                data-confirm="Лист {{ s.seq }} е изрязан? Целият лист излиза от склада, а детайлите от него се отчитат като изработени. Не може да се отмени."
+                                onclick="cutSheet({{ s.id }}, {{ order.id }}, this)">Изрязан</button>
+                        {% else %}
+                        <span class="status-badge status-completed" style="padding: 2px 8px;">изрязан</span>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% endfor %}
+                <div class="alert alert-danger text-small" id="cut-error-{{ order.id }}" style="margin-top: 4px; padding: 6px 10px;" hidden></div>
             </div>
             <div style="display: flex; align-items: center; gap: 8px; margin-left: auto; margin-right: 16px;">
                 <label for="machine_select_{{ order.id }}" style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">Машина:</label>
@@ -210,6 +236,29 @@
             </div>
         </form>
     </dialog>
+
+    {#- Cutting plan of one (order, sheet lot) - posted to admin_cut_plan_save(). #}
+    <dialog id="cutPlanDialog" class="form-dialog">
+        <button type="button" class="dialog-close" aria-label="Затвори" onclick="this.closest('dialog').close()">&times;</button>
+        <form id="cutPlanForm" novalidate>
+            <h3 style="margin-top: 0;">Разкрой по листове</h3>
+            <p class="text-muted text-small" id="cutPlanInfo"></p>
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead><tr><th>Ред</th><th class="text-center">Нужни</th><th class="text-center">Изработени</th>
+                        <th class="text-center">В разкроя</th><th class="text-center">Неразпределени</th></tr></thead>
+                    <tbody id="cutPlanLines"></tbody>
+                </table>
+            </div>
+            <div id="cutPlanSheets" style="margin-top: 10px;"></div>
+            <button type="button" class="btn-secondary" id="cutPlanAdd" style="margin-top: 4px;">+ Лист</button>
+            <div class="alert alert-danger" id="cutPlanError" hidden></div>
+            <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px;">
+                <button type="button" class="btn-secondary" onclick="this.closest('dialog').close()">Отказ</button>
+                <button type="submit" class="btn-submit btn-inline" id="cutPlanSave">Запази разкроя</button>
+            </div>
+        </form>
+    </dialog>
 </main>
 
 <script>
@@ -300,16 +349,19 @@
     // its size. Built with textContent only - the material name comes from the DB.
     let remnantGroup = null;
 
+    function remnantKey(g) { return g.material_id + '-' + (g.cut_sheet_id || ''); }
+
     function addRemnantBadge(g) {
         const box = document.getElementById('remnants-' + g.order_id);
-        if (!box || box.querySelector('[data-material-id="' + g.material_id + '"]')) return;
+        if (!box || box.querySelector('[data-remnant-key="' + remnantKey(g) + '"]')) return;
         const wrap = document.createElement('div');
         wrap.className = 'remnant-pending';
-        wrap.dataset.materialId = g.material_id;
+        wrap.dataset.remnantKey = remnantKey(g);
         wrap.style.marginTop = '4px';
         const badge = document.createElement('span');
         badge.className = 'status-badge status-new';
-        badge.textContent = 'Остатък: чака решение (' + g.material_name + ', ' + g.sheets + ' л.)';
+        badge.textContent = 'Остатък: чака решение (' + g.material_name + ', '
+            + (g.cut_sheet_id ? 'лист ' + g.seq : g.sheets + ' л.') + ')';
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'btn-secondary';
@@ -324,7 +376,8 @@
         remnantGroup = g;
         const size = (g.default_w && g.default_h) ? g.default_w + ' x ' + g.default_h + ' mm' : '';
         document.getElementById('remnantInfo').textContent = g.material_name + (size ? ' - лист ' + size : '')
-            + '. Използвани листа: ' + g.sheets + '. Какво става с остатъка от всеки лист?';
+            + (g.cut_sheet_id ? '. Изрязан лист ' + g.seq + ' от разкроя.' : '. Използвани листа: ' + g.sheets + '.')
+            + ' Какво става с остатъка от всеки лист?';
         const rows = document.getElementById('remnantRows');
         rows.replaceChildren();
         for (let i = 1; i <= g.sheets; i++) {
@@ -332,8 +385,18 @@
             row.className = 'remnant-sheet';
             row.style.cssText = 'border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; margin-bottom: 8px;';
             const legend = document.createElement('legend');
-            legend.textContent = 'Лист ' + i + ' от ' + g.sheets;
+            legend.textContent = g.cut_sheet_id ? 'Лист ' + g.seq : 'Лист ' + i + ' от ' + g.sheets;
             row.appendChild(legend);
+            // used / left of this sheet - a hint only, the size entered below is what is recorded
+            const u = (g.usage || [])[i - 1];
+            if (u) {
+                const info = document.createElement('div');
+                info.className = 'text-small text-muted';
+                info.style.marginBottom = '4px';
+                info.textContent = 'Изразходвано: ' + u.used_m2 + ' m² (' + u.used_pct + '%) · Остава: '
+                    + u.left_m2 + ' m² (' + u.left_pct + '%)' + (g.estimate ? ' - оценка по габаритите на детайлите' : '');
+                row.appendChild(info);
+            }
             const dims = document.createElement('div');
             dims.style.cssText = 'display: flex; gap: 12px; margin-top: 6px;';
             dims.hidden = true;
@@ -392,6 +455,7 @@
         formData.append('csrf_token', window.CSRF_TOKEN);
         formData.append('order_id', g.order_id);
         formData.append('material_id', g.material_id);
+        if (g.cut_sheet_id) formData.append('cut_sheet_id', g.cut_sheet_id);
         formData.append('sheets', JSON.stringify(sheets));
         const saveBtn = document.getElementById('remnantSave');
         saveBtn.disabled = true;
@@ -403,7 +467,7 @@
                     errorEl.hidden = false;
                     return;
                 }
-                const pending = document.querySelector('#remnants-' + g.order_id + ' [data-material-id="' + g.material_id + '"]');
+                const pending = document.querySelector('#remnants-' + g.order_id + ' [data-remnant-key="' + remnantKey(g) + '"]');
                 if (pending) pending.remove();
                 document.getElementById('remnantDialog').close();
             })
@@ -412,6 +476,177 @@
                 errorEl.hidden = false;
             })
             .finally(function () { saveBtn.disabled = false; });
+    });
+
+    // After a sheet was cut the page reloads (produced totals, sheet buttons) - once the
+    // remnant question for that sheet is answered or put off.
+    let reloadAfterRemnant = false;
+    document.getElementById('remnantDialog').addEventListener('close', function () {
+        if (reloadAfterRemnant) location.reload();
+    });
+
+    function cutSheet(sheetId, orderId, btn) {
+        const errorEl = document.getElementById('cut-error-' + orderId);
+        errorEl.hidden = true;
+        const formData = new FormData();
+        formData.append('csrf_token', window.CSRF_TOKEN);
+        btn.disabled = true;
+        fetch('/admin/production/cut-sheets/' + sheetId + '/cut', { method: 'POST', body: formData })
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+                if (data.status !== 'success') {
+                    errorEl.textContent = data.message || 'Възникна грешка.';
+                    errorEl.hidden = false;
+                    btn.disabled = false;
+                    return;
+                }
+                if (data.remnant_prompt) {
+                    reloadAfterRemnant = true;
+                    openRemnantDialog(data.remnant_prompt);
+                } else {
+                    location.reload();
+                }
+            })
+            .catch(function () {
+                errorEl.textContent = 'Връзката със сървъра беше прекъсната.';
+                errorEl.hidden = false;
+                btn.disabled = false;
+            });
+    }
+
+    // Cutting plan dialog: one block per planned sheet, a count per order line on the lot.
+    // Cut sheets are not editable (their pieces are already in "Изработени"). The used area is
+    // an estimate from the parts' bounding boxes and only warns. textContent only (DB names).
+    let cutPlan = null;
+
+    function cutPlanSheetBlock(counts) {
+        const box = document.createElement('fieldset');
+        box.className = 'cut-plan-sheet';
+        box.style.cssText = 'border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; margin-bottom: 8px;';
+        box.appendChild(document.createElement('legend'));
+        cutPlan.lines.forEach(function (line) {
+            const label = document.createElement('label');
+            label.style.cssText = 'display: flex; gap: 8px; align-items: center; margin-bottom: 4px;';
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.min = '0';
+            input.step = '1';
+            input.value = counts[line.key] || 0;
+            input.dataset.key = line.key;
+            input.style.width = '80px';
+            input.addEventListener('input', refreshCutPlan);
+            label.append(input, ' бр. ' + line.name);
+            box.appendChild(label);
+        });
+        const usage = document.createElement('div');
+        usage.className = 'text-small cut-plan-usage';
+        box.appendChild(usage);
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'btn-secondary';
+        remove.style.cssText = 'padding: 2px 8px; font-size: 0.75rem; margin-top: 4px;';
+        remove.textContent = 'Премахни листа';
+        remove.addEventListener('click', function () { box.remove(); refreshCutPlan(); });
+        box.appendChild(remove);
+        return box;
+    }
+
+    function cutPlanCount(input) {
+        const v = Number(input.value);
+        return Number.isInteger(v) && v > 0 ? v : 0;
+    }
+
+    function refreshCutPlan() {
+        const planned = {};
+        const cutCount = cutPlan.sheets.filter(function (s) { return s.status === 'cut'; }).length;
+        document.querySelectorAll('#cutPlanSheets .cut-plan-sheet').forEach(function (box, idx) {
+            box.querySelector('legend').textContent = 'Лист ' + (cutCount + idx + 1) + ' (планиран)';
+            let used = 0;
+            box.querySelectorAll('input[data-key]').forEach(function (input) {
+                const n = cutPlanCount(input);
+                planned[input.dataset.key] = (planned[input.dataset.key] || 0) + n;
+                const line = cutPlan.lines.find(function (l) { return l.key === input.dataset.key; });
+                used += line.m2 * n;
+            });
+            const usage = box.querySelector('.cut-plan-usage');
+            const pct = used / cutPlan.sheet_m2 * 100;
+            usage.textContent = 'Оценка по габаритите: ' + used.toFixed(3) + ' от ' + cutPlan.sheet_m2.toFixed(3)
+                + ' m² (' + pct.toFixed(1) + '%)' + (used > cutPlan.sheet_m2 + 1e-9 ? ' - надвишава площта на листа!' : '');
+            usage.style.color = used > cutPlan.sheet_m2 + 1e-9 ? '#dc3545' : '';
+        });
+        const body = document.getElementById('cutPlanLines');
+        body.replaceChildren();
+        cutPlan.lines.forEach(function (line) {
+            const left = line.needed - line.produced - (planned[line.key] || 0);
+            const tr = document.createElement('tr');
+            [line.name, line.needed, line.produced, planned[line.key] || 0, left].forEach(function (v, i) {
+                const td = document.createElement('td');
+                if (i) td.className = 'text-center';
+                td.textContent = v;
+                if (i === 4 && left < 0) td.style.color = '#dc3545';
+                tr.appendChild(td);
+            });
+            body.appendChild(tr);
+        });
+    }
+
+    function openCutPlan(g) {
+        cutPlan = g;
+        const cut = g.sheets.filter(function (s) { return s.status === 'cut'; }).length;
+        document.getElementById('cutPlanInfo').textContent = g.material_name + ' - лист ' + g.sheet_w + ' x ' + g.sheet_h
+            + ' mm. Колко броя от всеки ред се режат от всеки лист. Изрязани листове: ' + cut + ' (не се редактират).';
+        const sheets = document.getElementById('cutPlanSheets');
+        sheets.replaceChildren();
+        g.sheets.forEach(function (s) { if (s.status === 'planned') sheets.appendChild(cutPlanSheetBlock(s.items)); });
+        if (!sheets.children.length) sheets.appendChild(cutPlanSheetBlock({}));
+        document.getElementById('cutPlanError').hidden = true;
+        refreshCutPlan();
+        document.getElementById('cutPlanDialog').showModal();
+    }
+
+    document.getElementById('cutPlanAdd').addEventListener('click', function () {
+        document.getElementById('cutPlanSheets').appendChild(cutPlanSheetBlock({}));
+        refreshCutPlan();
+    });
+
+    document.getElementById('cutPlanForm').addEventListener('submit', function (e) {
+        e.preventDefault();
+        const errorEl = document.getElementById('cutPlanError');
+        const sheets = [];
+        let error = '';
+        document.querySelectorAll('#cutPlanSheets .cut-plan-sheet').forEach(function (box) {
+            const counts = {};
+            box.querySelectorAll('input[data-key]').forEach(function (input) {
+                const v = Number(input.value || 0);
+                if (!Number.isInteger(v) || v < 0) error = error || 'Бройките трябва да са цели числа (0 или повече).';
+                else if (v) counts[input.dataset.key] = v;
+            });
+            sheets.push(counts);
+        });
+        if (error) { errorEl.textContent = error; errorEl.hidden = false; return; }
+        const formData = new FormData();
+        formData.append('csrf_token', window.CSRF_TOKEN);
+        formData.append('order_id', cutPlan.order_id);
+        formData.append('material_id', cutPlan.material_id);
+        formData.append('sheets', JSON.stringify(sheets));
+        const saveBtn = document.getElementById('cutPlanSave');
+        saveBtn.disabled = true;
+        fetch('/admin/production/cut-plan', { method: 'POST', body: formData })
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+                if (data.status !== 'success') {
+                    errorEl.textContent = data.message || 'Възникна грешка при записа.';
+                    errorEl.hidden = false;
+                    saveBtn.disabled = false;
+                    return;
+                }
+                location.reload();
+            })
+            .catch(function () {
+                errorEl.textContent = 'Връзката със сървъра беше прекъсната.';
+                errorEl.hidden = false;
+                saveBtn.disabled = false;
+            });
     });
 
     function assignMachine(orderId, selectEl) {
