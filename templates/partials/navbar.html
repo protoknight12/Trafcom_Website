@@ -3,13 +3,6 @@
     <div class="nav-container">
         <a href="{{ url_for('index') }}" class="nav-logo-link"><h2 class="nav-logo">TRAFCOM</h2></a>
 
-        {% if current_user.is_authenticated and request.path.startswith('/admin') %}
-        {% set safe_referrer = request.referrer if request.referrer and request.referrer.startswith(request.host_url) else None %}
-        <a href="{{ safe_referrer or url_for('admin_dashboard') }}" class="nav-admin-back"
-           style="color: var(--text-muted); font-size: 0.85rem; text-decoration: none; white-space: nowrap; margin-left: 4px;"
-           title="Назад към предишната страница">&larr; Назад</a>
-        {% endif %}
-
         <button class="nav-toggle" id="navToggle" aria-label="{{ _('Отвори менюто') }}" aria-expanded="false">
             <span></span><span></span><span></span>
         </button>
@@ -198,6 +191,7 @@
         </div>
     </div>
 </nav>
+{% include 'partials/subnav.html' %}
 
 {% if vehicle_alerts %}
 <div class="vehicle-alert-banner">

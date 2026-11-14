@@ -1,0 +1,26 @@
+{#- Secondary navigation under the main navbar (included by partials/navbar.html).
+    "← Назад" + the quick links of the page's section, so "back"/cross links never
+    sit in the main menu. A page opts into a section before including the navbar:
+        {% set subnav = 'catalog' %}                 - key of SUBNAV_GROUPS below
+        {% set subnav_current = detail.name %}       - optional crumb for the open record
+    Without a group every /admin page still gets "Назад" + "Админ панел".
+    Items: (label, endpoint, admin_only) - workers see only the non-admin ones. -#}
+{% set SUBNAV_GROUPS = {
+    'catalog': [('Детайли', 'admin_details', True), ('Продукти', 'admin_products', True),
+                ('Материали', 'admin_materials', True), ('Склад материали', 'storage_materials', False),
+                ('Доставки', 'admin_delivery_notes', False), ('Протоколи с клиент', 'admin_client_delivery_notes', False)],
+} %}
+{% set subnav_items = SUBNAV_GROUPS.get(subnav) if subnav is defined else none %}
+{% if current_user.is_authenticated and (subnav_items or request.path.startswith('/admin')) %}
+{% set safe_referrer = request.referrer if request.referrer and request.referrer.startswith(request.host_url) and request.referrer != request.url else None %}
+<div class="subnav">
+    <a href="{{ safe_referrer or (url_for(subnav_items[0][1]) if subnav_items else url_for('admin_dashboard')) }}" class="subnav-back" title="Назад към предишната страница">&larr; Назад</a>
+    <a href="{{ url_for('admin_dashboard') }}" class="{{ 'active' if request.endpoint == 'admin_dashboard' else '' }}">Админ панел</a>
+    {% for label, endpoint, admin_only in subnav_items or [] %}
+        {% if current_user.is_admin or (not admin_only and current_user.is_staff) %}
+        <a href="{{ url_for(endpoint) }}" class="{{ 'active' if request.endpoint == endpoint else '' }}">{{ label }}</a>
+        {% endif %}
+    {% endfor %}
+    {% if subnav_current is defined and subnav_current %}<span class="subnav-current">{{ subnav_current }}</span>{% endif %}
+</div>
+{% endif %}

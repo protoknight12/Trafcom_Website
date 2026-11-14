@@ -1634,7 +1634,19 @@ div[id$="Modal"] > .admin-card {
 .dialog-open-bar { display: flex; justify-content: flex-end; margin: 0 0 1rem; }
 .dialog-open-bar .btn-submit, .btn-submit.btn-inline { width: auto; }
 /* Pages loaded inside a frame dialog drop the site chrome. */
-html.embedded .navbar, html.embedded .site-footer, html.embedded .nav-admin-back, html.embedded #chatbot-widget { display: none !important; }
+html.embedded .navbar, html.embedded .subnav, html.embedded .site-footer, html.embedded #chatbot-widget { display: none !important; }
+/* Secondary bar under the navbar (partials/subnav.html): "Назад" + section quick links. */
+.subnav {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px;
+    max-width: 98vw; margin: 0 auto; padding: 7px 24px;
+    background: var(--bg-base); border-bottom: 1px solid var(--border-color);
+    font-size: 0.85rem;
+}
+.subnav a { color: var(--text-muted); text-decoration: none; white-space: nowrap; }
+.subnav a:hover, .subnav a.active { color: var(--accent-secondary); }
+.subnav a.active { font-weight: 600; }
+.subnav .subnav-back { padding-right: 14px; border-right: 1px solid var(--border-color); }
+.subnav .subnav-current { color: var(--text-main); font-weight: 600; white-space: nowrap; }
 /* "+" create-new button next to an entity <select> (form_dialog.js, data-create) */
 .select-create-row { display: flex; gap: 6px; align-items: stretch; width: 100%; }
 .select-create-row > select, .select-create-row > .mp-wrap { flex: 1 1 auto; min-width: 0; }
