@@ -249,6 +249,62 @@
             <button type="submit" class="btn-submit">Запази</button>
         </form>
     </section>
+
+    <section class="admin-card">
+        <h3>Други разрешени материали</h3>
+        <p class="section-subtitle">
+            Освен материала по подразбиране детайлът може да се поръча и от тези материали - материалът се избира
+            при поръчката и цената, заделянето и изписването следват избрания материал. Цената е от същите размери
+            и операции, само материалът е друг.
+            {% if not (detail.width and detail.height) %}<strong>Детайлът няма размери (ръчна цена) - други материали не се предлагат.</strong>{% endif %}
+        </p>
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead><tr><th>Материал</th><th class="text-right">Цена на детайла</th><th class="text-right">Действие</th></tr></thead>
+                <tbody>
+                <tr>
+                    <td>{{ format_material_option(detail.material) if detail.material else detail.material_key }} <span class="text-muted text-small">(по подразбиране)</span></td>
+                    <td class="text-right">{{ "%.2f"|format(detail.total_price) }} €</td>
+                    <td></td>
+                </tr>
+                {% for dm, price in alt_materials %}
+                <tr>
+                    <td>{{ format_material_option(dm.material) }}</td>
+                    <td class="text-right">{{ "%.2f"|format(price) }} €</td>
+                    <td class="text-right">
+                        <form method="POST" action="{{ url_for('admin_delete_detail_alt_material', detail_id=detail.id, row_id=dm.id) }}"
+                              data-confirm="Премахване на &quot;{{ format_material_option(dm.material) }}&quot; от разрешените материали?">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Премахни</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    {% set used_keys = [detail.material_key] + alt_materials|map(attribute='0.material_key')|list %}
+    <section class="admin-card" data-dialog-section="+ Разрешен материал">
+        <h3>Добави разрешен материал</h3>
+        <form action="{{ url_for('admin_add_detail_alt_material', detail_id=detail.id) }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="alt_material_key">Материал</label>
+                <select id="alt_material_key" name="material_key" required>
+                    {% for type_key, group in materials|groupby('type') %}
+                    <optgroup label="{{ material_type_label(type_key) }}">
+                        {% for material in group if material.key not in used_keys %}
+                        <option value="{{ material.key }}">{{ format_material_option(material) }}</option>
+                        {% endfor %}
+                    </optgroup>
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="btn-submit">Добави</button>
+        </form>
+    </section>
     </div>
     <script>
         // Same per-type dimension labels as admin_materials.html's

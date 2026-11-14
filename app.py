@@ -876,6 +876,24 @@ class Detail(db.Model):
         return f"{area_m2:.3f} м² × {rate:.2f} €/м²{suffix}"
 
 
+class DetailMaterial(db.Model):
+    """
+    One more material a Detail may be ordered in besides its default
+    (Detail.material_key, which is never repeated here) - picked per order
+    line (OrderItem.material_key), priced by _detail_total_price() from the
+    detail's own size. Edited on the detail page's "Материал и размери" tab
+    (admin_add_detail_alt_material()); see detail_material_choices().
+    """
+    __table_args__ = (db.UniqueConstraint('detail_id', 'material_key', name='uq_detail_material'),)
+    id = db.Column(db.Integer, primary_key=True)
+    detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=False, index=True)
+    material_key = db.Column(db.String(50), db.ForeignKey('material_price.key'), nullable=False, index=True)
+
+    detail = db.relationship('Detail', backref=db.backref('alt_materials', cascade='all, delete-orphan', lazy=True,
+                                                          order_by='DetailMaterial.id'))
+    material = db.relationship('MaterialPrice')
+
+
 class DetailDxfFile(db.Model):
     """
     An original .dxf file kept for a Detail, shown on its admin-only file
@@ -1084,9 +1102,13 @@ class OrderItem(db.Model):
     # on the first consumption, see _consume_detail_material().
     material_consumed = db.Column(db.Float, nullable=False, default=0.0)
     consumed_material_id = db.Column(db.Integer, db.ForeignKey('material_price.id'), nullable=True, index=True)
+    # A standalone-detail line ordered in one of the detail's other allowed
+    # materials (DetailMaterial); NULL = the detail's default. See _line_material().
+    material_key = db.Column(db.String(50), db.ForeignKey('material_price.key'), nullable=True, index=True)
 
     product = db.relationship('Product')
     detail = db.relationship('Detail')
+    material = db.relationship('MaterialPrice', foreign_keys=[material_key])
 
     @property
     def quantity_remaining(self):
@@ -1096,6 +1118,8 @@ class OrderItem(db.Model):
     @property
     def item_name(self):
         name = self.product.name if self.product else self.detail.name if self.detail else 'Неизвестен артикул'
+        if self.material_key and self.material:
+            name = f'{name} [{localized(self.material, "display_name")}]'
         return f'{name} (материал на клиента)' if self.own_material else name
 
     @property
@@ -1313,11 +1337,48 @@ def _own_material_factor(client):
     return 1 + ((client.own_material_surcharge_percent or 0) / 100.0) if client else 1.0
 
 
-def _detail_base_price(detail, client=None, own_material=False):
-    """A Detail's list price - or, with the client's own material, only its
-    services (Operations) times the client's surcharge, no material cost."""
-    if not own_material:
+def detail_material_choices(detail):
+    """The materials `detail` can be ordered in: its default (Detail.material)
+    first, then the allowed alternatives (DetailMaterial) that are still ours
+    or the owner's lots. Only the default for a detail without a size (manual
+    price, no DXF) - there is nothing to price another material from."""
+    if not detail.material:
+        return []
+    if not (detail.width and detail.height):
+        return [detail.material]
+    return [detail.material] + [dm.material for dm in detail.alt_materials
+                                if dm.material and dm.material.owner_client_id in (None, detail.owner_client_id)]
+
+
+def _detail_material_choice(detail, material_key):
+    """The MaterialPrice an order line of `detail` is cut from: blank = the
+    default, else one of detail_material_choices() - None for any other key."""
+    if not material_key:
+        return detail.material
+    return next((m for m in detail_material_choices(detail) if m.key == material_key), None)
+
+
+def _detail_total_price(detail, material=None):
+    """Detail.total_price as if the detail were cut from `material` (None or
+    the default = total_price itself): the same material cost a Detail made
+    with that material stores (calculate_material_price() from the effective
+    size, the owner's Материали terms) plus its Operations - or, for a lot of
+    the owner's own, only the Operations times his surcharge."""
+    if material is None or material.key == detail.material_key:
         return detail.total_price
+    ops = sum(op.cost for op in detail.operations)
+    if material.owner_client_id:
+        return round(ops * _own_material_factor(detail.owner_client), 2)
+    material_price = round(_material_cost(detail.effective_width, detail.effective_height, material, detail.owner_client), 2)
+    return round(material_price + ops, 2)
+
+
+def _detail_base_price(detail, client=None, own_material=False, material=None):
+    """A Detail's list price (in `material`, see _detail_total_price()) - or,
+    with the client's own material, only its services (Operations) times the
+    client's surcharge, no material cost."""
+    if not own_material:
+        return _detail_total_price(detail, material)
     return round(sum(op.cost for op in detail.operations) * _own_material_factor(client), 2)
 
 
@@ -4912,14 +4973,19 @@ def client_material_rate(material):
     return round(_apply_adjustment(material.cost_per_m2, client.material_adjustment_type, client.material_adjustment_percent), 2)
 
 
-def detail_price_for(detail, client, own_material=False):
+def detail_price_for(detail, client, own_material=False, material_key=None):
     """A Detail's total_price adjusted for one client's "Детайли"
     discount/markup - what a linked client actually sees/pays for a
     standalone catalog Detail (order_create.html, DXF-upload-adjacent
     displays). None/unlinked client -> unchanged list price. The owner
     of a private Detail pays its stored price as is: it already carries his
-    Материали terms (calculate_material_price()), so no Детайли on top."""
-    base = _detail_base_price(detail, client, own_material)
+    Материали terms (calculate_material_price()), so no Детайли on top.
+    `material_key` = one of detail_material_choices() (blank = the default);
+    any other key raises ValueError - callers check it first."""
+    material = _detail_material_choice(detail, material_key) if material_key else None
+    if material_key and material is None:
+        raise ValueError(f'material {material_key!r} is not allowed for detail {detail.id}')
+    base = _detail_base_price(detail, client, own_material, material)
     if not client or detail.owner_client_id == client.id:
         return base
     return round(_apply_adjustment(base, client.detail_adjustment_type, client.detail_adjustment_percent), 2)
@@ -5061,7 +5127,7 @@ def _cost_per_m2_from_unit_price(material_type, unit_price, width, height):
     return unit_price / ((width * height) / 1_000_000)
 
 
-def _detail_material_unit_qty(detail):
+def _detail_material_unit_qty(detail, material=None):
     """
     Raw-stock quantity needed for ONE unit of `detail` - m² for sheets/other
     (mirrors _material_cost()'s type branching exactly, just returning
@@ -5070,10 +5136,11 @@ def _detail_material_unit_qty(detail):
     below convert MaterialPrice.stock_quantity into/out of - see those for
     why stock_quantity itself isn't already in this unit for sheets. Used by
     the production wizard (admin_production_orders()) to size a job's
-    material need.
+    material need. `material` = the one it is cut from when not the
+    default (an order line's chosen material, _line_material()).
     """
     width, height = detail.effective_width, detail.effective_height
-    unit = material_price_unit(detail.material.type)
+    unit = material_price_unit((material or detail.material).type)
     if unit == 'm':
         return height / 1000.0
     if unit == 'pcs':
@@ -5158,14 +5225,17 @@ def _consume_detail_material(row, detail, stock_delta):
     MaterialPrice it moved, or None when there is nothing to move (no
     detail, a zero-size detail - manual price, no DXF - or a correction of
     production recorded before this existed, which never took anything).
+    The material is the line's (_line_material()): the one chosen on the
+    order, else the detail's default.
     """
-    if not stock_delta or not detail or not detail.material:
+    line_material = _line_material(row, detail)
+    if not stock_delta or not line_material:
         return None
-    material = _lock_or_404(MaterialPrice, row.consumed_material_id or detail.material.id)
+    material = _lock_or_404(MaterialPrice, row.consumed_material_id or line_material.id)
     if stock_delta > 0:
-        if material_price_unit(material.type) != material_price_unit(detail.material.type):
+        if material_price_unit(material.type) != material_price_unit(line_material.type):
             return None   # detail moved to a material in another unit (m2/m/pcs): nothing sane to take from the frozen lot
-        converted = _material_stock_delta(material, _detail_material_unit_qty(detail) * stock_delta)
+        converted = _material_stock_delta(material, _detail_material_unit_qty(detail, line_material) * stock_delta)
     else:
         # ratio first: a return to 0 is x * -1.0 == -x exactly, so material_consumed ends at 0, not at a float crumb
         converted = (row.material_consumed or 0) * (stock_delta / (row.quantity_produced - stock_delta))
@@ -5177,6 +5247,37 @@ def _consume_detail_material(row, detail, stock_delta):
     return material
 
 
+def _line_material(row, detail):
+    """The MaterialPrice a production row (a standalone-detail OrderItem or an
+    OrderItemComponent) cuts `detail` from: the material chosen on the order
+    line (OrderItem.material_key), else the detail's default. Product
+    components always use the default (OrderItemComponent has no choice)."""
+    return getattr(row, 'material', None) or (detail.material if detail else None)
+
+
+def _order_production_rows(order):
+    """(row, detail, pieces) for every Detail `order` produces from a lot: a
+    product line's OrderItemComponent rows, a standalone detail line itself.
+    "Материал на клиента" lines (own_material) are left out - they take no lot."""
+    for item in order.items:
+        if item.own_material:
+            continue
+        if item.product_id:
+            yield from ((c, c.detail, c.quantity_needed) for c in item.components)
+        else:
+            yield item, item.detail, item.quantity_ordered
+
+
+def _row_material_need(row, detail, pieces):
+    """(lot, quantity in its stock unit) that `pieces` of `detail` on `row` take
+    (_line_material(), _detail_material_unit_qty(), _material_stock_delta());
+    (None, 0) without a detail/material/pieces."""
+    material = _line_material(row, detail)
+    if not detail or not material or not pieces:
+        return None, 0
+    return material, _material_stock_delta(material, _detail_material_unit_qty(detail, material) * pieces)
+
+
 def _order_material_needs(order):
     """
     {material_id: quantity} - the raw material `order` needs from each lot,
@@ -5184,23 +5285,16 @@ def _order_material_needs(order):
     OrderItemComponent rows, a standalone detail line's quantity_ordered -
     what admin_production_report() consumes) _detail_material_unit_qty() x
     pieces, converted with _material_stock_delta() like
-    _consume_detail_material(). A "материал на клиента" line (own_material)
-    takes nothing from a lot, a detail with no material or zero size needs
-    nothing, a component-less product has no material. Client-owned lots
-    count like ours.
+    _consume_detail_material(), from the line's material (_line_material()).
+    A "материал на клиента" line (own_material) takes nothing from a lot, a
+    detail with no material or zero size needs nothing, a component-less
+    product has no material. Client-owned lots count like ours.
     """
     needs = {}
-    for item in order.items:
-        if item.own_material:
-            continue
-        pieces = ([(c.detail, c.quantity_needed) for c in item.components] if item.product_id
-                  else [(item.detail, item.quantity_ordered)])
-        for detail, qty in pieces:
-            if not detail or not detail.material or not qty:
-                continue
-            need = _material_stock_delta(detail.material, _detail_material_unit_qty(detail) * qty)
-            if need > 0:
-                needs[detail.material.id] = needs.get(detail.material.id, 0) + need
+    for row, detail, qty in _order_production_rows(order):
+        material, need = _row_material_need(row, detail, qty)
+        if need > 0:
+            needs[material.id] = needs.get(material.id, 0) + need
     return needs
 
 
@@ -5263,7 +5357,7 @@ def _order_material_shortages(order):
     return [s for s in _open_material_reservations(lot_ids).get(order.id, []) if s['missing']]
 
 
-def _reserve_order_material(order):
+def _reserve_order_material(order, changes=None):
     """
     Reserves `order`'s raw material when it is placed (create_order(),
     admin_offer_create_order() - after its lines and components exist, same
@@ -5275,13 +5369,32 @@ def _reserve_order_material(order):
     not buy it. The order is placed either way; producing it waits for the
     material (admin_production_report()). Returns the Bulgarian warnings for
     the caller to flash.
+
+    `changes` ({material_id: +/- quantity}) moves an existing reservation
+    instead (a line switched material, admin_order_item_material()): rows
+    are adjusted (dropped at 0, created when missing) and requests are
+    raised only for the lots that grew.
     """
-    for material_id, quantity in _order_material_needs(order).items():
-        db.session.add(OrderMaterialReservation(order_id=order.id, material_id=material_id, quantity=quantity))
+    fresh = changes is None
+    if fresh:
+        changes = _order_material_needs(order)
+    rows = {} if fresh else {r.material_id: r for r in OrderMaterialReservation.query.filter_by(order_id=order.id)}
+    for material_id, quantity in changes.items():
+        row = rows.get(material_id)
+        if row is None:
+            if quantity > 0:
+                db.session.add(OrderMaterialReservation(order_id=order.id, material_id=material_id, quantity=quantity))
+        elif row.quantity + quantity > PRODUCTION_STOCK_TOLERANCE:
+            row.quantity += quantity
+        else:
+            db.session.delete(row)
     db.session.flush()
+    grown = {m for m, q in changes.items() if q > 0}
     warnings = []
     for s in _order_material_shortages(order):
         material, missing = s['material'], s['missing']
+        if material.id not in grown:
+            continue
         name = format_material_option(material)
         if material.owner_client_id:
             warnings.append(f'Поръчка {order.order_number}: материалът на клиента "{name}" не стига - липсват '
@@ -5302,21 +5415,15 @@ def _pending_remnants(orders):
     (OrderMaterialRemnant). One group per (order, lot): sheets of a lot are
     shared by the order's details (nesting). A group is ready when every line
     of the order on that lot - consumed_material_id == lot, or not produced
-    yet and its detail is cut from that lot - is fully produced and something
+    yet and its line material (_line_material()) is that lot - is fully produced and something
     was taken (material_consumed). Only lots with price unit 'm2' and a known
     sheet size (stock counted in sheets - without a size it is m², see
     _material_stock_delta()); "материал на клиента" lines never take a lot.
     sheets = whole sheets used = ceil(consumed), at least 1. Three queries
     whatever the number of orders (the report renders it for all of them);
-    needs order.items / components / their detail loaded.
+    needs order.items / components / their detail (+ its material, the line's material) loaded.
     """
-    rows_by_order = {}
-    for order in orders:
-        rows = rows_by_order[order.id] = []
-        for item in order.items:
-            if not item.own_material:
-                rows += ([(c, c.detail, c.quantity_needed) for c in item.components] if item.product_id
-                         else [(item, item.detail, item.quantity_ordered)])
+    rows_by_order = {order.id: list(_order_production_rows(order)) for order in orders}
     lot_ids = {r.consumed_material_id for rows in rows_by_order.values() for r, _, _ in rows if r.consumed_material_id}
     if not lot_ids:
         return {}
@@ -5333,7 +5440,7 @@ def _pending_remnants(orders):
                 continue
             group = [(r, target) for r, detail, target in rows
                      if r.consumed_material_id == lot_id
-                     or (not r.consumed_material_id and detail and detail.material_key == lot.key)]
+                     or (not r.consumed_material_id and getattr(_line_material(r, detail), 'id', None) == lot_id)]
             consumed = sum(r.material_consumed or 0 for r, _ in group if r.consumed_material_id == lot_id)
             if consumed > PRODUCTION_STOCK_TOLERANCE and all(r.quantity_produced >= target for r, target in group):
                 result.setdefault(order.id, []).append({
@@ -5792,6 +5899,7 @@ app.jinja_env.globals['generator_price_on'] = generator_price_on
 # templates call it - only pages that actually list types hit the DB.
 app.jinja_env.globals['material_type_labels'] = material_type_labels
 app.jinja_env.globals['format_material_option'] = format_material_option
+app.jinja_env.globals['detail_material_choices'] = detail_material_choices
 app.jinja_env.globals['material_dimension_labels'] = material_dimension_labels
 app.jinja_env.globals['material_price_m2_label'] = material_price_m2_label
 app.jinja_env.globals['format_cut_dimensions'] = format_cut_dimensions
@@ -13340,8 +13448,11 @@ def detail_dxf_dashboard(detail_id):
     services_data = [{'id': s.id, 'name': s.name, 'price_per_hour_eur': s.price_per_hour_eur,
                        'pricing_mode': s.pricing_mode, 'price_per_meter_eur': s.price_per_meter_eur}
                       for s in services]
+    # Other allowed materials with the list price of the detail in each (admin tab "Материал и размери").
+    alt_materials = [(dm, _detail_total_price(detail, dm.material)) for dm in detail.alt_materials if dm.material]
     return render_template('detail_dxf_dashboard.html', detail=detail, files=files, services=services,
-                            materials=materials, services_data=services_data, active_page='admin_details')
+                            materials=materials, services_data=services_data, alt_materials=alt_materials,
+                            active_page='admin_details')
 
 
 @app.route('/details/<int:detail_id>/update-material', methods=['POST'])
@@ -13395,8 +13506,49 @@ def admin_update_detail_material(detail_id):
         'thickness_mm': 'дебелина мм', 'extra_width_mm': 'доп. ширина мм',
         'extra_height_mm': 'доп. височина мм', 'calculated_price': 'цена €',
     }))
+    # the default is never also an alternative (after describe_changes: this query flushes the history away)
+    DetailMaterial.query.filter_by(detail_id=detail.id, material_key=material_key).delete()
     db.session.commit()
     flash('Материалът и размерите бяха обновени успешно.', 'success')
+    return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
+
+
+@app.route('/details/<int:detail_id>/materials/add', methods=['POST'])
+@role_required('admin')
+def admin_add_detail_alt_material(detail_id):
+    """Allows one more material for this detail besides its default (DetailMaterial) -
+    same pick rule as the default (detail_materials_query(): ours + the owner's lots)."""
+    detail = Detail.query.get_or_404(detail_id)
+    back = redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
+    material_key = request.form.get('material_key', '')
+    material = detail_materials_query(detail.owner_client_id).filter_by(key=material_key).first()
+    if not material:
+        flash('Невалиден избор на материал.', 'danger')
+        return back
+    if not (detail.width and detail.height):
+        flash('Детайлът няма размери (ръчна цена) - друг материал не може да се остойности.', 'danger')
+        return back
+    if material.key == detail.material_key or DetailMaterial.query.filter_by(detail_id=detail.id, material_key=material.key).first():
+        flash('Този материал вече е разрешен за детайла.', 'danger')
+        return back
+    db.session.add(DetailMaterial(detail_id=detail.id, material_key=material.key))
+    db.session.commit()
+    log_action(f'Детайл "{detail.name}": разрешен материал "{format_material_option(material)}"')
+    flash('Материалът беше добавен към разрешените.', 'success')
+    return back
+
+
+@app.route('/details/<int:detail_id>/materials/<int:row_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_delete_detail_alt_material(detail_id, row_id):
+    """Removes an allowed material. Order lines already placed in it keep it (OrderItem.material_key)."""
+    row = DetailMaterial.query.filter_by(id=row_id, detail_id=detail_id).first_or_404()
+    name = format_material_option(row.material) if row.material else row.material_key
+    detail_name = row.detail.name
+    db.session.delete(row)
+    db.session.commit()
+    log_action(f'Детайл "{detail_name}": премахнат разрешен материал "{name}"')
+    flash('Материалът беше премахнат от разрешените.', 'success')
     return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
 
@@ -13845,6 +13997,9 @@ def admin_update_detail_owner(detail_id):
 
     old_owner = detail.owner_client.name if detail.owner_client else '(публичен)'
     old_price = detail.calculated_price
+    for dm in list(detail.alt_materials):   # another client's stored lot is no longer an allowed material
+        if dm.material and dm.material.owner_client_id not in (None, client_id):
+            db.session.delete(dm)
     detail.owner_client_id = client_id
     db.session.flush()
     db.session.refresh(detail, ['owner_client'])   # the relationship still holds the old owner until reloaded
@@ -14362,9 +14517,17 @@ def create_order():
                     continue
                 if not current_user.is_staff and not catalog_item_allowed(detail, current_user.client):
                     continue
+                # The material picked on the page: re-checked here and priced server-side, never the posted price.
+                raw_key = row.get('material_key')
+                material = _detail_material_choice(detail, raw_key.strip() if isinstance(raw_key, str) else raw_key)
+                if material is None:
+                    db.session.rollback()
+                    flash(f'Невалиден материал за детайл "{localized(detail, "name")}".', 'danger')
+                    return redirect(url_for('create_order'))
+                material_key = None if material.key == detail.material_key else material.key
                 order_item = OrderItem(
-                    order_id=new_order.id, detail_id=detail.id,
-                    quantity_ordered=qty, unit_price=detail_price_for(detail, pricing_client, own_material),
+                    order_id=new_order.id, detail_id=detail.id, material_key=material_key,
+                    quantity_ordered=qty, unit_price=detail_price_for(detail, pricing_client, own_material, material_key),
                     own_material=own_material
                 )
                 db.session.add(order_item)
@@ -14414,7 +14577,8 @@ def create_order():
         return redirect(url_for('my_orders'))
 
     products = Product.query.order_by(Product.name).all()
-    details = Detail.query.order_by(Detail.name).all()
+    details = (Detail.query.order_by(Detail.name)
+               .options(db.selectinload(Detail.alt_materials).joinedload(DetailMaterial.material)).all())
     # Non-staff only ever browse their own client's private catalog entries
     # plus whatever admin marked public - see _catalog_item_visible(). Staff
     # keep the full, unfiltered catalog (they build orders for any client).
@@ -14462,6 +14626,10 @@ def create_order():
         details_data = [{'id': d.id, 'name': detail_label(d), 'price': d.total_price, 'ops_total': ops_sum[d.id],
                          'owner_client_id': d.owner_client_id}
                         for d in details]
+        for row, d in zip(details_data, details):   # list price per allowed material, the JS adds the client's terms
+            if d.alt_materials and len(detail_material_choices(d)) > 1:
+                row['materials'] = [{'key': m.key, 'name': format_material_option(m), 'price': _detail_total_price(d, m)}
+                                    for m in detail_material_choices(d)]
     else:
         # A customer only ever orders as their own client (see the POST branch),
         # so they get finished prices - with shop material and with their own -
@@ -14483,6 +14651,11 @@ def create_order():
             }
             for d in details
         ]
+        for row, d in zip(details_data, details):   # finished price per allowed material (the default first)
+            if d.alt_materials and len(detail_material_choices(d)) > 1:
+                row['materials'] = [{'key': m.key, 'name': format_material_option(m),
+                                     'price': detail_price_for(d, viewer_client, False, m.key)}
+                                    for m in detail_material_choices(d)]
     # JSON-friendly service list so the per-detail operations picker can
     # preview an operation's cost client-side, same convention as
     # admin_details.html's ND_SERVICES.
@@ -14523,7 +14696,7 @@ def my_orders():
               .options(db.joinedload(Order.machine),
                        db.selectinload(Order.items).options(
                            db.joinedload(OrderItem.product), db.joinedload(OrderItem.detail),
-                           db.selectinload(OrderItem.components),
+                           db.joinedload(OrderItem.material), db.selectinload(OrderItem.components),
                            db.selectinload(OrderItem.operations).joinedload(OrderItemOperation.service)))
               .all())
     return render_template('my_orders.html', orders=orders, active_page='my_orders')
@@ -14614,8 +14787,9 @@ def admin_production_report():
         # Making more pieces waits until the lot covers this order's reservation (first come
         # first served, see _open_material_reservations()); a correction downward never waits.
         # The lot is locked first, so two entries on it cannot both pass on the same stock.
-        if row and stock_delta > 0 and detail and detail.material:
-            lot_id = row.consumed_material_id or detail.material.id
+        line_material = _line_material(row, detail) if row else None
+        if stock_delta > 0 and line_material:
+            lot_id = row.consumed_material_id or line_material.id
             _lock_or_404(MaterialPrice, lot_id)
             short = next((s for s in _order_material_shortages(order_item.order) if s['material'].id == lot_id), None)
             if short:
@@ -14666,8 +14840,12 @@ def admin_production_report():
     orders = (Order.query.filter(Order.status != 'cancelled').order_by(Order.created_at.desc())
               .options(db.joinedload(Order.user),
                        db.selectinload(Order.items).options(
-                           db.joinedload(OrderItem.product), db.joinedload(OrderItem.detail),
-                           db.selectinload(OrderItem.components).joinedload(OrderItemComponent.detail),
+                           db.joinedload(OrderItem.product), db.joinedload(OrderItem.material),
+                           db.joinedload(OrderItem.detail).joinedload(Detail.material),
+                           db.joinedload(OrderItem.detail).selectinload(Detail.alt_materials)
+                           .joinedload(DetailMaterial.material),
+                           db.selectinload(OrderItem.components).joinedload(OrderItemComponent.detail)
+                           .joinedload(Detail.material),
                            db.selectinload(OrderItem.attachments)))
               .all())
     machines = Machine.query.order_by(Machine.name).all()
@@ -14770,6 +14948,60 @@ def admin_confirm_order_material(order_id):
         for warning in warnings:
             flash(warning, 'warning')
     return redirect(url_for('admin_production_report') + f'#order-{order.id}')
+
+
+@app.route('/admin/order-items/<int:item_id>/material', methods=['POST'])
+@role_required('admin')
+def admin_order_item_material(item_id):
+    """
+    Switches a standalone-detail order line to another of the detail's
+    materials (detail_material_choices()) before anything is produced on it:
+    unit_price moves by the price difference of the two materials for the
+    order's client (detail_price_for(); order-time operations are untouched),
+    and an order that already reserved material moves the line's need from
+    the old lot to the new one (_reserve_order_material(changes=...), a
+    request for the new lot when it is short). Refused once production of
+    the line started - the lot is frozen at the first consumption.
+    """
+    item = _lock_or_404(OrderItem, item_id)
+    order = item.order
+    back = redirect(url_for('admin_production_report') + f'#order-{order.id}')
+    detail = item.detail
+    if not detail or item.product_id or order.status in ('completed', 'cancelled'):
+        flash('Материалът на този ред не може да се сменя.', 'danger')
+        return back
+    if item.quantity_produced or item.material_consumed or item.consumed_material_id:
+        flash('Производството по този ред е започнало - материалът вече не може да се смени.', 'danger')
+        return back
+    new = _detail_material_choice(detail, request.form.get('material_key', '').strip())
+    if new is None:
+        flash('Невалиден материал за този детайл.', 'danger')
+        return back
+    old = _line_material(item, detail)
+    if new.id == old.id:
+        return back
+    client = order.client or (order.user.client if order.user else None)   # as create_order() priced it
+    old_price = detail_price_for(detail, client, item.own_material, old.key)
+    new_price = detail_price_for(detail, client, item.own_material, new.key)
+    old_lot, old_need = _row_material_need(item, detail, item.quantity_ordered)
+    item.material_key = None if new.key == detail.material_key else new.key
+    item.material = None if item.material_key is None else new
+    item.unit_price = round(item.unit_price + new_price - old_price, 2)
+    warnings = []
+    if not item.own_material and OrderMaterialReservation.query.filter_by(order_id=order.id).first():
+        new_lot, new_need = _row_material_need(item, detail, item.quantity_ordered)
+        changes = {}
+        for lot, need in ((old_lot, -old_need), (new_lot, new_need)):
+            if lot and need:
+                changes[lot.id] = changes.get(lot.id, 0) + need
+        warnings = _reserve_order_material(order, changes)
+    db.session.commit()
+    log_action(f'Поръчка {order.order_number}: материал на "{detail.name}" "{old.display_name}" → "{new.display_name}" '
+               f'(цена на детайла {old_price:g} → {new_price:g} €, ед. цена на реда {item.unit_price:g} €)')
+    flash(f'Материалът на "{detail.name}" е сменен.', 'success')
+    for warning in warnings:
+        flash(warning, 'warning')
+    return back
 
 
 @app.route('/admin/missing-stock')
@@ -15075,6 +15307,8 @@ def print_label(target_type, target_id):
             flash('Този продукт се отчита по детайли - отпечатайте етикет за всеки компонент.', 'danger')
             return redirect(url_for('admin_production_report'))
         name = made.name
+        if row.material_key and row.material:   # made from another of the detail's allowed materials
+            name = f'{name} [{row.material.display_name}]'
         quantity = row.quantity_produced
         order = row.order
         erp_number = made.erp_number
@@ -17253,7 +17487,7 @@ def admin_delete_material(key):
     Details first, then remove the material.
     """
     material = MaterialPrice.query.filter_by(key=key).first_or_404()
-    in_use = Detail.query.filter_by(material_key=key).count()
+    in_use = Detail.query.filter_by(material_key=key).count() + DetailMaterial.query.filter_by(material_key=key).count()
     if in_use > 0:
         flash(
             f'Материалът "{material.display_name}" се използва от {in_use} детайл(а) '
@@ -17277,6 +17511,8 @@ def admin_delete_material(key):
     if (OrderItem.query.filter_by(consumed_material_id=material.id).first()
             or OrderItemComponent.query.filter_by(consumed_material_id=material.id).first()):
         used_in.append('поръчка (изразходван материал)')
+    if OrderItem.query.filter_by(material_key=material.key).first():
+        used_in.append('поръчка (избран материал на ред)')
     if used_in:
         flash(f'Материалът "{material.display_name}" се използва в поне една {", ".join(used_in)} '
               f'и не може да бъде изтрит.', 'danger')

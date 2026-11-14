@@ -104,6 +104,23 @@
                         <span style="color: #007bff; font-weight: 600;">[ПРОДУКТ]</span> {{ item.product.name if item.product else 'Изтрит продукт' }}
                         {% else %}
                         <span style="color: #a56cff; font-weight: 600;">[ДЕТАЙЛ]</span> {{ item.detail.name if item.detail else 'Изтрит детайл' }}
+                        {% if item.material_key and item.material %}<div class="text-small text-muted">Материал: {{ format_material_option(item.material) }}</div>{% endif %}
+                        {% if current_user.is_admin and item.detail and item.detail.alt_materials and not item.quantity_produced
+                              and not item.consumed_material_id and order.status not in ('completed', 'cancelled') %}
+                        {% set choices = detail_material_choices(item.detail) %}
+                        {% if choices|length > 1 %}
+                        <form method="POST" action="{{ url_for('admin_order_item_material', item_id=item.id) }}"
+                              style="display: flex; gap: 6px; margin-top: 4px;">
+                            {% include 'partials/csrf_field.html' %}
+                            <select name="material_key" style="font-size: 0.78rem; max-width: 320px;">
+                                {% for m in choices %}
+                                <option value="{{ m.key }}" {% if m.key == (item.material_key or item.detail.material_key) %}selected{% endif %}>{{ format_material_option(m) }}</option>
+                                {% endfor %}
+                            </select>
+                            <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Смени материала</button>
+                        </form>
+                        {% endif %}
+                        {% endif %}
                         {% endif %}
                     </td>
                     <td class="text-center">{{ item.quantity_ordered }} бр. <span class="text-muted text-small" id="item-remaining-{{ item.id }}">(остават {{ item.quantity_remaining }})</span></td>

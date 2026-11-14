@@ -82,6 +82,11 @@
                     </optgroup>
                 </select>
             </div>
+            {# Filled by renderDetailMaterials() for a detail that may be made from other materials. #}
+            <div class="form-group" id="detail_material_selector" style="display: none;">
+                <label for="cart_detail_material">{{ _('Материал') }}</label>
+                <select id="cart_detail_material"></select>
+            </div>
             <div class="form-group qty-field">
                 <label for="cart_qty">{{ _('Количество') }}</label>
                 <input type="number" id="cart_qty" value="1" min="1">
@@ -499,13 +504,21 @@
         return 1 + ((cp && cp.own_material_percent) || 0) / 100;
     }
 
+    // The price of a detail cut from the chosen material (d.materials, the
+    // default first - only for a detail with other allowed materials): the
+    // server's finished price for a customer, the list price for staff.
+    function detailMaterialPrice(d, materialKey) {
+        const m = materialKey && (d.materials || []).find(function (x) { return x.key === materialKey; });
+        return m ? m.price : d.price;
+    }
+
     // A standalone Detail's price - mirrors detail_price_for(). A customer's
     // page carries both finished prices (price / price_own) from the server;
     // staff re-run the formula for the selected client's Детайли terms.
-    function detailAdjustedPrice(d, ownMaterial) {
-        if (d.price_own !== undefined) return ownMaterial ? d.price_own : d.price;
+    function detailAdjustedPrice(d, ownMaterial, materialKey) {
+        if (d.price_own !== undefined) return ownMaterial ? d.price_own : detailMaterialPrice(d, materialKey);
         const cp = selectedClientPricing();
-        const base = ownMaterial ? round2(d.ops_total * ownMaterialFactor()) : d.price;
+        const base = ownMaterial ? round2(d.ops_total * ownMaterialFactor()) : detailMaterialPrice(d, materialKey);
         // The owner of a private detail pays its stored price: it already carries his Материали terms.
         const sel = document.getElementById('client_id');
         const isOwner = d.owner_client_id != null && sel && parseInt(sel.value, 10) === d.owner_client_id;
@@ -544,8 +557,8 @@
 
     // A standalone-Detail cart line: the Detail plus its order-time
     // operations, rounded where create_order() rounds.
-    function detailLinePrice(d, ownMaterial, operations) {
-        const price = detailAdjustedPrice(d, ownMaterial);
+    function detailLinePrice(d, ownMaterial, operations, materialKey) {
+        const price = detailAdjustedPrice(d, ownMaterial, materialKey);
         if (!operations || operations.length === 0) return price;
         let opsCost = round2(operations.reduce(function (sum, op) {
             return sum + pendingOpCost(op.serviceId, op.durationMinutes);
@@ -564,7 +577,7 @@
             return p ? productAdjustedPrice(p, item.ownMaterial) : (item.unitPrice || 0);
         }
         const d = DETAILS.find(function (x) { return x.id === item.id; });
-        return d ? detailLinePrice(d, item.ownMaterial, item.operations) : (item.unitPrice || 0);
+        return d ? detailLinePrice(d, item.ownMaterial, item.operations, item.materialKey) : (item.unitPrice || 0);
     }
 
     function addPendingOperation() {
@@ -631,13 +644,33 @@
         return td;
     }
 
+    // The material picker of the selected detail - shown only when it has other allowed materials.
+    function renderDetailMaterials() {
+        const isDetail = document.querySelector('input[name="cart_item_type"]:checked').value === 'detail';
+        const id = parseInt(document.getElementById('cart_detail_id').value, 10);
+        const d = DETAILS.find(function (x) { return x.id === id; });
+        const select = document.getElementById('cart_detail_material');
+        select.innerHTML = '';
+        const materials = isDetail && d && d.materials ? d.materials : [];
+        materials.forEach(function (m) {
+            const opt = document.createElement('option');
+            opt.value = m.key;
+            opt.textContent = m.name + ' — ' + detailAdjustedPrice(d, false, m.key).toFixed(2) + ' €';
+            select.appendChild(opt);
+        });
+        document.getElementById('detail_material_selector').style.display = materials.length ? 'block' : 'none';
+    }
+    document.getElementById('cart_detail_id').addEventListener('change', renderDetailMaterials);
+
     document.querySelectorAll('input[name="cart_item_type"]').forEach(function (radio) {
         radio.addEventListener('change', function () {
             document.getElementById('product_selector').style.display = this.value === 'product' ? 'block' : 'none';
             document.getElementById('detail_selector').style.display = this.value === 'detail' ? 'block' : 'none';
             document.getElementById('detail_ops_section').style.display = this.value === 'detail' ? 'block' : 'none';
+            renderDetailMaterials();
         });
     });
+    renderDetailMaterials();
 
     function addToCart() {
         const type = document.querySelector('input[name="cart_item_type"]:checked').value;
@@ -668,11 +701,16 @@
             const id = parseInt(sel.value, 10);
             const d = DETAILS.find(function (x) { return x.id === id; });
             if (!d) return;
+            // The default material (first option) is sent as no choice at all - same as a detail without options.
+            const matSel = document.getElementById('cart_detail_material');
+            const chosen = d.materials && d.materials.find(function (m) { return m.key === matSel.value; });
+            const materialKey = chosen && chosen !== d.materials[0] ? chosen.key : null;
+            const name = materialKey ? d.name + ' [' + chosen.name + ']' : d.name;
 
             const operations = pendingDetailOps.map(function (op) {
                 return { serviceId: op.serviceId, serviceName: op.serviceName, description: op.description, durationMinutes: op.durationMinutes };
             });
-            const unitPrice = detailLinePrice(d, ownMaterial, operations);
+            const unitPrice = detailLinePrice(d, ownMaterial, operations, materialKey);
 
             const pdfInput = document.getElementById('pending_op_pdf');
             const pdfFile = pdfInput.files[0];
@@ -683,13 +721,13 @@
                     // always its own cart line - merging it into a plain (or
                     // differently-configured) line for the same detail would
                     // lose which operations/file go with which piece count.
-                    cart.push({ type: type, id: id, name: d.name, unitPrice: unitPrice, qty: qty, operations: operations, attachment: attachment || null, ownMaterial: ownMaterial });
+                    cart.push({ type: type, id: id, name: name, unitPrice: unitPrice, qty: qty, operations: operations, attachment: attachment || null, ownMaterial: ownMaterial, materialKey: materialKey });
                 } else {
-                    const existing = cart.find(function (c) { return c.type === type && c.id === id && (!c.operations || c.operations.length === 0) && !c.attachment && !!c.ownMaterial === ownMaterial; });
+                    const existing = cart.find(function (c) { return c.type === type && c.id === id && (!c.operations || c.operations.length === 0) && !c.attachment && !!c.ownMaterial === ownMaterial && (c.materialKey || null) === materialKey; });
                     if (existing) {
                         existing.qty += qty;
                     } else {
-                        cart.push({ type: type, id: id, name: d.name, unitPrice: unitPrice, qty: qty, ownMaterial: ownMaterial });
+                        cart.push({ type: type, id: id, name: name, unitPrice: unitPrice, qty: qty, ownMaterial: ownMaterial, materialKey: materialKey });
                     }
                 }
                 pendingDetailOps = [];
@@ -801,6 +839,7 @@
             cart.map(function (c) {
                 const row = { type: c.type, id: c.id, qty: c.qty };
                 if (c.ownMaterial) row.own_material = true;
+                if (c.materialKey) row.material_key = c.materialKey;
                 if (c.operations && c.operations.length > 0) {
                     row.operations = c.operations.map(function (op) {
                         return { service_id: op.serviceId, duration_minutes: op.durationMinutes, description: op.description };
