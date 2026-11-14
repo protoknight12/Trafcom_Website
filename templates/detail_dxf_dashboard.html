@@ -85,6 +85,7 @@
     </style>
 </head>
 <body>
+{% from 'partials/entity_link.html' import elink %}
 {% set subnav = 'catalog' %}{% set subnav_current = detail.name %}
 {% include 'partials/navbar.html' %}
 
@@ -263,13 +264,13 @@
                 <thead><tr><th>Материал</th><th class="text-right">Цена на детайла</th><th class="text-right">Действие</th></tr></thead>
                 <tbody>
                 <tr>
-                    <td>{{ format_material_option(detail.material) if detail.material else detail.material_key }} <span class="text-muted text-small">(по подразбиране)</span></td>
+                    <td>{{ elink('material', detail.material.id, format_material_option(detail.material)) if detail.material else detail.material_key }} <span class="text-muted text-small">(по подразбиране)</span></td>
                     <td class="text-right">{{ "%.2f"|format(detail.total_price) }} €</td>
                     <td></td>
                 </tr>
                 {% for dm, price in alt_materials %}
                 <tr>
-                    <td>{{ format_material_option(dm.material) }}</td>
+                    <td>{{ elink('material', dm.material.id, format_material_option(dm.material)) }}</td>
                     <td class="text-right">{{ "%.2f"|format(price) }} €</td>
                     <td class="text-right">
                         <form method="POST" action="{{ url_for('admin_delete_detail_alt_material', detail_id=detail.id, row_id=dm.id) }}"

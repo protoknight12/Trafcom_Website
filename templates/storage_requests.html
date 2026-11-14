@@ -17,6 +17,7 @@
     </style>
 </head>
 <body>
+{% from 'partials/entity_link.html' import elink %}
 {% include 'partials/navbar.html' %}
 
 <main class="admin-container">
@@ -99,7 +100,7 @@
                 <tbody>
                 {% for req in requests %}
                 <tr>
-                    <td>{{ format_material_option(req.material) if req.material else 'Изтрит материал' }}{% if req.note %}<div class="text-muted text-small">{{ req.note }}</div>{% endif %}</td>
+                    <td>{{ elink('material', req.material_id, format_material_option(req.material)) if req.material else 'Изтрит материал' }}{% if req.note %}<div class="text-muted text-small">{{ req.note }}</div>{% endif %}</td>
                     <td class="text-center">{{ req.quantity|round(2) }}</td>
                     <td>{{ (req.created_at|local).strftime('%d.%m.%Y %H:%M') if req.created_at else '-' }} {% if req.created_by %}<div class="text-muted text-small">{{ req.created_by.username }}</div>{% endif %}</td>
                     <td class="text-center"><span class="status-badge status-{{ req.status }}">{{ req.status_label }}</span></td>

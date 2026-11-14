@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+{% from 'partials/entity_link.html' import elink %}
 <html lang="bg">
 <head>
     <meta charset="UTF-8">
@@ -240,7 +241,7 @@
                     <td>
                         {% for item in note.items %}
                         <div>
-                            {{ item.description_snapshot }} &times; {{ item.quantity }}
+                            {% if item.target_type in ('material','detail','product') %}{{ elink(item.target_type, item.target_id, item.description_snapshot) }}{% else %}{{ item.description_snapshot }}{% endif %} &times; {{ item.quantity }}
                             {%- if item.unit_price %} @ {{ "%.2f"|format(item.unit_price) }} €{% endif %}
                             {%- if item.remnant_qty %}, остатък {{ '%g'|format(item.remnant_qty) }}{% if item.remnant_width %} ({{ '%g'|format(item.remnant_width) }}×{{ '%g'|format(item.remnant_height) }}){% endif %}{% endif %}
                             {%- if item.notes %} - {{ item.notes }}{% endif %}

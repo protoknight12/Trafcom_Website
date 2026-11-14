@@ -15,6 +15,7 @@
     </style>
 </head>
 <body>
+{% from 'partials/entity_link.html' import elink %}
 {% include 'partials/navbar.html' %}
 
 <main class="admin-container" style="max-width: 98vw; margin: 30px auto; padding: 0 15px;">
@@ -37,7 +38,7 @@
     <section class="admin-card">
         <div class="order-card-header">
             <div>
-                <strong style="font-size: 1.1rem;">{{ order.order_number }}</strong> &nbsp;—&nbsp; {{ order.customer_name }}
+                <strong style="font-size: 1.1rem;">{{ elink('order', order.id, order.order_number) }}</strong> &nbsp;—&nbsp; {{ order.customer_name }}
                 <div class="text-muted text-small">{{ (order.created_at|local).strftime('%d.%m.%Y %H:%M') }} · Потребител: {{ order.user.username if order.user else 'Изтрит потребител' }}</div>
             </div>
             <span class="status-badge status-{{ order.status }}">{{ order.status_label }}</span>
@@ -56,7 +57,7 @@
                 <tbody>
                 {% for s in row.shortfalls %}
                 <tr>
-                    <td>{{ s.item_name }}</td>
+                    <td>{{ elink(s.target_type, s.target_id, s.item_name) }}</td>
                     <td class="text-center">{{ s.needed }}</td>
                     <td class="text-center">{{ s.available }}</td>
                     <td class="text-center missing-qty">{{ s.missing }}</td>

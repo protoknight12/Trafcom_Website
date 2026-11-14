@@ -9,6 +9,7 @@
 </head>
 <body>
 {% include 'partials/navbar.html' %}
+{% from 'partials/entity_link.html' import elink %}
 
 <main class="admin-container" style="max-width: 1100px; margin: 20px auto; padding: 0 15px;">
     {% with messages = get_flashed_messages(with_categories=true) %}
@@ -65,7 +66,7 @@
                 {% for item in order.items %}
                 {% set floor, touched = line_state[item.id] %}
                 <tr>
-                    <td>{{ '[ПРОДУКТ]' if item.product_id else '[ДЕТАЙЛ]' }} {{ item.item_name }}
+                    <td>{{ '[ПРОДУКТ]' if item.product_id else '[ДЕТАЙЛ]' }} {{ elink('product', item.product_id, item.item_name) if item.product_id else elink('detail', item.detail_id, item.item_name) }}
                         {% if item.detail and item.detail.alt_materials and not touched %}
                         <div class="text-small"><a href="{{ url_for('admin_production_report') }}#order-{{ order.id }}" target="_top">Смяна на материала - от производствената справка</a></div>
                         {% endif %}

@@ -20,6 +20,7 @@
 </head>
 <body>
 {% include 'partials/navbar.html' %}
+{% from 'partials/entity_link.html' import elink %}
 
 <main class="admin-container" style="max-width: 900px; margin: 30px auto; padding: 0 15px;">
 
@@ -46,7 +47,7 @@
     <section class="admin-card" data-search="{{ (order.order_number ~ ' ' ~ order.customer_name ~ ' ' ~ (order.items|map(attribute='item_name')|join(' '))) | lower }}">
         <div class="order-card-header">
             <div>
-                <strong style="font-size: 1.1rem;">{{ order.order_number }}</strong> &nbsp;—&nbsp; {{ order.customer_name }}
+                <strong style="font-size: 1.1rem;">{{ elink('order', order.id, order.order_number) }}</strong> &nbsp;—&nbsp; {{ order.customer_name }}
                 {% if order.machine %}
                 <span style="margin-left: 8px; border: 1px solid var(--accent-primary); color: var(--accent-secondary); background-color: rgba(var(--accent-rgb), 0.1); font-size: 0.8rem; font-weight: bold; padding: 2px 8px; border-radius: 4px; display: inline-block; vertical-align: middle;">🔧 {{ order.machine.name }}</span>
                 {% endif %}
@@ -70,7 +71,7 @@
                 {% for item in order.items %}
                 <tr>
                     <td>
-                        {{ item.item_name }}
+                        {{ elink('product', item.product_id, item.item_name) if item.product_id else elink('detail', item.detail_id, item.item_name) }}
                         {% if item.product %}
                         <span class="badge badge-user">{{ _('Продукт') }}</span>
                         {% else %}

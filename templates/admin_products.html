@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
+{% from 'partials/entity_link.html' import elink %}
 {% set subnav = 'catalog' %}
 {% include 'partials/navbar.html' %}
 
@@ -86,7 +87,7 @@
                 <tbody id="adminProductsTableBody">
                 {% for product in products %}
                 <tr data-search="{{ (product.name ~ ' ' ~ (product.erp_number or '') ~ ' ' ~ (product.code_number or '')) | lower }}">
-                    <td><strong>{{ product.name }}</strong></td>
+                    <td><strong>{{ elink('product', product.id, product.name) }}</strong></td>
                     <td>{{ "%.2f"|format(product_pricing[product.id].total_cost) }} €</td>
                     <td>{{ product.markup_percent }}%</td>
                     <td><span style="color: var(--success-text); font-weight: 600;">{{ "%.2f"|format(product_pricing[product.id].sell_price) }} €</span></td>

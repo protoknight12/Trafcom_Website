@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+{% from 'partials/entity_link.html' import elink %}
 <html lang="bg">
 <head>
     <meta charset="UTF-8">
@@ -393,7 +394,7 @@
                         {#- Format: (item) (brand) x (quantity) (parameters separated by ,) - see CLAUDE.md delivery-note history task #}
                         <div>
                             {%- if item.target_type == 'material' %}#{{ item.target_id }} {% endif -%}
-                            {{ item.description_snapshot }}{% if item.brand %} {{ item.brand }}{% endif %} &times; {{ item.quantity }}
+                            {% if item.target_type in ('material','detail','product') %}{{ elink(item.target_type, item.target_id, item.description_snapshot) }}{% else %}{{ item.description_snapshot }}{% endif %}{% if item.brand %} {{ item.brand }}{% endif %} &times; {{ item.quantity }}
                             {%- set params = [] %}
                             {%- if item.width %}{% set _ = params.append('Ш: ' ~ item.width) %}{% endif %}
                             {%- if item.height %}{% set _ = params.append('Д: ' ~ item.height) %}{% endif %}

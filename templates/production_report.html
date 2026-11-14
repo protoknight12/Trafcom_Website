@@ -22,6 +22,7 @@
 </head>
 <body>
 {% include 'partials/navbar.html' %}
+{% from 'partials/entity_link.html' import elink %}
 
 <main class="admin-container" style="max-width: 98vw; margin: 30px auto; padding: 0 15px;">
 
@@ -42,14 +43,14 @@
     <section class="admin-card" id="order-{{ order.id }}">
         <div class="order-card-header">
             <div>
-                <strong style="font-size: 1.1rem;">{{ order.order_number }}</strong> &nbsp;—&nbsp; {{ order.customer_name }}
+                <strong style="font-size: 1.1rem;">{{ elink('order', order.id, order.order_number) }}</strong> &nbsp;—&nbsp; {{ order.customer_name }}
                 <div class="text-muted text-small">{{ (order.created_at|local).strftime('%d.%m.%Y %H:%M') }} · Потребител: {{ order.user.username if order.user else 'Изтрит потребител' }}</div>
                 {#- Material reserved for the order, first come first served - see _open_material_reservations(). #}
                 {% set lots = reservations.get(order.id, []) %}
                 {% set short = lots|selectattr('missing')|list %}
                 {% if short %}
                 {% for s in short %}
-                <span class="status-badge status-new" style="margin-top: 4px;">Чака материал: {{ format_material_option(s.material) }} (липсват {{ s.missing|round(3) }})</span>
+                <span class="status-badge status-new" style="margin-top: 4px;">Чака материал: {{ elink('material', s.material.id, format_material_option(s.material)) }} (липсват {{ s.missing|round(3) }})</span>
                 {% endfor %}
                 {% elif lots %}
                 <span class="status-badge status-completed" style="margin-top: 4px;">Материал заделен</span>
@@ -63,7 +64,7 @@
                 <div id="remnants-{{ order.id }}">
                     {% for g in remnants.get(order.id, []) %}
                     <div class="remnant-pending" data-remnant-key="{{ g.material_id }}-{{ g.cut_sheet_id or '' }}" style="margin-top: 4px;">
-                        <span class="status-badge status-new">Остатък: чака решение ({{ g.material_name }}, {% if g.cut_sheet_id %}лист {{ g.seq }}{% if g.sheets > 1 %} - {{ g.sheets }} л.{% endif %}{% else %}{{ g.sheets }} л.{% endif %})</span>
+                        <span class="status-badge status-new">Остатък: чака решение ({{ elink('material', g.material_id, g.material_name) }}, {% if g.cut_sheet_id %}лист {{ g.seq }}{% if g.sheets > 1 %} - {{ g.sheets }} л.{% endif %}{% else %}{{ g.sheets }} л.{% endif %})</span>
                         <button type="button" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;"
                                 data-remnant='{{ g|tojson|forceescape }}' onclick="openRemnantDialog(JSON.parse(this.dataset.remnant))">Реши за остатъка</button>
                     </div>
@@ -78,7 +79,7 @@
                     <button type="button" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;"
                             data-plan='{{ g|tojson|forceescape }}' onclick="openCutPlan(JSON.parse(this.dataset.plan))">Разкрой по листове ({{ g.material_name }})</button>
                     {% else %}
-                    <span class="text-small text-muted">Разкрой по листове ({{ g.material_name }})</span>
+                    <span class="text-small text-muted">Разкрой по листове ({{ elink('material', g.material_id, g.material_name) }})</span>
                     {% endif %}
                     {% for s in g.sheets %}
                     <div class="text-small" style="margin-top: 3px;">Лист {{ s.seq }}{% if s.copies > 1 %} (×{{ s.copies }} листа){% endif %}: {{ s.label }}
@@ -151,10 +152,10 @@
                 <tr style="background-color: rgba(255,255,255,0.03);">
                     <td>
                         {% if item.product %}
-                        <span style="color: #007bff; font-weight: 600;">[ПРОДУКТ]</span> {{ item.product.name if item.product else 'Изтрит продукт' }}
+                        <span style="color: #007bff; font-weight: 600;">[ПРОДУКТ]</span> {{ elink('product', item.product_id, item.product.name) if item.product else 'Изтрит продукт' }}
                         {% else %}
-                        <span style="color: #a56cff; font-weight: 600;">[ДЕТАЙЛ]</span> {{ item.detail.name if item.detail else 'Изтрит детайл' }}
-                        {% if item.material_key and item.material %}<div class="text-small text-muted">Материал: {{ format_material_option(item.material) }}</div>{% endif %}
+                        <span style="color: #a56cff; font-weight: 600;">[ДЕТАЙЛ]</span> {{ elink('detail', item.detail_id, item.detail.name) if item.detail else 'Изтрит детайл' }}
+                        {% if item.material_key and item.material %}<div class="text-small text-muted">Материал: {{ elink('material', item.material.id, format_material_option(item.material)) }}</div>{% endif %}
                         {% if current_user.is_admin and item.detail and item.detail.alt_materials and not item.quantity_produced
                               and not item.consumed_material_id and order.status not in ('completed', 'cancelled') %}
                         {% set choices = detail_material_choices(item.detail) %}
@@ -202,7 +203,7 @@
                 {% if item.product %}
                 {% for comp in item.components %}
                 <tr>
-                    <td style="padding-left: 30px; color: var(--text-muted);">↳ Компонент: {{ comp.detail_name_snapshot }}</td>
+                    <td style="padding-left: 30px; color: var(--text-muted);">↳ Компонент: {{ elink('detail', comp.detail_id, comp.detail_name_snapshot) }}</td>
                     <td class="text-center">{{ comp.quantity_needed }} бр. <span class="text-muted text-small" id="component-remaining-{{ comp.id }}">(остават {{ comp.quantity_remaining }})</span></td>
                     <td class="text-center">
                         <div class="text-small text-muted" style="margin-bottom: 4px;">Общо изработени: <span id="component-total-{{ comp.id }}">{{ comp.quantity_produced }}</span> бр.</div>

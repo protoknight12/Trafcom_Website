@@ -18,6 +18,7 @@
     </style>
 </head>
 <body>
+{% from 'partials/entity_link.html' import elink %}
 {% include 'partials/navbar.html' %}
 
 <main class="admin-container">
@@ -84,7 +85,7 @@
                 <tbody>
                 {% for job in pending_jobs + done_jobs %}
                 <tr>
-                    <td>{{ job.detail.name }}</td>
+                    <td>{{ elink('detail', job.detail.id, job.detail.name) if job.detail else '' }}</td>
                     <td class="text-center">{{ job.quantity }}</td>
                     <td>{{ format_material_option(job.material) }} — {{ "%.2f"|format(job.material.cost_per_m2) }} €/{{ material_unit_short(job.material.type) }}
                         <span style="color: var(--text-muted);">(наличност: {{ job.material_available_display }} {{ job.unit_label }})</span></td>

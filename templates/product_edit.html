@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
+{% from 'partials/entity_link.html' import elink %}
 {% set subnav = 'catalog' %}{% set subnav_current = product.name %}
 {% include 'partials/navbar.html' %}
 
@@ -121,7 +122,7 @@
                 <tbody>
                 {% for pd in product.product_details %}
                 <tr>
-                    <td><strong>{{ pd.detail.name if pd.detail else 'Изтрит детайл' }}</strong></td>
+                    <td><strong>{{ elink('detail', pd.detail.id, pd.detail.name) if pd.detail else 'Изтрит детайл' }}</strong></td>
                     <td><span class="badge badge-user">{{ pd.detail.material.display_name if (pd.detail and pd.detail.material) else 'Неизвестен' }}</span></td>
                     <td>{{ "%.2f"|format(pd.detail.total_price if pd.detail else 0) }} €</td>
                     <td>{{ pd.quantity }}</td>

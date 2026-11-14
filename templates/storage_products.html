@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
+{% from 'partials/entity_link.html' import elink %}
 {% include 'partials/navbar.html' %}
 
 <main class="admin-container">
@@ -50,7 +51,7 @@
                 <tbody id="productsTableBody">
                 {% for product in products %}
                 <tr data-search="{{ product.name | lower }}">
-                    <td>{{ product.name }}</td>
+                    <td>{{ elink('product', product.id, product.name) }}</td>
                     <td class="text-center">{{ product.stock_quantity|round(2) }}</td>
                 </tr>
                 {% else %}

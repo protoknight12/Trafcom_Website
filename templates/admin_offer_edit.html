@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+{% from 'partials/entity_link.html' import elink %}
 <html lang="bg">
 <head>
     <meta charset="UTF-8">
@@ -57,7 +58,7 @@
                 <tr><th>Подписал</th><td data-summary="signed_by"></td></tr>
                 <tr><th>Валидна до</th><td data-summary="valid_until"></td></tr>
                 <tr><th>Отстъпка</th><td data-summary="discount_percent"></td></tr>
-                {% if offer and offer.order %}<tr><th>Поръчка</th><td><a href="{{ url_for('admin_production_report') }}#order-{{ offer.order.id }}">Поръчка № {{ offer.order.order_number }}</a></td></tr>{% endif %}
+                {% if offer and offer.order %}<tr><th>Поръчка</th><td>{{ elink('order', offer.order.id, 'Поръчка № ' ~ offer.order.order_number) }}</td></tr>{% endif %}
                 <tr><th>Условия / бележки</th><td data-summary="footer_notes" style="white-space: pre-line;"></td></tr>
                 </tbody>
             </table>
@@ -592,6 +593,14 @@
     }
 
     // The catalog price today (server-side, current_price) differs from the line's saved price: offered, never applied by itself.
+    // The line's name opens its product/detail page in a new tab (the offer stays open here).
+    function itemNameLink(item) {
+        const text = escapeHtml(item.name);
+        const href = item.product_id ? '/admin/products/' + encodeURIComponent(item.product_id) + '/edit'
+            : item.detail_id ? '/details/' + encodeURIComponent(item.detail_id) + '/files' : '';
+        return href ? '<a href="' + href + '" target="_blank" rel="noopener" class="entity-link">' + text + '</a>' : text;
+    }
+
     function isStale(item) {
         return item.current_price != null && item.unit_price != null && Math.round(item.unit_price * 100) !== Math.round(item.current_price * 100);
     }
@@ -618,7 +627,7 @@
                     ? '<img src="' + OFFER_IMAGE_URL_PREFIX + escapeHtml(item.image_filename) + '" style="max-height:40px; max-width:60px; border-radius:4px;">'
                     : '';
                 tr.appendChild(cell(thumbHtml));
-                let nameHtml = item.name ? ('<strong>' + escapeHtml(item.name) + '</strong>') : '';
+                let nameHtml = item.name ? ('<strong>' + itemNameLink(item) + '</strong>') : '';
                 if (item.description_html) nameHtml += (nameHtml ? '<br>' : '') + '<span class="text-small text-muted">' + item.description_html + '</span>';
                 if (isStale(item)) nameHtml += '<br><span class="text-small" style="color: var(--warning, #e0a800);">Цената е променена: ' + round2(item.unit_price).toFixed(2) + ' -> ' + round2(item.current_price).toFixed(2) + ' €'
                     + (OFFER_HAS_ORDER ? ' (поръчката запазва старата цена)' : '') + '</span>';
@@ -718,7 +727,7 @@
                 const cbTd = document.createElement('td');
                 cbTd.appendChild(cb);
                 tr.appendChild(cbTd);
-                tr.appendChild(cell('<strong>' + escapeHtml(item.name) + '</strong>'));
+                tr.appendChild(cell('<strong>' + itemNameLink(item) + '</strong>'));
 
                 // Quantity here is just the offer's default, editable per line
                 // before creating the order (e.g. quoted 2000 but ordering

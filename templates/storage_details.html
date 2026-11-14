@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
+{% from 'partials/entity_link.html' import elink %}
 {% include 'partials/navbar.html' %}
 
 <main class="admin-container">
@@ -52,7 +53,7 @@
                 <tbody id="detailsTableBody">
                 {% for detail in details %}
                 <tr data-search="{{ (detail.name ~ ' ' ~ (detail.material.display_name if detail.material else '')) | lower }}">
-                    <td>{{ detail.name }}</td>
+                    <td>{{ elink('detail', detail.id, detail.name) }}</td>
                     <td>{{ detail.material.display_name if detail.material else '-' }}</td>
                     <td>{{ format_cut_dimensions(detail.width, detail.height, detail.material.type if detail.material else 'sheets') }}</td>
                     <td class="text-center">{{ detail.stock_quantity|round(2) }}</td>

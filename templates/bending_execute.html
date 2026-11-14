@@ -1,3 +1,4 @@
+{% from 'partials/entity_link.html' import elink %}
 {% from 'partials/bend_tooling.html' import tooling_start, tooling_change, tooling_caption %}
 {% from 'partials/step_axes.html' import step_axes, axes_legend %}
 <!DOCTYPE html>
@@ -26,7 +27,7 @@
 
     <section class="admin-card">
         <h3>Изпълнение: {{ prog.name }} <small>v{{ prog.version }}</small></h3>
-        <p>Детайл: {{ prog.detail.name }} · Машина: {{ prog.machine.name }}</p>
+        <p>Детайл: {{ elink('detail', prog.detail.id, prog.detail.name) }} · Машина: {{ prog.machine.name }}</p>
         <form method="POST" class="admin-form">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group"><label for="ex_o">Поръчка №</label><input type="text" id="ex_o" name="order_no"></div>

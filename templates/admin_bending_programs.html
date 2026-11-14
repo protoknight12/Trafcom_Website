@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+{% from 'partials/entity_link.html' import elink %}
 <html lang="bg">
 <head>
     <meta charset="UTF-8">
@@ -45,7 +46,7 @@
                 <tbody>
                 {% for p in programs %}
                 <tr>
-                    <td>{{ p.name }}</td><td>{{ p.detail.name }}</td><td>{{ p.machine.name }}</td><td>{{ p.version }}</td><td>{{ p.status }}</td><td>{{ p.steps|length }}</td>
+                    <td>{{ p.name }}</td><td>{{ elink('detail', p.detail.id, p.detail.name) }}</td><td>{{ p.machine.name }}</td><td>{{ p.version }}</td><td>{{ p.status }}</td><td>{{ p.steps|length }}</td>
                     <td><a href="{{ url_for('admin_bending_program', prog_id=p.id) }}">Отвори</a> · <a href="{{ url_for('bending_program_sheet', prog_id=p.id) }}" target="_blank">Лист</a></td>
                 </tr>
                 {% else %}

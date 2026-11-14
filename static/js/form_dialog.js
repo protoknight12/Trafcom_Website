@@ -352,6 +352,16 @@
             }, 0);
         }
 
+        // ?dialog=edit:ID - a clicked name elsewhere (partials/entity_link.html): open the
+        // edit dialog of the row whose button carries data-edit-id="ID".
+        const em = want && /^edit:(\d+)$/.exec(want);
+        if (em) {
+            setTimeout(function () {
+                const btn = document.querySelector('[data-edit-id="' + em[1] + '"]');
+                if (btn) btn.click();
+            }, 0);
+        }
+
         if (!embedded) {
             let flashes = null;
             try { flashes = JSON.parse(sessionStorage.getItem(FLASH_KEY) || 'null'); sessionStorage.removeItem(FLASH_KEY); } catch (e) { /* ignore */ }

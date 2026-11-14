@@ -1657,3 +1657,7 @@ html.embedded .navbar, html.embedded .subnav, html.embedded .site-footer, html.e
     font-size: 1.2rem; font-weight: 700; line-height: 1; cursor: pointer;
 }
 .btn-create-new:hover { border-color: var(--accent-primary); }
+
+/* Names of details/products/materials/orders/offers link to their page (partials/entity_link.html) */
+a.entity-link { color: inherit; text-decoration: underline dotted; text-underline-offset: 3px; }
+a.entity-link:hover { color: var(--primary, #2563eb); text-decoration: underline; }

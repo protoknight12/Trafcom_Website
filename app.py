@@ -5852,6 +5852,8 @@ def order_missing_items(order):
         if missing > 0:
             shortfalls.append({
                 'item_name': item.item_name,
+                'target_type': 'product' if item.product_id else 'detail',
+                'target_id': item.product_id or item.detail_id,
                 'needed': item.quantity_ordered,
                 'available': available,
                 'missing': missing,
@@ -6136,6 +6138,32 @@ def create_url(entity):
 
 
 app.jinja_env.globals['create_url'] = create_url
+
+
+def entity_url(kind, entity_id):
+    """Where a clicked name of a detail/product/material/order/offer leads for the
+    current viewer - '' when there is no page they may open (the template then
+    prints plain text). Pages enforce their own access, this only picks the target."""
+    if not entity_id or not current_user.is_authenticated:
+        return ''
+    if kind == 'detail':
+        return url_for('detail_dxf_dashboard', detail_id=entity_id)
+    if not current_user.is_admin and kind == 'order' and current_user.is_staff:
+        return url_for('admin_production_report', _anchor=f'order-{entity_id}')
+    if not current_user.is_admin:
+        return ''
+    if kind == 'product':
+        return url_for('admin_product_edit', product_id=entity_id)
+    if kind == 'material':
+        return url_for('admin_materials', dialog=f'edit:{entity_id}')
+    if kind == 'order':
+        return url_for('admin_order_edit', order_id=entity_id)
+    if kind == 'offer':
+        return url_for('admin_offer_edit', offer_id=entity_id)
+    return ''
+
+
+app.jinja_env.globals['entity_url'] = entity_url
 app.jinja_env.globals['client_allows'] = client_allows
 app.jinja_env.globals['client_section_on'] = client_section_on
 app.jinja_env.globals['generator_price_on'] = generator_price_on

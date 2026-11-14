@@ -1,0 +1,11 @@
+{# {% from 'partials/entity_link.html' import elink %} {{ elink('detail', d.id, d.name) }}
+   kind: detail | product | material | order | offer. No page for this viewer -> plain text.
+   Orders and offers open in the same frame dialog as their "Редакция" buttons. #}
+{% macro elink(kind, id, text) -%}
+{%- set url = entity_url(kind, id) -%}
+{%- if url -%}
+<a href="{{ url }}" class="entity-link"
+   {%- if kind == 'order' and url.startswith('/admin/orders/') %} data-frame="stay"
+   {%- elif kind == 'offer' %} data-frame data-frame-scope="/admin/offers/"{% endif %}>{{ text }}</a>
+{%- else -%}{{ text }}{%- endif -%}
+{%- endmacro %}

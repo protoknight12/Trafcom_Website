@@ -1,3 +1,4 @@
+{% from 'partials/entity_link.html' import elink %}
 {% from 'partials/bend_tooling.html' import tooling_start, tooling_change, tooling_caption %}
 {% from 'partials/step_axes.html' import step_axes, axes_legend %}
 {% from 'partials/machine_fit.html' import machine_fit_banner %}
@@ -31,7 +32,7 @@
 
     <section class="admin-card">
         <h3>{{ prog.name }} <small>v{{ prog.version }} · {{ prog.status }}</small></h3>
-        <p>Детайл: {{ prog.detail.name }} · Машина:
+        <p>Детайл: {{ elink('detail', prog.detail.id, prog.detail.name) }} · Машина:
         {% if prog.status != 'approved' %}
         <form action="{{ url_for('admin_bending_program_machine', prog_id=prog.id) }}" method="POST" style="display:inline" onsubmit="return confirm('Смяна на машината? Ходовете, инструментите и подреждането трябва да се проверят наново.')">
             {% include 'partials/csrf_field.html' %}
