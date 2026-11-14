@@ -1242,15 +1242,18 @@ class OrderCutSheet(db.Model):
     (admin_cut_sheet()): the sheet leaves the lot whole, its pieces are
     produced, and the rest of THAT sheet is decided right away
     (OrderMaterialRemnant.cut_sheet_id). seq = 1..n per group; 'planned'
-    sheets are edited in admin_cut_plan_save(), a 'cut' one is final. Detail
-    prices are not affected - the plan drives reservation, consumption and
-    remnants only.
+    sheets are edited in admin_cut_plan_save(), a 'cut' one only changes back
+    through "Върни листа" (admin_uncut_sheet()). One row = `copies` identical
+    sheets (a batch; the item quantities are PER SHEET) - cutting part of a
+    batch splits the row. Detail prices are not affected - the plan drives
+    reservation, consumption and remnants only.
     """
     __table_args__ = (db.UniqueConstraint('order_id', 'material_id', 'seq', name='uq_order_cut_sheet'),)
     id = db.Column(db.Integer, primary_key=True)
     order_id = db.Column(db.Integer, db.ForeignKey('order.id'), nullable=False, index=True)
     material_id = db.Column(db.Integer, db.ForeignKey('material_price.id'), nullable=False, index=True)
     seq = db.Column(db.Integer, nullable=False)
+    copies = db.Column(db.Integer, nullable=False, default=1, server_default='1')
     status = db.Column(db.String(20), nullable=False, default='planned')   # 'planned' | 'cut'
     cut_at = db.Column(db.DateTime, nullable=True)
     cut_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
@@ -1284,10 +1287,10 @@ class OrderMaterialRemnant(db.Model):
     are scrap and every other sheet came back as a "<name> - остатък" lot -
     returned_json = [{width, height, material_id}] one entry per returned
     sheet (material_id = the remnant lot that received it).
-    With a cutting plan (OrderCutSheet) there is one row per cut sheet
-    instead (cut_sheet_id set, sheets=1, extra_taken=0 - the sheet already
-    left the lot whole); cut_sheet_id NULL = the group-level decision, at most
-    one per (order, lot).
+    With a cutting plan (OrderCutSheet) there is one row per cut sheet row
+    instead (cut_sheet_id set, sheets = its copies, extra_taken=0 - the sheets
+    already left the lot whole); cut_sheet_id NULL = the group-level decision,
+    at most one per (order, lot).
     """
     __table_args__ = (db.Index('uq_order_material_remnant_group', 'order_id', 'material_id', unique=True,
                                postgresql_where=db.text('cut_sheet_id IS NULL'),
@@ -5347,15 +5350,16 @@ def _order_material_needs(order):
     A "материал на клиента" line (own_material) takes nothing from a lot, a
     detail with no material or zero size needs nothing, a component-less
     product has no material. Client-owned lots count like ours.
-    With a cutting plan (OrderCutSheet) every sheet of it counts whole (1 -
-    sheet lots keep stock in sheets) and only a line's pieces on no sheet yet
-    still count by area.
+    With a cutting plan (OrderCutSheet) every sheet of it counts whole (1 per
+    copy - sheet lots keep stock in sheets) and only a line's pieces on no
+    sheet yet still count by area.
     """
     needs, on_sheets = {}, Counter()
     for sheet in (OrderCutSheet.query.filter_by(order_id=order.id).options(db.selectinload(OrderCutSheet.items))
                   if order.id else []):
-        needs[sheet.material_id] = needs.get(sheet.material_id, 0) + 1
-        on_sheets.update({(it.target_type, it.target_id): it.quantity for it in sheet.items})
+        needs[sheet.material_id] = needs.get(sheet.material_id, 0) + sheet.copies
+        for it in sheet.items:
+            on_sheets[(it.target_type, it.target_id)] += it.quantity * sheet.copies
     for row, detail, qty in _order_production_rows(order):
         material, need = _row_material_need(row, detail, max(0, qty - on_sheets[_row_key(row)]))
         if need > 0:
@@ -5516,9 +5520,10 @@ def _pending_remnants(orders):
     _material_stock_delta()); "материал на клиента" lines never take a lot.
     sheets = whole sheets used = ceil(consumed), at least 1. A group with a
     cutting plan (OrderCutSheet) is never asked as a group: instead every cut
-    sheet without a decision is its own entry (cut_sheet_id, seq, sheets=1,
-    consumed=1.0 - nothing to true up). `usage` = per sheet used / left
-    (_sheet_usage()): a plan sheet from its pieces' bounding boxes (estimate),
+    sheet row without a decision is its own entry (cut_sheet_id, seq, sheets =
+    consumed = its copies - nothing to true up). `usage` = per sheet used / left
+    (_sheet_usage()): a plan sheet from its pieces' bounding boxes (estimate,
+    once for a batch - its sheets are identical),
     a group's sheet i from what was consumed (clamp(consumed - (i-1), 0, 1) of
     the sheet). Five queries whatever the number of orders (the report renders
     it for all of them); needs order.items / components / their detail (+ its
@@ -5553,7 +5558,8 @@ def _pending_remnants(orders):
                         continue
                     used = sum(piece_m2.get((it.target_type, it.target_id), 0.0) * it.quantity for it in sheet.items)
                     result.setdefault(order.id, []).append(dict(
-                        base, sheets=1, consumed=1.0, cut_sheet_id=sheet.id, seq=sheet.seq, estimate=True,
+                        base, sheets=sheet.copies, consumed=float(sheet.copies), cut_sheet_id=sheet.id, seq=sheet.seq,
+                        estimate=True,
                         usage=[_sheet_usage(used, sheet_m2)]))
                 continue
             if (order.id, lot_id, None) in decided:
@@ -5577,12 +5583,15 @@ def _order_cut_groups(orders):
     lot = _row_lot_id()) its lines - key 'item:<id>' / 'component:<id>',
     needed, produced, m2 = one piece's bounding box (what
     _detail_material_unit_qty() takes) - and its sheets (OrderCutSheet,
-    planned and cut, label = "name x count, ..."). `blocked` = why the plan
-    cannot be edited ('' = it can): the group's remnant is already decided, or
-    material was consumed piece by piece before any plan (admin_cut_plan_save()
-    refuses both). Four queries whatever the number of orders.
+    planned and cut, copies, label = "name x count, ..." per sheet). `blocked` =
+    why the plan cannot be edited ('' = it can): the group's remnant is already
+    decided, or material was consumed piece by piece before any plan
+    (admin_cut_plan_save() refuses both); `editable` = False for a completed
+    order (only "Върни листа" on a cut sheet then). Four queries whatever the
+    number of orders.
     """
     groups = {}
+    status = {order.id: order.status for order in orders}
     for order in orders:
         for r, d, n in _order_production_rows(order):
             lot_id = _row_lot_id(r, d)
@@ -5616,8 +5625,8 @@ def _order_cut_groups(orders):
         result.setdefault(order_id, []).append({
             'order_id': order_id, 'material_id': lot_id, 'material_name': format_material_option(lot),
             'sheet_w': lot.sheet_width_mm, 'sheet_h': lot.sheet_length_mm, 'sheet_m2': sheet_m2,
-            'lines': lines, 'blocked': blocked,
-            'sheets': [{'id': s.id, 'seq': s.seq, 'status': s.status,
+            'lines': lines, 'blocked': blocked, 'editable': status[order_id] not in ('completed', 'cancelled'),
+            'sheets': [{'id': s.id, 'seq': s.seq, 'status': s.status, 'copies': s.copies,
                         'items': {f'{it.target_type}:{it.target_id}': it.quantity for it in s.items},
                         'label': ', '.join(f'{names.get(f"{it.target_type}:{it.target_id}", "?")} x{it.quantity}'
                                            for it in s.items)} for s in sheets]})
@@ -15051,12 +15060,14 @@ def admin_production_report():
         # first served, see _open_material_reservations()); a correction downward never waits.
         # The lot is locked first, so two entries on it cannot both pass on the same stock.
         line_material = _line_material(row, detail) if row else None
-        # A lot this order cuts by a plan (OrderCutSheet): its lines move only with whole sheets (admin_cut_sheet()).
-        # ponytail: no correction of a cut sheet (fewer pieces / un-cut) - add an "undo cut" route that reverses one sheet if needed
+        # A lot this order cuts by a plan (OrderCutSheet): its lines move only with whole sheets (admin_cut_sheet(),
+        # and back with admin_uncut_sheet()).
         if row and OrderCutSheet.query.filter_by(order_id=order_item.order_id, material_id=_row_lot_id(row, detail)).first():
             db.session.rollback()
             return jsonify({'status': 'error', 'message': 'Този ред се реже по разкрой по листове - отчитайте '
-                                                          'изработеното с бутона „Изрязан“ на листа.'}), 400
+                                                          'изработеното с бутона „Изрязан“ на листа, а грешно '
+                                                          'отчетен лист върнете с „Върни листа“ в „Разкрой по '
+                                                          'листове“.'}), 400
         if stock_delta > 0 and line_material:
             lot_id = row.consumed_material_id or line_material.id
             _lock_or_404(MaterialPrice, lot_id)
@@ -15136,8 +15147,11 @@ def admin_order_remnants():
     as a "<name> - остатък" lot of the entered size (_sheet_remnant_lot(), same
     owner and €/m²), scrap stays written off, and an OrderMaterialRemnant
     records it so the group is never asked again. A client's lot may not go
-    below zero. With `cut_sheet_id` it is the decision for one cut sheet of a
-    cutting plan (admin_cut_sheet()): one sheet, nothing to true up.
+    below zero. With `cut_sheet_id` it is the decision for one cut sheet row of
+    a cutting plan (admin_cut_sheet()): its copies sheets, nothing to true up
+    (the page asks a batch once - "x брак, y се връщат" with one size - and
+    posts it as the same per-sheet list). Returned sheets of the same size go
+    into one remnant lot (stock + their count).
     """
     def refuse(message):
         db.session.rollback()
@@ -15163,7 +15177,8 @@ def admin_order_remnants():
     if not group:
         return refuse('Няма остатък за решение по тази поръчка и материал - вече е решено или производството не е завършено.')
     if len(sheets) != group['sheets']:
-        return refuse(f'Очакват се {group["sheets"]} листа.')
+        return refuse(f'Брак + върнати трябва да са точно {group["sheets"]} листа.' if cut_sheet_id
+                      else f'Очакват се {group["sheets"]} листа.')
     sheet_size = sorted((lot.sheet_width_mm, lot.sheet_length_mm))
     returned = []
     for number, s in enumerate(sheets, 1):
@@ -15185,12 +15200,12 @@ def admin_order_remnants():
     if extra > PRODUCTION_STOCK_TOLERANCE:
         _bump_stock(lot, -extra)
     created = []
-    for width, height in returned:
+    for (width, height), count in Counter(returned).items():   # one remnant lot per size, stock + count
         remnant = _sheet_remnant_lot(lot, width, height)
         if not remnant:
             return refuse(f'Остатъкът {width:g}x{height:g} mm не можа да бъде записан.')
-        _bump_stock(remnant, 1)
-        created.append({'width': width, 'height': height, 'material_id': remnant.id})
+        _bump_stock(remnant, count)
+        created += [{'width': width, 'height': height, 'material_id': remnant.id}] * count
     names = _negative_client_lots({('material', lot.id)}, details=False)
     if names:
         return refuse(f'Отказано: наличността на клиентска партида би станала отрицателна ({", ".join(names)}).')
@@ -15200,7 +15215,9 @@ def admin_order_remnants():
                                         returned_json=json.dumps(created), decided_by_id=current_user.id))
     db.session.commit()
     sizes = ': ' + ', '.join(f'{s["width"]:g}x{s["height"]:g}' for s in created) if created else ''
-    which = f'лист {group["seq"]} от разкроя' if cut_sheet_id else f'{group["sheets"]} листа'
+    which = f'{group["sheets"]} листа'
+    if cut_sheet_id:
+        which = f'лист {group["seq"]} от разкроя' + (f' ({which})' if group['sheets'] > 1 else '')
     log_action(f'Остатък по поръчка {order.order_number}: {which} "{lot.display_name}", '
                f'{scrap} брак, {len(created)} върнати{sizes}')
     return jsonify({'status': 'success', 'message': f'Записано: {scrap} брак, {len(created)} върнати в склада.'})
@@ -15213,13 +15230,15 @@ def admin_cut_plan_save():
     """
     Saves the cutting plan of one (order, sheet lot) group from the production
     report's "Разкрой по листове" dialog: `sheets` is a JSON list, one
-    {"item:<id>" | "component:<id>": pieces} per planned sheet. The group's
-    planned sheets are replaced by these (empty ones dropped, numbered after
-    the cut ones); cut sheets stay as they are. Refused: a lot without a
+    {"item:<id>" | "component:<id>": pieces, "copies": K} per planned sheet
+    row - K identical sheets with these pieces EACH (copies optional, 1). The
+    group's planned sheets are replaced by these (empty ones dropped, numbered
+    after the cut ones); cut sheets stay as they are. Refused: a lot without a
     sheet size, a group whose remnant is decided, a group that consumed
     material piece by piece before any plan, a row not of the group, a count
-    that is not a whole number >= 0, or more pieces of a line on the planned
-    sheets than it still needs (needed - produced). The reservation follows
+    that is not a whole number >= 0, copies not a whole number >= 1, or more
+    pieces of a line on the planned sheets (count x copies) than it still
+    needs (needed - produced). The reservation follows
     (_sync_order_reservation(): whole planned sheets + the unplanned pieces).
     """
     def refuse(message):
@@ -15251,7 +15270,9 @@ def admin_cut_plan_save():
 
     new, planned = [], Counter()
     for number, sheet in enumerate(plan, 1):
-        counts = {}
+        counts, copies = {}, sheet.pop('copies', 1)
+        if not isinstance(copies, int) or isinstance(copies, bool) or copies < 1:
+            return refuse(f'Лист {number}: копията трябва да са цяло число (1 или повече).')
         for key, qty in sheet.items():
             if key not in group:
                 return refuse('Разкроят съдържа ред, който не е от този материал.')
@@ -15259,9 +15280,9 @@ def admin_cut_plan_save():
                 return refuse(f'Лист {number}: бройките трябва да са цели числа (0 или повече).')
             if qty:
                 counts[key] = qty
-                planned[key] += qty
+                planned[key] += qty * copies
         if counts:
-            new.append(counts)
+            new.append((counts, copies))
     for key, total in planned.items():
         row, needed = group[key]
         if total > needed - row.quantity_produced:
@@ -15274,19 +15295,42 @@ def admin_cut_plan_save():
             db.session.delete(sheet)
     db.session.flush()   # the freed seq numbers are reused below (unique per group)
     seq = max((s.seq for s in sheets if s.status == 'cut'), default=0)
-    for counts in new:
+    for counts, copies in new:
         seq += 1
-        db.session.add(OrderCutSheet(order_id=order.id, material_id=lot.id, seq=seq, items=[
+        db.session.add(OrderCutSheet(order_id=order.id, material_id=lot.id, seq=seq, copies=copies, items=[
             OrderCutSheetItem(target_type=key.split(':')[0], target_id=int(key.split(':')[1]), quantity=qty)
             for key, qty in counts.items()]))
     db.session.flush()
     warnings = _sync_order_reservation(order, needs_before)
     db.session.commit()
-    log_action(f'Разкрой по листове за поръчка {order.order_number}, "{lot.display_name}": {len(new)} планирани листа',
-               details='\n'.join(f'Лист: ' + ', '.join(f'{_row_name(group[k][0])} x{q}' for k, q in counts.items())
-                                 for counts in new))
-    return jsonify({'status': 'success', 'message': f'Разкроят е записан: {len(new)} планирани листа.',
+    total = sum(copies for _, copies in new)
+    log_action(f'Разкрой по листове за поръчка {order.order_number}, "{lot.display_name}": {total} планирани листа',
+               details='\n'.join(f'Лист x{copies}: ' + ', '.join(f'{_row_name(group[k][0])} x{q}' for k, q in counts.items())
+                                 for counts, copies in new))
+    return jsonify({'status': 'success', 'message': f'Разкроят е записан: {total} планирани листа.',
                     'warnings': warnings})
+
+
+def _cut_sheet_shares(parts, lot):
+    """One sheet's 1.0 split over its lines - `parts` = (row, detail, pieces per sheet): by the pieces'
+    bounding-box area, by pieces when all are zero size; the last line takes the rest so the shares add up
+    to exactly one sheet. admin_cut_sheet() records share x sheets cut, admin_uncut_sheet() takes the same
+    back (recomputed from the current sizes - the lot total is exact, only the split between lines could
+    shift if a detail's size was changed in between)."""
+    weights = [(_detail_material_unit_qty(d, lot) if d else 0.0) * q for _, d, q in parts]
+    if sum(weights) <= 0:
+        weights = [q for _, _, q in parts]
+    total, taken, shares = sum(weights), 0.0, []
+    for n, weight in enumerate(weights, 1):
+        share = 1.0 - taken if n == len(weights) else weight / total
+        taken += share
+        shares.append(share)
+    return shares
+
+
+def _cut_target(row, detail):
+    """What a cut sheet's pieces of a production row go into: the component's Detail, else the line's stock_target."""
+    return detail if isinstance(row, OrderItemComponent) else row.stock_target
 
 
 @app.route('/admin/production/cut-sheets/<int:sheet_id>/cut', methods=['POST'])
@@ -15294,21 +15338,22 @@ def admin_cut_plan_save():
 @retry_on_db_busy(json_reply=True)
 def admin_cut_sheet(sheet_id):
     """
-    "Изрязан" on a planned sheet of a cutting plan (OrderCutSheet): in one
-    transaction exactly one whole sheet leaves the lot (_bump_stock(lot, -1))
-    and every line on it gets its pieces - quantity_produced up, the Detail /
+    "Изрязан" on a planned sheet row of a cutting plan (OrderCutSheet): in one
+    transaction `count` whole sheets (form field, default all copies of the
+    row, 1..copies) leave the lot (_bump_stock(lot, -count)) and every line
+    on it gets its pieces x count - quantity_produced up, the Detail /
     component-less Product stock up, as admin_production_report() does for an
     increase but without its per-piece _consume_detail_material(): the sheet
-    replaces it. The sheet's 1.0 is recorded on the lines' material_consumed
-    split by their pieces' bounding-box area (by pieces when all are zero
-    size; the last line takes the rest so the shares add up to the sheet),
-    consumed_material_id = the lot - so the reservation, the material
-    history and an order delete (admin_delete_order() gives material_consumed
-    back) see the whole sheet. Same refusals as an increase there: the lot
-    must cover the order's reservation, a client's lot may not go below zero;
-    and a line may not get more pieces than it still needs (the plan must be
-    edited first). Returns the remnant prompt for THIS sheet
-    (_pending_remnants(), cut_sheet_id).
+    replaces it. Each sheet's 1.0 is recorded on the lines' material_consumed
+    (_cut_sheet_shares() x count), consumed_material_id = the lot - so the
+    reservation, the material history and an order delete
+    (admin_delete_order() gives material_consumed back) see the whole sheets.
+    Cutting part of a batch splits the row: this one becomes the cut
+    `count` copies, the rest a new planned row (seq after the group's last).
+    Same refusals as an increase there: the lot must cover the order's
+    reservation, a client's lot may not go below zero; and a line may not get
+    more pieces than it still needs (the plan must be edited first). Returns
+    the remnant prompt for THIS row (_pending_remnants(), cut_sheet_id).
     """
     def refuse(message):
         db.session.rollback()
@@ -15322,6 +15367,12 @@ def admin_cut_sheet(sheet_id):
     sheet = _lock_or_404(OrderCutSheet, sheet_id)
     if sheet.status != 'planned':
         return refuse(f'Лист {sheet.seq} вече е изрязан.')
+    try:
+        count = int(request.form.get('count') or sheet.copies)
+    except ValueError:
+        count = 0
+    if not 1 <= count <= sheet.copies:
+        return refuse(f'Лист {sheet.seq}: изрязаните листове трябва да са от 1 до {sheet.copies}.')
     lot = _lock_or_404(MaterialPrice, sheet.material_id)
     short = next((s for s in _order_material_shortages(order) if s['material'].id == lot.id), None)
     if short:
@@ -15334,38 +15385,127 @@ def admin_cut_sheet(sheet_id):
         row, detail, needed = group.get((it.target_type, it.target_id)) or (None, None, 0)
         if row is None:
             return refuse('Ред от листа вече не е от този материал - редактирайте разкроя.')
-        if row.quantity_produced + it.quantity > needed:
-            return refuse(f'"{_row_name(row)}": на листа са {it.quantity} бр., а остават '
+        if row.quantity_produced + it.quantity * count > needed:
+            return refuse(f'"{_row_name(row)}": на листовете са {it.quantity * count} бр., а остават '
                           f'{max(0, needed - row.quantity_produced)} бр. - редактирайте разкроя.')
         parts.append((row, detail, it.quantity))
     if not parts:
         return refuse(f'Лист {sheet.seq} е празен.')
 
-    weights = [(_detail_material_unit_qty(d, lot) if d else 0.0) * q for _, d, q in parts]
-    if sum(weights) <= 0:
-        weights = [q for _, _, q in parts]
-    total, taken, lines = sum(weights), 0.0, []
-    for n, ((row, detail, qty), weight) in enumerate(zip(parts, weights), 1):
-        share = 1.0 - taken if n == len(parts) else weight / total
-        taken += share
-        row.quantity_produced += qty
-        target = detail if isinstance(row, OrderItemComponent) else row.stock_target
+    lines = []
+    for (row, detail, qty), share in zip(parts, _cut_sheet_shares(parts, lot)):
+        row.quantity_produced += qty * count
+        target = _cut_target(row, detail)
         if target:
-            _bump_stock(target, qty)
-        row.material_consumed = (row.material_consumed or 0) + share
+            _bump_stock(target, qty * count)
+        row.material_consumed = (row.material_consumed or 0) + share * count
         row.consumed_material_id = lot.id
-        lines.append(f'{_row_name(row)}: +{qty} бр.')
-    _bump_stock(lot, -1)
+        lines.append(f'{_row_name(row)}: +{qty * count} бр.')
+    _bump_stock(lot, -count)
     names = _negative_client_lots({('material', lot.id)}, details=False)
     if names:
         return refuse(f'Отказано: наличността на клиентска партида би станала отрицателна ({", ".join(names)}).')
+    if count < sheet.copies:   # the rest of the batch stays planned as its own row
+        last = db.session.query(db.func.max(OrderCutSheet.seq)).filter_by(order_id=order.id, material_id=lot.id).scalar()
+        db.session.add(OrderCutSheet(order_id=order.id, material_id=lot.id, seq=last + 1, copies=sheet.copies - count,
+                                     items=[OrderCutSheetItem(target_type=it.target_type, target_id=it.target_id,
+                                                              quantity=it.quantity) for it in sheet.items]))
+        sheet.copies = count
     sheet.status, sheet.cut_at, sheet.cut_by_id = 'cut', datetime.utcnow(), current_user.id
     refresh_order_status(order)
     db.session.commit()
-    log_action(f'Изрязан лист {sheet.seq} по поръчка {order.order_number} от "{lot.display_name}" - '
+    what = f'лист {sheet.seq}' + (f' ({count} листа)' if count > 1 else '')
+    log_action(f'Изрязан {what} по поръчка {order.order_number} от "{lot.display_name}" - '
                f'нова наличност {lot.stock_quantity:g}', details='\n'.join(lines))
     remnant_prompt = next((g for g in _pending_remnants([order]).get(order.id, []) if g['cut_sheet_id'] == sheet.id), None)
-    return jsonify({'status': 'success', 'message': f'Лист {sheet.seq} е изрязан.', 'remnant_prompt': remnant_prompt})
+    return jsonify({'status': 'success', 'message': f'Изрязан {what}.', 'remnant_prompt': remnant_prompt})
+
+
+@app.route('/admin/production/cut-sheets/<int:sheet_id>/undo', methods=['POST'])
+@role_required(['admin', 'worker'])
+@retry_on_db_busy(json_reply=True)
+def admin_uncut_sheet(sheet_id):
+    """
+    "Върни листа" in the cutting-plan dialog - the exact reverse of
+    admin_cut_sheet() for one cut sheet row (all its copies): the whole sheets
+    go back into the lot, every line on it loses its pieces x copies
+    (quantity_produced and Detail / component-less Product stock down - our
+    rows may go negative, a client's Detail may not) and the material_consumed
+    shares the cut recorded (_cut_sheet_shares() x copies); a line back at 0
+    produced drops its frozen lot. The row's remnant decision
+    (OrderMaterialRemnant.cut_sheet_id) is undone too: scrap needs nothing
+    more, returned sheets are taken out of their remnant lots again - refused
+    (whole undo) when such a lot was used since (_remnant_lot_used(), as an
+    order delete) - and the decision row is deleted. An emptied remnant lot
+    stays at 0 (it may have been created by another decision of the same size;
+    admin_delete_material() removes it). The row is 'planned' again (editable,
+    cut again later), the reservation is synced and the order status refreshed
+    (a completed order reopens). Refused for a cancelled / deleted order.
+    Netting, like a production correction downward: the history simply no
+    longer shows what was taken back.
+    """
+    def refuse(message):
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': message}), 400
+
+    sheet = db.session.get(OrderCutSheet, sheet_id) or abort(404)
+    order = _lock_or_404(Order, sheet.order_id)
+    if order.deleted_at or order.status == 'cancelled':
+        return refuse('Поръчката е отказана или изтрита.')
+    _lock_order_lines(order)
+    sheet = _lock_or_404(OrderCutSheet, sheet_id)
+    if sheet.status != 'cut':
+        return refuse(f'Лист {sheet.seq} не е изрязан.')
+    decision = OrderMaterialRemnant.query.filter_by(cut_sheet_id=sheet.id).first()
+    returned = Counter(s['material_id'] for s in decision.returned) if decision else Counter()
+    lots = {m: _lock_or_404(MaterialPrice, m) for m in sorted({sheet.material_id} | set(returned))}
+    lot = lots[sheet.material_id]
+    group = {_row_key(r): (r, d) for r, d, _ in _cut_group_rows(order, lot.id)}
+    parts = []
+    for it in sheet.items:
+        row, detail = group.get((it.target_type, it.target_id)) or (None, None)
+        if row is None:
+            return refuse(f'Ред от лист {sheet.seq} вече не е от този материал - листът не може да бъде върнат.')
+        parts.append((row, detail, it.quantity))
+    targets = {}   # locked in a stable order, as admin_delete_order()
+    for model in (Detail, Product):
+        for t_id in sorted({t.id for t in (_cut_target(r, d) for r, d, _ in parts) if isinstance(t, model)}):
+            targets[(model, t_id)] = _lock_or_404(model, t_id)
+    needs_before = _order_material_needs(order)
+
+    for lot_id, count in sorted(returned.items()):
+        if _remnant_lot_used(lots[lot_id], count):
+            return refuse(f'Отказано: остатъкът "{format_material_option(lots[lot_id])}" от лист {sheet.seq} вече е '
+                          f'използван или преместен - листът не може да бъде върнат.')
+        _bump_stock(lots[lot_id], -count)
+    undone = ''
+    if decision:
+        undone = f', решението за остатъка е отменено ({decision.scrap_count} брак, {len(decision.returned)} върнати)'
+        db.session.delete(decision)
+    lines = []
+    for (row, detail, qty), share in zip(parts, _cut_sheet_shares(parts, lot)):
+        pieces = min(qty * sheet.copies, row.quantity_produced)
+        row.quantity_produced -= pieces
+        target = _cut_target(row, detail)
+        if target and pieces:
+            _bump_stock(targets[(type(target), target.id)], -pieces)
+        row.material_consumed = (row.material_consumed or 0) - share * sheet.copies
+        if not row.quantity_produced:
+            row.material_consumed, row.consumed_material_id = 0.0, None
+        lines.append(f'{_row_name(row)}: -{pieces} бр.')
+    _bump_stock(lot, sheet.copies)
+    touched = {('material', m) for m in lots} | {('detail', t_id) for model, t_id in targets if model is Detail}
+    names = _negative_client_lots(touched)
+    if names:
+        return refuse(f'Отказано: наличността на клиентска партида би станала отрицателна ({", ".join(names)}).')
+    sheet.status, sheet.cut_at, sheet.cut_by_id = 'planned', None, None
+    warnings = _sync_order_reservation(order, needs_before)
+    refresh_order_status(order)
+    db.session.commit()
+    what = f'лист {sheet.seq}' + (f' ({sheet.copies} листа)' if sheet.copies > 1 else '')
+    log_action(f'Върнат {what} по поръчка {order.order_number} в "{lot.display_name}" - нова наличност '
+               f'{lot.stock_quantity:g}{undone}', details='\n'.join(lines))
+    return jsonify({'status': 'success', 'message': f'Върнат {what} - листът отново е планиран.', 'warnings': warnings})
 
 
 @app.route('/admin/orders/<int:order_id>/confirm-material', methods=['POST'])
