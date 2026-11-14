@@ -1175,6 +1175,30 @@ class OrderItemComponent(db.Model):
         return round(min(self.quantity_produced, self.quantity_needed) / self.quantity_needed * 100, 1)
 
 
+class OrderMaterialReservation(db.Model):
+    """
+    Raw material set aside for an Order when it is placed
+    (_reserve_order_material()): one row per lot, `quantity` = the order's
+    whole need from that lot at creation, in the lot's STOCK unit (the unit of
+    MaterialPrice.stock_quantity). Stock itself is not touched - production
+    takes it (_consume_detail_material()). What is still reserved is
+    quantity minus what the order's lines already consumed from that lot
+    (material_consumed with consumed_material_id == material_id), and
+    whether stock covers it is computed live, first come first served
+    (_open_material_reservations()) - nothing else is stored. A completed or
+    cancelled order simply drops out of that computation.
+    """
+    __table_args__ = (db.UniqueConstraint('order_id', 'material_id', name='uq_order_material_reservation'),)
+    id = db.Column(db.Integer, primary_key=True)
+    order_id = db.Column(db.Integer, db.ForeignKey('order.id'), nullable=False, index=True)
+    material_id = db.Column(db.Integer, db.ForeignKey('material_price.id'), nullable=False, index=True)
+    quantity = db.Column(db.Float, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    order = db.relationship('Order', backref=db.backref('material_reservations', cascade='all, delete-orphan', lazy=True))
+    material = db.relationship('MaterialPrice')
+
+
 class OrderItemOperation(db.Model):
     """
     An ad-hoc processing step (cutting, bending, drilling...) picked at
@@ -1436,6 +1460,8 @@ class MaterialRequest(db.Model):
     supplier_id = db.Column(db.Integer, db.ForeignKey('supplier.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    # Why it was raised, e.g. the order whose reservation fell short (_reserve_order_material()).
+    note = db.Column(db.String(255), nullable=True)
 
     material = db.relationship('MaterialPrice')
     supplier = db.relationship('Supplier')
@@ -5111,6 +5137,123 @@ def _consume_detail_material(row, detail, stock_delta):
     return material
 
 
+def _order_material_needs(order):
+    """
+    {material_id: quantity} - the raw material `order` needs from each lot,
+    in the lot's stock unit: per Detail it produces (a product line's
+    OrderItemComponent rows, a standalone detail line's quantity_ordered -
+    what admin_production_report() consumes) _detail_material_unit_qty() x
+    pieces, converted with _material_stock_delta() like
+    _consume_detail_material(). A "материал на клиента" line (own_material)
+    takes nothing from a lot, a detail with no material or zero size needs
+    nothing, a component-less product has no material. Client-owned lots
+    count like ours.
+    """
+    needs = {}
+    for item in order.items:
+        if item.own_material:
+            continue
+        pieces = ([(c.detail, c.quantity_needed) for c in item.components] if item.product_id
+                  else [(item.detail, item.quantity_ordered)])
+        for detail, qty in pieces:
+            if not detail or not detail.material or not qty:
+                continue
+            need = _material_stock_delta(detail.material, _detail_material_unit_qty(detail) * qty)
+            if need > 0:
+                needs[detail.material.id] = needs.get(detail.material.id, 0) + need
+    return needs
+
+
+def _open_material_reservations(material_ids=None):
+    """
+    {order_id: [{material, needed, available, missing}]} for every open order
+    (not completed/cancelled) holding an OrderMaterialReservation on these
+    lots (every lot when None). needed = what is still reserved: quantity
+    minus what the order's lines already consumed from that lot (never below
+    0). First come first served by (Order.created_at, Order.id): available =
+    the lot's stock_quantity minus what EARLIER open orders still reserve on
+    it (never below 0); missing = needed - available, 0 when covered (within
+    PRODUCTION_STOCK_TOLERANCE). Live - a delivery note, a production entry
+    or a cancellation changes it at once, nothing is stored. Three queries
+    whatever the number of orders (the production report and the storage
+    page call it once for everything).
+    """
+    query = (OrderMaterialReservation.query.join(Order)
+             .filter(Order.status.notin_(('completed', 'cancelled')))
+             .options(db.joinedload(OrderMaterialReservation.material))
+             .order_by(Order.created_at, Order.id))
+    if material_ids is not None:
+        query = query.filter(OrderMaterialReservation.material_id.in_(material_ids))
+    reservations = query.all()
+    consumed = {}
+    order_ids = {r.order_id for r in reservations}
+    if order_ids:
+        item_sums = (db.session.query(OrderItem.order_id, OrderItem.consumed_material_id,
+                                      db.func.sum(OrderItem.material_consumed))
+                     .filter(OrderItem.order_id.in_(order_ids), OrderItem.consumed_material_id.isnot(None))
+                     .group_by(OrderItem.order_id, OrderItem.consumed_material_id).all())
+        component_sums = (db.session.query(OrderItem.order_id, OrderItemComponent.consumed_material_id,
+                                           db.func.sum(OrderItemComponent.material_consumed))
+                          .join(OrderItem, OrderItemComponent.order_item_id == OrderItem.id)
+                          .filter(OrderItem.order_id.in_(order_ids), OrderItemComponent.consumed_material_id.isnot(None))
+                          .group_by(OrderItem.order_id, OrderItemComponent.consumed_material_id).all())
+        for order_id, material_id, total in item_sums + component_sums:
+            consumed[(order_id, material_id)] = consumed.get((order_id, material_id), 0) + (total or 0)
+    ahead = {}   # material_id -> still reserved by the open orders before this one
+    result = {}
+    for r in reservations:
+        needed = max(0.0, r.quantity - consumed.get((r.order_id, r.material_id), 0))
+        available = max(0.0, (r.material.stock_quantity or 0) - ahead.get(r.material_id, 0))
+        missing = needed - available
+        result.setdefault(r.order_id, []).append({
+            'material': r.material, 'needed': needed, 'available': available,
+            'missing': missing if missing > PRODUCTION_STOCK_TOLERANCE else 0.0,
+        })
+        ahead[r.material_id] = ahead.get(r.material_id, 0) + needed
+    return result
+
+
+def _order_material_shortages(order):
+    """The lots `order` is short of right now - [{material, needed,
+    available, missing}] with missing > 0, see _open_material_reservations().
+    Empty for a closed order or one with nothing reserved."""
+    lot_ids = [m for (m,) in db.session.query(OrderMaterialReservation.material_id).filter_by(order_id=order.id)]
+    if not lot_ids:
+        return []
+    return [s for s in _open_material_reservations(lot_ids).get(order.id, []) if s['missing']]
+
+
+def _reserve_order_material(order):
+    """
+    Reserves `order`'s raw material when it is placed (create_order(),
+    admin_offer_create_order() - after its lines and components exist, same
+    transaction): one OrderMaterialReservation per lot with
+    _order_material_needs(). For every lot it is short of right away
+    (_order_material_shortages(), so earlier open orders come first) one
+    MaterialRequest ('new') for the missing quantity, its note naming the
+    order - except a client's own lot: the client has to bring that, we do
+    not buy it. The order is placed either way; producing it waits for the
+    material (admin_production_report()). Returns the Bulgarian warnings for
+    the caller to flash.
+    """
+    for material_id, quantity in _order_material_needs(order).items():
+        db.session.add(OrderMaterialReservation(order_id=order.id, material_id=material_id, quantity=quantity))
+    db.session.flush()
+    warnings = []
+    for s in _order_material_shortages(order):
+        material, missing = s['material'], s['missing']
+        name = format_material_option(material)
+        if material.owner_client_id:
+            warnings.append(f'Поръчка {order.order_number}: материалът на клиента "{name}" не стига - липсват '
+                            f'{round(missing, 3):g}. Клиентът трябва да го донесе, заявка не е създадена.')
+        else:
+            db.session.add(MaterialRequest(material_id=material.id, quantity=missing, created_by_id=current_user.id,
+                                           note=f'Поръчка {order.order_number}'))
+            warnings.append(f'Поръчка {order.order_number}: материалът "{name}" не стига - липсват '
+                            f'{round(missing, 3):g}. Създадена е заявка за материал.')
+    return warnings
+
+
 def calculate_cnc_price(width, height, total_length, pierce_count, material_key, service_id, client=None):
     """
     Time-based pricing engine for a single service - used by the personal
@@ -5249,10 +5392,12 @@ def order_missing_items(order):
     see CLAUDE.md order-fulfillment task) and returns only the lines that
     fall short. Recomputed on demand rather than snapshotted at order-
     creation time, so it stays correct as stock is replenished or other
-    orders are placed - an Order never reserves stock (only producing its
-    lines moves stock, see admin_production_report() and _bump_stock), so
-    "available" here just means "on hand right now", same as everywhere else
-    stock_quantity is read.
+    orders are placed - an Order never reserves Detail/Product stock (only
+    producing its lines moves stock, see admin_production_report() and
+    _bump_stock), so "available" here just means "on hand right now", same as
+    everywhere else stock_quantity is read. Raw material IS reserved for an
+    order (OrderMaterialReservation) - that check is
+    _order_material_shortages(), not this one.
     Returns a list of {item_name, needed, available, missing} dicts.
     """
     shortfalls = []
@@ -10451,6 +10596,12 @@ def storage_materials():
             material_groups.append(group)
         group['lots'].append(material)
 
+    # What open orders still have reserved on each lot (_open_material_reservations()).
+    reserved = {}
+    for lots in _open_material_reservations().values():
+        for s in lots:
+            reserved[s['material'].id] = reserved.get(s['material'].id, 0) + s['needed']
+
     for group in material_groups:
         lots = group['lots']
         if len(lots) < 2:
@@ -10459,6 +10610,7 @@ def storage_materials():
         group['label'] = f"{first.display_name} ({_format_material_dims(first)})"
         group['unit'] = material_unit_short(first.type)
         group['total_stock'] = sum(lot.stock_quantity for lot in lots)
+        group['total_reserved'] = sum(reserved.get(lot.id, 0) for lot in lots)
         # Client-owned stock is not ours: it carries no value.
         group['total_value'] = (0 if first.owner_client_id else
                                 sum(lot.cost_per_m2 * _material_available_qty(lot) for lot in lots))
@@ -10473,7 +10625,7 @@ def storage_materials():
             group['row_bg'] = None
 
     return render_template('storage_materials.html', material_groups=material_groups, clients=clients,
-                           owner_filter=owner_filter, active_page='storage')
+                           owner_filter=owner_filter, reserved=reserved, active_page='storage')
 
 
 @app.route('/storage/requests')
@@ -14107,6 +14259,7 @@ def create_order():
             flash(gettext('Невалидни артикули в поръчката.'), 'danger')
             return redirect(url_for('create_order'))
 
+        material_warnings = _reserve_order_material(new_order)
         db.session.commit()
         order_items = OrderItem.query.filter_by(order_id=new_order.id).all()
         header = f'Поръчка {new_order.order_number} за "{customer_name}"'
@@ -14116,6 +14269,9 @@ def create_order():
         log_action(f'Създадена поръчка {new_order.order_number} за "{customer_name}" ({len(order_items)} артикул(и))',
                    details=header + '\n' + '\n'.join(item_lines))
         flash(gettext('Поръчка %(order_number)s беше успешно изпратена!', order_number=new_order.order_number), 'success')
+        if current_user.is_staff:   # our stock is not the customer's business (the request is raised either way)
+            for warning in material_warnings:
+                flash(warning, 'warning')
 
         shortfalls = order_missing_items(new_order)
         if shortfalls:
@@ -14300,6 +14456,7 @@ def admin_production_report():
         # deleted from the catalog (detail_id nullable, only detail_name_snapshot
         # survives).
         material = None
+        row = None   # the line whose detail's raw material moves with this entry
         if target_type == 'component':
             component = _lock_or_404(OrderItemComponent, target_id)  # the delta below must start from the committed quantity_produced
             produced_qty = max(0, min(produced_qty, component.quantity_needed))
@@ -14308,7 +14465,7 @@ def admin_production_report():
             if stock_delta and component.detail:
                 _bump_stock(component.detail, stock_delta)
                 if not component.order_item.own_material:
-                    material = _consume_detail_material(component, component.detail, stock_delta)
+                    row, detail = component, component.detail
             order_item = component.order_item
             target_percent = component.percent_complete
             target_label = f'детайл "{component.detail.name}"' if component.detail else f'компонент #{target_id}'
@@ -14320,11 +14477,28 @@ def admin_production_report():
             if stock_delta and order_item.stock_target:
                 _bump_stock(order_item.stock_target, stock_delta)
                 if not order_item.own_material:
-                    material = _consume_detail_material(order_item, order_item.detail, stock_delta)
+                    row, detail = order_item, order_item.detail
             target_percent = order_item.percent_complete
             target_label = f'артикул "{order_item.item_name}"'
         else:
             return jsonify({'status': 'error', 'message': 'Невалиден тип на артикула.'}), 400
+
+        # Making more pieces waits until the lot covers this order's reservation (first come
+        # first served, see _open_material_reservations()); a correction downward never waits.
+        # The lot is locked first, so two entries on it cannot both pass on the same stock.
+        if row and stock_delta > 0 and detail and detail.material:
+            lot_id = row.consumed_material_id or detail.material.id
+            _lock_or_404(MaterialPrice, lot_id)
+            short = next((s for s in _order_material_shortages(order_item.order) if s['material'].id == lot_id), None)
+            if short:
+                message = (f'Отказано: материалът "{format_material_option(short["material"])}" не стига за поръчка '
+                           f'{order_item.order.order_number} - липсват {round(short["missing"], 3):g} '
+                           f'(нужни {round(short["needed"], 3):g}, свободни {round(short["available"], 3):g}). '
+                           f'Изчакайте доставката по заявката за материал.')
+                db.session.rollback()
+                return jsonify({'status': 'error', 'message': message}), 400
+        if row:
+            material = _consume_detail_material(row, detail, stock_delta)
 
         # A client's stored lot may not go below zero (our lots stay non-blocking). Only
         # checked when taking material: a correction that returns it is never refused.
@@ -14359,7 +14533,8 @@ def admin_production_report():
                            db.selectinload(OrderItem.components), db.selectinload(OrderItem.attachments)))
               .all())
     machines = Machine.query.order_by(Machine.name).all()
-    return render_template('production_report.html', orders=orders, machines=machines, active_page='production')
+    return render_template('production_report.html', orders=orders, machines=machines,
+                           reservations=_open_material_reservations(), active_page='production')
 
 
 @app.route('/admin/missing-stock')
@@ -16856,7 +17031,8 @@ def admin_delete_material(key):
         return redirect(url_for('admin_materials'))
     # Restock requests and production jobs (reversed ones included - they are
     # the stock history) point at it by id, also with no ON DELETE rule.
-    used_in = [label for model, label in ((MaterialRequest, 'заявка за материал'), (ProductionOrder, 'задача за производство'))
+    used_in = [label for model, label in ((MaterialRequest, 'заявка за материал'), (ProductionOrder, 'задача за производство'),
+                                          (OrderMaterialReservation, 'поръчка (заделен материал)'))
                if model.query.filter_by(material_id=material.id).first()]
     if ClientDeliveryNoteItem.query.filter_by(remnant_material_id=material.id).first():
         used_in.append('издадена стокова разписка (остатък)')
@@ -24865,9 +25041,12 @@ def admin_offer_create_order(offer_id):
         return redirect(url_for('admin_offer_edit', offer_id=offer.id))
 
     offer.order_id = new_order.id
+    material_warnings = _reserve_order_material(new_order)
     db.session.commit()
     log_action(f'Създадена поръчка {new_order.order_number} от оферта № {offer.number} за "{customer_name}" ({len(selected)} артикул(и))')
     flash(f'Поръчка {new_order.order_number} беше създадена от офертата.', 'success')
+    for warning in material_warnings:
+        flash(warning, 'warning')
     if rounded_up:
         flash('Количеството е закръглено нагоре до цяло число (бройките са цели): ' + '; '.join(rounded_up) + '.', 'warning')
     return redirect(url_for('admin_production_report'))

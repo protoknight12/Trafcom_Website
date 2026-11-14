@@ -95,7 +95,7 @@
                     <td><a href="{{ url_for('admin_material_history', material_id=material.id) }}">{{ format_material_option(material) }}</a></td>
                     <td>{{ material.owner_client.name if material.owner_client_id and material.owner_client else 'Трафком' }}</td>
                     <td>{{ material_type_label(material.type) }}</td>
-                    <td class="text-center">{{ material.stock_quantity|round(2) }}</td>
+                    <td class="text-center">{{ material.stock_quantity|round(2) }}{% if reserved.get(material.id) %}<div class="text-muted text-small">Заделено: {{ reserved[material.id]|round(2) }}</div>{% endif %}</td>
                     {#- A client's material is not ours: no price, no value. #}
                     <td class="text-right">{{ '—' if material.owner_client_id else "%.2f"|format(material.cost_per_m2) ~ ' €/' ~ unit }}</td>
                     <td class="text-right">{{ "%.2f €"|format(material.price_per_unit) if material.price_per_unit is not none and not material.owner_client_id else '—' }}</td>
@@ -119,7 +119,7 @@
                     <td><span class="toggle-chevron">▶</span>{{ group.label }}<span class="lot-count-badge">{{ lots|length }} партиди</span></td>
                     <td>{{ lots[0].owner_client.name if lots[0].owner_client_id and lots[0].owner_client else 'Трафком' }}</td>
                     <td>{{ material_type_label(lots[0].type) }}</td>
-                    <td class="text-center">{{ group.total_stock|round(2) }}</td>
+                    <td class="text-center">{{ group.total_stock|round(2) }}{% if group.total_reserved %}<div class="text-muted text-small">Заделено: {{ group.total_reserved|round(2) }}</div>{% endif %}</td>
                     <td class="text-right">{{ '—' if lots[0].owner_client_id else "%.2f"|format(group.min_price) ~ '–' ~ "%.2f"|format(group.max_price) ~ ' €/' ~ group.unit }}</td>
                     <td class="text-right">—</td>
                     <td class="text-right">{{ '—' if lots[0].owner_client_id else "%.2f"|format(group.total_value) ~ ' €' }}</td>
@@ -129,7 +129,7 @@
                     <td><a href="{{ url_for('admin_material_history', material_id=lot.id) }}">{{ format_material_option(lot) }}</a></td>
                     <td>{{ lot.owner_client.name if lot.owner_client_id and lot.owner_client else 'Трафком' }}</td>
                     <td>{{ material_type_label(lot.type) }}</td>
-                    <td class="text-center">{{ lot.stock_quantity|round(2) }}</td>
+                    <td class="text-center">{{ lot.stock_quantity|round(2) }}{% if reserved.get(lot.id) %}<div class="text-muted text-small">Заделено: {{ reserved[lot.id]|round(2) }}</div>{% endif %}</td>
                     <td class="text-right">{{ '—' if lot.owner_client_id else "%.2f"|format(lot.cost_per_m2) ~ ' €/' ~ unit }}</td>
                     <td class="text-right">{{ "%.2f €"|format(lot.price_per_unit) if lot.price_per_unit is not none and not lot.owner_client_id else '—' }}</td>
                     <td class="text-right">{{ '—' if lot.owner_client_id else "%.2f"|format(lot.cost_per_m2 * material_available_qty(lot)) ~ ' €' }}</td>
