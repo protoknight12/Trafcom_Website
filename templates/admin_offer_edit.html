@@ -185,6 +185,9 @@
 
     <section class="admin-card">
         <h3>Редове на офертата</h3>
+        <div id="refreshAllBar" class="text-small" style="margin-bottom: 0.5rem;" hidden>
+            <button type="button" class="btn-secondary" style="padding: 6px 10px; font-size: 0.8rem;" onclick="refreshPrices()">Обнови всички цени</button>
+        </div>
         <div class="table-responsive">
             <table class="users-table" id="cartTable">
                 <thead>
@@ -266,6 +269,7 @@
     const CLIENT_PRICING = {{ client_pricing|tojson }};
     const OFFER_IMAGE_URL_PREFIX = {{ url_for('static', filename='uploads/offers/')|tojson }};
     const HAS_OFFER = {{ 'true' if offer else 'false' }};
+    const OFFER_HAS_ORDER = {{ 'true' if offer and offer.order_id else 'false' }};
     // the SAVED discount - what admin_offer_create_order() reads
     const SAVED_DISCOUNT = {{ (offer.discount_percent or 0) if offer else 0 }};
     let cart = {{ initial_items|tojson }};
@@ -532,6 +536,7 @@
         };
         if (editing) {
             if (editing.id != null) item.id = editing.id;  // keeps the order-selector tick on this row
+            if (editing.product_id === item.product_id && editing.detail_id === item.detail_id) item.current_price = editing.current_price;
             cart[editingIndex] = item;
         } else {
             cart.push(item);
@@ -586,6 +591,17 @@
         renderCart();
     }
 
+    // The catalog price today (server-side, current_price) differs from the line's saved price: offered, never applied by itself.
+    function isStale(item) {
+        return item.current_price != null && item.unit_price != null && Math.round(item.unit_price * 100) !== Math.round(item.current_price * 100);
+    }
+
+    // "Обнови": takes the server's current price into the editor (saved with "Запази офертата"); idx = one line, none = all.
+    function refreshPrices(idx) {
+        cart.forEach(function (item, i) { if ((idx === undefined || idx === i) && isStale(item)) item.unit_price = item.current_price; });
+        renderCart();
+    }
+
     function renderCart() {
         const body = document.getElementById('cartTableBody');
         body.innerHTML = '';
@@ -604,6 +620,8 @@
                 tr.appendChild(cell(thumbHtml));
                 let nameHtml = item.name ? ('<strong>' + escapeHtml(item.name) + '</strong>') : '';
                 if (item.description_html) nameHtml += (nameHtml ? '<br>' : '') + '<span class="text-small text-muted">' + item.description_html + '</span>';
+                if (isStale(item)) nameHtml += '<br><span class="text-small" style="color: var(--warning, #e0a800);">Цената е променена: ' + round2(item.unit_price).toFixed(2) + ' -> ' + round2(item.current_price).toFixed(2) + ' €'
+                    + (OFFER_HAS_ORDER ? ' (поръчката запазва старата цена)' : '') + '</span>';
                 tr.appendChild(cell(nameHtml || '-'));
                 tr.appendChild(cell(escapeHtml(item.dimensions)));
                 tr.appendChild(cell(item.quantity != null ? item.quantity : '', { className: 'text-center' }));
@@ -622,6 +640,15 @@
                 editBtn.dataset.rowIndex = idx;
                 editBtn.dataset.title = 'Редакция на ред' + (item.name ? ': ' + item.name : '');
                 actionTd.appendChild(editBtn);
+                if (isStale(item)) {
+                    const refreshBtn = document.createElement('button');
+                    refreshBtn.type = 'button';
+                    refreshBtn.className = 'btn-secondary';
+                    refreshBtn.style.cssText = editBtn.style.cssText;
+                    refreshBtn.textContent = 'Обнови';
+                    refreshBtn.addEventListener('click', function () { refreshPrices(idx); });
+                    actionTd.appendChild(refreshBtn);
+                }
                 // only a priced line can become a product line (a note can't)
                 if (item.type === 'text' && item.name && item.quantity != null && item.unit_price != null) {
                     const exists = findProductByName(item.name);
@@ -658,6 +685,7 @@
             ? 'Сума: ' + totals.subtotal.toFixed(2) + ' €<br>Отстъпка (-' + discountPercent + '%): -' + totals.discount.toFixed(2) + ' €<br><strong>ОБЩО: ' + totals.total.toFixed(2) + ' €</strong>'
             : totals.subtotal.toFixed(2) + ' €';
         document.getElementById('submitOfferBtn').disabled = cart.length === 0;
+        document.getElementById('refreshAllBar').hidden = cart.filter(isStale).length < 2;
 
         if (HAS_OFFER) renderOrderSelector();
     }

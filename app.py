@@ -1035,10 +1035,14 @@ class Order(db.Model):
     # reversed, so admin_material_history() still shows both; hidden everywhere else (live_orders()).
     deleted_at = db.Column(db.DateTime, nullable=True)
     deleted_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    # The stock note "Изпиши към клиента" (admin_order_issue()) issued for this order; set once, cleared
+    # when that note or the order is deleted.
+    issued_note_id = db.Column(db.Integer, db.ForeignKey('client_delivery_note.id'), nullable=True, index=True)
 
     user = db.relationship('User', foreign_keys=[user_id], backref=db.backref('orders', lazy=True))
     machine = db.relationship('Machine', backref='orders')
     client = db.relationship('Client')
+    issued_note = db.relationship('ClientDeliveryNote', foreign_keys=[issued_note_id])
     deliverer = db.relationship('Deliverer')
     items = db.relationship('OrderItem', backref='order', lazy=True, cascade="all, delete-orphan")
 
@@ -11969,6 +11973,7 @@ def delete_delivery_note(note_id):
 def delete_client_delivery_note(note_id):
     """Deletes a ClientDeliveryNote: everything it issued goes back into stock."""
     note = _lock_or_404(ClientDeliveryNote, note_id)
+    Order.query.filter_by(issued_note_id=note.id).update({'issued_note_id': None})  # the order may be issued again
     return _delete_note(note, sign=-1, label='Издадена стокова разписка', endpoint='admin_client_delivery_notes')
 
 
@@ -15102,7 +15107,7 @@ def admin_production_report():
         })
 
     orders = (live_orders().filter(Order.status != 'cancelled').order_by(Order.created_at.desc())
-              .options(db.joinedload(Order.user),
+              .options(db.joinedload(Order.user), db.joinedload(Order.issued_note),
                        db.selectinload(Order.items).options(
                            db.joinedload(OrderItem.product), db.joinedload(OrderItem.material),
                            db.joinedload(OrderItem.detail).joinedload(Detail.material),
@@ -15670,6 +15675,57 @@ def _remnant_lot_used(lot, count):
         OrderMaterialRemnant.query.filter_by(material_id=lot.id)))
 
 
+@app.route('/admin/orders/<int:order_id>/issue', methods=['POST'])
+@role_required('admin')
+@retry_on_db_busy
+def admin_order_issue(order_id):
+    """
+    "Изпиши към клиента": one 'return' ClientDeliveryNote for a completed order, one line per
+    produced piece through the same _apply_client_delivery_note_items() as the manual route. A
+    standalone Detail / component-less Product line issues its quantity_produced at the line's frozen
+    unit_price; a product tracked per component issues each component Detail (that is what production
+    put into stock - the Product row itself was never stocked), without a price. Once: Order.issued_note_id
+    is set and a second POST is refused (deleting the note frees it). Our rows may go negative like on a
+    manual note; a client's Detail may not.
+    """
+    order = _lock_or_404(Order, order_id)
+    back = redirect(url_for('admin_production_report') + f'#order-{order.id}')
+    if order.deleted_at or order.status != 'completed' or not order.client_id:
+        flash('Изписване към клиент е възможно само за завършена поръчка със зададен клиент.', 'danger')
+        return back
+    if order.issued_note_id:
+        flash(f'Поръчка {order.order_number} вече е изписана към клиента.', 'danger')
+        return back
+    rows = []
+    for item in _lock_order_lines(order):
+        target = item.stock_target
+        if target is not None:
+            rows.append({'type': 'detail' if item.detail_id else 'product', 'target_id': target.id,
+                         'qty': item.quantity_produced, 'unit_price': item.unit_price})
+        else:
+            rows += [{'type': 'detail', 'target_id': c.detail_id, 'qty': c.quantity_produced,
+                      'notes': f'част от {item.product.name}'} for c in item.components if c.detail_id]
+    note = ClientDeliveryNote(created_by_id=current_user.id, kind='return', client_id=order.client_id,
+                              note_number=order.order_number, note_date=datetime.now(APP_TZ).date())
+    db.session.add(note)
+    db.session.flush()
+    added_any, log_parts, log_detail_lines, errors = _apply_client_delivery_note_items(note, rows)
+    if errors or not added_any:
+        db.session.rollback()
+        for message in errors or ['Няма изработени бройки за изписване.']:
+            flash(message, 'danger')
+        return back
+    refusal = _negative_client_lots_refusal({(r['type'], r['target_id']) for r in rows}, 'admin_production_report')
+    if refusal:
+        return refusal
+    order.issued_note_id = note.id
+    db.session.commit()
+    log_action(f'Изписана поръчка {order.order_number} към клиента: разписка №{note.id}',
+               details=_client_note_header_text(note) + '\n' + '\n'.join(log_detail_lines))
+    flash(f'Поръчка {order.order_number} е изписана към клиента, наличностите са обновени.', 'success')
+    return redirect(url_for('admin_client_delivery_note_print', note_id=note.id))
+
+
 @app.route('/admin/orders/<int:order_id>/delete', methods=['POST'])
 @role_required('admin')
 @retry_on_db_busy
@@ -15699,6 +15755,7 @@ def admin_delete_order(order_id):
     remnants = OrderMaterialRemnant.query.filter_by(order_id=order.id).order_by(OrderMaterialRemnant.id).all()
     moved = remnants or any(r.quantity_produced or r.material_consumed for r, _ in rows)
     Offer.query.filter_by(order_id=order.id).update({'order_id': None})
+    order.issued_note_id = None   # the issued note itself stays (its stock movement is not reversed here)
 
     if not moved:   # lines, components, operations, attachments and reservations go with it (ORM cascade)
         used_in = _fk_references(order, skip=('order_item', 'order_material_reservation', 'order_cut_sheet'))
@@ -26027,7 +26084,22 @@ def _offer_items_json(offer):
         'quantity': item.quantity, 'unit': item.unit or '', 'unit_price': item.unit_price,
         'image_filename': item.image_filename or '',
         'product_id': item.product_id, 'detail_id': item.detail_id,
+        'current_price': _offer_item_current_price(item, offer.client),
     } for item in offer.items]
+
+
+def _offer_item_current_price(item, client):
+    """What the catalog row an offer line points at costs `client` today - the server's own price, the
+    same functions create_order() uses (detail_price_for() / calculate_product_pricing()), rounded like
+    them. None for a text line or a row that no longer exists. The editor offers it as "Обнови" when it
+    differs from the line's stored unit_price; it is never applied by itself."""
+    if item.product_id:
+        product = db.session.get(Product, item.product_id)
+        return calculate_product_pricing(product, client)['sell_price'] if product else None
+    if item.detail_id:
+        detail = db.session.get(Detail, item.detail_id)
+        return round(detail_price_for(detail, client), 2) if detail else None
+    return None
 
 
 def _resolve_staged_offer_image(filename):
