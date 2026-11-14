@@ -89,6 +89,8 @@
             margin-bottom: 16px;
         }
 
+        body.no-prices .price { display: none !important; }
+
         @media print {
             .navbar, .offer-toolbar, .no-print { display: none !important; }
             body { background: #fff; }
@@ -118,6 +120,7 @@
         </select>
         <input type="text" id="customerNameInput" placeholder="Име на клиента..." value="{{ customer_name }}">
     </div>
+<label class="no-print" style="display: inline-flex; align-items: center; gap: 8px; margin-right: 16px; color: var(--text-main); white-space: nowrap; cursor: pointer;"><input type="checkbox" data-print-prices="product-offer" checked> Показвай цените</label>
     <button class="btn-submit" style="padding: 12px 24px;" onclick="window.print()">Печат / PDF</button>
 </div>
 
@@ -138,8 +141,8 @@
             <th>Детайл</th>
             <th>Материал</th>
             <th class="text-right">Кол.</th>
-            <th class="text-right">Ед. цена</th>
-            <th class="text-right">Общо</th>
+            <th class="text-right price">Ед. цена</th>
+            <th class="text-right price">Общо</th>
         </tr>
         </thead>
         <tbody>
@@ -148,18 +151,19 @@
             <td>{{ pd.detail.name }}</td>
             <td>{{ pd.detail.material.display_name }}</td>
             <td class="text-right">{{ pd.quantity }}</td>
-            <td class="text-right" id="pd-unit-{{ loop.index0 }}">{{ "%.2f"|format(pd.detail.total_price) }} €</td>
-            <td class="text-right" id="pd-total-{{ loop.index0 }}">{{ "%.2f"|format(pd.detail.total_price * pd.quantity) }} €</td>
+            <td class="text-right price" id="pd-unit-{{ loop.index0 }}">{{ "%.2f"|format(pd.detail.total_price) }} €</td>
+            <td class="text-right price" id="pd-total-{{ loop.index0 }}">{{ "%.2f"|format(pd.detail.total_price * pd.quantity) }} €</td>
         </tr>
         {% else %}
         <tr>
-            <td colspan="5" class="text-center" style="color: #555; font-style: italic; padding: 12px 0;">Няма добавени детайли.</td>
+            <td colspan="3" class="text-center" style="color: #555; font-style: italic; padding: 12px 0;">Няма добавени детайли.</td>
+            <td colspan="2" class="price"></td>
         </tr>
         {% endfor %}
         </tbody>
     </table>
 
-    <table style="margin-top: 30px;">
+    <table class="price" style="margin-top: 30px;">
         <thead>
         <tr>
             <th colspan="2" style="border-bottom: 2px solid #111; color: #111; font-weight: 700;">Калкулация на цената</th>
@@ -215,6 +219,7 @@
     {% endif %}
 </div>
 
+<script src="{{ url_for('static', filename='js/print_prices.js') }}"></script>
 <script>
     document.getElementById('offerDate').textContent = new Date().toLocaleDateString('bg-BG');
 

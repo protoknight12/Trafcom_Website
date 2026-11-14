@@ -36,6 +36,8 @@
         .offer-sheet .offer-terms p { font-weight: 700; margin: 4px 0; }
         .offer-sheet .offer-signoff { margin-top: 40px; display: flex; justify-content: space-between; }
 
+        body.no-prices .price { display: none !important; }
+
         @media print {
             .navbar, .offer-toolbar, .no-print { display: none !important; }
             body { background: #fff; }
@@ -48,6 +50,7 @@
 
 <div class="offer-toolbar no-print">
     <a href="{{ url_for('admin_offers') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem; margin-right: 12px;">← Обратно</a>
+<label class="no-print" style="display: inline-flex; align-items: center; gap: 8px; margin-right: 16px; color: var(--text-main); white-space: nowrap; cursor: pointer;"><input type="checkbox" data-print-prices="admin-offer" checked> Показвай цените</label>
     <button class="btn-submit" style="padding: 12px 24px;" onclick="window.print()">Печат / PDF</button>
 </div>
 
@@ -69,8 +72,8 @@
             <th>Размери</th>
             <th>Кол-во</th>
             <th>Мярка</th>
-            <th>Ед. цена<br>(EUR без ДДС)</th>
-            <th>Обща цена<br>(EUR без ДДС)</th>
+            <th class="price">Ед. цена<br>(EUR без ДДС)</th>
+            <th class="price">Обща цена<br>(EUR без ДДС)</th>
         </tr>
         </thead>
         <tbody>
@@ -87,21 +90,21 @@
             <td class="text-center">{{ item.dimensions or '' }}</td>
             <td class="text-center">{{ '%g'|format(item.quantity) if item.quantity is not none else '' }}</td>
             <td class="text-center">{{ item.unit or '' }}</td>
-            <td class="text-right">{{ '%.2f'|format(item.unit_price) if item.unit_price is not none else '' }}</td>
-            <td class="text-right">{{ '%.2f'|format(item.line_total) if item.quantity is not none and item.unit_price is not none else '' }}</td>
+            <td class="text-right price">{{ '%.2f'|format(item.unit_price) if item.unit_price is not none else '' }}</td>
+            <td class="text-right price">{{ '%.2f'|format(item.line_total) if item.quantity is not none and item.unit_price is not none else '' }}</td>
         </tr>
         {% endfor %}
         {% if offer.discount_percent %}
-        <tr class="offer-subtotal-row">
+        <tr class="offer-subtotal-row price">
             <td colspan="8" class="text-right">Сума:</td>
             <td class="text-right">{{ '%.2f'|format(offer.subtotal) }} EUR</td>
         </tr>
-        <tr class="offer-subtotal-row">
+        <tr class="offer-subtotal-row price">
             <td colspan="8" class="text-right">Отстъпка (-{{ '%g'|format(offer.discount_percent) }}%):</td>
             <td class="text-right">-{{ '%.2f'|format(offer.discount_amount) }} EUR</td>
         </tr>
         {% endif %}
-        <tr class="offer-total-row">
+        <tr class="offer-total-row price">
             <td colspan="8" class="text-right">ОБЩО:</td>
             <td class="text-right">{{ '%.2f'|format(offer.total) }} EUR</td>
         </tr>
@@ -124,5 +127,6 @@
         {% if offer.signed_by %}<span>С уважение: {{ offer.signed_by }}</span>{% endif %}
     </div>
 </div>
+<script src="{{ url_for('static', filename='js/print_prices.js') }}"></script>
 </body>
 </html>
