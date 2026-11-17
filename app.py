@@ -5792,6 +5792,22 @@ def _item_on_cut_sheet(item):
         db.and_(OrderCutSheetItem.target_type == t, OrderCutSheetItem.target_id == i) for t, i in keys])).exists()).scalar()
 
 
+def _drop_stale_planned_sheets(order):
+    """After a detail moved to another material (admin_update_detail_material()): pieces on a PLANNED sheet whose
+    line no longer cuts from that sheet's lot (_row_lot_id()) come off it, a sheet left empty is deleted. Cut sheets
+    never change. Returns how many sheet rows were deleted."""
+    lots = {_row_key(r): _row_lot_id(r, d) for r, d, _ in _order_production_rows(order)}
+    dropped = 0
+    for sheet in OrderCutSheet.query.filter_by(order_id=order.id, status='planned'):
+        for it in list(sheet.items):
+            if lots.get((it.target_type, it.target_id)) != sheet.material_id:
+                sheet.items.remove(it)
+        if not sheet.items:
+            db.session.delete(sheet)
+            dropped += 1
+    return dropped
+
+
 def _sync_order_reservation(order, needs_before):
     """After a line edit (admin_order_edit() and its add/remove routes): moves the order's
     OrderMaterialReservation rows by what its needs changed (_order_material_needs() now minus
@@ -13803,7 +13819,12 @@ def admin_update_detail_material(detail_id):
     DetailMaterial.query.filter_by(detail_id=detail.id, material_key=material_key).delete()
     db.session.flush()
     db.session.expire(detail, ['material'])
-    warnings = [w for o in open_orders for w in _sync_order_reservation(o, needs_before[o.id])]
+    warnings = []
+    for o in open_orders:
+        if _drop_stale_planned_sheets(o):
+            db.session.flush()
+            warnings.append(f'Поръчка {o.order_number}: планираните листове на стария материал са премахнати от разкроя.')
+        warnings += _sync_order_reservation(o, needs_before[o.id])
     db.session.commit()
     for w in warnings:
         flash(w, 'warning')

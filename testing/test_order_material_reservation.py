@@ -333,3 +333,25 @@ def test_saving_the_detail_material_again_repairs_a_stale_reservation(c, ids):
     _as(c).post(f"/details/{ids['detail']}/update-material", data={'material': 'steel_new', 'width': '500', 'height': '400'})
     assert _reserved(order_id) == {new_id: pytest.approx(2)}
     assert _shortages(order_id) == []
+
+
+def test_material_change_drops_planned_sheets_of_the_old_lot(c, ids):
+    """A planned cutting sheet on the old lot no longer holds the pieces once the detail moved, so the
+    reservation leaves the old lot (ORD-2026-3166: sheet planned on #57, material brought as #58)."""
+    from app import OrderCutSheet, OrderCutSheetItem
+    order_id, _ = _order(c, [{'type': 'detail', 'id': ids['detail'], 'qty': 5}])
+    item_id = _item(order_id)
+    with flask_app.app_context():
+        db.session.add(MaterialPrice(key='steel_new', display_name='Стомана нова', cost_per_m2=0, type='sheets',
+                                     sheet_width_mm=1000, sheet_length_mm=2000, stock_quantity=5))
+        sheet = OrderCutSheet(order_id=order_id, material_id=ids['ours'], seq=1, copies=1, status='planned')
+        db.session.add(sheet)
+        db.session.flush()
+        db.session.add(OrderCutSheetItem(cut_sheet_id=sheet.id, target_type='item', target_id=item_id, quantity=5))
+        db.session.commit()
+        new_id = MaterialPrice.query.filter_by(key='steel_new').one().id
+
+    _as(c).post(f"/details/{ids['detail']}/update-material", data={'material': 'steel_new', 'width': '500', 'height': '400'})
+    assert _all(OrderCutSheet, order_id=order_id) == []
+    assert _reserved(order_id) == {new_id: pytest.approx(0.5)}
+    assert _shortages(order_id) == []
