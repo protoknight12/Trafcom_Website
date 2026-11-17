@@ -1508,6 +1508,12 @@ class DeliveryNote(db.Model):
     created_by = db.relationship('User')
     items = db.relationship('DeliveryNoteItem', backref='delivery_note', cascade='all, delete-orphan', lazy=True)
 
+    @property
+    def number(self):
+        """Printed number: a receipt from a client (приемо-предавателен протокол, вход) is 1 + the id in 7 digits
+        (10000036), a supplier delivery note just the id."""
+        return f'{10000000 + self.id}' if self.client_id else str(self.id)
+
 
 class DeliveryNoteItem(db.Model):
     """
@@ -1561,6 +1567,11 @@ class ClientDeliveryNote(db.Model):
     client = db.relationship('Client')
     created_by = db.relationship('User')
     items = db.relationship('ClientDeliveryNoteItem', backref='client_delivery_note', cascade='all, delete-orphan', lazy=True)
+
+    @property
+    def number(self):
+        """Printed number (изход): the id in 8 digits (00000009) - receipts from a client start with 1 (DeliveryNote.number)."""
+        return f'{self.id:08d}'
 
 
 class ClientDeliveryNoteItem(db.Model):
@@ -12064,7 +12075,7 @@ def _delivery_note_header_text(note):
     """One-line description of a DeliveryNote for the activity log."""
     number_date = f'№ {note.note_number or "-"}, дата {note.note_date or "-"}'
     if note.client_id:
-        return f'Приемане на съхранение №{note.id} (клиент: {note.client.name if note.client else "-"}, {number_date})'
+        return f'Приемане на съхранение №{note.number} (клиент: {note.client.name if note.client else "-"}, {number_date})'
     return f'Стокова разписка №{note.id} (доставчик: {note.supplier.name if note.supplier else "-"}, {number_date})'
 
 
@@ -15929,7 +15940,7 @@ def admin_order_issue(order_id):
         return refusal
     order.issued_note_id = note.id
     db.session.commit()
-    log_action(f'Изписана поръчка {order.order_number} към клиента: разписка №{note.id}',
+    log_action(f'Изписана поръчка {order.order_number} към клиента: разписка №{note.number}',
                details=_client_note_header_text(note) + '\n' + '\n'.join(log_detail_lines))
     flash(f'Поръчка {order.order_number} е изписана към клиента, наличностите са обновени.', 'success')
     return redirect(url_for('admin_client_delivery_note_print', note_id=note.id))

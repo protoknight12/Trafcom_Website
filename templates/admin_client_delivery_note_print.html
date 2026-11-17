@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     {% include 'partials/favicon.html' %}
-    <title>{% if note.kind == 'consume' %}Протокол за изписване{% else %}Приемо-предавателен протокол{% endif %} № {{ note.id }}</title>
+    <title>{% if note.kind == 'consume' %}Протокол за изписване{% else %}Приемо-предавателен протокол{% endif %} № {{ note.number }}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@700&display=swap" rel="stylesheet">
@@ -63,11 +63,11 @@
     {% set consume = note.kind == 'consume' %}
     {% set priced = note.items|selectattr('unit_price')|list %}
     {% if consume %}
-    <p class="offer-number">ПРОТОКОЛ ЗА ИЗПИСВАНЕ № {{ note.id }}<br><span style="font-weight: 400; font-size: 0.95rem;">изписване на материал на клиента за производство</span></p>
+    <p class="offer-number">ПРОТОКОЛ ЗА ИЗПИСВАНЕ № {{ note.number }}<br><span style="font-weight: 400; font-size: 0.95rem;">изписване на материал на клиента за производство</span></p>
     {% if note.client %}<p class="offer-client">Собственик: {{ note.client.name }}</p>{{ legal_lines(note.client) }}{% endif %}
     {% else %}
     {% set doc_date = note.note_date or ((note.created_at|local) if note.created_at else none) %}
-    <p class="offer-number">ПРИЕМО-ПРЕДАВАТЕЛЕН ПРОТОКОЛ № {{ note.id }}{% if doc_date %}/{{ doc_date.strftime('%d.%m.%Y') }}{% endif %}<br><span style="font-weight: 400; font-size: 0.95rem;">връщане</span></p>
+    <p class="offer-number">ПРИЕМО-ПРЕДАВАТЕЛЕН ПРОТОКОЛ № {{ note.number }}{% if doc_date %}/{{ doc_date.strftime('%d.%m.%Y') }}{% endif %}<br><span style="font-weight: 400; font-size: 0.95rem;">връщане</span></p>
     <div class="offer-parties">
         <div>
             <p class="party-title">Предал: ТРАФКОМ ООД</p>

@@ -253,13 +253,13 @@
                         <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;"
                                 data-dialog="clientDeliveryNoteSection-dialog" data-note-id="{{ note.id }}"
                                 data-action="{{ url_for('edit_client_delivery_note', note_id=note.id) }}"
-                                data-title="Редакция на стокова разписка №{{ note.id }}"
+                                data-title="Редакция на стокова разписка №{{ note.number }}"
                                 data-values='{{ {"client_id": note.client_id or "", "kind": note.kind, "note_number": note.note_number or "", "note_date": note.note_date.isoformat() if note.note_date else ""}|tojson|forceescape }}'>Редактирай</button>
                         {% endif %}
                         <a href="{{ url_for('admin_client_delivery_note_print', note_id=note.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Печат</a>
                         {% if current_user.is_admin %}
                         <form action="{{ url_for('delete_client_delivery_note', note_id=note.id) }}" method="POST" style="display: inline;"
-                              onsubmit="return confirm('Да се изтрие ли стокова разписка №{{ note.id }}? Изписаните количества ще бъдат върнати в наличностите.');">
+                              onsubmit="return confirm('Да се изтрие ли стокова разписка №{{ note.number }}? Изписаните количества ще бъдат върнати в наличностите.');">
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-delete" style="padding: 6px 12px; font-size: 0.85rem;">Изтрий</button>
                         </form>

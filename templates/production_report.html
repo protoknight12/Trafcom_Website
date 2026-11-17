@@ -114,7 +114,7 @@
             {% if current_user.is_admin %}
             <div style="display: flex; gap: 6px;">
                 {% if order.issued_note %}
-                <a href="{{ url_for('admin_client_delivery_note_print', note_id=order.issued_note_id) }}" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem; text-decoration: none;">Изписана с разписка №{{ order.issued_note.note_number or order.issued_note_id }}</a>
+                <a href="{{ url_for('admin_client_delivery_note_print', note_id=order.issued_note_id) }}" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem; text-decoration: none;">Изписана с разписка №{{ order.issued_note.note_number or order.issued_note.number }}</a>
                 {% elif order.status == 'completed' and order.client_id %}
                 <form method="POST" action="{{ url_for('admin_order_issue', order_id=order.id) }}" data-once
                       data-confirm="Изписване на поръчка {{ order.order_number }} към клиента? Създава се стокова разписка с изработените бройки и наличностите на детайлите/продуктите се намаляват (нашите могат да станат отрицателни).">

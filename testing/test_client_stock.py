@@ -540,3 +540,11 @@ def test_delete_material_refusals(admin_client):   # fix 5
 def test_option_text_owner_row_missing(admin_client):   # fix 7
     m = MaterialPrice(key='z', display_name='Мед', cost_per_m2=0, type='sheets', owner_client_id=999)
     assert format_material_option(m).endswith(' [клиент: #999]')
+
+
+def test_protocol_numbers():
+    """Receipt from a client (вход) = 1 + 7-digit id, issue to a client (изход) = 8-digit id; supplier notes stay plain."""
+    from app import DeliveryNote, ClientDeliveryNote
+    assert DeliveryNote(id=36, client_id=1).number == '10000036'
+    assert DeliveryNote(id=36).number == '36'
+    assert ClientDeliveryNote(id=9).number == '00000009'
