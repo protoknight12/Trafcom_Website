@@ -9,6 +9,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@700&display=swap" rel="stylesheet">
     {% from 'partials/legal_fields.html' import legal_lines %}
+    {% from 'partials/company.html' import contact_line, legal_line, party, bank_accounts %}
+    {% from 'partials/vat_rows.html' import vat_rows %}
     <style>
         .offer-toolbar {
             max-width: 900px; margin: 24px auto 0; padding: 0 24px;
@@ -58,8 +60,9 @@
 </div>
 
 <div class="offer-sheet">
-    <h1>ТРАФКОМ ООД</h1>
-    <p class="offer-address">гр. Тетевен, ул Александър Стамболийски 36, trafcom@tafcombg.com, +359 886 762276</p>
+    <h1>{{ company().name }}</h1>
+    <p class="offer-address">{{ contact_line() }}</p>
+    {% if legal_line()|trim %}<p class="offer-address">{{ legal_line() }}</p>{% endif %}
     {% if note.client %}
     {% set doc_date = note.note_date or ((note.created_at|local) if note.created_at else none) %}
     <p class="offer-number">ПРИЕМО-ПРЕДАВАТЕЛЕН ПРОТОКОЛ № {{ note.number }}{% if doc_date %}/{{ doc_date.strftime('%d.%m.%Y') }}{% endif %}<br><span style="font-weight: 400; font-size: 0.95rem;">приемане на съхранение</span></p>
@@ -69,8 +72,7 @@
             {{ legal_lines(note.client, 'party-line') }}
         </div>
         <div>
-            <p class="party-title">Приел: ТРАФКОМ ООД</p>
-            <p>Адрес: гр. Тетевен, ул Александър Стамболийски 36</p>
+            {{ party('Приел') }}
         </div>
     </div>
     {% if note.note_number %}<p class="offer-client">Реф. №: {{ note.note_number }}</p>{% endif %}
@@ -120,9 +122,10 @@
         {% endfor %}
         {% if not note.client %}
         <tr class="offer-total-row price">
-            <td colspan="6" class="text-right">ОБЩО:</td>
+            <td colspan="6" class="text-right">ОБЩО (без ДДС):</td>
             <td class="text-right">{{ '%.2f'|format(ns.total) }} EUR</td>
         </tr>
+        {{ vat_rows(ns.total, 6) }}
         {% endif %}
         </tbody>
     </table>

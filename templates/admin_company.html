@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Данни на фирмата - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">
+            {{ message }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card" style="max-width: 760px;">
+        <h3>Данни на фирмата</h3>
+        <p class="section-subtitle">Изписват се в документите: стокови разписки, приемо-предавателни протоколи, оферти,
+            протоколи за качество, декларации и етикети.</p>
+        <form action="{{ url_for('admin_company') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            {% for key, label, default in fields %}
+            <div class="form-group">
+                <label for="company_{{ key }}">{{ label }}</label>
+                {% if key == 'bank_accounts' %}
+                <textarea id="company_{{ key }}" name="{{ key }}" rows="4" style="width: 100%; box-sizing: border-box;"
+                          placeholder="ОББ, BG00UBBS00000000000000, UBBSBGSF">{{ info[key] }}</textarea>
+                {% else %}
+                <input type="text" id="company_{{ key }}" name="{{ key }}" value="{{ info[key] }}"
+                       {% if key in ('name', 'vat_percent') %}required{% endif %}>
+                {% endif %}
+            </div>
+            {% endfor %}
+            <button type="submit" class="btn-submit">Запази</button>
+        </form>
+    </section>
+
+</main>
+</body>
+</html>

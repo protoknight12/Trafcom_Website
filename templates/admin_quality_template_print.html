@@ -121,8 +121,8 @@
     <div class="mir-header-row">
         <div class="mir-company">
             <div class="mir-company-name">TRAFCOM</div>
-            <div class="mir-company-line">гр. Тетевен, ул. „Александър Стамболийски“ 36</div>
-            <div class="mir-company-line">Тел: +359 886 762 276 &nbsp; Имейл: trafcom@trafcombg.com</div>
+            <div class="mir-company-line">{{ company().address }}</div>
+            <div class="mir-company-line">Тел: {{ company().phone }} &nbsp; Имейл: {{ company().email }}</div>
         </div>
         <div class="mir-title-block">
             <div class="mir-title-en">INSPECTION REPORT OF QUALITY</div>

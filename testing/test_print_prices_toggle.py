@@ -188,3 +188,13 @@ def test_client_delivery_note(ctx, key):
 def test_client_delivery_note_without_prices_has_no_toggle(ctx):
     c, ids = ctx
     _check(_get(c, f"/admin/client-delivery-notes/{ids['free']}/print"), toggle=False)
+
+
+def test_vat_rows_under_the_total(ctx):
+    """Priced documents add "ДДС 20%" and "ОБЩО С ДДС" under the total without VAT (3 x 12.50 = 37.50)."""
+    c, ids = ctx
+    for url in (f"/admin/delivery-notes/{ids['sup']}/print", f"/admin/client-delivery-notes/{ids['ret']}/print"):
+        text = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', _get(c, url)))
+        assert 'ОБЩО (без ДДС): 37.50 EUR' in text and 'ДДС 20%: 7.50 EUR' in text and 'ОБЩО С ДДС: 45.00 EUR' in text
+    assert 'ОБЩО С ДДС' in _get(c, f"/admin/offers/{ids['offer']}/print")
+    assert 'ОБЩО С ДДС' not in _get(c, f"/admin/client-delivery-notes/{ids['free']}/print")   # no prices, no VAT

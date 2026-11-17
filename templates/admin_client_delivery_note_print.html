@@ -9,6 +9,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@700&display=swap" rel="stylesheet">
     {% from 'partials/legal_fields.html' import legal_lines %}
+    {% from 'partials/company.html' import contact_line, legal_line, party, bank_accounts %}
+    {% from 'partials/vat_rows.html' import vat_rows %}
     <style>
         .offer-toolbar {
             max-width: 900px; margin: 24px auto 0; padding: 0 24px;
@@ -58,8 +60,9 @@
 </div>
 
 <div class="offer-sheet">
-    <h1>ТРАФКОМ ООД</h1>
-    <p class="offer-address">гр. Тетевен, ул Александър Стамболийски 36, trafcom@tafcombg.com, +359 886 762276</p>
+    <h1>{{ company().name }}</h1>
+    <p class="offer-address">{{ contact_line() }}</p>
+    {% if legal_line()|trim %}<p class="offer-address">{{ legal_line() }}</p>{% endif %}
     {% set consume = note.kind == 'consume' %}
     {% set priced = note.items|selectattr('unit_price')|list %}
     {% if consume %}
@@ -70,8 +73,7 @@
     <p class="offer-number">ПРИЕМО-ПРЕДАВАТЕЛЕН ПРОТОКОЛ № {{ note.number }}{% if doc_date %}/{{ doc_date.strftime('%d.%m.%Y') }}{% endif %}<br><span style="font-weight: 400; font-size: 0.95rem;">{{ 'връщане' if note.kind == 'return' else 'издаване' }}</span></p>
     <div class="offer-parties">
         <div>
-            <p class="party-title">Предал: ТРАФКОМ ООД</p>
-            <p>Адрес: гр. Тетевен, ул Александър Стамболийски 36</p>
+            {{ party('Предал') }}
         </div>
         <div>
             <p class="party-title">Приел: {{ note.client.name if note.client else '-' }}</p>
@@ -129,9 +131,10 @@
         {% endfor %}
         {% if priced %}
         <tr class="offer-total-row price">
-            <td colspan="{{ 6 if consume else 4 }}" class="text-right">ОБЩО:</td>
+            <td colspan="{{ 6 if consume else 4 }}" class="text-right">ОБЩО (без ДДС):</td>
             <td class="text-right">{{ '%.2f'|format(ns.total) }} EUR</td>
         </tr>
+        {{ vat_rows(ns.total, 6 if consume else 4) }}
         {% endif %}
         </tbody>
     </table>
@@ -140,6 +143,7 @@
     <div class="offer-terms price">
         <p>Всички цени са в EUR без включен ДДС</p>
     </div>
+    <div class="price">{{ bank_accounts() }}</div>
     {% endif %}
 
     <div class="offer-signoff">

@@ -9,6 +9,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@700&display=swap" rel="stylesheet">
     {% from 'partials/legal_fields.html' import legal_lines %}
+    {% from 'partials/company.html' import contact_line, legal_line, party, bank_accounts %}
+    {% from 'partials/vat_rows.html' import vat_rows %}
     <style>
         .offer-toolbar {
             max-width: 900px; margin: 24px auto 0; padding: 0 24px;
@@ -55,8 +57,9 @@
 </div>
 
 <div class="offer-sheet">
-    <h1>ТРАФКОМ ООД</h1>
-    <p class="offer-address">гр. Тетевен, ул Александър Стамболийски 36, trafcom@tafcombg.com, +359 886 762276</p>
+    <h1>{{ company().name }}</h1>
+    <p class="offer-address">{{ contact_line() }}</p>
+    {% if legal_line()|trim %}<p class="offer-address">{{ legal_line() }}</p>{% endif %}
     <p class="offer-number">ОФЕРТА № {{ offer.number }}</p>
     {% if offer.object_title %}<p class="offer-object">ОБЕКТ: {{ offer.object_title }}</p>{% endif %}
     {% if offer.client %}<p class="offer-client">Клиент: {{ offer.client.name }}</p>{{ legal_lines(offer.client) }}{% endif %}
@@ -105,9 +108,10 @@
         </tr>
         {% endif %}
         <tr class="offer-total-row price">
-            <td colspan="8" class="text-right">ОБЩО:</td>
+            <td colspan="8" class="text-right">ОБЩО (без ДДС):</td>
             <td class="text-right">{{ '%.2f'|format(offer.total) }} EUR</td>
         </tr>
+        {{ vat_rows(offer.total, 8) }}
         </tbody>
     </table>
 
@@ -121,6 +125,8 @@
         {% endif %}
     </div>
     {% endif %}
+
+    <div class="price">{{ bank_accounts() }}</div>
 
     <div class="offer-signoff">
         <span>Дата: {{ (offer.created_at|local).strftime('%d.%m.%Y') if offer.created_at else '' }}</span>

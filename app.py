@@ -33,7 +33,7 @@ from openpyxl import Workbook
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import inspect as sa_inspect
 from markupsafe import Markup
-from sqlalchemy.exc import IntegrityError, DBAPIError
+from sqlalchemy.exc import IntegrityError, DBAPIError, SQLAlchemyError
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -6182,6 +6182,86 @@ def create_url(entity):
 
 
 app.jinja_env.globals['create_url'] = create_url
+
+# Default Bulgarian VAT rate (company() 'vat_percent' overrides it); prices in the app are without VAT.
+VAT_PERCENT = 20
+
+# Our company's data printed on every document (header, Предал/Приел side, offers) - edited on /admin/company,
+# stored as EditableText 'settings.company.<key>' (settings.* keys are out of the content editor's reach).
+# (key, label, default) - the defaults are what the documents printed before the page existed.
+COMPANY_FIELDS = (
+    ('name', 'Име на фирмата', 'ТРАФКОМ ООД'),
+    ('address', 'Адрес', 'гр. Тетевен, ул. Александър Стамболийски 36'),
+    ('production_address', 'Производствена база', 'ул. Воловийте, 5700 гр. Тетевен'),
+    ('eik', 'ЕИК', '110034354'),
+    ('vat_number', 'ДДС №', ''),
+    ('mol', 'МОЛ', 'Десислав Цветанов'),
+    ('phone', 'Телефон', '+359 886 762276'),
+    ('email', 'Имейл', 'trafcom@trafcombg.com'),
+    ('website', 'Уебсайт', 'trafcombg.com'),
+    ('bank_accounts', 'Банкови сметки (по една на ред: банка, IBAN, BIC)', ''),
+    ('vat_percent', 'ДДС ставка (%)', str(VAT_PERCENT)),
+)
+COMPANY_KEY_PREFIX = 'settings.company.'
+
+
+def company():
+    """{key: value} of our company's data (COMPANY_FIELDS defaults filled in), one query per request (cached in g),
+    plus 'vat' = vat_percent as a number and 'accounts' = bank_accounts as a list of lines."""
+    if has_app_context() and 'company_info' in g:
+        return g.company_info
+    info = {key: default for key, _, default in COMPANY_FIELDS}
+    try:
+        for row in EditableText.query.filter(EditableText.key.startswith(COMPANY_KEY_PREFIX)):
+            key = row.key[len(COMPANY_KEY_PREFIX):]
+            if key in info:
+                info[key] = row.content or ''
+    except SQLAlchemyError:
+        db.session.rollback()   # no table yet (a fresh database) - the defaults
+    try:
+        info['vat'] = float(info['vat_percent'].replace(',', '.'))
+    except ValueError:
+        info['vat'] = float(VAT_PERCENT)
+    info['accounts'] = [line for line in info['bank_accounts'].splitlines() if line.strip()]
+    if has_app_context():
+        g.company_info = info
+    return info
+
+
+app.jinja_env.globals['company'] = company
+
+
+@app.route('/admin/company', methods=['GET', 'POST'])
+@role_required('admin')
+def admin_company():
+    """Our company's data for the documents (COMPANY_FIELDS)."""
+    if request.method == 'POST':
+        vat = request.form.get('vat_percent', '').strip().replace(',', '.')
+        try:
+            if not 0 <= float(vat) <= 100:
+                raise ValueError
+        except ValueError:
+            flash('ДДС ставката трябва да е число между 0 и 100.', 'danger')
+            return redirect(url_for('admin_company'))
+        changed = []
+        for key, label, _ in COMPANY_FIELDS:
+            value = '\n'.join(line.strip() for line in request.form.get(key, '').splitlines() if line.strip())[:2000]
+            row = db.session.get(EditableText, COMPANY_KEY_PREFIX + key)
+            if row is None:
+                row = EditableText(key=COMPANY_KEY_PREFIX + key, content='')
+                db.session.add(row)
+                old = company()[key]
+            else:
+                old = row.content
+            if value != old:
+                changed.append(f'{label}: {old or "-"} → {value or "-"}')
+            row.content = value
+        db.session.commit()
+        g.pop('company_info', None)
+        log_action('Данни на фирмата' + (': ' + '; '.join(changed) if changed else ' (без промяна)'))
+        flash('Данните на фирмата са запазени.', 'success')
+        return redirect(url_for('admin_company'))
+    return render_template('admin_company.html', fields=COMPANY_FIELDS, info=company(), active_page='admin')
 
 
 def entity_url(kind, entity_id):

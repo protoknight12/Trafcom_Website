@@ -220,8 +220,8 @@
 </div>
 
 <div class="cert-sheet">
-    <div class="cert-company"> ТРАФКОМ ООД</div>
-    <div class="cert-address"> ГР. ТЕТЕВЕН УЛ. АЛЕКСАНДЪР СТАМБОЛИЙСКИ 36</div>
+    <div class="cert-company"> {{ company().name }}</div>
+    <div class="cert-address"> {{ company().address|upper }}</div>
 
     <div class="cert-title"> ДЕКЛАРАЦИЯ ЗА СЪОТВЕТСТВИЕ</div>
     <div class="cert-number"> № <span id="lblCertNum">........</span> / <span id="lblCertDate">................</span></div>

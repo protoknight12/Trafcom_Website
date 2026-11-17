@@ -1,0 +1,29 @@
+{#
+    Our company's data on documents - everything comes from company() (app.py, edited on /admin/company).
+    contact_line(): "address, email, phone"; legal_line(): "ЕИК: … · ДДС №: …" (empty when neither is set);
+    party(title): the "our side" block of a protocol; bank_accounts(): the accounts, one per line (nothing when none).
+#}
+{% macro contact_line() %}{% set c = company() %}{{ [c.address, c.email, c.phone]|select|join(', ') }}{% endmacro %}
+
+{% macro legal_line() -%}
+{%- set c = company() -%}
+{%- if c.eik %}ЕИК: {{ c.eik }}{% endif %}{% if c.eik and c.vat_number %} &middot; {% endif %}{% if c.vat_number %}ДДС №: {{ c.vat_number }}{% endif -%}
+{%- endmacro %}
+
+{% macro party(title) %}
+{% set c = company() %}
+<p class="party-title">{{ title }}: {{ c.name }}</p>
+{% if c.address %}<p>Адрес: {{ c.address }}</p>{% endif %}
+{% if c.eik or c.vat_number %}<p>{{ legal_line() }}</p>{% endif %}
+{% if c.mol %}<p>МОЛ: {{ c.mol }}</p>{% endif %}
+{% endmacro %}
+
+{% macro bank_accounts() %}
+{% set c = company() %}
+{% if c.accounts %}
+<div class="offer-terms">
+    <p>Банкови сметки:</p>
+    {% for line in c.accounts %}<div>{{ line }}</div>{% endfor %}
+</div>
+{% endif %}
+{% endmacro %}

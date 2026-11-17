@@ -163,8 +163,8 @@
         <input type="text" id="inProtoId" value="1.2-M01">
     </div>
     <div class="form-group">
-        <label for="inProviderRep">МОЛ на ТРАФКОМ (Предаващ)</label>
-        <input type="text" id="inProviderRep" value="Десислав Цветанов">
+        <label for="inProviderRep">МОЛ на {{ company().name }} (Предаващ)</label>
+        <input type="text" id="inProviderRep" value="{{ company().mol }}">
     </div>
     <div class="form-group" style="grid-column: span 2;">
         <label for="inClientSelect">Избери клиент от списъка (по избор, попълва полетата долу)</label>
@@ -218,15 +218,16 @@
 
 <div class="proto-sheet">
     <div class="proto-header">
-        <h2>ТРАФКОМ ООД</h2>
-        <p>гр. Тетевен, ул Александър Стамболийски 36, trafcom@tafcombg.com, +359 886 762276</p>
+        {% from 'partials/company.html' import contact_line %}
+        <h2>{{ company().name }}</h2>
+        <p>{{ contact_line() }}</p>
     </div>
 
     <div class="proto-title">ПРИЕМО-ПРЕДАВАТЕЛЕН ПРОТОКОЛ</div>
 
     <div class="proto-preamble">
         Днес, <strong id="lblDate">......................</strong> год. в гр. <strong id="lblCity">......................</strong>, между страните:<br><br>
-        <strong>Предаваща страна:</strong> ТРАФКОМ ООД, ГР.ТЕТЕВЕН УЛ. АЛЕКСАНДЪР СТАМБОЛИЙСКИ 36, ЕИК: 110034354, представлявано от <span id="lblProviderRep1" style="font-weight: bold;">Десислав Цветанов</span> и<br>
+        <strong>Предаваща страна:</strong> {{ company().name }}, {{ company().address|upper }}{% if company().eik %}, ЕИК: {{ company().eik }}{% endif %}, представлявано от <span id="lblProviderRep1" style="font-weight: bold;">{{ company().mol }}</span> и<br>
         <strong>Приемаща страна:</strong> <span id="lblClientName" style="border-bottom: 1px dotted #000; min-width: 150px; display: inline-block;">............................................................</span>,
         ситуирана на адрес: <span id="lblClientAddress" style="border-bottom: 1px dotted #000; min-width: 150px; display: inline-block;">............................................................</span>,
         ЕИК: <span id="lblClientEik" style="border-bottom: 1px dotted #000; min-width: 80px; display: inline-block;">........................</span>,
@@ -274,7 +275,7 @@
     <div class="proto-signatures">
         <div class="sig-block">
             <strong>ПРЕДАВАЩА СТРАНА:</strong>
-            <div class="sig-line">за ТРАФКОМ ООД<br><span id="lblProviderRep2">Десислав Цветанов</span></div>
+            <div class="sig-line">за {{ company().name }}<br><span id="lblProviderRep2">{{ company().mol }}</span></div>
         </div>
         <div class="sig-block">
             <strong>ПРИЕМАЩА СТРАНА:</strong>
