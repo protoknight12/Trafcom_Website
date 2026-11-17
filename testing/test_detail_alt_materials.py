@@ -218,7 +218,7 @@ def test_the_chosen_lot_is_reserved_consumed_and_remnanted(ids):
     assert _stock(ids['alu']) == pytest.approx(9) and _stock(ids['steel']) == 10
 
     page = c.get('/admin/production').get_data(as_text=True)
-    assert 'Материал: #' in page and 'Алуминий' in page
+    assert re.search(r'Материал: <a [^>]*>#\d+ Алуминий', page)   # the line's material, an entity link
     assert 'ORD' in c.get(f'/admin/materials/{ids["alu"]}/history').get_data(as_text=True)
 
 

@@ -16,6 +16,7 @@ import hashlib
 import io
 import html
 import csv
+import unicodedata
 import webbrowser
 import threading
 import time
@@ -10378,16 +10379,33 @@ def account():
     return render_template('account.html')
 
 
+# Latin letters that look like Cyrillic ones - a name typed with them must still count as the same name.
+_NAME_LOOKALIKES = str.maketrans('aceopxykmthbABCEHKMOPTXY', 'асеорхукмтнвАВСЕНКМОРТХУ')
+
+
+def _clean_name(value):
+    """A first/last name as stored: NFKC, no control/format characters (zero-width etc.), whitespace runs -> one
+    space, at most 50 characters; None when empty."""
+    text = unicodedata.normalize('NFKC', value or '')
+    text = ''.join(ch for ch in text if unicodedata.category(ch)[0] != 'C' or ch.isspace())
+    return ' '.join(text.split())[:50] or None
+
+
+def _name_key(value):
+    """Comparison form of a name: _clean_name(), Latin lookalikes -> Cyrillic, case-folded."""
+    return (_clean_name(value) or '').translate(_NAME_LOOKALIKES).casefold()
+
+
 @app.route('/account/name', methods=['POST'])
 @login_required
 def account_update_name():
     """The user's own first/last name - printed on the documents they make. A name another account already shows
     (its full_name or username) is refused, so nobody can sign documents as a colleague; an admin can still set any
     name on /admin/users."""
-    first = request.form.get('first_name', '').strip()[:50] or None
-    last = request.form.get('last_name', '').strip()[:50] or None
-    wanted = ' '.join(p for p in (first, last) if p).casefold()
-    if wanted and any(u.full_name.casefold() == wanted or u.username.casefold() == wanted
+    first = _clean_name(request.form.get('first_name'))
+    last = _clean_name(request.form.get('last_name'))
+    wanted = _name_key(' '.join(p for p in (first, last) if p))
+    if wanted and any(_name_key(u.full_name) == wanted or _name_key(u.username) == wanted
                       for u in User.query.filter(User.id != current_user.id)):
         flash(gettext('Това име вече се използва от друг потребител.'), 'danger')
         return redirect(url_for('account'))
@@ -12946,8 +12964,8 @@ def admin_create_user():
 
     secure_pass = generate_password_hash(password, method='scrypt')
     new_user = User(username=username, password=secure_pass, role=role, client_id=client_id,
-                    first_name=request.form.get('first_name', '').strip()[:50] or None,
-                    last_name=request.form.get('last_name', '').strip()[:50] or None)
+                    first_name=_clean_name(request.form.get('first_name')),
+                    last_name=_clean_name(request.form.get('last_name')))
     db.session.add(new_user)
     db.session.commit()
     log_action(f'Създаден потребител "{username}" (роля {role})')
@@ -13003,7 +13021,7 @@ def admin_update_user(user_id):
     user_to_update.client_id = client_id
     for field in ('first_name', 'last_name'):
         if field in request.form:
-            setattr(user_to_update, field, request.form[field].strip()[:50] or None)
+            setattr(user_to_update, field, _clean_name(request.form[field]))
     log_action(describe_changes(f'потребител "{user_to_update.username}"', user_to_update,
                                 {'role': 'роля', 'client_id': 'клиент', 'first_name': 'име', 'last_name': 'фамилия'}))
     db.session.commit()

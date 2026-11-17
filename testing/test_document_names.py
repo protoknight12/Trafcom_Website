@@ -113,3 +113,15 @@ def test_user_cannot_take_a_colleagues_name(ids):
     w.post('/account/name', data={'first_name': 'qa_admin', 'last_name': ''})
     with flask_app.app_context():
         assert db.session.get(User, ids['worker']).full_name == 'qa_worker'
+
+
+def test_lookalike_and_invisible_characters_do_not_bypass_the_check(ids):
+    """Latin lookalikes, zero-width characters and extra spaces still match the colleague's name."""
+    from flask import g
+    from app import _clean_name
+    assert _clean_name(' Иван ​  Петров ') == 'Иван Петров'
+    for first, last in (('Иван​', 'Петров'), ('Иван', '  Петров'), ('Ивaн', 'Пeтрoв')):   # Latin a/e/o
+        g.pop('_login_user', None)
+        _login('qa_worker').post('/account/name', data={'first_name': first, 'last_name': last})
+        with flask_app.app_context():
+            assert db.session.get(User, ids['worker']).full_name == 'qa_worker', (first, last)
