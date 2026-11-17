@@ -10381,9 +10381,17 @@ def account():
 @app.route('/account/name', methods=['POST'])
 @login_required
 def account_update_name():
-    """The user's own first/last name - printed on the documents they make."""
-    current_user.first_name = request.form.get('first_name', '').strip()[:50] or None
-    current_user.last_name = request.form.get('last_name', '').strip()[:50] or None
+    """The user's own first/last name - printed on the documents they make. A name another account already shows
+    (its full_name or username) is refused, so nobody can sign documents as a colleague; an admin can still set any
+    name on /admin/users."""
+    first = request.form.get('first_name', '').strip()[:50] or None
+    last = request.form.get('last_name', '').strip()[:50] or None
+    wanted = ' '.join(p for p in (first, last) if p).casefold()
+    if wanted and any(u.full_name.casefold() == wanted or u.username.casefold() == wanted
+                      for u in User.query.filter(User.id != current_user.id)):
+        flash(gettext('Това име вече се използва от друг потребител.'), 'danger')
+        return redirect(url_for('account'))
+    current_user.first_name, current_user.last_name = first, last
     db.session.commit()
     flash(gettext('Името е обновено.'), 'success')
     return redirect(url_for('account'))

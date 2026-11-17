@@ -100,3 +100,16 @@ def test_names_set_by_admin_and_by_the_user(ids):
     w.post('/account/name', data={'first_name': 'Петър', 'last_name': ''})
     with flask_app.app_context():
         assert db.session.get(User, ids['worker']).full_name == 'Петър'
+
+
+def test_user_cannot_take_a_colleagues_name(ids):
+    """Self-service refuses a name another account shows (full name or username) - no signing as a colleague."""
+    from flask import g
+    g.pop('_login_user', None)
+    w = _login('qa_worker')
+    g.pop('_login_user', None)
+    w.post('/account/name', data={'first_name': 'иван', 'last_name': 'ПЕТРОВ'})
+    g.pop('_login_user', None)
+    w.post('/account/name', data={'first_name': 'qa_admin', 'last_name': ''})
+    with flask_app.app_context():
+        assert db.session.get(User, ids['worker']).full_name == 'qa_worker'
