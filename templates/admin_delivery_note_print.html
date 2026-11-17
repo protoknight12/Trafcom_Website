@@ -33,6 +33,10 @@
         .offer-sheet .offer-terms { margin-top: 24px; }
         .offer-sheet .offer-terms p { font-weight: 700; margin: 4px 0; }
         .offer-sheet .offer-signoff { margin-top: 40px; display: flex; justify-content: space-between; }
+        .offer-sheet .offer-parties { display: flex; justify-content: space-between; gap: 32px; margin: 8px 0 4px; }
+        .offer-sheet .offer-parties > div { flex: 1; }
+        .offer-sheet .offer-parties p { margin: 3px 0; color: #333; }
+        .offer-sheet .offer-parties .party-title { font-weight: 700; color: #111; }
 
         body.no-prices .price { display: none !important; }
 
@@ -57,11 +61,19 @@
     <h1>ТРАФКОМ ООД</h1>
     <p class="offer-address">гр. Тетевен, ул Александър Стамболийски 36, trafcom@tafcombg.com, +359 886 762276</p>
     {% if note.client %}
-    <p class="offer-number">ПРИЕМО-ПРЕДАВАТЕЛЕН ПРОТОКОЛ № {{ note.id }}<br><span style="font-weight: 400; font-size: 0.95rem;">приемане на съхранение</span></p>
-    <p class="offer-client">Предал: {{ note.client.name }}</p>{{ legal_lines(note.client) }}
-    <p class="offer-client">Приел: ТРАФКОМ ООД</p>
+    {% set doc_date = note.note_date or ((note.created_at|local) if note.created_at else none) %}
+    <p class="offer-number">ПРИЕМО-ПРЕДАВАТЕЛЕН ПРОТОКОЛ № {{ note.id }}{% if doc_date %}/{{ doc_date.strftime('%d.%m.%Y') }}{% endif %}<br><span style="font-weight: 400; font-size: 0.95rem;">приемане на съхранение</span></p>
+    <div class="offer-parties">
+        <div>
+            <p class="party-title">Предал: {{ note.client.name }}</p>
+            {{ legal_lines(note.client, 'party-line') }}
+        </div>
+        <div>
+            <p class="party-title">Приел: ТРАФКОМ ООД</p>
+            <p>Адрес: гр. Тетевен, ул Александър Стамболийски 36</p>
+        </div>
+    </div>
     {% if note.note_number %}<p class="offer-client">Реф. №: {{ note.note_number }}</p>{% endif %}
-    {% if note.note_date %}<p class="offer-client">Дата на приемане: {{ note.note_date.strftime('%d.%m.%Y') }}</p>{% endif %}
     {% else %}
     <p class="offer-number">СТОКОВА РАЗПИСКА № {{ note.id }}</p>
     {% if note.supplier %}<p class="offer-client">Доставчик: {{ note.supplier.name }}</p>{{ legal_lines(note.supplier) }}{% endif %}
