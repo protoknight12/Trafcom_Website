@@ -1,5 +1,5 @@
 """
-pytest: admin_order_issue() - "Изпиши към клиента" on a completed order. One 'return' ClientDeliveryNote
+pytest: admin_order_issue() - "Изпиши към клиента" on a completed order. One 'issue' ClientDeliveryNote
 with a line per produced piece (standalone Detail / component-less Product at the line's frozen price,
 a product tracked per component as its component Details), stock goes down through the manual note's
 own code, Order.issued_note_id makes it once-only, deleting the note frees the order, deleting the order
@@ -127,7 +127,7 @@ def test_issue_creates_one_note_and_lowers_stock(ids):
         (note,) = ClientDeliveryNote.query.all()
         assert res.headers['Location'].endswith(f'/admin/client-delivery-notes/{note.id}/print')
         assert (note.kind, note.client_id, note.note_number, note.note_date) == (
-            'return', ids['client'], 'ORD-1', datetime.now(APP_TZ).date())
+            'issue', ids['client'], 'ORD-1', datetime.now(APP_TZ).date())
         lines = {(i.target_type, i.target_id): (i.quantity, i.unit_price, i.description_snapshot) for i in note.items}
         assert lines == {('detail', ids['plain']): (3, 4.5, 'Планка'),
                          ('product', ids['loose']): (2, 9.0, 'Кутия'),

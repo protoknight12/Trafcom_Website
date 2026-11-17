@@ -236,7 +236,7 @@
                 <tr>
                     <td>{{ (note.created_at|local).strftime('%d.%m.%Y %H:%M') }}</td>
                     <td>{{ note.client.name if note.client else '-' }}
-                        {%- if note.kind == 'consume' %}<div style="font-size: 0.8rem; color: var(--text-muted);">{{ kinds[note.kind] }}</div>{% endif %}</td>
+                        {%- if note.kind != 'issue' %}<div style="font-size: 0.8rem; color: var(--text-muted);">{{ kinds[note.kind] }}</div>{% endif %}</td>
                     <td>{{ note.note_number or '-' }}</td>
                     <td>
                         {% for item in note.items %}
@@ -402,7 +402,7 @@
     }
     // Changing the kind, or the client of a consume note, clears the lines
     // already added (they were picked for the old owner) - after a confirm.
-    const cdnParty = { kind: 'return', client: '' };
+    const cdnParty = { kind: 'issue', client: '' };
     function onPartyChange(e) {
         const kindNow = cdnKind();
         const clientNow = document.getElementById('client_id').value;

@@ -41,6 +41,7 @@ ONCE = (
     'data_close_registration',        # owner's decision 2026-10-15: new accounts only through an admin (checkbox on /admin/users reopens it)
     'data_reprice_owned_details',     # owned Details created before the owner-pricing rule get the owner's Материали terms in calculated_price
     'data_backfill_offer_orders',     # offers turned into orders before offer.order_id existed get linked to them from the ActivityLog
+    'data_client_note_issue_kind',    # old 'return' client notes with detail/product lines become 'issue' (издаване); material-only stay 'return'
 )
 
 

@@ -1555,10 +1555,11 @@ class ClientDeliveryNote(db.Model):
     """
     id = db.Column(db.Integer, primary_key=True)
     client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True)
-    # 'return' = issue/return to the client (the original behaviour), 'consume'
-    # = manual write-off of the client's stored material for production
-    # (see CLIENT_NOTE_KINDS). Set on create only.
-    kind = db.Column(db.String(10), nullable=False, default='return')
+    # 'issue' = goods issued to the client (the default), 'return' = the client's
+    # material given back - both move stock the same way, only the printed
+    # wording differs; 'consume' = manual write-off of the client's stored
+    # material for production (see CLIENT_NOTE_KINDS). Set on create only.
+    kind = db.Column(db.String(10), nullable=False, default='issue')
     note_number = db.Column(db.String(100), nullable=True)
     note_date = db.Column(db.Date, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -1604,7 +1605,8 @@ class ClientDeliveryNoteItem(db.Model):
 
 # ClientDeliveryNote.kind slugs
 CLIENT_NOTE_KINDS = {
-    'return': 'Връщане / издаване на клиент',
+    'issue': 'Издаване на клиент',
+    'return': 'Връщане на клиент',
     'consume': 'Изписване за производство',
 }
 
@@ -10948,7 +10950,7 @@ def admin_material_history(material_id):
     ] + [
         {'date': item.client_delivery_note.note_date or to_local(item.client_delivery_note.created_at).date(),
          'created_at': item.client_delivery_note.created_at,
-         'kind': item.client_delivery_note.kind if item.client_delivery_note.kind in CLIENT_NOTE_KINDS else 'return',
+         'kind': item.client_delivery_note.kind if item.client_delivery_note.kind in CLIENT_NOTE_KINDS else 'issue',
          'direction': 'out', 'quantity': item.quantity,
          'party': item.client_delivery_note.client.name if item.client_delivery_note.client else '-',
          'note_number': item.client_delivery_note.note_number, 'unit_price': item.unit_price, 'notes': item.notes}
@@ -12325,7 +12327,7 @@ def create_client_delivery_note():
     _find_or_create_delivery_target here - except for a sheet remnant, see
     _apply_client_delivery_note_items()). The remnant keys only count on a
     material line of a 'consume' note. `kind` (CLIENT_NOTE_KINDS, anything
-    else -> 'return') and the client are set here only, never on edit.
+    else -> 'issue') and the client are set here only, never on edit.
     """
     items = _delivery_note_form_items()
     if not items:
@@ -12333,7 +12335,7 @@ def create_client_delivery_note():
         return redirect(url_for('admin_client_delivery_notes'))
 
     kind = request.form.get('kind')
-    note = ClientDeliveryNote(created_by_id=current_user.id, kind=kind if kind in CLIENT_NOTE_KINDS else 'return')
+    note = ClientDeliveryNote(created_by_id=current_user.id, kind=kind if kind in CLIENT_NOTE_KINDS else 'issue')
     if note.kind == 'consume':
         _lock_numbering('erp')  # a sheet remnant may become a new lot (ERP №) - before any stock row, see create_delivery_note()
     _set_delivery_note_header(note, 'client_id')
@@ -12435,7 +12437,7 @@ def _apply_client_delivery_note_items(note, items):
 
     Ownership: a 'consume' note (writing off a client's stored material for
     production) needs a client, and every line must be that client's own row
-    (owner_client_id). A 'return' note with a client may issue our stock or
+    (owner_client_id). An 'issue'/'return' note with a client may issue our stock or
     that client's own rows, never another client's; without a client it
     works as before.
 
@@ -15900,7 +15902,7 @@ def _remnant_lot_used(lot, count):
 @retry_on_db_busy
 def admin_order_issue(order_id):
     """
-    "Изпиши към клиента": one 'return' ClientDeliveryNote for a completed order, one line per
+    "Изпиши към клиента": one 'issue' ClientDeliveryNote for a completed order, one line per
     produced piece through the same _apply_client_delivery_note_items() as the manual route. A
     standalone Detail / component-less Product line issues its quantity_produced at the line's frozen
     unit_price; a product tracked per component issues each component Detail (that is what production
@@ -15925,7 +15927,7 @@ def admin_order_issue(order_id):
         else:
             rows += [{'type': 'detail', 'target_id': c.detail_id, 'qty': c.quantity_produced,
                       'notes': f'част от {item.product.name}'} for c in item.components if c.detail_id]
-    note = ClientDeliveryNote(created_by_id=current_user.id, kind='return', client_id=order.client_id,
+    note = ClientDeliveryNote(created_by_id=current_user.id, kind='issue', client_id=order.client_id,
                               note_number=order.order_number, note_date=datetime.now(APP_TZ).date())
     db.session.add(note)
     db.session.flush()

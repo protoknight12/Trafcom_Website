@@ -336,10 +336,10 @@ def test_edit_ignores_kind_and_client(admin_client):
     assert note.kind == 'consume' and note.client_id == a and _stock(la) == 3
 
 
-def test_unknown_kind_falls_back_to_return(admin_client):
+def test_unknown_kind_falls_back_to_issue(admin_client):
     a, b, la, lb = _setup()
     _out(admin_client, a, 'bogus', [_mline(la, 1)])
-    assert ClientDeliveryNote.query.one().kind == 'return'
+    assert ClientDeliveryNote.query.one().kind == 'issue'
 
 
 def test_client_note_print_titles(admin_client):
@@ -548,3 +548,18 @@ def test_protocol_numbers():
     assert DeliveryNote(id=36, client_id=1).number == '10000036'
     assert DeliveryNote(id=36).number == '36'
     assert ClientDeliveryNote(id=9).number == '00000009'
+
+
+def test_issue_is_the_default_kind_and_prints_izdavane(admin_client):
+    """A client note without a kind is an issue (издаване); 'return' prints "връщане"."""
+    from app import ClientDeliveryNote, CLIENT_NOTE_KINDS
+    assert list(CLIENT_NOTE_KINDS)[0] == 'issue'
+    with flask_app.app_context():
+        c = Client(name='Клиент А'); db.session.add(c); db.session.flush()
+        issue, ret = ClientDeliveryNote(client_id=c.id), ClientDeliveryNote(client_id=c.id, kind='return')
+        db.session.add_all([issue, ret]); db.session.commit()
+        assert issue.kind == 'issue'
+        ids = issue.id, ret.id
+    html = admin_client.get(f'/admin/client-delivery-notes/{ids[0]}/print').get_data(as_text=True)
+    assert 'издаване' in html and 'връщане' not in html
+    assert 'връщане' in admin_client.get(f'/admin/client-delivery-notes/{ids[1]}/print').get_data(as_text=True)

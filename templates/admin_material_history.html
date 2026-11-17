@@ -56,6 +56,8 @@
                     <td>
                         {% if m.kind == 'client_receipt' %}
                         <span class="alert-success" style="padding: 2px 8px; border-radius: 4px;">Приемане на съхранение</span>
+                        {% elif m.kind == 'issue' %}
+                        <span class="alert-danger" style="padding: 2px 8px; border-radius: 4px;">Издаване на клиент</span>
                         {% elif m.kind == 'return' %}
                         <span class="alert-danger" style="padding: 2px 8px; border-radius: 4px;">Връщане на клиент</span>
                         {% elif m.kind == 'consume' %}
