@@ -125,3 +125,22 @@ def test_lookalike_and_invisible_characters_do_not_bypass_the_check(ids):
         _login('qa_worker').post('/account/name', data={'first_name': first, 'last_name': last})
         with flask_app.app_context():
             assert db.session.get(User, ids['worker']).full_name == 'qa_worker', (first, last)
+
+
+def test_name_allowlist():
+    """Only letters of one script (Cyrillic or Latin), space, hyphen, apostrophe."""
+    from app import _name_ok, _clean_name
+    assert _name_ok('Иван', 'Петров-Стоянов') and _name_ok('John', "O'Brien") and _name_ok(None, None)
+    assert _name_ok(_clean_name('Йордан'), _clean_name('Ёлкин'))       # precomposed after NFKC
+    assert not _name_ok('Ивaн', None)                                    # Latin a inside a Cyrillic name
+    assert not _name_ok('Иван', 'Smith')                                 # two scripts
+    assert not _name_ok('Иван́', None)                               # combining mark
+    assert not _name_ok('Ιван', None) and not _name_ok('Иван1', None) and not _name_ok('Иван★', None)
+
+
+def test_admin_cannot_store_a_bad_name(ids):
+    c = _login('qa_admin')
+    c.post(f"/admin/users/{ids['worker']}/update", data={'role': 'worker', 'client_id': '',
+                                                         'first_name': 'Ивaн', 'last_name': 'Петров'})
+    with flask_app.app_context():
+        assert db.session.get(User, ids['worker']).first_name is None

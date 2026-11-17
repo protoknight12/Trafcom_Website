@@ -10396,6 +10396,25 @@ def _name_key(value):
     return (_clean_name(value) or '').translate(_NAME_LOOKALIKES).casefold()
 
 
+NAME_RULE_MESSAGE = 'Името може да съдържа само букви от една азбука (кирилица или латиница), интервал, тире и апостроф.'
+
+
+def _name_ok(*names):
+    """Allowlist for printed person names (after _clean_name()): letters of ONE script - Cyrillic or Latin - plus
+    space, hyphen and apostrophe; nothing else (no marks, symbols, other scripts, mixed scripts)."""
+    scripts = set()
+    for ch in ''.join(n for n in names if n):
+        if ch in " -'’":
+            continue
+        if unicodedata.category(ch) not in ('Lu', 'Ll'):
+            return False
+        script = unicodedata.name(ch, '').split(' ')[0]
+        if script not in ('CYRILLIC', 'LATIN'):
+            return False
+        scripts.add(script)
+    return len(scripts) <= 1
+
+
 @app.route('/account/name', methods=['POST'])
 @login_required
 def account_update_name():
@@ -10404,6 +10423,9 @@ def account_update_name():
     name on /admin/users."""
     first = _clean_name(request.form.get('first_name'))
     last = _clean_name(request.form.get('last_name'))
+    if not _name_ok(first, last):
+        flash(gettext('Името може да съдържа само букви от една азбука (кирилица или латиница), интервал, тире и апостроф.'), 'danger')
+        return redirect(url_for('account'))
     wanted = _name_key(' '.join(p for p in (first, last) if p))
     if wanted and any(_name_key(u.full_name) == wanted or _name_key(u.username) == wanted
                       for u in User.query.filter(User.id != current_user.id)):
@@ -12962,10 +12984,14 @@ def admin_create_user():
     if client_id and not db.session.get(Client, client_id):
         client_id = None
 
+    first, last = _clean_name(request.form.get('first_name')), _clean_name(request.form.get('last_name'))
+    if not _name_ok(first, last):
+        flash(NAME_RULE_MESSAGE, 'danger')
+        return redirect(url_for('admin_users'))
+
     secure_pass = generate_password_hash(password, method='scrypt')
     new_user = User(username=username, password=secure_pass, role=role, client_id=client_id,
-                    first_name=_clean_name(request.form.get('first_name')),
-                    last_name=_clean_name(request.form.get('last_name')))
+                    first_name=first, last_name=last)
     db.session.add(new_user)
     db.session.commit()
     log_action(f'Създаден потребител "{username}" (роля {role})')
@@ -13016,12 +13042,15 @@ def admin_update_user(user_id):
     if client_id and not db.session.get(Client, client_id):
         flash('Невалиден клиент.', 'danger')
         return redirect(url_for('admin_users'))
+    names = {f: _clean_name(request.form[f]) for f in ('first_name', 'last_name') if f in request.form}
+    if not _name_ok(*names.values()):
+        flash(NAME_RULE_MESSAGE, 'danger')
+        return redirect(url_for('admin_users'))
 
     user_to_update.role = role
     user_to_update.client_id = client_id
-    for field in ('first_name', 'last_name'):
-        if field in request.form:
-            setattr(user_to_update, field, _clean_name(request.form[field]))
+    for field, value in names.items():
+        setattr(user_to_update, field, value)
     log_action(describe_changes(f'потребител "{user_to_update.username}"', user_to_update,
                                 {'role': 'роля', 'client_id': 'клиент', 'first_name': 'име', 'last_name': 'фамилия'}))
     db.session.commit()

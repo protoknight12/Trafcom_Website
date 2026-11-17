@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-11-17 19:49+0200\n"
+"POT-Creation-Date: 2026-11-17 20:01+0200\n"
 "PO-Revision-Date: 2026-09-02 12:54+0300\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: de\n"
@@ -18,49 +18,49 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
-#: app.py:665
+#: app.py:666
 msgid "ЕИК трябва да съдържа точно 9 цифри."
 msgstr "Die EIK/USt-IdNr. muss genau 9 Ziffern enthalten."
 
-#: app.py:680
+#: app.py:681
 msgid "Невалиден имейл адрес."
 msgstr "Ungültige E-Mail-Adresse."
 
-#: app.py:5155
+#: app.py:5156
 msgid "Нямате достъп до това приложение."
 msgstr "Sie haben keinen Zugriff auf diese Anwendung."
 
-#: app.py:6389 app.py:9991
+#: app.py:6390 app.py:9992
 msgid "Моля въведете име на пресет."
 msgstr "Bitte geben Sie einen Namen für die Voreinstellung ein."
 
-#: app.py:6393 app.py:9995
+#: app.py:6394 app.py:9996
 msgid "Невалидни настройки."
 msgstr "Ungültige Einstellungen."
 
-#: app.py:6410 app.py:10011
+#: app.py:6411 app.py:10012
 msgid "Нямате достъп."
 msgstr "Sie haben keinen Zugriff."
 
-#: app.py:10179 app.py:10209 app.py:10224
+#: app.py:10180 app.py:10210 app.py:10225
 msgid "Твърде много грешни кодове. Опитайте отново след 15 минути."
 msgstr "Zu viele falsche Codes. Bitte versuchen Sie es in 15 Minuten erneut."
 
-#: app.py:10191
+#: app.py:10192
 msgid "Невалидно потребителско име или парола."
 msgstr "Ungültiger Benutzername oder Passwort."
 
-#: app.py:10205
+#: app.py:10206
 msgid "Времето за въвеждане на кода изтече. Влезте отново."
 msgstr ""
 "Die Zeit zur Eingabe des Codes ist abgelaufen. Bitte melden Sie sich "
 "erneut an."
 
-#: app.py:10226
+#: app.py:10227
 msgid "Невалиден код."
 msgstr "Ungültiger Code."
 
-#: app.py:10252
+#: app.py:10253
 msgid ""
 "Ако имейлът съществува в системата, изпратихме връзка за възстановяване "
 "на паролата."
@@ -68,31 +68,31 @@ msgstr ""
 "Falls diese E-Mail-Adresse in unserem System registriert ist, haben wir "
 "einen Link zum Zurücksetzen des Passworts gesendet."
 
-#: app.py:10265
+#: app.py:10266
 msgid "Връзката за възстановяване е изтекла. Заявете нова."
 msgstr ""
 "Der Link zum Zurücksetzen ist abgelaufen. Bitte fordern Sie einen neuen "
 "an."
 
-#: app.py:10268 app.py:10275
+#: app.py:10269 app.py:10276
 msgid "Невалидна връзка за възстановяване."
 msgstr "Ungültiger Link zum Zurücksetzen des Passworts."
 
-#: app.py:10283 app.py:10323 app.py:10434
+#: app.py:10284 app.py:10324 app.py:10474
 msgid "Паролата трябва да бъде поне 8 символа."
 msgstr "Das Passwort muss mindestens 8 Zeichen lang sein."
 
-#: app.py:10286 app.py:10437 templates/reset_password.html:42
+#: app.py:10287 app.py:10477 templates/reset_password.html:42
 msgid "Паролите не съвпадат."
 msgstr "Die Passwörter stimmen nicht überein."
 
-#: app.py:10290
+#: app.py:10291
 msgid "Паролата е сменена успешно. Влезте с новата парола."
 msgstr ""
 "Passwort erfolgreich geändert. Bitte melden Sie sich mit dem neuen "
 "Passwort an."
 
-#: app.py:10303
+#: app.py:10304
 msgid ""
 "Сайтът е в момента на техническа поддръжка. Регистрацията на нови профили"
 " е временно спряна."
@@ -100,93 +100,101 @@ msgstr ""
 "Die Website befindet sich derzeit in Wartung. Die Registrierung neuer "
 "Konten ist vorübergehend deaktiviert."
 
-#: app.py:10316 app.py:10409
+#: app.py:10317 app.py:10449
 msgid "Имейл е задължителен."
 msgstr "E-Mail-Adresse ist erforderlich."
 
-#: app.py:10342
+#: app.py:10343
 msgid "Това потребителско име или имейл вече съществува."
 msgstr "Dieser Benutzername oder diese E-Mail-Adresse wird bereits verwendet."
 
-#: app.py:10346
+#: app.py:10347
 msgid "Регистрацията е успешна! Проверете имейла си, за да потвърдите адреса."
 msgstr ""
 "Registrierung erfolgreich. Bitte prüfen Sie Ihre E-Mails, um die Adresse "
 "zu bestätigen."
 
-#: app.py:10357
+#: app.py:10358
 msgid "Връзката за потвърждение е изтекла. Заявете нова от профила си."
 msgstr ""
 "Der Bestätigungslink ist abgelaufen. Fordern Sie einen neuen in Ihrem "
 "Konto an."
 
-#: app.py:10360 app.py:10366
+#: app.py:10361 app.py:10367
 msgid "Невалидна връзка за потвърждение."
 msgstr "Ungültiger Bestätigungslink."
 
-#: app.py:10371
+#: app.py:10372
 msgid "Имейлът е потвърден успешно."
 msgstr "E-Mail-Adresse erfolgreich bestätigt."
 
-#: app.py:10392
+#: app.py:10427
+msgid ""
+"Името може да съдържа само букви от една азбука (кирилица или латиница), "
+"интервал, тире и апостроф."
+msgstr ""
+"Ein Name darf nur Buchstaben eines Alphabets (Kyrillisch oder "
+"Lateinisch), Leerzeichen, Bindestriche und Apostrophe enthalten."
+
+#: app.py:10432
 msgid "Това име вече се използва от друг потребител."
 msgstr "Dieser Name wird bereits von einem anderen Benutzer verwendet."
 
-#: app.py:10396
+#: app.py:10436
 msgid "Името е обновено."
 msgstr "Ihr Name wurde aktualisiert."
 
-#: app.py:10405 app.py:10429 app.py:10497 app.py:10638
+#: app.py:10445 app.py:10469 app.py:10537 app.py:10678
 msgid "Грешна парола."
 msgstr "Falsches Passwort."
 
-#: app.py:10417
+#: app.py:10457
 msgid "Този имейл вече се използва от друг акаунт."
 msgstr "Diese E-Mail-Adresse wird bereits von einem anderen Konto verwendet."
 
-#: app.py:10420
+#: app.py:10460
 msgid "Имейлът е обновен. Изпратихме връзка за потвърждение на новия адрес."
 msgstr ""
 "E-Mail-Adresse aktualisiert. Wir haben einen Bestätigungslink an die neue"
 " Adresse gesendet."
 
-#: app.py:10442
+#: app.py:10482
 msgid "Паролата е сменена успешно."
 msgstr "Das Passwort wurde erfolgreich geändert."
 
-#: app.py:10451
+#: app.py:10491
 msgid "Имейлът вече е потвърден."
 msgstr "Die E-Mail-Adresse ist bereits bestätigt."
 
-#: app.py:10454
+#: app.py:10494
 msgid "Нямате зададен имейл."
 msgstr "Sie haben keine E-Mail-Adresse hinterlegt."
 
-#: app.py:10457
+#: app.py:10497
 msgid "Изпратихме нова връзка за потвърждение."
 msgstr "Wir haben einen neuen Bestätigungslink gesendet."
 
-#: app.py:10465
+#: app.py:10505
 msgid "Двуфакторното удостоверяване вече е активирано."
 msgstr "Die Zwei-Faktor-Authentifizierung ist bereits aktiviert."
 
-#: app.py:10474
+#: app.py:10514
 msgid "Невалиден код. Опитайте отново."
 msgstr "Ungültiger Code. Bitte versuchen Sie es erneut."
 
-#: app.py:10479
+#: app.py:10519
 msgid "Двуфакторното удостоверяване е активирано."
 msgstr "Die Zwei-Faktor-Authentifizierung wurde aktiviert."
 
-#: app.py:10502
+#: app.py:10542
 msgid "Двуфакторното удостоверяване е изключено."
 msgstr "Die Zwei-Faktor-Authentifizierung wurde deaktiviert."
 
-#: app.py:10641
+#: app.py:10681
 msgid "Не можете да изтриете единствения администратор."
 msgstr "Sie können den einzigen Administrator nicht löschen."
 
-#: app.py:10647
+#: app.py:10687
 #, python-format
 msgid ""
 "Профилът има свързани записи (%(what)s) и не може да бъде изтрит. "
@@ -195,58 +203,58 @@ msgstr ""
 "Das Konto hat verknüpfte Datensätze (%(what)s) und kann nicht gelöscht "
 "werden. Bitte wenden Sie sich an einen Administrator."
 
-#: app.py:10665
+#: app.py:10705
 msgid "Моля, изберете файл за качване."
 msgstr "Bitte wählen Sie eine Datei zum Hochladen aus."
 
-#: app.py:10669
+#: app.py:10709
 msgid "Невалиден формат! Системата приема само .dxf файлове."
 msgstr "Ungültiges Format. Das System akzeptiert nur .dxf-Dateien."
 
-#: app.py:10690
+#: app.py:10730
 #, python-format
 msgid "Файлът \"%(filename)s\" беше качен и обработен успешно!"
 msgstr "Die Datei \"%(filename)s\" wurde erfolgreich hochgeladen und verarbeitet."
 
-#: app.py:10695
+#: app.py:10735
 #, python-format
 msgid "Критична грешка при обработка/запис: %(error)s"
 msgstr "Kritischer Fehler bei Verarbeitung/Speicherung: %(error)s"
 
-#: app.py:13991
+#: app.py:14038
 msgid "Моля изберете файл."
 msgstr "Bitte wählen Sie eine Datei aus."
 
-#: app.py:14018
+#: app.py:14065
 msgid "Файлът беше качен успешно."
 msgstr "Die Datei wurde erfolgreich hochgeladen."
 
-#: app.py:14808
+#: app.py:14855
 msgid "Няма избран файл."
 msgstr "Keine Datei ausgewählt."
 
-#: app.py:14811
+#: app.py:14858
 msgid "Приемат се само PDF файлове."
 msgstr "Es werden nur PDF-Dateien akzeptiert."
 
-#: app.py:14904
+#: app.py:14951
 msgid "Моля въведете име на клиент."
 msgstr "Bitte geben Sie einen Kundennamen ein."
 
-#: app.py:14915 templates/order_create.html:827
+#: app.py:14962 templates/order_create.html:827
 msgid "Моля добавете поне един артикул към поръчката."
 msgstr "Bitte fügen Sie der Bestellung mindestens einen Artikel hinzu."
 
-#: app.py:14967
+#: app.py:15014
 msgid "Невалидни артикули в поръчката."
 msgstr "Ungültige Artikel in der Bestellung."
 
-#: app.py:14981
+#: app.py:15028
 #, python-format
 msgid "Поръчка %(order_number)s беше успешно изпратена!"
 msgstr "Bestellung %(order_number)s wurde erfolgreich übermittelt."
 
-#: app.py:14992
+#: app.py:15039
 #, python-format
 msgid ""
 "Внимание: поръчка %(order_number)s има недостатъчна наличност за: "
@@ -255,11 +263,11 @@ msgstr ""
 "Achtung: Bestellung %(order_number)s hat unzureichenden Bestand für: "
 "%(missing_desc)s. Siehe das Dashboard \"Fehlender Bestand\"."
 
-#: app.py:15130
+#: app.py:15177
 msgid "Нямате достъп до тази поръчка."
 msgstr "Sie haben keinen Zugriff auf diese Bestellung."
 
-#: app.py:15134
+#: app.py:15181
 msgid ""
 "Поръчката вече е в процес на изработка (или вече е приключена/отменена) и"
 " не може да бъде отменена."
@@ -267,58 +275,58 @@ msgstr ""
 "Die Bestellung befindet sich bereits in Bearbeitung (oder ist bereits "
 "abgeschlossen/storniert) und kann nicht storniert werden."
 
-#: app.py:15141
+#: app.py:15188
 #, python-format
 msgid "Поръчка %(order_number)s беше отменена."
 msgstr "Bestellung %(order_number)s wurde storniert."
 
-#: app.py:18396
+#: app.py:18443
 msgid "Моля въведете име на клиента."
 msgstr "Bitte geben Sie den Namen des Kunden ein."
 
-#: app.py:18434
+#: app.py:18481
 msgid "Моля въведете име на куриера."
 msgstr "Bitte geben Sie den Namen des Kurierdienstes ein."
 
-#: app.py:27253
+#: app.py:27300
 msgid "Страницата не е намерена"
 msgstr "Seite nicht gefunden"
 
-#: app.py:27254
+#: app.py:27301
 msgid "Проверете адреса или се върнете към началото."
 msgstr "Überprüfen Sie die Adresse oder kehren Sie zur Startseite zurück."
 
-#: app.py:27259
+#: app.py:27306
 msgid "Нямате достъп"
 msgstr "Zugriff verweigert"
 
-#: app.py:27260
+#: app.py:27307
 msgid "Нямате права за тази страница."
 msgstr "Sie haben keine Berechtigung für diese Seite."
 
-#: app.py:27265
+#: app.py:27312
 msgid "Твърде много опити"
 msgstr "Zu viele Versuche"
 
-#: app.py:27266
+#: app.py:27313
 msgid "Изчакайте малко и опитайте отново."
 msgstr "Bitte warten Sie einen Moment und versuchen Sie es erneut."
 
-#: app.py:27271
+#: app.py:27318
 msgid "Възникна грешка"
 msgstr "Ein Fehler ist aufgetreten"
 
-#: app.py:27272
+#: app.py:27319
 msgid "Нещо се обърка от наша страна. Опитайте отново по-късно."
 msgstr ""
 "Auf unserer Seite ist etwas schiefgelaufen. Bitte versuchen Sie es später"
 " erneut."
 
-#: app.py:27279
+#: app.py:27326
 msgid "Изтекла сесия на формата"
 msgstr "Formularsitzung abgelaufen"
 
-#: app.py:27280
+#: app.py:27327
 msgid "Презаредете страницата и опитайте отново."
 msgstr "Laden Sie die Seite neu und versuchen Sie es erneut."
 
