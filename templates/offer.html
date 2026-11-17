@@ -16,6 +16,9 @@
                 width: 100%; box-sizing: border-box; }
         table.doc-totals td.sub { padding-left: 10px; color: #6b6b6b; }
         table.doc-totals tr.rule td { border-top: .5px solid #c8c8c8; }
+        /* our cost breakdown (detail prices, cost, markup, client adjustment) is for us on screen, never on paper */
+        @media print { .internal { display: none !important; } }
+        @media print { table.doc-totals tr.rule td { border-top: none; } }
         .doc-gallery { break-inside: avoid; page-break-inside: avoid; margin-top: 4mm; }
         .doc-gallery-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4mm; }
         .doc-gallery-grid div { border: .5px solid #c8c8c8; height: 45mm; padding: 2mm; display: flex; align-items: center;
@@ -75,8 +78,8 @@
             <th>Детайл</th>
             <th>Материал</th>
             <th class="num">Кол.</th>
-            <th class="num price">Ед. цена, EUR</th>
-            <th class="num price">Стойност, EUR</th>
+            <th class="num price internal">Ед. цена, EUR</th>
+            <th class="num price internal">Стойност, EUR</th>
         </tr>
         </thead>
         <tbody>
@@ -86,40 +89,40 @@
             <td>{{ pd.detail.name }}</td>
             <td>{{ pd.detail.material.display_name }}</td>
             <td class="num">{{ pd.quantity }}</td>
-            <td class="num price" id="pd-unit-{{ loop.index0 }}">{{ pd.detail.total_price|money }}</td>
-            <td class="num price" id="pd-total-{{ loop.index0 }}">{{ (pd.detail.total_price * pd.quantity)|money }}</td>
+            <td class="num price internal" id="pd-unit-{{ loop.index0 }}">{{ pd.detail.total_price|money }}</td>
+            <td class="num price internal" id="pd-total-{{ loop.index0 }}">{{ (pd.detail.total_price * pd.quantity)|money }}</td>
         </tr>
         {% else %}
         <tr>
             <td colspan="4" class="muted">Няма добавени детайли.</td>
-            <td colspan="2" class="price"></td>
+            <td colspan="2" class="price internal"></td>
         </tr>
         {% endfor %}
         </tbody>
     </table>
 
     <table class="doc-totals price">
-        <tr>
+        <tr class="internal">
             <td>Сума от детайли</td>
             <td id="offerDetailsSubtotal">{{ pricing.details_subtotal|money }} €</td>
         </tr>
         {% for cost in product.extra_costs %}
-        <tr>
+        <tr class="internal">
             <td class="sub">+ {{ cost.label }} (допълнителен разход)</td>
             <td>{{ cost.amount|money }} €</td>
         </tr>
         {% endfor %}
-        <tr class="rule">
+        <tr class="rule internal">
             <td>Обща себестойност</td>
             <td id="offerTotalCost">{{ pricing.total_cost|money }} €</td>
         </tr>
         {% if product.markup_percent %}
-        <tr>
+        <tr class="internal">
             <td>Надценка ({{ product.markup_percent }}%)</td>
             <td id="offerMarkupAmount">+{{ pricing.markup_amount|money }} €</td>
         </tr>
         {% endif %}
-        <tr id="offerClientAdjRow" style="display: none;">
+        <tr id="offerClientAdjRow" class="internal" style="display: none;">
             <td id="offerClientAdjLabel"></td>
             <td id="offerClientAdjAmount"></td>
         </tr>

@@ -90,3 +90,20 @@ def test_offer_page_exposes_list_price_and_client_product_terms(admin_browser):
     assert '"product_percent": 15' in body or '"product_percent":15' in body
     for cell_id in ('offerClientAdjRow', 'offerClientAdjAmount', 'offerSellPrice'):
         assert f'id="{cell_id}"' in body
+
+
+def test_printed_offer_hides_our_cost_breakdown(admin_browser):
+    """Detail prices, cost, markup and the client adjustment are class "internal" (hidden in print); the customer
+    sees the price without VAT, the VAT and the total."""
+    import re
+    c, product_id, _ = admin_browser
+    body = c.get(f'/admin/products/{product_id}/offer').get_data(as_text=True)
+    assert '@media print { .internal { display: none !important; } }' in body
+    for marker in ('Сума от детайли', 'Обща себестойност', 'Надценка (', 'id="offerClientAdjRow"', 'id="pd-unit-0"',
+                   'id="pd-total-0"'):
+        tag = re.search(r'<t[rhd][^>]*>\s*(?:<td>)?\s*' + re.escape(marker) if not marker.startswith('id=')
+                        else r'<t[rd][^>]*' + re.escape(marker) + r'[^>]*>', body)
+        assert tag and 'internal' in tag.group(0), marker
+    for marker in ('id="offerSellPrice"', 'id="offerVatAmount"', 'id="offerGrossTotal"'):
+        cell = re.search(r'<tr[^>]*>\s*<td>[^<]*</td>\s*<td ' + re.escape(marker), body)
+        assert cell and 'internal' not in cell.group(0), marker
