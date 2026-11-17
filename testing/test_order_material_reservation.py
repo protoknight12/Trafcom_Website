@@ -296,3 +296,40 @@ def test_production_report_and_storage_show_the_reservation(c, ids):
     html = _as(c).get('/admin/production').get_data(as_text=True)
     assert html.count('Материал заделен') == 1 and html.count('Чака материал:') == 1
     assert 'Заделено: 1.4' in c.get('/storage/materials').get_data(as_text=True)
+
+
+def test_changing_the_detail_material_moves_open_reservations(c, ids):
+    """The client brings the material as its own lot and the detail is switched to it: an open order
+    that waited on the old default lot follows the detail (admin_update_detail_material())."""
+    with flask_app.app_context():
+        new_lot = MaterialPrice(key='steel_new', display_name='Стомана нова', cost_per_m2=0, type='sheets',
+                                sheet_width_mm=1000, sheet_length_mm=2000, stock_quantity=5)
+        db.session.add(new_lot)
+        db.session.commit()
+        new_id = new_lot.id
+    order_id, _ = _order(c, [{'type': 'detail', 'id': ids['detail'], 'qty': 20},          # 2 sheets, stock 1
+                             {'type': 'product', 'id': ids['product'], 'qty': 1}])        # + 0.2 sheet
+    assert _shortages(order_id) == [(ids['ours'], 1.2)]
+
+    res = _as(c).post(f"/details/{ids['detail']}/update-material",
+                      data={'material': 'steel_new', 'width': '500', 'height': '400'})
+    assert res.status_code == 302
+    assert _reserved(order_id) == {new_id: pytest.approx(2.2)}
+    assert _shortages(order_id) == []
+
+
+def test_saving_the_detail_material_again_repairs_a_stale_reservation(c, ids):
+    """An order whose reservation stayed on the old lot (the default was changed before the sync existed)
+    is repaired by saving the same material again."""
+    order_id, _ = _order(c, [{'type': 'detail', 'id': ids['detail'], 'qty': 20}])
+    with flask_app.app_context():
+        db.session.add(MaterialPrice(key='steel_new', display_name='Стомана нова', cost_per_m2=0, type='sheets',
+                                     sheet_width_mm=1000, sheet_length_mm=2000, stock_quantity=5))
+        Detail.query.get(ids['detail']).material_key = 'steel_new'   # old behaviour: reservation not moved
+        db.session.commit()
+        new_id = MaterialPrice.query.filter_by(key='steel_new').one().id
+    assert _reserved(order_id) == {ids['ours']: pytest.approx(2)}
+
+    _as(c).post(f"/details/{ids['detail']}/update-material", data={'material': 'steel_new', 'width': '500', 'height': '400'})
+    assert _reserved(order_id) == {new_id: pytest.approx(2)}
+    assert _shortages(order_id) == []

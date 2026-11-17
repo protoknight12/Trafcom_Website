@@ -13777,6 +13777,16 @@ def admin_update_detail_material(detail_id):
         flash('Размерите не могат да бъдат отрицателни.', 'danger')
         return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
+    # Open orders cutting this detail from its default: their reservation follows the new material/size.
+    # Diffed against the rows actually reserved, so saving again also repairs an order left on an old lot.
+    order_ids = {i for (i,) in db.session.query(OrderItem.order_id).filter(OrderItem.detail_id == detail.id)} | \
+                {i for (i,) in db.session.query(OrderItem.order_id).join(OrderItemComponent)
+                 .filter(OrderItemComponent.detail_id == detail.id)}
+    open_orders = live_orders().filter(Order.id.in_(order_ids), Order.status.notin_(('completed', 'cancelled'))).all() \
+        if order_ids else []
+    needs_before = {o.id: {r.material_id: r.quantity for r in OrderMaterialReservation.query.filter_by(order_id=o.id)}
+                    for o in open_orders}
+
     detail.material_key = material_key
     detail.width = width
     detail.height = height
@@ -13791,7 +13801,12 @@ def admin_update_detail_material(detail_id):
     }))
     # the default is never also an alternative (after describe_changes: this query flushes the history away)
     DetailMaterial.query.filter_by(detail_id=detail.id, material_key=material_key).delete()
+    db.session.flush()
+    db.session.expire(detail, ['material'])
+    warnings = [w for o in open_orders for w in _sync_order_reservation(o, needs_before[o.id])]
     db.session.commit()
+    for w in warnings:
+        flash(w, 'warning')
     flash('Материалът и размерите бяха обновени успешно.', 'success')
     return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
