@@ -1,0 +1,16 @@
+{# The company header of a printed document - goes in the <thead> of table.doc-frame, so the browser repeats it on
+   every page. Logo (uploaded on /admin/company, else the TRAFCOM wordmark) and the company data from company(). #}
+{% from 'partials/company.html' import legal_line %}
+{% set c = company() %}
+<div class="doc-header">
+    <div class="doc-logo">
+        {% if c.logo %}<img src="{{ url_for('static', filename='uploads/company/' ~ c.logo) }}" alt="{{ c.name }}">
+        {% else %}<span class="doc-logo-text">TRAFCOM</span>{% endif %}
+    </div>
+    <div class="doc-company">
+        <div class="doc-company-name">{{ c.name }}</div>
+        {% if c.address %}<div>{{ c.address }}</div>{% endif %}
+        <div>{{ [c.phone, c.email, c.website]|select|join(' · ') }}</div>
+        {% if legal_line()|trim %}<div>{{ legal_line() }}</div>{% endif %}
+    </div>
+</div>

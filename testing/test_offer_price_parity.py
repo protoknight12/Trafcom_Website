@@ -46,7 +46,7 @@ os.environ['DATABASE_URL'] = f'sqlite:///{_db_path}'
 import pytest
 from werkzeug.security import generate_password_hash
 
-from app import (app as flask_app, db, User, Client, ClientServicePrice, Service, MaterialPrice, Detail,
+from app import (app as flask_app, money, db, User, Client, ClientServicePrice, Service, MaterialPrice, Detail,
                   Operation, Product, ProductDetail, ProductExtraCost, Offer, OfferItem, Order, OrderItem,
                   calculate_product_pricing, detail_price_for, limiter)
 
@@ -315,7 +315,7 @@ console.log(JSON.stringify(CIDS.map(function (cid) {
 """.replace('CIDS', json.dumps(client_ids))
             product = db.session.get(Product, pid)
             for cid, shown in zip(client_ids, _node(js)):
-                server = '%.2f €' % calculate_product_pricing(product, clients[cid])['sell_price']
+                server = money(calculate_product_pricing(product, clients[cid])['sell_price']) + ' €'
                 if shown != server:
                     bad.append((pid, cid, shown, server))
     return bad

@@ -69,7 +69,7 @@ def test_defaults_without_rows(ids):
     info = company()
     assert info['name'] == 'ТРАФКОМ ООД' and info['eik'] == '110034354' and info['vat'] == 20 and info['accounts'] == []
     html = _login('qa_admin').get(f"/admin/delivery-notes/{ids['sup']}/print").get_data(as_text=True)
-    assert 'ТРАФКОМ ООД' in html and 'ДДС 20%: 20.00 EUR' in _text(html)
+    assert 'ТРАФКОМ ООД' in html and 'ДДС 20% 20.00 EUR' in _text(html)
 
 
 def test_admin_saves_and_documents_use_it(ids):
@@ -83,7 +83,7 @@ def test_admin_saves_and_documents_use_it(ids):
 
     issue = _text(c.get(f"/admin/client-delivery-notes/{ids['issue']}/print").get_data(as_text=True))
     assert 'ТЕСТ ФИРМА ЕООД' in issue and 'ЕИК: 123456789' in issue and 'МОЛ: Петър Петров' in issue
-    assert 'ДДС 9%: 9.00 EUR' in issue and 'ОБЩО С ДДС: 109.00 EUR' in issue and 'BG22STSA2' in issue
+    assert 'ДДС 9% 9.00 EUR' in issue and 'Общо с ДДС 109.00 EUR' in issue and 'BG22STSA2' in issue
     assert 'ТРАФКОМ' not in issue
     for url in (f"/admin/products/{ids['product']}/protocol", f"/admin/products/{ids['product']}/certificates",
                 f"/admin/print-label/material/{ids['mat']}"):
@@ -108,3 +108,26 @@ def test_only_admins(ids):
         c.post('/content-text/settings.company.name/update', data={'content': 'Хакер'})
     with flask_app.app_context():
         assert EditableText.query.filter(EditableText.key.startswith('settings.company.')).count() == 0
+
+
+def test_logo_upload_png_only(ids):
+    """A PNG logo is stored and shown in the document header; an SVG (script risk) is refused."""
+    import io
+    import os
+    from app import COMPANY_LOGO_DIR
+    c = _login('qa_admin')
+    png = b'\x89PNG\r\n\x1a\n' + b'\x00' * 32
+    c.post('/admin/company', data=dict(DATA, logo_file=(io.BytesIO(png), 'logo.png')), content_type='multipart/form-data')
+    with flask_app.app_context():
+        logo = EditableText.query.get('settings.company.logo').content
+    assert logo.endswith('.png') and os.path.exists(os.path.join(COMPANY_LOGO_DIR, logo))
+    html = c.get(f"/admin/delivery-notes/{ids['sup']}/print").get_data(as_text=True)
+    assert f'uploads/company/{logo}' in html
+    c.post('/admin/company', data=dict(DATA, logo_file=(io.BytesIO(b'<svg onload="x()"/>'), 'logo.svg')),
+           content_type='multipart/form-data')
+    with flask_app.app_context():
+        assert EditableText.query.get('settings.company.logo').content == logo
+    c.post('/admin/company', data=dict(DATA, logo_remove='1'))
+    with flask_app.app_context():
+        assert EditableText.query.get('settings.company.logo').content == ''
+    assert not os.path.exists(os.path.join(COMPANY_LOGO_DIR, logo))

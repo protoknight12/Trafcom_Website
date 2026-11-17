@@ -92,7 +92,7 @@ with app.app_context():
     resp = client.get(f'/admin/offers/{offer2.id}/print')
     assert resp.status_code == 200
     body = resp.data.decode('utf-8')
-    assert f'ОФЕРТА № {second}' in body
+    assert '<div class="doc-title">Оферта</div>' in body and f'<td>Номер</td><td>{second}</td>' in body
     assert f'uploads/offers/{staged_filename}' in body
     assert '<b>Забележка</b>' in body  # rendered unescaped, not &lt;b&gt;
 
@@ -133,7 +133,7 @@ with app.app_context():
     # --- valid_until: parses into a real date, and renders on the print page ---
     assert third_offer.valid_until == date(2026, 9, 30)
     print_resp = client.get(f'/admin/offers/{third_offer.id}/print')
-    assert 'Валидна до: 30.09.2026' in print_resp.data.decode('utf-8')
+    assert '<td>Валидна до</td><td>30.09.2026</td>' in print_resp.data.decode('utf-8')
 
     # A malformed date must be rejected, not silently dropped or crash.
     edit_resp = client.get(f'/admin/offers/{third_offer.id}/edit')
@@ -160,9 +160,9 @@ with app.app_context():
     assert third_offer.total == 45.0
 
     discounted_print = client.get(f'/admin/offers/{third_offer.id}/print').data.decode('utf-8')
-    assert 'Сума:' in discounted_print and '50.00 EUR' in discounted_print
-    assert 'Отстъпка (-10%):' in discounted_print and '-5.00 EUR' in discounted_print
-    assert '45.00 EUR' in discounted_print  # ОБЩО row
+    assert '<td>Сума</td><td>50.00 EUR</td>' in discounted_print
+    assert 'Отстъпка (-10%)' in discounted_print and '-5.00 EUR' in discounted_print
+    assert '<td>Сума без ДДС</td><td>45.00 EUR</td>' in discounted_print  # the total without VAT
 
     # An out-of-range discount must be rejected, not silently clamped.
     out_of_range_resp = client.post(f'/admin/offers/{third_offer.id}/edit', data={

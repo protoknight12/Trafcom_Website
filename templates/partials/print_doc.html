@@ -1,0 +1,6 @@
+{# Include in the <head> of every printed document: the document style, page geometry, repeated header, page numbers,
+   scaling. The page body then uses .doc-toolbar / .doc-sheet > table.doc-frame (see static/css/print_doc.css). #}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/print_doc.css') }}">
+<script src="{{ url_for('static', filename='js/print_doc.js') }}" defer></script>

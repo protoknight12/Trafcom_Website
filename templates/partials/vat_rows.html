@@ -1,16 +1,17 @@
 {#
-    The VAT lines under a priced document's total (offer, delivery-note prints): "ДДС <company().vat>%" and
-    "ОБЩО С ДДС", rounded to the cent like the total above them. `total` is the amount without VAT, `colspan` the
-    columns before the amount cell. Rows carry `price`, so the "Показвай цените" toggle hides them too.
+    totals(net, before=[]): the totals block of a priced document - optional `before` rows [(label, text)] (e.g. an
+    offer's sum and discount), then "Сума без ДДС", "ДДС <company().vat>%" and "Общо с ДДС", rounded to the cent.
+    `net` is the amount without VAT. The block carries `price`, so the "Показвай цените" toggle hides it too.
 #}
-{% macro vat_rows(total, colspan) %}
-{% set vat = ((total or 0) * company().vat / 100)|round(2) %}
-<tr class="offer-subtotal-row price">
-    <td colspan="{{ colspan }}" class="text-right">ДДС {{ '%g'|format(company().vat) }}%:</td>
-    <td class="text-right">{{ '%.2f'|format(vat) }} EUR</td>
-</tr>
-<tr class="offer-total-row price">
-    <td colspan="{{ colspan }}" class="text-right">ОБЩО С ДДС:</td>
-    <td class="text-right">{{ '%.2f'|format((total or 0)|round(2) + vat) }} EUR</td>
-</tr>
+{% macro totals(net, before=[]) %}
+{% set net = (net or 0)|round(2) %}
+{% set vat = (net * company().vat / 100)|round(2) %}
+<table class="doc-totals price">
+    {% for label, text in before %}
+    <tr><td>{{ label }}</td><td>{{ text }}</td></tr>
+    {% endfor %}
+    <tr><td>Сума без ДДС</td><td>{{ net|money }} EUR</td></tr>
+    <tr><td>ДДС {{ '%g'|format(company().vat) }}%</td><td>{{ vat|money }} EUR</td></tr>
+    <tr class="doc-grand"><td>Общо с ДДС</td><td>{{ (net + vat)|money }} EUR</td></tr>
+</table>
 {% endmacro %}

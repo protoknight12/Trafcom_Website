@@ -1,0 +1,100 @@
+/* Printed documents (offers, delivery notes, protocols, certificates, quality reports) - partials/print_doc.html.
+   One sober business-document style for all of them: PT Sans, black on white, thin rules, no colour or rounded
+   boxes. Layout: .doc-sheet > table.doc-frame: <thead> = the company header (partials/doc_header.html), repeated
+   by the browser on every printed page; <tbody> td.doc-body = the document; .doc-signatures = the sign-off,
+   never split. Page numbers and "keep the signatures with the content" scaling: static/js/print_doc.js. */
+@page { size: A4; margin: 12mm 13mm 14mm 13mm; }
+
+/* ---- the sheet (on screen: a sheet of paper) ---- */
+.doc-toolbar { max-width: 210mm; margin: 20px auto 0; display: flex; justify-content: flex-end; align-items: center;
+               gap: 12px; flex-wrap: wrap; }
+.doc-sheet { width: 210mm; max-width: 100%; margin: 16px auto 48px; padding: 14mm 13mm; box-sizing: border-box;
+             background: #fff; color: #1a1a1a; box-shadow: 0 2px 12px rgba(0, 0, 0, .45);
+             font-family: 'PT Sans', 'Segoe UI', Arial, sans-serif; font-size: 9.5pt; line-height: 1.4; }
+.doc-sheet * { box-sizing: border-box; }
+.doc-sheet p { margin: 0; }
+.doc-frame { width: 100%; border-collapse: collapse; border: none; margin: 0; }
+.doc-frame > thead > tr > td, .doc-frame > tbody > tr > td { padding: 0; border: none; vertical-align: top;
+                                                             background: none; }
+
+/* ---- company header (every page) ---- */
+.doc-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px;
+              padding-bottom: 7px; margin-bottom: 9mm; border-bottom: 1.5px solid #1a1a1a; }
+.doc-logo img { max-height: 15mm; max-width: 60mm; display: block; }
+.doc-logo-text { font-family: 'PT Sans', Arial, sans-serif; font-weight: 700; font-size: 20pt; letter-spacing: 3px;
+                 line-height: 1; }
+.doc-company { text-align: right; font-size: 8pt; line-height: 1.45; color: #4a4a4a; }
+.doc-company-name { font-size: 9.5pt; font-weight: 700; color: #1a1a1a; letter-spacing: .3px; }
+
+/* ---- title + number/date ---- */
+.doc-titlebar { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 7mm; }
+.doc-title { font-size: 15pt; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; line-height: 1.2; }
+.doc-subtitle { margin-top: 2px; font-size: 9pt; color: #4a4a4a; }
+.doc-meta { border-collapse: collapse; font-size: 9pt; flex: 0 0 auto; }
+.doc-meta td { padding: 1px 0 1px 14px; border: none; white-space: nowrap; }
+.doc-meta td:first-child { color: #6b6b6b; padding-left: 0; }
+.doc-meta td:last-child { font-weight: 700; text-align: right; }
+
+/* ---- parties ---- */
+.doc-parties { display: grid; grid-template-columns: 1fr 1fr; gap: 10mm; margin-bottom: 7mm; }
+.doc-party { border-top: 1px solid #1a1a1a; padding-top: 5px; font-size: 9pt; color: #333; }
+.doc-label { display: block; margin-bottom: 3px; font-size: 7.5pt; font-weight: 700; letter-spacing: .8px;
+             text-transform: uppercase; color: #6b6b6b; }
+.doc-party-name { font-size: 10pt; font-weight: 700; color: #1a1a1a; }
+.doc-party p { margin: 1px 0; }
+.doc-refs { margin: -3mm 0 6mm; font-size: 9pt; color: #333; }
+
+/* ---- items table ---- */
+table.doc-table { width: 100%; border-collapse: collapse; font-size: 9pt; margin: 0 0 5mm; }
+table.doc-table th { padding: 5px 6px; text-align: left; font-size: 7.5pt; font-weight: 700; letter-spacing: .6px;
+                     text-transform: uppercase; color: #4a4a4a; background: none;
+                     border-top: 1.5px solid #1a1a1a; border-bottom: 1px solid #1a1a1a; }
+table.doc-table td { padding: 5px 6px; border: none; border-bottom: .5px solid #c8c8c8; vertical-align: top; }
+table.doc-table tbody tr:last-child td { border-bottom: 1px solid #1a1a1a; }
+.doc-sheet .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.doc-sheet .ctr { text-align: center; }
+.doc-sheet .idx { width: 7mm; color: #6b6b6b; }
+.doc-sheet .muted { color: #6b6b6b; }
+
+/* ---- totals ---- */
+table.doc-totals { margin: 0 0 6mm auto; border-collapse: collapse; font-size: 9.5pt; min-width: 72mm; }
+table.doc-totals td { padding: 3px 0 3px 18px; border: none; }
+table.doc-totals td:first-child { padding-left: 0; color: #4a4a4a; }
+table.doc-totals td:last-child { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+table.doc-totals tr.doc-grand td { padding-top: 6px; border-top: 1.5px solid #1a1a1a; font-size: 11pt;
+                                   font-weight: 700; color: #1a1a1a; }
+
+/* ---- notes, bank accounts ---- */
+.doc-notes { margin: 0 0 5mm; font-size: 8.5pt; color: #333; }
+.doc-notes p { margin: 1px 0; }
+
+/* ---- sign-off ---- */
+.doc-signatures { break-inside: avoid; page-break-inside: avoid; margin-top: 10mm; }
+.doc-issued { display: flex; gap: 14mm; margin-bottom: 9mm; font-size: 9pt; color: #333; }
+.doc-sign-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14mm; }
+.doc-sign { font-size: 9pt; }
+.doc-sign-line { margin-top: 13mm; border-top: .75px solid #1a1a1a; padding-top: 3px; font-size: 7.5pt;
+                 color: #6b6b6b; letter-spacing: .4px; }
+.doc-sign-name { font-size: 9.5pt; font-weight: 700; color: #1a1a1a; }
+.doc-sheet input.doc-sign-input { font: inherit; font-size: 9.5pt; font-weight: 700; color: #1a1a1a !important;
+                  background: transparent !important; width: 100%; margin: 0; border: none !important;
+                  border-bottom: 1px dashed #b0b0b0 !important; border-radius: 0 !important; padding: 1px 0 !important;
+                  box-shadow: none !important; }
+
+
+/* .doc-measure: print geometry on screen for one moment, while print_doc.js measures the pages */
+html.doc-measure .navbar, html.doc-measure .subnav, html.doc-measure .no-print, html.doc-measure .doc-toolbar,
+html.doc-measure .site-footer, html.doc-measure #chatbot-widget { display: none !important; }
+html.doc-measure .doc-sheet { width: 184mm !important; max-width: none !important; margin: 0 !important;
+                              padding: 0 !important; box-shadow: none !important; }
+
+@media print {
+    body, body.doc-page { background: #fff !important; }
+    .doc-toolbar { display: none !important; }
+    .doc-sheet { width: auto !important; max-width: none !important; margin: 0 !important; padding: 0 !important;
+                 box-shadow: none !important; }
+    .doc-frame > thead { display: table-header-group; }
+    table.doc-table thead { display: table-header-group; }
+    table.doc-table tr, table.doc-totals { break-inside: avoid; }
+    .doc-sheet input.doc-sign-input { border-bottom-color: transparent !important; }
+}

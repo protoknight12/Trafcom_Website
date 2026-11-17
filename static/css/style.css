@@ -1661,3 +1661,8 @@ html.embedded .navbar, html.embedded .subnav, html.embedded .site-footer, html.e
 /* Names of details/products/materials/orders/offers link to their page (partials/entity_link.html) */
 a.entity-link { color: inherit; text-decoration: underline dotted; text-underline-offset: 3px; }
 a.entity-link:hover { color: var(--primary, #2563eb); text-decoration: underline; }
+
+/* Printing any page: the site chrome never goes on paper (documents: static/css/print_doc.css) */
+@media print {
+    .navbar, .subnav, .site-footer, #chatbot-widget, .flash-messages, .no-print { display: none !important; }
+}

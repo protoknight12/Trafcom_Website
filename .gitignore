@@ -4,6 +4,7 @@ __pycache__/
 .env
 uploads/
 static/uploads/products/*
+static/uploads/company/
 detail_dxf_files/
 order_item_files/
 controlled_documents/

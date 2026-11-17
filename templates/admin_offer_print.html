@@ -6,121 +6,102 @@
     {% include 'partials/favicon.html' %}
     <title>Оферта № {{ offer.number }}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@700&display=swap" rel="stylesheet">
-    {% from 'partials/legal_fields.html' import legal_lines %}
-    {% from 'partials/company.html' import contact_line, legal_line, party, bank_accounts %}
-    {% from 'partials/vat_rows.html' import vat_rows %}
+    {% include 'partials/print_doc.html' %}
+    {% from 'partials/company.html' import party, client_party, bank_accounts %}
+    {% from 'partials/vat_rows.html' import totals %}
     <style>
-        .offer-toolbar {
-            max-width: 900px; margin: 24px auto 0; padding: 0 24px;
-            display: flex; justify-content: flex-end;
-        }
-        .offer-sheet {
-            max-width: 900px; margin: 24px auto 60px; background-color: #ffffff; color: #111111;
-            border-radius: var(--border-radius-md); padding: 48px; box-sizing: border-box;
-        }
-        .offer-sheet h1 {
-            font-family: 'Oswald', sans-serif; font-weight: 700; font-size: 2.2rem;
-            text-align: center; margin: 0 0 6px;
-        }
-        .offer-sheet .offer-address, .offer-sheet .offer-object, .offer-sheet .offer-client { text-align: center; color: #333; margin: 4px 0; }
-        .offer-sheet .offer-number { text-align: center; font-weight: 700; font-size: 1.15rem; margin: 14px 0 20px; }
-        .offer-sheet table { width: 100%; border-collapse: collapse; font-size: 0.88rem; margin-top: 20px; }
-        .offer-sheet th { text-align: center; padding: 8px 6px; border: 1px solid #ccc; background: #f4f4f4; font-weight: 700; }
-        .offer-sheet td { padding: 8px 6px; border: 1px solid #ddd; vertical-align: top; }
-        .offer-sheet .text-center { text-align: center; }
-        .offer-sheet .text-right { text-align: right; }
-        .offer-sheet img.item-photo { max-width: 90px; max-height: 90px; display: block; margin: 0 auto; }
-        .offer-sheet .offer-subtotal-row td { border: none; padding: 4px 6px; color: #333; }
-        .offer-sheet .offer-total-row td { border-top: 2px solid #111; font-weight: 700; font-size: 1.05rem; }
-        .offer-sheet .offer-terms { margin-top: 24px; }
-        .offer-sheet .offer-terms p { font-weight: 700; margin: 4px 0; }
-        .offer-sheet .offer-signoff { margin-top: 40px; display: flex; justify-content: space-between; }
-
         body.no-prices .price { display: none !important; }
-
-        @media print {
-            .navbar, .offer-toolbar, .no-print { display: none !important; }
-            body { background: #fff; }
-            .offer-sheet { margin: 0; box-shadow: none; padding: 0; }
-        }
+        .doc-sheet img.item-photo { max-width: 22mm; max-height: 22mm; display: block; }
+        .doc-sheet .item-desc p { margin: 0 0 2px; }
+        .doc-sheet .item-desc ul, .doc-sheet .item-desc ol { margin: 0; padding-left: 14px; }
+        .doc-terms p { font-weight: 700; color: #1a1a1a; }
     </style>
 </head>
-<body>
+<body class="doc-page">
 {% include 'partials/navbar.html' %}
 
-<div class="offer-toolbar no-print">
-    <a href="{{ url_for('admin_offers') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem; margin-right: 12px;">← Обратно</a>
-<label class="no-print" style="display: inline-flex; align-items: center; gap: 8px; margin-right: 16px; color: var(--text-main); white-space: nowrap; cursor: pointer;"><input type="checkbox" data-print-prices="admin-offer" checked> Показвай цените</label>
+<div class="doc-toolbar no-print">
+    <a href="{{ url_for('admin_offers') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">← Обратно</a>
+    <label style="display: inline-flex; align-items: center; gap: 8px; color: var(--text-main); white-space: nowrap; cursor: pointer;"><input type="checkbox" data-print-prices="admin-offer" checked> Показвай цените</label>
     <button class="btn-submit" style="padding: 12px 24px;" onclick="window.print()">Печат / PDF</button>
 </div>
 
-<div class="offer-sheet">
-    <h1>{{ company().name }}</h1>
-    <p class="offer-address">{{ contact_line() }}</p>
-    {% if legal_line()|trim %}<p class="offer-address">{{ legal_line() }}</p>{% endif %}
-    <p class="offer-number">ОФЕРТА № {{ offer.number }}</p>
-    {% if offer.object_title %}<p class="offer-object">ОБЕКТ: {{ offer.object_title }}</p>{% endif %}
-    {% if offer.client %}<p class="offer-client">Клиент: {{ offer.client.name }}</p>{{ legal_lines(offer.client) }}{% endif %}
-    {% if offer.valid_until %}<p class="offer-client">Валидна до: {{ offer.valid_until.strftime('%d.%m.%Y') }}</p>{% endif %}
+{% set doc_date = (offer.created_at|local) if offer.created_at else none %}
+{% set has_photos = offer.items|selectattr('image_filename')|list %}
+<div class="doc-sheet">
+<table class="doc-frame">
+    <thead><tr><td>{% include 'partials/doc_header.html' %}</td></tr></thead>
+    <tbody><tr><td class="doc-body">
 
-    <table>
+    <div class="doc-titlebar">
+        <div>
+            <div class="doc-title">Оферта</div>
+            {% if offer.object_title %}<div class="doc-subtitle">Обект: {{ offer.object_title }}</div>{% endif %}
+        </div>
+        <table class="doc-meta">
+            <tr><td>Номер</td><td>{{ offer.number }}</td></tr>
+            {% if doc_date %}<tr><td>Дата</td><td>{{ doc_date.strftime('%d.%m.%Y') }}</td></tr>{% endif %}
+            {% if offer.valid_until %}<tr><td>Валидна до</td><td>{{ offer.valid_until.strftime('%d.%m.%Y') }}</td></tr>{% endif %}
+        </table>
+    </div>
+
+    <div class="doc-parties">
+        {{ party('Оферент') }}
+        {{ client_party('Получател', offer.client) }}
+    </div>
+
+    <table class="doc-table">
         <thead>
         <tr>
-            <th>ID</th>
-            <th>Снимка</th>
+            <th>Код</th>
+            {% if has_photos %}<th>Снимка</th>{% endif %}
             <th>Наименование</th>
             <th>Описание</th>
             <th>Размери</th>
-            <th>Кол-во</th>
+            <th class="num">Кол.</th>
             <th>Мярка</th>
-            <th class="price">Ед. цена<br>(EUR без ДДС)</th>
-            <th class="price">Обща цена<br>(EUR без ДДС)</th>
+            <th class="num price">Ед. цена, EUR</th>
+            <th class="num price">Стойност, EUR</th>
         </tr>
         </thead>
         <tbody>
         {% for item in offer.items %}
         <tr>
-            <td class="text-center">{{ item.code or '' }}</td>
+            <td class="muted">{{ item.code or '' }}</td>
+            {% if has_photos %}
             <td>
                 {% if item.image_filename %}
                 <img class="item-photo" src="{{ url_for('static', filename='uploads/offers/' ~ item.image_filename) }}" alt="">
                 {% endif %}
             </td>
+            {% endif %}
             <td>{{ item.name or '' }}</td>
-            <td>{{ item.description_html | safe if item.description_html else '' }}</td>
-            <td class="text-center">{{ item.dimensions or '' }}</td>
-            <td class="text-center">{{ '%g'|format(item.quantity) if item.quantity is not none else '' }}</td>
-            <td class="text-center">{{ item.unit or '' }}</td>
-            <td class="text-right price">{{ '%.2f'|format(item.unit_price) if item.unit_price is not none else '' }}</td>
-            <td class="text-right price">{{ '%.2f'|format(item.line_total) if item.quantity is not none and item.unit_price is not none else '' }}</td>
+            <td class="item-desc">{{ item.description_html | safe if item.description_html else '' }}</td>
+            <td>{{ item.dimensions or '' }}</td>
+            <td class="num">{{ '%g'|format(item.quantity) if item.quantity is not none else '' }}</td>
+            <td>{{ item.unit or '' }}</td>
+            <td class="num price">{{ item.unit_price|money if item.unit_price is not none else '' }}</td>
+            <td class="num price">{{ item.line_total|money if item.quantity is not none and item.unit_price is not none else '' }}</td>
         </tr>
         {% endfor %}
-        {% if offer.discount_percent %}
-        <tr class="offer-subtotal-row price">
-            <td colspan="8" class="text-right">Сума:</td>
-            <td class="text-right">{{ '%.2f'|format(offer.subtotal) }} EUR</td>
-        </tr>
-        <tr class="offer-subtotal-row price">
-            <td colspan="8" class="text-right">Отстъпка (-{{ '%g'|format(offer.discount_percent) }}%):</td>
-            <td class="text-right">-{{ '%.2f'|format(offer.discount_amount) }} EUR</td>
-        </tr>
-        {% endif %}
-        <tr class="offer-total-row price">
-            <td colspan="8" class="text-right">ОБЩО (без ДДС):</td>
-            <td class="text-right">{{ '%.2f'|format(offer.total) }} EUR</td>
-        </tr>
-        {{ vat_rows(offer.total, 8) }}
         </tbody>
     </table>
 
+    {% set before = [] %}
+    {% if offer.discount_percent %}
+    {% set before = [('Сума', (offer.subtotal|money) ~ ' EUR'),
+                     ('Отстъпка (-' ~ ('%g'|format(offer.discount_percent)) ~ '%)', '-' ~ (offer.discount_amount|money) ~ ' EUR')] %}
+    {% endif %}
+    {{ totals(offer.total, before) }}
+    <div class="doc-notes price"><p>Единичните цени и стойностите са в EUR без ДДС.</p></div>
+
     {% if offer.footer_notes or offer.valid_until %}
-    <div class="offer-terms">
+    <div class="doc-notes doc-terms">
+        <span class="doc-label">Условия</span>
         {% for line in (offer.footer_notes or '').splitlines() %}
         {% if line.strip() %}<p>{{ line.strip() }}</p>{% endif %}
         {% endfor %}
-        {% if offer.valid_until %}
+        {% if offer.valid_until and offer.created_at %}
         <p>Валидност на офертата {{ (offer.valid_until - (offer.created_at|local).date()).days }} дни</p>
         {% endif %}
     </div>
@@ -128,10 +109,22 @@
 
     <div class="price">{{ bank_accounts() }}</div>
 
-    <div class="offer-signoff">
-        <span>Дата: {{ (offer.created_at|local).strftime('%d.%m.%Y') if offer.created_at else '' }}</span>
-        {% if offer.signed_by %}<span>С уважение: {{ offer.signed_by }}</span>{% endif %}
+    <div class="doc-signatures">
+        <div class="doc-sign-row">
+            <div class="doc-sign">
+                <span class="doc-label">Дата</span>
+                <div class="doc-sign-name">{{ doc_date.strftime('%d.%m.%Y') if doc_date else '' }}</div>
+            </div>
+            <div class="doc-sign">
+                <span class="doc-label">С уважение</span>
+                <div class="doc-sign-name">{{ offer.signed_by or '' }}</div>
+                <div class="doc-sign-line">подпис</div>
+            </div>
+        </div>
     </div>
+
+    </td></tr></tbody>
+</table>
 </div>
 <script src="{{ url_for('static', filename='js/print_prices.js') }}"></script>
 </body>

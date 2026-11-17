@@ -6,6 +6,8 @@ to the author and the client's МОЛ (_note_signatures()), an admin changes and
 Run with:
     pytest testing/test_document_names.py -v
 """
+import re
+
 import pytest
 from werkzeug.security import generate_password_hash
 
@@ -58,7 +60,8 @@ def test_prints_show_names_not_usernames(ids):
     c = _login('qa_admin')
     for url in (f"/admin/client-delivery-notes/{ids['issue']}/print", f"/admin/delivery-notes/{ids['receipt']}/print"):
         html = c.get(url).get_data(as_text=True)
-        assert 'Съставил: Иван Петров' in html and 'value="Мария Георгиева"' in html and 'value="Иван Петров"' in html
+        text = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', html))
+        assert 'Съставил: Иван Петров' in text and 'value="Мария Георгиева"' in html and 'value="Иван Петров"' in html
         assert 'Запази имената' in html
 
 

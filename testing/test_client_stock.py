@@ -173,7 +173,7 @@ def test_client_receipt_print(admin_client):
     _receipt(admin_client, c.id, [_line(3)])
     note = DeliveryNote.query.one()
     html = admin_client.get(f'/admin/delivery-notes/{note.id}/print').get_data(as_text=True)
-    assert 'ПРИЕМО-ПРЕДАВАТЕЛЕН ПРОТОКОЛ' in html and 'Клиент А' in html and 'Ед. цена' not in html
+    assert 'Приемо-предавателен протокол' in html and 'Клиент А' in html and 'Ед. цена' not in html
     # the list page renders the party label
     assert 'Клиент А (съхранение)' in admin_client.get('/admin/delivery-notes').get_data(as_text=True)
 
@@ -348,9 +348,9 @@ def test_client_note_print_titles(admin_client):
     _out(admin_client, a, 'return', [_mline(la, 1)])
     consume, ret = ClientDeliveryNote.query.order_by(ClientDeliveryNote.id).all()
     html = admin_client.get(f'/admin/client-delivery-notes/{consume.id}/print').get_data(as_text=True)
-    assert 'ПРОТОКОЛ ЗА ИЗПИСВАНЕ' in html and '600' in html and 'Ед. цена' not in html
+    assert 'Протокол за изписване' in html and '600' in html and 'Ед. цена' not in html
     html = admin_client.get(f'/admin/client-delivery-notes/{ret.id}/print').get_data(as_text=True)
-    assert 'ПРИЕМО-ПРЕДАВАТЕЛЕН ПРОТОКОЛ' in html and 'връщане' in html and 'Клиент А' in html
+    assert 'Приемо-предавателен протокол' in html and 'връщане' in html and 'Клиент А' in html
     page = admin_client.get('/admin/client-delivery-notes')
     assert page.status_code == 200 and 'Изписване за производство' in page.get_data(as_text=True)
 

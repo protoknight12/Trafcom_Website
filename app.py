@@ -6211,6 +6211,7 @@ def company():
     if has_app_context() and 'company_info' in g:
         return g.company_info
     info = {key: default for key, _, default in COMPANY_FIELDS}
+    info['logo'] = ''   # file name in static/uploads/company/ (admin_company() upload), '' = the TRAFCOM wordmark
     try:
         for row in EditableText.query.filter(EditableText.key.startswith(COMPANY_KEY_PREFIX)):
             key = row.key[len(COMPANY_KEY_PREFIX):]
@@ -6229,6 +6230,53 @@ def company():
 
 
 app.jinja_env.globals['company'] = company
+
+
+def money(value):
+    """An amount on a printed document: two decimals, thousands grouped by a no-break space - 17 413.50."""
+    return f'{float(value or 0):,.2f}'.replace(',', ' ')
+
+
+app.jinja_env.filters['money'] = money
+
+
+COMPANY_LOGO_DIR = os.path.join(app.root_path, 'static', 'uploads', 'company')
+# PNG / JPEG / WebP by their first bytes - no SVG (it could carry script and is served from our own origin)
+_LOGO_SIGNATURES = {b'\x89PNG\r\n\x1a\n': '.png', b'\xff\xd8\xff': '.jpg'}
+
+
+def _save_company_logo(upload, remove):
+    """Stores an uploaded logo (PNG/JPEG/WebP, at most 2 MB) as settings.company.logo, or removes it. Returns an
+    error message or None. The previous file is deleted after the commit."""
+    row = db.session.get(EditableText, COMPANY_KEY_PREFIX + 'logo')
+    old = row.content if row else ''
+    new = old
+    if upload and upload.filename:
+        data = upload.read(2 * 1024 * 1024 + 1)
+        if len(data) > 2 * 1024 * 1024:
+            return 'Логото трябва да е до 2 MB.'
+        ext = next((e for sig, e in _LOGO_SIGNATURES.items() if data.startswith(sig)), None)
+        if ext is None and data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+            ext = '.webp'
+        if ext is None:
+            return 'Логото трябва да е PNG, JPEG или WebP.'
+        os.makedirs(COMPANY_LOGO_DIR, exist_ok=True)
+        new = f'logo_{uuid.uuid4().hex[:12]}{ext}'
+        with open(os.path.join(COMPANY_LOGO_DIR, new), 'wb') as f:
+            f.write(data)
+    elif remove:
+        new = ''
+    if new == old:
+        return None
+    if row is None:
+        db.session.add(EditableText(key=COMPANY_KEY_PREFIX + 'logo', content=new))
+    else:
+        row.content = new
+    db.session.commit()
+    log_action('Лого на фирмата: ' + ('качено' if new else 'премахнато'))
+    if old:
+        _remove_files([os.path.join(COMPANY_LOGO_DIR, os.path.basename(old))])
+    return None
 
 
 @app.route('/admin/company', methods=['GET', 'POST'])
@@ -6257,6 +6305,9 @@ def admin_company():
                 changed.append(f'{label}: {old or "-"} → {value or "-"}')
             row.content = value
         db.session.commit()
+        logo_error = _save_company_logo(request.files.get('logo_file'), request.form.get('logo_remove') == '1')
+        if logo_error:
+            flash(logo_error, 'danger')
         g.pop('company_info', None)
         log_action('Данни на фирмата' + (': ' + '; '.join(changed) if changed else ' (без промяна)'))
         flash('Данните на фирмата са запазени.', 'success')

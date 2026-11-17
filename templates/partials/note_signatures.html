@@ -1,32 +1,32 @@
 {#
-    Предал / Приел names under a delivery-note print (admin_delivery_note_print.html for a receipt from a client,
-    admin_client_delivery_note_print.html). Defaults from note_signatures() (_note_signatures() in app.py); an admin
-    can change them here and save them on the note (`save_url`). Printed as plain text above the signature line.
+    The sign-off of a delivery-note print (admin_delivery_note_print.html for a receipt from a client,
+    admin_client_delivery_note_print.html): date + Съставил, then Предал / Приел with their signature lines.
+    The names default to note_signatures() (_note_signatures() in app.py); an admin can change them here and save
+    them on the note (`save_url`). Printed as plain text above the signature line. Never split across pages.
 #}
 {% set handed, received = note_signatures(note) %}
-<style>
-    .sig-form { margin-top: 48px; }
-    .sig-row { display: flex; justify-content: space-between; gap: 32px; }
-    .sig-row > div { flex: 1; }
-    .sig-input { font: inherit; color: inherit; background: transparent; border: none; border-bottom: 1px dashed #999;
-                 padding: 2px 0; width: 100%; max-width: 280px; }
-    .sig-line { margin-top: 28px; }
-    @media print { .sig-input { border: none; } }
-</style>
-<form method="POST" action="{{ save_url }}" class="sig-form">
+<form method="POST" action="{{ save_url }}" class="doc-signatures">
     {% include 'partials/csrf_field.html' %}
-    <div class="sig-row">
-        <div>
-            <label>Предал: <input type="text" name="handed_by" value="{{ handed }}" maxlength="150" class="sig-input" {% if not current_user.is_admin %}readonly{% endif %}></label>
-            <div class="sig-line">Подпис: ……………………………</div>
+    <div class="doc-issued">
+        <span><span class="muted">Дата на съставяне:</span> {{ (note.created_at|local).strftime('%d.%m.%Y') if note.created_at else '' }}</span>
+        <span><span class="muted">Съставил:</span> {{ note.created_by.full_name if note.created_by else '' }}</span>
+    </div>
+    <div class="doc-sign-row">
+        <div class="doc-sign">
+            <span class="doc-label">Предал</span>
+            <input type="text" name="handed_by" value="{{ handed }}" maxlength="150" class="doc-sign-input"
+                   aria-label="Предал" {% if not current_user.is_admin %}readonly{% endif %}>
+            <div class="doc-sign-line">подпис</div>
         </div>
-        <div>
-            <label>Приел: <input type="text" name="received_by" value="{{ received }}" maxlength="150" class="sig-input" {% if not current_user.is_admin %}readonly{% endif %}></label>
-            <div class="sig-line">Подпис: ……………………………</div>
+        <div class="doc-sign">
+            <span class="doc-label">Приел</span>
+            <input type="text" name="received_by" value="{{ received }}" maxlength="150" class="doc-sign-input"
+                   aria-label="Приел" {% if not current_user.is_admin %}readonly{% endif %}>
+            <div class="doc-sign-line">подпис</div>
         </div>
     </div>
     {% if current_user.is_admin %}
-    <div class="no-print" style="margin-top: 12px; text-align: right;">
+    <div class="no-print" style="margin-top: 10px; text-align: right;">
         <button type="submit" class="btn-secondary" style="padding: 6px 14px;">Запази имената</button>
     </div>
     {% endif %}

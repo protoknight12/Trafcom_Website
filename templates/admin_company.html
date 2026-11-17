@@ -28,8 +28,18 @@
         <h3>Данни на фирмата</h3>
         <p class="section-subtitle">Изписват се в документите: стокови разписки, приемо-предавателни протоколи, оферти,
             протоколи за качество, декларации и етикети.</p>
-        <form action="{{ url_for('admin_company') }}" method="POST" class="admin-form">
+        <form action="{{ url_for('admin_company') }}" method="POST" class="admin-form" enctype="multipart/form-data">
             {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="company_logo_file">Лого (PNG, JPEG или WebP, до 2 MB)</label>
+                {% if info.logo %}
+                <img src="{{ url_for('static', filename='uploads/company/' ~ info.logo) }}" alt="Лого"
+                     style="display: block; max-height: 64px; max-width: 240px; background: #fff; padding: 6px; margin-bottom: 8px;">
+                <label style="display: inline-flex; gap: 6px; align-items: center; font-weight: 400;">
+                    <input type="checkbox" name="logo_remove" value="1"> Премахни логото</label>
+                {% endif %}
+                <input type="file" id="company_logo_file" name="logo_file" accept="image/png,image/jpeg,image/webp">
+            </div>
             {% for key, label, default in fields %}
             <div class="form-group">
                 <label for="company_{{ key }}">{{ label }}</label>

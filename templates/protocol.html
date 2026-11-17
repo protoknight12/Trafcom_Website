@@ -4,152 +4,34 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     {% include 'partials/favicon.html' %}
-    <title>Приемо-Предавателен Протокол - {{ product.name }}</title>
+    <title>Приемо-предавателен протокол - {{ product.name }}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    {% include 'partials/print_doc.html' %}
+    {% from 'partials/company.html' import party %}
     <style>
-        .proto-toolbar {
-            max-width: 1000px;
-            margin: 24px auto 0;
-            padding: 24px;
-            background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: var(--border-radius-md);
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 16px;
-        }
-        .proto-toolbar .form-group {
-            margin-bottom: 0;
-        }
-        .proto-toolbar label {
-            font-size: 0.8rem;
-            color: var(--text-muted);
-            margin-bottom: 6px;
-            display: block;
-            font-weight: 600;
-        }
-        .proto-toolbar input, .proto-toolbar textarea, .proto-toolbar select {
-            background-color: var(--bg-input);
-            border: 1px solid var(--border-color);
-            color: var(--text-main);
-            padding: 10px 14px;
-            border-radius: var(--border-radius-sm);
-            font-size: 0.88rem;
-            width: 100%;
-            box-sizing: border-box;
-        }
-        .proto-toolbar textarea {
-            resize: vertical;
-            min-height: 80px;
-        }
-        .proto-sheet {
-            max-width: 1000px;
-            margin: 24px auto 60px;
-            background-color: #ffffff;
-            color: #111111;
-            border-radius: var(--border-radius-md);
-            padding: 50px;
-            box-sizing: border-box;
-            font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-        }
-        .proto-header {
-            border-bottom: 1px solid #111;
-            padding-bottom: 10px;
-            margin-bottom: 25px;
-        }
-        .proto-header h2 {
-            margin: 0;
-            font-size: 1.4rem;
-            font-weight: 800;
-            color: #000;
-        }
-        .proto-header p {
-            margin: 4px 0 0;
-            font-size: 0.85rem;
-            color: #444;
-        }
-        .proto-title {
-            text-align: center;
-            font-size: 1.5rem;
-            font-weight: 800;
-            margin: 30px 0 20px;
-            letter-spacing: 0.5px;
-        }
-        .proto-preamble {
-            font-size: 0.95rem;
-            margin-bottom: 20px;
-            text-align: justify;
-        }
-        .proto-object {
-            font-weight: 700;
-            background: #f5f5f5;
-            padding: 12px;
-            border-left: 4px solid #111;
-            margin-bottom: 25px;
-            font-size: 0.95rem;
-        }
-        .proto-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 20px;
-            font-size: 0.9rem;
-        }
-        .proto-table th {
-            background: #f9f9f9;
-            color: #111;
-            font-weight: 700;
-            border: 1px solid #ddd;
-            padding: 12px 10px;
-            text-align: left;
-            font-size: 0.85rem;
-        }
-        .proto-table td {
-            border: 1px solid #ddd;
-            padding: 12px 10px;
-            vertical-align: top;
-        }
-        .text-center { text-align: center; }
-        .text-right { text-align: right; }
-
-        .proto-signatures {
-            margin-top: 60px;
-            display: flex;
-            justify-content: space-between;
-            page-break-inside: avoid;
-        }
-        .sig-block {
-            width: 45%;
-            font-size: 0.95rem;
-        }
-        .sig-line {
-            margin-top: 45px;
-            border-top: 1px dashed #111;
-            padding-top: 5px;
-            font-size: 0.85rem;
-            color: #333;
-        }
-
-        @media print {
-            .navbar, .proto-toolbar, .no-print { display: none !important; }
-            body { background: #fff; }
-            .proto-sheet { margin: 0; box-shadow: none; padding: 0; max-width: 100%; }
-        }
+        .doc-form { max-width: 210mm; margin: 16px auto 0; padding: 18px; background: var(--bg-card);
+                    border: 1px solid var(--border-color); border-radius: var(--border-radius-md);
+                    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+        .doc-form .form-group { margin-bottom: 0; }
+        .doc-form label { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 4px; display: block; font-weight: 600; }
+        .doc-form input, .doc-form textarea, .doc-form select { background-color: var(--bg-input); border: 1px solid var(--border-color);
+                    color: var(--text-main); padding: 8px 12px; border-radius: var(--border-radius-sm); font-size: 0.88rem;
+                    width: 100%; box-sizing: border-box; }
+        .doc-form textarea { resize: vertical; min-height: 80px; }
+        .doc-preamble { margin: 0 0 5mm; text-align: justify; }
+        .doc-sheet .fill { font-weight: 700; }
+        .doc-sheet img.item-photo { max-width: 28mm; max-height: 22mm; object-fit: contain; display: block; }
     </style>
 </head>
-<body>
-<nav class="navbar">
-    <div class="nav-container">
-        <h2>TRAFCOM</h2>
-        <div class="nav-links">
-            <div class="nav-cta-buttons">
-                <a href="{{ url_for('admin_product_edit', product_id=product.id) }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">← Обратно</a>
-            </div>
-        </div>
-    </div>
-</nav>
+<body class="doc-page">
+{% include 'partials/navbar.html' %}
 
-<div class="proto-toolbar no-print">
+<div class="doc-toolbar no-print">
+    <a href="{{ url_for('admin_product_edit', product_id=product.id) }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">← Обратно</a>
+    <button class="btn-submit" style="padding: 12px 24px;" onclick="window.print()">Печат / PDF</button>
+</div>
+
+<div class="doc-form no-print">
     <div class="form-group">
         <label for="inDate">Дата на протокола</label>
         <input type="date" id="inDate">
@@ -211,77 +93,92 @@
         <label for="inCustomDesc">Описание / Спецификация на марка и модел (Редактируемо)</label>
         <textarea id="inCustomDesc">{% if product.description %}{{ product.description }}&#10;{% endif %}КОНСТРУКЦИЯ&#10;Компоненти:&#10;{% for pd in product.product_details %}- {{ pd.detail.name }} ({{ pd.detail.material.display_name }}) — {{ pd.quantity }} бр.&#10;{% endfor %}</textarea>
     </div>
-    <div class="form-group" style="display: flex; align-items: flex-end;">
-        <button class="btn-submit" style="padding: 12px 24px; width: 100%; margin-top: 0; font-size: 0.95rem;" onclick="window.print()">Печат / PDF</button>
-    </div>
 </div>
 
-<div class="proto-sheet">
-    <div class="proto-header">
-        {% from 'partials/company.html' import contact_line %}
-        <h2>{{ company().name }}</h2>
-        <p>{{ contact_line() }}</p>
+<div class="doc-sheet">
+<table class="doc-frame">
+    <thead><tr><td>{% include 'partials/doc_header.html' %}</td></tr></thead>
+    <tbody><tr><td class="doc-body">
+
+    <div class="doc-titlebar">
+        <div>
+            <div class="doc-title">Приемо-предавателен протокол</div>
+            <div class="doc-subtitle">предаване на изделие</div>
+        </div>
+        <table class="doc-meta">
+            <tr><td>Дата</td><td id="lblDate">......................</td></tr>
+            <tr><td>Място</td><td>гр. <span id="lblCity">......................</span></td></tr>
+        </table>
     </div>
 
-    <div class="proto-title">ПРИЕМО-ПРЕДАВАТЕЛЕН ПРОТОКОЛ</div>
-
-    <div class="proto-preamble">
-        Днес, <strong id="lblDate">......................</strong> год. в гр. <strong id="lblCity">......................</strong>, между страните:<br><br>
-        <strong>Предаваща страна:</strong> {{ company().name }}, {{ company().address|upper }}{% if company().eik %}, ЕИК: {{ company().eik }}{% endif %}, представлявано от <span id="lblProviderRep1" style="font-weight: bold;">{{ company().mol }}</span> и<br>
-        <strong>Приемаща страна:</strong> <span id="lblClientName" style="border-bottom: 1px dotted #000; min-width: 150px; display: inline-block;">............................................................</span>,
-        ситуирана на адрес: <span id="lblClientAddress" style="border-bottom: 1px dotted #000; min-width: 150px; display: inline-block;">............................................................</span>,
-        ЕИК: <span id="lblClientEik" style="border-bottom: 1px dotted #000; min-width: 80px; display: inline-block;">........................</span>,
-        ДДС №: <span id="lblClientVat" style="border-bottom: 1px dotted #000; min-width: 80px; display: inline-block;">........................</span>,
-        представлявано от <span id="lblClientRep" style="border-bottom: 1px dotted #000; min-width: 120px; display: inline-block;">............................................................</span><br><br>
-        се подписа настоящият Приемо-Предавателен Протокол, наричан по-нататък за краткост Протокола, при следните условия:<br><br>
-        Предаващата Страна предаде, а Приемащата Страна прие, както следва:
+    <div class="doc-parties">
+        {{ party('Предаваща страна') }}
+        <div class="doc-party">
+            <span class="doc-label">Приемаща страна</span>
+            <p class="doc-party-name" id="lblClientName">............................................................</p>
+            <p>ЕИК: <span id="lblClientEik">........................</span> &middot; ДДС №: <span id="lblClientVat">........................</span></p>
+            <p>Адрес: <span id="lblClientAddress">............................................................</span></p>
+            <p>МОЛ: <span id="lblClientRep">............................................................</span></p>
+        </div>
     </div>
 
-    <div class="proto-object">
-        ОБЕКТ: <span id="lblObject">........................................................................................................................</span>
-    </div>
+    <div class="doc-refs"><span class="muted">Обект:</span> <strong id="lblObject">........................................................................................</strong></div>
 
-    <table class="proto-table">
+    <p class="doc-preamble">
+        Настоящият протокол се подписа между страните по-горе. Предаващата страна, представлявана от
+        <span id="lblProviderRep1" class="fill">{{ company().mol }}</span>, предаде, а приемащата страна прие, както следва:
+    </p>
+
+    <table class="doc-table">
         <thead>
         <tr>
-            <th style="width: 10%; text-align: center;">ID</th>
-            <th style="width: 25%;">модул</th>
-            <th style="width: 15%; text-align: center;">снимка</th>
-            <th style="width: 32%;">описание<br>марка модел</th>
-            <th style="width: 12%; text-align: center;">размери<br>Ш / Д / В см</th>
-            <th style="width: 3%; text-align: right;">кол-во</th>
-            <th style="width: 3%; text-align: center;">мерна<br>единица</th>
+            <th style="width: 12%;">ID</th>
+            <th style="width: 20%;">Модул</th>
+            <th style="width: 15%;">Снимка</th>
+            <th>Описание, марка, модел</th>
+            <th style="width: 13%;">Размери Ш / Д / В, см</th>
+            <th class="num">Кол.</th>
+            <th>Мярка</th>
         </tr>
         </thead>
         <tbody>
         <tr>
-            <td class="text-center" id="lblProtoId" style="font-weight: 600;">1.2-M01</td>
+            <td id="lblProtoId">1.2-M01</td>
             <td><strong>{{ product.name }}</strong></td>
-            <td class="text-center">
+            <td>
                 {% if product.images %}
-                    <img src="{{ url_for('static', filename='uploads/products/' ~ product.images[0].filename) }}" alt="{{ product.name }}" style="max-width: 120px; max-height: 90px; object-fit: contain; display: block; margin: 0 auto;">
+                    <img class="item-photo" src="{{ url_for('static', filename='uploads/products/' ~ product.images[0].filename) }}" alt="{{ product.name }}">
                 {% else %}
-                    <span style="color: #999; font-size: 0.75rem; font-style: italic;">Няма снимка</span>
+                    <span class="muted">няма снимка</span>
                 {% endif %}
             </td>
-            <td id="lblCustomDesc" style="font-size: 0.85rem; white-space: pre-wrap; text-align: left;"></td>
-            <td class="text-center" id="lblDimensions" style="font-size: 0.85rem;">—</td>
-            <td class="text-right"><strong id="lblQuantity">1</strong></td>
-            <td class="text-center">бр.</td>
+            <td id="lblCustomDesc" style="white-space: pre-wrap;"></td>
+            <td id="lblDimensions">—</td>
+            <td class="num" id="lblQuantity">1</td>
+            <td>бр.</td>
         </tr>
         </tbody>
     </table>
 
-    <div class="proto-signatures">
-        <div class="sig-block">
-            <strong>ПРЕДАВАЩА СТРАНА:</strong>
-            <div class="sig-line">за {{ company().name }}<br><span id="lblProviderRep2">{{ company().mol }}</span></div>
-        </div>
-        <div class="sig-block">
-            <strong>ПРИЕМАЩА СТРАНА:</strong>
-            <div class="sig-line">за <span class="mirror-client-name">...................................................</span><br>три имена и подпис</div>
+    <div class="doc-signatures">
+        <div class="doc-sign-row">
+            <div class="doc-sign">
+                <span class="doc-label">Предал</span>
+                <div>за {{ company().name }}</div>
+                <div class="doc-sign-name" id="lblProviderRep2">{{ company().mol }}</div>
+                <div class="doc-sign-line">подпис</div>
+            </div>
+            <div class="doc-sign">
+                <span class="doc-label">Приел</span>
+                <div>за <span class="mirror-client-name">...................................................</span></div>
+                <div class="doc-sign-name">&nbsp;</div>
+                <div class="doc-sign-line">три имена и подпис</div>
+            </div>
         </div>
     </div>
+
+    </td></tr></tbody>
+</table>
 </div>
 
 <script>
@@ -314,6 +211,7 @@
     // Мапинг за динамично преливане на данните
     const bindings = [
         { input: 'inCity', label: 'lblCity', fallback: '......................' },
+        { input: 'inObject', label: 'lblObject', fallback: '........................................................................................' },
         { input: 'inProtoId', label: 'lblProtoId', fallback: '—' },
         { input: 'inDimensions', label: 'lblDimensions', fallback: '—' },
         { input: 'inQuantity', label: 'lblQuantity', fallback: '1' },

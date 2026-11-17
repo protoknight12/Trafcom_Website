@@ -6,113 +6,30 @@
     {% include 'partials/favicon.html' %}
     <title>Оферта - {{ product.name }}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    {% include 'partials/print_doc.html' %}
+    {% from 'partials/company.html' import party, bank_accounts %}
     <style>
-        .offer-toolbar {
-            max-width: 800px;
-            margin: 24px auto 0;
-            padding: 0 24px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 16px;
-        }
-        .offer-toolbar .form-group {
-            flex: 1;
-            margin-bottom: 0;
-        }
-        .offer-toolbar input[type="text"] {
-            background-color: var(--bg-input);
-            border: 1px solid var(--border-color);
-            color: var(--text-main);
-            padding: 10px 14px;
-            border-radius: var(--border-radius-sm);
-            font-size: 0.9rem;
-            width: 100%;
-            box-sizing: border-box;
-        }
-        .offer-sheet {
-            max-width: 800px;
-            margin: 24px auto 60px;
-            background-color: #ffffff;
-            color: #111111;
-            border-radius: var(--border-radius-md);
-            padding: 48px;
-            box-sizing: border-box;
-        }
-        .offer-sheet h1 {
-            margin: 0 0 4px;
-            font-size: 1.6rem;
-            font-weight: 800;
-        }
-        .offer-sheet .offer-meta {
-            color: #555;
-            font-size: 0.9rem;
-            margin-bottom: 32px;
-        }
-        .offer-sheet .offer-meta strong {
-            color: #111;
-        }
-        .offer-sheet h2 {
-            font-size: 1.1rem;
-            font-weight: 700;
-            border-bottom: 2px solid #111;
-            padding-bottom: 8px;
-            margin-top: 32px;
-            margin-bottom: 16px;
-        }
-        .offer-sheet table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.92rem;
-        }
-        .offer-sheet th {
-            text-align: left;
-            padding: 8px 4px;
-            border-bottom: 1px solid #ccc;
-            color: #555;
-            font-weight: 600;
-        }
-        .offer-sheet td {
-            padding: 8px 4px;
-            border-bottom: 1px solid #eee;
-        }
-        .offer-sheet .text-right { text-align: right; }
-        .offer-sheet .offer-total-row td {
-            border-bottom: none;
-            border-top: 2px solid #111;
-            padding-top: 14px;
-            font-size: 1.2rem;
-            font-weight: 800;
-        }
-        .offer-sheet .offer-description {
-            color: #555;
-            margin-bottom: 16px;
-        }
-
         body.no-prices .price { display: none !important; }
-
-        @media print {
-            .navbar, .offer-toolbar, .no-print { display: none !important; }
-            body { background: #fff; }
-            .offer-sheet { margin: 0; box-shadow: none; padding: 0; }
-        }
+        .offer-client-pick { flex: 1 1 320px; display: flex; flex-direction: column; gap: 6px; }
+        .offer-client-pick select, .offer-client-pick input { background-color: var(--bg-input); border: 1px solid var(--border-color);
+                color: var(--text-main); padding: 8px 12px; border-radius: var(--border-radius-sm); font-size: 0.88rem;
+                width: 100%; box-sizing: border-box; }
+        table.doc-totals td.sub { padding-left: 10px; color: #6b6b6b; }
+        table.doc-totals tr.rule td { border-top: .5px solid #c8c8c8; }
+        .doc-gallery { break-inside: avoid; page-break-inside: avoid; margin-top: 4mm; }
+        .doc-gallery-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4mm; }
+        .doc-gallery-grid div { border: .5px solid #c8c8c8; height: 45mm; padding: 2mm; display: flex; align-items: center;
+                                justify-content: center; break-inside: avoid; page-break-inside: avoid; }
+        .doc-gallery-grid img { max-width: 100%; max-height: 100%; object-fit: contain; }
     </style>
 </head>
-<body>
-<nav class="navbar">
-    <div class="nav-container">
-        <h2>TRAFCOM</h2>
-        <div class="nav-links">
-            <div class="nav-cta-buttons">
-                <a href="{{ url_for('admin_product_edit', product_id=product.id) }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">← Обратно</a>
-            </div>
-        </div>
-    </div>
-</nav>
+<body class="doc-page">
+{% include 'partials/navbar.html' %}
 
-<div class="offer-toolbar no-print">
-    <div class="form-group">
-        <select id="offerClientSelect" style="background-color: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-main); padding: 10px 14px; border-radius: var(--border-radius-sm); font-size: 0.9rem; width: 100%; box-sizing: border-box; margin-bottom: 8px;">
+<div class="doc-toolbar no-print">
+    <a href="{{ url_for('admin_product_edit', product_id=product.id) }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">← Обратно</a>
+    <div class="offer-client-pick">
+        <select id="offerClientSelect">
             <option value="">-- Избери клиент от списъка (по избор) --</option>
             {% for c in clients %}
             <option value="{{ c.id }}" data-name="{{ c.name }}">{{ c.name }}</option>
@@ -120,103 +37,120 @@
         </select>
         <input type="text" id="customerNameInput" placeholder="Име на клиента..." value="{{ customer_name }}">
     </div>
-<label class="no-print" style="display: inline-flex; align-items: center; gap: 8px; margin-right: 16px; color: var(--text-main); white-space: nowrap; cursor: pointer;"><input type="checkbox" data-print-prices="product-offer" checked> Показвай цените</label>
+    <label style="display: inline-flex; align-items: center; gap: 8px; color: var(--text-main); white-space: nowrap; cursor: pointer;"><input type="checkbox" data-print-prices="product-offer" checked> Показвай цените</label>
     <button class="btn-submit" style="padding: 12px 24px;" onclick="window.print()">Печат / PDF</button>
 </div>
 
-<div class="offer-sheet">
-    <h1>ТЪРГОВСКА ОФЕРТА</h1>
-    <div class="offer-meta">
-        <strong>Trafcom</strong> &nbsp;|&nbsp; Дата: <span id="offerDate"></span> &nbsp;|&nbsp; Клиент: <span id="offerCustomerName">{{ customer_name if customer_name else '—' }}</span>
+<div class="doc-sheet">
+<table class="doc-frame">
+    <thead><tr><td>{% include 'partials/doc_header.html' %}</td></tr></thead>
+    <tbody><tr><td class="doc-body">
+
+    <div class="doc-titlebar">
+        <div>
+            <div class="doc-title">Търговска оферта</div>
+            <div class="doc-subtitle">{{ product.name }}</div>
+        </div>
+        <table class="doc-meta">
+            <tr><td>Дата</td><td id="offerDate"></td></tr>
+        </table>
     </div>
 
-    <h2>{{ product.name }}</h2>
+    <div class="doc-parties">
+        {{ party('Оферент') }}
+        <div class="doc-party">
+            <span class="doc-label">Получател</span>
+            <p class="doc-party-name" id="offerCustomerName">{{ customer_name if customer_name else '—' }}</p>
+        </div>
+    </div>
+
     {% if product.description %}
-    <p class="offer-description">{{ product.description }}</p>
+    <div class="doc-notes"><span class="doc-label">Описание</span><p>{{ product.description }}</p></div>
     {% endif %}
 
-    <table>
+    <table class="doc-table">
         <thead>
         <tr>
+            <th class="idx">№</th>
             <th>Детайл</th>
             <th>Материал</th>
-            <th class="text-right">Кол.</th>
-            <th class="text-right price">Ед. цена</th>
-            <th class="text-right price">Общо</th>
+            <th class="num">Кол.</th>
+            <th class="num price">Ед. цена, EUR</th>
+            <th class="num price">Стойност, EUR</th>
         </tr>
         </thead>
         <tbody>
         {% for pd in product.product_details %}
         <tr>
+            <td class="idx">{{ loop.index }}</td>
             <td>{{ pd.detail.name }}</td>
             <td>{{ pd.detail.material.display_name }}</td>
-            <td class="text-right">{{ pd.quantity }}</td>
-            <td class="text-right price" id="pd-unit-{{ loop.index0 }}">{{ "%.2f"|format(pd.detail.total_price) }} €</td>
-            <td class="text-right price" id="pd-total-{{ loop.index0 }}">{{ "%.2f"|format(pd.detail.total_price * pd.quantity) }} €</td>
+            <td class="num">{{ pd.quantity }}</td>
+            <td class="num price" id="pd-unit-{{ loop.index0 }}">{{ pd.detail.total_price|money }}</td>
+            <td class="num price" id="pd-total-{{ loop.index0 }}">{{ (pd.detail.total_price * pd.quantity)|money }}</td>
         </tr>
         {% else %}
         <tr>
-            <td colspan="3" class="text-center" style="color: #555; font-style: italic; padding: 12px 0;">Няма добавени детайли.</td>
+            <td colspan="4" class="muted">Няма добавени детайли.</td>
             <td colspan="2" class="price"></td>
         </tr>
         {% endfor %}
         </tbody>
     </table>
 
-    <table class="price" style="margin-top: 30px;">
-        <thead>
-        <tr>
-            <th colspan="2" style="border-bottom: 2px solid #111; color: #111; font-weight: 700;">Калкулация на цената</th>
-        </tr>
-        </thead>
-        <tbody>
+    <table class="doc-totals price">
         <tr>
             <td>Сума от детайли</td>
-            <td class="text-right" id="offerDetailsSubtotal">{{ "%.2f"|format(pricing.details_subtotal) }} €</td>
+            <td id="offerDetailsSubtotal">{{ pricing.details_subtotal|money }} €</td>
         </tr>
-
-        {% if product.extra_costs %}
-            {% for cost in product.extra_costs %}
-            <tr>
-                <td style="padding-left: 15px; color: #555;">+ {{ cost.label }} (допълнителен разход)</td>
-                <td class="text-right" style="color: #555;">{{ "%.2f"|format(cost.amount) }} €</td>
-            </tr>
-            {% endfor %}
-        {% endif %}
-
+        {% for cost in product.extra_costs %}
         <tr>
-            <td style="border-top: 1px solid #ccc; font-weight: 600;">Обща себестойност</td>
-            <td class="text-right" style="border-top: 1px solid #ccc; font-weight: 600;" id="offerTotalCost">{{ "%.2f"|format(pricing.total_cost) }} €</td>
+            <td class="sub">+ {{ cost.label }} (допълнителен разход)</td>
+            <td>{{ cost.amount|money }} €</td>
+        </tr>
+        {% endfor %}
+        <tr class="rule">
+            <td>Обща себестойност</td>
+            <td id="offerTotalCost">{{ pricing.total_cost|money }} €</td>
         </tr>
         {% if product.markup_percent %}
         <tr>
             <td>Надценка ({{ product.markup_percent }}%)</td>
-            <td class="text-right" id="offerMarkupAmount">+{{ "%.2f"|format(pricing.markup_amount) }} €</td>
+            <td id="offerMarkupAmount">+{{ pricing.markup_amount|money }} €</td>
         </tr>
         {% endif %}
         <tr id="offerClientAdjRow" style="display: none;">
             <td id="offerClientAdjLabel"></td>
-            <td class="text-right" id="offerClientAdjAmount"></td>
+            <td id="offerClientAdjAmount"></td>
         </tr>
-        <tr class="offer-total-row">
-            <td>Крайна цена за клиента</td>
-            <td class="text-right" id="offerSellPrice">{{ "%.2f"|format(pricing.sell_price) }} €</td>
+        <tr class="rule">
+            <td>Цена без ДДС</td>
+            <td id="offerSellPrice">{{ pricing.sell_price|money }} €</td>
         </tr>
-        </tbody>
+        <tr>
+            <td>ДДС {{ '%g'|format(company().vat) }}%</td>
+            <td id="offerVatAmount"></td>
+        </tr>
+        <tr class="doc-grand">
+            <td>Общо с ДДС</td>
+            <td id="offerGrossTotal"></td>
+        </tr>
     </table>
+    <div class="price">{{ bank_accounts() }}</div>
 
     {% if product.images %}
-    <div class="offer-gallery-section" style="margin-top: 40px; border-top: 2px solid #111; padding-top: 20px; page-break-inside: avoid;">
-        <h3 style="font-size: 1.1rem; text-transform: uppercase; margin-bottom: 16px; color: #111; font-weight: 700;">Изображения на продукта</h3>
-        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px;">
+    <div class="doc-gallery">
+        <span class="doc-label">Изображения на продукта</span>
+        <div class="doc-gallery-grid">
             {% for img in product.images %}
-            <div style="border: 1px solid #eee; padding: 6px; background: #fff; text-align: center; display: flex; align-items: center; justify-content: center; height: 180px; box-sizing: border-box; page-break-inside: avoid;">
-                <img src="{{ url_for('static', filename='uploads/products/' ~ img.filename) }}" alt="Продуктово изображение" style="max-width: 100%; max-height: 100%; object-fit: contain;">
-            </div>
+            <div><img src="{{ url_for('static', filename='uploads/products/' ~ img.filename) }}" alt="Продуктово изображение"></div>
             {% endfor %}
         </div>
     </div>
     {% endif %}
+
+    </td></tr></tbody>
+</table>
 </div>
 
 <script src="{{ url_for('static', filename='js/print_prices.js') }}"></script>
@@ -233,10 +167,13 @@
     // Each Client's Продукти discount/markup and the resulting price from
     // calculate_product_pricing(client) - see admin_product_offer().
     const CLIENT_PRICING = {{ client_pricing|tojson }};
+    const VAT_PERCENT = {{ company().vat }};
 
     // The breakdown above stays the list one; the picked client's Продукти
     // discount/markup is its own row on the final price.
     function recomputeOfferPricing(clientId) {
+        // an amount like the server's |money filter: two decimals, thousands grouped by a no-break space
+        const money = x => (x < 0 ? '-' : '') + Math.abs(x).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0');
         const cp = clientId && CLIENT_PRICING[clientId] ? CLIENT_PRICING[clientId] : null;
         const sellPrice = cp ? cp.product_price : LIST_SELL_PRICE;
         const diff = sellPrice - LIST_SELL_PRICE;
@@ -245,10 +182,17 @@
         if (cp && cp.product_type) {
             document.getElementById('offerClientAdjLabel').textContent =
                 (cp.product_type === 'discount' ? 'Отстъпка' : 'Надценка') + ' за клиента (' + cp.product_percent + '%)';
-            document.getElementById('offerClientAdjAmount').textContent = (diff >= 0 ? '+' : '') + diff.toFixed(2) + ' €';
+            document.getElementById('offerClientAdjAmount').textContent = (diff >= 0 ? '+' : '') + money(diff) + ' €';
         }
-        document.getElementById('offerSellPrice').textContent = sellPrice.toFixed(2) + ' €';
+        document.getElementById('offerSellPrice').textContent = money(sellPrice) + ' €';
+        // same rounding as partials/vat_rows.html: the net and the VAT each to the cent
+        const net = Math.round(sellPrice * 100) / 100;
+        const vat = Math.round(net * VAT_PERCENT) / 100;
+        document.getElementById('offerVatAmount').textContent = money(vat) + ' €';
+        document.getElementById('offerGrossTotal').textContent = money(net + vat) + ' €';
     }
+
+    recomputeOfferPricing(null);
 
     document.getElementById('offerClientSelect').addEventListener('change', function () {
         const opt = this.options[this.selectedIndex];
