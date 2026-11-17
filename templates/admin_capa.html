@@ -68,7 +68,7 @@
                 <select id="new_responsible_id" data-create="{{ create_url('user') }}" name="responsible_id">
                     <option value="">-- няма --</option>
                     {% for u in users %}
-                    <option value="{{ u.id }}">{{ u.username }}</option>
+                    <option value="{{ u.id }}">{{ u.full_name }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -114,7 +114,7 @@
                     <td>{{ (capa.created_at|local).strftime('%d.%m.%Y') }}</td>
                     <td style="max-width: 320px;">{{ capa.problem_description }}</td>
                     <td>{{ capa.source_description or '—' }}</td>
-                    <td>{{ capa.responsible.username if capa.responsible else '—' }}</td>
+                    <td>{{ capa.responsible.full_name if capa.responsible else '—' }}</td>
                     <td class="{{ 'capa-overdue' if capa.is_overdue }}">
                         {{ capa.due_date.strftime('%d.%m.%Y') if capa.due_date else '—' }}
                         {% if capa.is_overdue %}<br>Просрочен{% endif %}

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-10-15 15:09+0300\n"
+"POT-Creation-Date: 2026-11-17 19:43+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -17,280 +17,284 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
-#: app.py:650
+#: app.py:665
 msgid "ЕИК трябва да съдържа точно 9 цифри."
 msgstr ""
 
-#: app.py:665
+#: app.py:680
 msgid "Невалиден имейл адрес."
 msgstr ""
 
-#: app.py:4870
+#: app.py:5155
 msgid "Нямате достъп до това приложение."
 msgstr ""
 
-#: app.py:5551 app.py:9153
+#: app.py:6389 app.py:9991
 msgid "Моля въведете име на пресет."
 msgstr ""
 
-#: app.py:5555 app.py:9157
+#: app.py:6393 app.py:9995
 msgid "Невалидни настройки."
 msgstr ""
 
-#: app.py:5572 app.py:9173
+#: app.py:6410 app.py:10011
 msgid "Нямате достъп."
 msgstr ""
 
-#: app.py:9341 app.py:9371 app.py:9386
+#: app.py:10179 app.py:10209 app.py:10224
 msgid "Твърде много грешни кодове. Опитайте отново след 15 минути."
 msgstr ""
 
-#: app.py:9353
+#: app.py:10191
 msgid "Невалидно потребителско име или парола."
 msgstr ""
 
-#: app.py:9367
+#: app.py:10205
 msgid "Времето за въвеждане на кода изтече. Влезте отново."
 msgstr ""
 
-#: app.py:9388
+#: app.py:10226
 msgid "Невалиден код."
 msgstr ""
 
-#: app.py:9414
+#: app.py:10252
 msgid ""
 "Ако имейлът съществува в системата, изпратихме връзка за възстановяване "
 "на паролата."
 msgstr ""
 
-#: app.py:9427
+#: app.py:10265
 msgid "Връзката за възстановяване е изтекла. Заявете нова."
 msgstr ""
 
-#: app.py:9430 app.py:9437
+#: app.py:10268 app.py:10275
 msgid "Невалидна връзка за възстановяване."
 msgstr ""
 
-#: app.py:9445 app.py:9485 app.py:9577
+#: app.py:10283 app.py:10323 app.py:10426
 msgid "Паролата трябва да бъде поне 8 символа."
 msgstr ""
 
-#: app.py:9448 app.py:9580 templates/reset_password.html:42
+#: app.py:10286 app.py:10429 templates/reset_password.html:42
 msgid "Паролите не съвпадат."
 msgstr ""
 
-#: app.py:9452
+#: app.py:10290
 msgid "Паролата е сменена успешно. Влезте с новата парола."
 msgstr ""
 
-#: app.py:9465
+#: app.py:10303
 msgid ""
 "Сайтът е в момента на техническа поддръжка. Регистрацията на нови профили"
 " е временно спряна."
 msgstr ""
 
-#: app.py:9478 app.py:9552
+#: app.py:10316 app.py:10401
 msgid "Имейл е задължителен."
 msgstr ""
 
-#: app.py:9504
+#: app.py:10342
 msgid "Това потребителско име или имейл вече съществува."
 msgstr ""
 
-#: app.py:9508
+#: app.py:10346
 msgid "Регистрацията е успешна! Проверете имейла си, за да потвърдите адреса."
 msgstr ""
 
-#: app.py:9519
+#: app.py:10357
 msgid "Връзката за потвърждение е изтекла. Заявете нова от профила си."
 msgstr ""
 
-#: app.py:9522 app.py:9528
+#: app.py:10360 app.py:10366
 msgid "Невалидна връзка за потвърждение."
 msgstr ""
 
-#: app.py:9533
+#: app.py:10371
 msgid "Имейлът е потвърден успешно."
 msgstr ""
 
-#: app.py:9548 app.py:9572 app.py:9640 app.py:9781
+#: app.py:10388
+msgid "Името е обновено."
+msgstr ""
+
+#: app.py:10397 app.py:10421 app.py:10489 app.py:10630
 msgid "Грешна парола."
 msgstr ""
 
-#: app.py:9560
+#: app.py:10409
 msgid "Този имейл вече се използва от друг акаунт."
 msgstr ""
 
-#: app.py:9563
+#: app.py:10412
 msgid "Имейлът е обновен. Изпратихме връзка за потвърждение на новия адрес."
 msgstr ""
 
-#: app.py:9585
+#: app.py:10434
 msgid "Паролата е сменена успешно."
 msgstr ""
 
-#: app.py:9594
+#: app.py:10443
 msgid "Имейлът вече е потвърден."
 msgstr ""
 
-#: app.py:9597
+#: app.py:10446
 msgid "Нямате зададен имейл."
 msgstr ""
 
-#: app.py:9600
+#: app.py:10449
 msgid "Изпратихме нова връзка за потвърждение."
 msgstr ""
 
-#: app.py:9608
+#: app.py:10457
 msgid "Двуфакторното удостоверяване вече е активирано."
 msgstr ""
 
-#: app.py:9617
+#: app.py:10466
 msgid "Невалиден код. Опитайте отново."
 msgstr ""
 
-#: app.py:9622
+#: app.py:10471
 msgid "Двуфакторното удостоверяване е активирано."
 msgstr ""
 
-#: app.py:9645
+#: app.py:10494
 msgid "Двуфакторното удостоверяване е изключено."
 msgstr ""
 
-#: app.py:9784
+#: app.py:10633
 msgid "Не можете да изтриете единствения администратор."
 msgstr ""
 
-#: app.py:9790
+#: app.py:10639
 #, python-format
 msgid ""
 "Профилът има свързани записи (%(what)s) и не може да бъде изтрит. "
 "Свържете се с администратор."
 msgstr ""
 
-#: app.py:9808
+#: app.py:10657
 msgid "Моля, изберете файл за качване."
 msgstr ""
 
-#: app.py:9812
+#: app.py:10661
 msgid "Невалиден формат! Системата приема само .dxf файлове."
 msgstr ""
 
-#: app.py:9833
+#: app.py:10682
 #, python-format
 msgid "Файлът \"%(filename)s\" беше качен и обработен успешно!"
 msgstr ""
 
-#: app.py:9838
+#: app.py:10687
 #, python-format
 msgid "Критична грешка при обработка/запис: %(error)s"
 msgstr ""
 
-#: app.py:12689
+#: app.py:13983
 msgid "Моля изберете файл."
 msgstr ""
 
-#: app.py:12716
+#: app.py:14010
 msgid "Файлът беше качен успешно."
 msgstr ""
 
-#: app.py:13493
+#: app.py:14800
 msgid "Няма избран файл."
 msgstr ""
 
-#: app.py:13496
+#: app.py:14803
 msgid "Приемат се само PDF файлове."
 msgstr ""
 
-#: app.py:13513
+#: app.py:14896
 msgid "Моля въведете име на клиент."
 msgstr ""
 
-#: app.py:13524 templates/order_create.html:786
+#: app.py:14907 templates/order_create.html:827
 msgid "Моля добавете поне един артикул към поръчката."
 msgstr ""
 
-#: app.py:13630
+#: app.py:14959
 msgid "Невалидни артикули в поръчката."
 msgstr ""
 
-#: app.py:13641
+#: app.py:14973
 #, python-format
 msgid "Поръчка %(order_number)s беше успешно изпратена!"
 msgstr ""
 
-#: app.py:13649
+#: app.py:14984
 #, python-format
 msgid ""
 "Внимание: поръчка %(order_number)s има недостатъчна наличност за: "
 "%(missing_desc)s. Виж таблото \"Липсваща наличност\"."
 msgstr ""
 
-#: app.py:13776
+#: app.py:15122
 msgid "Нямате достъп до тази поръчка."
 msgstr ""
 
-#: app.py:13780
+#: app.py:15126
 msgid ""
 "Поръчката вече е в процес на изработка (или вече е приключена/отменена) и"
 " не може да бъде отменена."
 msgstr ""
 
-#: app.py:13787
+#: app.py:15133
 #, python-format
 msgid "Поръчка %(order_number)s беше отменена."
 msgstr ""
 
-#: app.py:16132
+#: app.py:18388
 msgid "Моля въведете име на клиента."
 msgstr ""
 
-#: app.py:16170
+#: app.py:18426
 msgid "Моля въведете име на куриера."
 msgstr ""
 
-#: app.py:24843
+#: app.py:27245
 msgid "Страницата не е намерена"
 msgstr ""
 
-#: app.py:24844
+#: app.py:27246
 msgid "Проверете адреса или се върнете към началото."
 msgstr ""
 
-#: app.py:24849
+#: app.py:27251
 msgid "Нямате достъп"
 msgstr ""
 
-#: app.py:24850
+#: app.py:27252
 msgid "Нямате права за тази страница."
 msgstr ""
 
-#: app.py:24855
+#: app.py:27257
 msgid "Твърде много опити"
 msgstr ""
 
-#: app.py:24856
+#: app.py:27258
 msgid "Изчакайте малко и опитайте отново."
 msgstr ""
 
-#: app.py:24861
+#: app.py:27263
 msgid "Възникна грешка"
 msgstr ""
 
-#: app.py:24862
+#: app.py:27264
 msgid "Нещо се обърка от наша страна. Опитайте отново по-късно."
 msgstr ""
 
-#: app.py:24869
+#: app.py:27271
 msgid "Изтекла сесия на формата"
 msgstr ""
 
-#: app.py:24870
+#: app.py:27272
 msgid "Презаредете страницата и опитайте отново."
 msgstr ""
 
 #: templates/about.html:7 templates/partials/footer.html:16
-#: templates/partials/navbar.html:30
+#: templates/partials/navbar.html:23
 msgid "За нас"
 msgstr ""
 
@@ -400,80 +404,101 @@ msgstr ""
 msgid "Моят профил"
 msgstr ""
 
-#: templates/account.html:28 templates/contact.html:57
-#: templates/forgot_password.html:40 templates/order_create.html:387
-#: templates/order_create.html:430 templates/register.html:64
-msgid "Имейл"
+#: templates/account.html:28
+msgid "Име и фамилия"
 msgstr ""
 
 #: templates/account.html:29
-msgid "Използва се за възстановяване на паролата."
+msgid "Изписват се в документите, които съставяте."
 msgstr ""
 
-#: templates/account.html:32
-msgid "Потвърден."
-msgstr ""
-
-#: templates/account.html:34
-msgid "Непотвърден."
+#: templates/account.html:33
+msgid "Име"
 msgstr ""
 
 #: templates/account.html:37
+msgid "Фамилия"
+msgstr ""
+
+#: templates/account.html:40 templates/flashing.html:134
+#: templates/generator.html:224
+msgid "Запази"
+msgstr ""
+
+#: templates/account.html:45 templates/contact.html:57
+#: templates/forgot_password.html:40 templates/order_create.html:392
+#: templates/order_create.html:435 templates/register.html:64
+msgid "Имейл"
+msgstr ""
+
+#: templates/account.html:46
+msgid "Използва се за възстановяване на паролата."
+msgstr ""
+
+#: templates/account.html:49
+msgid "Потвърден."
+msgstr ""
+
+#: templates/account.html:51
+msgid "Непотвърден."
+msgstr ""
+
+#: templates/account.html:54
 msgid "Изпрати връзка за потвърждение отново"
 msgstr ""
 
-#: templates/account.html:47 templates/account.html:81
+#: templates/account.html:64 templates/account.html:98
 msgid "Парола (за потвърждение)"
 msgstr ""
 
-#: templates/account.html:50
+#: templates/account.html:67
 msgid "Смени имейла"
 msgstr ""
 
-#: templates/account.html:50
+#: templates/account.html:67
 msgid "Добави имейл"
 msgstr ""
 
-#: templates/account.html:55 templates/login.html:63 templates/register.html:68
+#: templates/account.html:72 templates/login.html:63 templates/register.html:68
 msgid "Парола"
 msgstr ""
 
-#: templates/account.html:59
+#: templates/account.html:76
 msgid "Текуща парола"
 msgstr ""
 
-#: templates/account.html:63 templates/reset_password.html:7
+#: templates/account.html:80 templates/reset_password.html:7
 #: templates/reset_password.html:20 templates/reset_password.html:36
 msgid "Нова парола"
 msgstr ""
 
-#: templates/account.html:67
+#: templates/account.html:84
 msgid "Повторете новата парола"
 msgstr ""
 
-#: templates/account.html:70 templates/reset_password.html:45
+#: templates/account.html:87 templates/reset_password.html:45
 msgid "Смени паролата"
 msgstr ""
 
-#: templates/account.html:75
+#: templates/account.html:92
 msgid "Двуфакторно удостоверяване (2FA)"
 msgstr ""
 
-#: templates/account.html:77
+#: templates/account.html:94
 msgid ""
 "Активирано е. При вход ще се изисква код от приложението за "
 "удостоверяване."
 msgstr ""
 
-#: templates/account.html:84
+#: templates/account.html:101
 msgid "Изключи 2FA"
 msgstr ""
 
-#: templates/account.html:87
+#: templates/account.html:104
 msgid "Не е активирано. Добавете допълнителен слой защита на входа."
 msgstr ""
 
-#: templates/account.html:88
+#: templates/account.html:105
 msgid "Активирай 2FA"
 msgstr ""
 
@@ -506,7 +531,7 @@ msgid "Отказ"
 msgstr ""
 
 #: templates/contact.html:7 templates/partials/footer.html:8
-#: templates/partials/footer.html:17 templates/partials/navbar.html:31
+#: templates/partials/footer.html:17 templates/partials/navbar.html:24
 msgid "Контакти"
 msgstr ""
 
@@ -532,8 +557,8 @@ msgstr ""
 msgid "ул. „Воловийте“, 5700 гр. Тетевен"
 msgstr ""
 
-#: templates/contact.html:53 templates/order_create.html:391
-#: templates/order_create.html:434
+#: templates/contact.html:53 templates/order_create.html:396
+#: templates/order_create.html:439
 msgid "Телефон"
 msgstr ""
 
@@ -541,62 +566,62 @@ msgstr ""
 msgid "Файлове"
 msgstr ""
 
-#: templates/detail_dxf_dashboard.html:114
+#: templates/detail_dxf_dashboard.html:116
 msgid "Файлове:"
 msgstr ""
 
-#: templates/detail_dxf_dashboard.html:116
+#: templates/detail_dxf_dashboard.html:118
 msgid ""
 "Хранилище на файлове за този детайл - всякакъв тип (DXF чертежи, снимки, "
 "спецификации...)."
 msgstr ""
 
-#: templates/detail_dxf_dashboard.html:120
+#: templates/detail_dxf_dashboard.html:122
 msgid "+ Качи нова версия"
 msgstr ""
 
-#: templates/detail_dxf_dashboard.html:120
+#: templates/detail_dxf_dashboard.html:122
 msgid "Нова версия на DXF файла"
 msgstr ""
 
-#: templates/detail_dxf_dashboard.html:123
+#: templates/detail_dxf_dashboard.html:125
 msgid "Качване на нов файл"
 msgstr ""
 
-#: templates/detail_dxf_dashboard.html:126
+#: templates/detail_dxf_dashboard.html:128
 msgid "Качи"
 msgstr ""
 
-#: templates/detail_dxf_dashboard.html:133
+#: templates/detail_dxf_dashboard.html:135
 msgid "Файл"
 msgstr ""
 
-#: templates/detail_dxf_dashboard.html:134
+#: templates/detail_dxf_dashboard.html:136
 msgid "Качен от"
 msgstr ""
 
-#: templates/detail_dxf_dashboard.html:135
+#: templates/detail_dxf_dashboard.html:137
 msgid "Дата"
 msgstr ""
 
-#: templates/detail_dxf_dashboard.html:136 templates/library.html:172
-#: templates/order_create.html:139
+#: templates/detail_dxf_dashboard.html:138 templates/library.html:172
+#: templates/order_create.html:144
 msgid "Действие"
 msgstr ""
 
-#: templates/detail_dxf_dashboard.html:163
+#: templates/detail_dxf_dashboard.html:165
 msgid "Само за администратори"
 msgstr ""
 
-#: templates/detail_dxf_dashboard.html:169
+#: templates/detail_dxf_dashboard.html:171
 msgid "Няма качени файлове."
 msgstr ""
 
-#: templates/detail_dxf_dashboard.html:644 templates/library.html:228
+#: templates/detail_dxf_dashboard.html:723 templates/library.html:228
 msgid "Визуализация"
 msgstr ""
 
-#: templates/detail_dxf_dashboard.html:648 templates/library.html:232
+#: templates/detail_dxf_dashboard.html:727 templates/library.html:232
 msgid "Зареждане..."
 msgstr ""
 
@@ -609,7 +634,7 @@ msgid "Към началото"
 msgstr ""
 
 #: templates/factory3d.html:7 templates/factory3d.html:118
-#: templates/partials/navbar.html:25
+#: templates/partials/navbar.html:18
 msgid "Фабрика 3D"
 msgstr ""
 
@@ -1115,17 +1140,17 @@ msgstr ""
 msgid "Статус"
 msgstr ""
 
-#: templates/factory3d.html:863 templates/order_create.html:162
+#: templates/factory3d.html:863 templates/order_create.html:167
 #: templates/upload.html:84
 msgid "Работи"
 msgstr ""
 
-#: templates/factory3d.html:863 templates/order_create.html:162
+#: templates/factory3d.html:863 templates/order_create.html:167
 #: templates/upload.html:84
 msgid "Свободна"
 msgstr ""
 
-#: templates/factory3d.html:863 templates/order_create.html:162
+#: templates/factory3d.html:863 templates/order_create.html:167
 #: templates/upload.html:84
 msgid "Поддръжка"
 msgstr ""
@@ -1147,7 +1172,7 @@ msgid "Табло"
 msgstr ""
 
 #: templates/factory3d.html:877 templates/partials/footer.html:15
-#: templates/partials/navbar.html:29 templates/services.html:7
+#: templates/partials/navbar.html:22 templates/services.html:7
 msgid "Услуги"
 msgstr ""
 
@@ -1208,11 +1233,11 @@ msgstr ""
 msgid "Редактирай"
 msgstr ""
 
-#: templates/flashing.html:7 templates/partials/navbar.html:24
+#: templates/flashing.html:7 templates/partials/navbar.html:17
 msgid "Облицовки от ламарина"
 msgstr ""
 
-#: templates/flashing.html:59 templates/partials/navbar.html:191
+#: templates/flashing.html:59 templates/partials/navbar.html:184
 msgid "Профил"
 msgstr ""
 
@@ -1383,10 +1408,6 @@ msgstr ""
 
 #: templates/flashing.html:133 templates/generator.html:223
 msgid "Име на пресет"
-msgstr ""
-
-#: templates/flashing.html:134 templates/generator.html:224
-msgid "Запази"
 msgstr ""
 
 #: templates/flashing.html:138
@@ -2006,7 +2027,7 @@ msgstr ""
 msgid "Име на файл"
 msgstr ""
 
-#: templates/library.html:167
+#: templates/library.html:167 templates/order_create.html:87
 msgid "Материал"
 msgstr ""
 
@@ -2034,25 +2055,25 @@ msgstr ""
 msgid "Качете първия си чертеж"
 msgstr ""
 
-#: templates/library.html:216 templates/my_orders.html:119
+#: templates/library.html:216 templates/my_orders.html:120
 msgid "Няма съвпадения."
 msgstr ""
 
-#: templates/login.html:7 templates/partials/navbar.html:194
+#: templates/login.html:7 templates/partials/navbar.html:187
 msgid "Вход"
 msgstr ""
 
-#: templates/login.html:24 templates/partials/navbar.html:20
+#: templates/login.html:24 templates/partials/navbar.html:13
 #: templates/register.html:24
 msgid "Приложения"
 msgstr ""
 
-#: templates/login.html:26 templates/partials/navbar.html:22
+#: templates/login.html:26 templates/partials/navbar.html:15
 #: templates/register.html:26 templates/upload.html:50
 msgid "DXF CNC Калкулатор"
 msgstr ""
 
-#: templates/login.html:27 templates/partials/navbar.html:23
+#: templates/login.html:27 templates/partials/navbar.html:16
 #: templates/register.html:27
 msgid "Параметричен Генератор"
 msgstr ""
@@ -2115,73 +2136,73 @@ msgstr ""
 msgid "Потвърди"
 msgstr ""
 
-#: templates/my_orders.html:7 templates/my_orders.html:36
-#: templates/partials/navbar.html:36
+#: templates/my_orders.html:7 templates/my_orders.html:37
+#: templates/partials/navbar.html:29
 msgid "Моите Поръчки"
 msgstr ""
 
-#: templates/my_orders.html:40
+#: templates/my_orders.html:41
 msgid "Търсене по № поръчка, клиент, артикул..."
 msgstr ""
 
-#: templates/my_orders.html:62 templates/order_create.html:134
+#: templates/my_orders.html:63 templates/order_create.html:139
 msgid "Артикул"
 msgstr ""
 
-#: templates/my_orders.html:63 templates/order_create.html:136
+#: templates/my_orders.html:64 templates/order_create.html:141
 msgid "Кол."
 msgstr ""
 
-#: templates/my_orders.html:64 templates/order_create.html:137
+#: templates/my_orders.html:65 templates/order_create.html:142
 msgid "Ед. цена"
 msgstr ""
 
-#: templates/my_orders.html:65 templates/order_create.html:138
+#: templates/my_orders.html:66 templates/order_create.html:143
 msgid "Общо"
 msgstr ""
 
-#: templates/my_orders.html:66
+#: templates/my_orders.html:67
 msgid "Прогрес"
 msgstr ""
 
-#: templates/my_orders.html:75 templates/order_create.html:759
+#: templates/my_orders.html:76 templates/order_create.html:800
 msgid "Продукт"
 msgstr ""
 
-#: templates/my_orders.html:77 templates/order_create.html:759
+#: templates/my_orders.html:78 templates/order_create.html:800
 msgid "Детайл"
 msgstr ""
 
-#: templates/my_orders.html:85
+#: templates/my_orders.html:86
 msgid "бр."
 msgstr ""
 
-#: templates/my_orders.html:101
+#: templates/my_orders.html:102
 msgid "Общ напредък на поръчката:"
 msgstr ""
 
-#: templates/my_orders.html:104
+#: templates/my_orders.html:105
 msgid "Обща сума:"
 msgstr ""
 
-#: templates/my_orders.html:107
+#: templates/my_orders.html:108
 #, python-format
 msgid "Наистина ли искате да отмените поръчка %(order_number)s?"
 msgstr ""
 
-#: templates/my_orders.html:109
+#: templates/my_orders.html:110
 msgid "Отмени поръчка"
 msgstr ""
 
-#: templates/my_orders.html:116
+#: templates/my_orders.html:117
 msgid "Нямате направени поръчки все още."
 msgstr ""
 
-#: templates/my_orders.html:116
+#: templates/my_orders.html:117
 msgid "Направете първата си поръчка"
 msgstr ""
 
-#: templates/order_create.html:7 templates/partials/navbar.html:35
+#: templates/order_create.html:7 templates/partials/navbar.html:28
 msgid "Нова Поръчка"
 msgstr ""
 
@@ -2235,252 +2256,252 @@ msgstr ""
 msgid "Няма налични детайли"
 msgstr ""
 
-#: templates/order_create.html:86
+#: templates/order_create.html:91
 msgid "Количество"
 msgstr ""
 
-#: templates/order_create.html:90
+#: templates/order_create.html:95
 msgid "Материал на клиента"
 msgstr ""
 
-#: templates/order_create.html:93
+#: templates/order_create.html:98
 msgid "Добави"
 msgstr ""
 
-#: templates/order_create.html:99
+#: templates/order_create.html:104
 msgid "Операции за този детайл (незадължително - рязане, огъване, пробиване...)"
 msgstr ""
 
-#: templates/order_create.html:100
+#: templates/order_create.html:105
 msgid "Приложени само към детайла, който ще бъде добавен към количката по-долу."
 msgstr ""
 
-#: templates/order_create.html:103
+#: templates/order_create.html:108
 msgid "Изберете услуга"
 msgstr ""
 
-#: templates/order_create.html:105 templates/upload.html:67
+#: templates/order_create.html:110 templates/upload.html:67
 msgid "час"
 msgstr ""
 
-#: templates/order_create.html:108
+#: templates/order_create.html:113
 msgid "Описание (незадължително, напр. външно лазерно рязане)"
 msgstr ""
 
-#: templates/order_create.html:109
+#: templates/order_create.html:114
 msgid "Продължителност (мин)"
 msgstr ""
 
-#: templates/order_create.html:110
+#: templates/order_create.html:115
 msgid "Добави операция"
 msgstr ""
 
-#: templates/order_create.html:114 templates/order_create.html:599
+#: templates/order_create.html:119 templates/order_create.html:615
 msgid "Няма избрани операции за този детайл."
 msgstr ""
 
-#: templates/order_create.html:121
+#: templates/order_create.html:126
 msgid "Приложен PDF (незадължително - чертеж, спецификация...)"
 msgstr ""
 
-#: templates/order_create.html:129
+#: templates/order_create.html:134
 msgid "Съдържание на поръчката"
 msgstr ""
 
-#: templates/order_create.html:135
+#: templates/order_create.html:140
 msgid "Тип"
 msgstr ""
 
-#: templates/order_create.html:143 templates/order_create.html:735
+#: templates/order_create.html:148 templates/order_create.html:776
 msgid "Все още няма добавени артикули."
 msgstr ""
 
-#: templates/order_create.html:147
+#: templates/order_create.html:152
 msgid "Обща стойност:"
 msgstr ""
 
-#: templates/order_create.html:158
+#: templates/order_create.html:163
 msgid "Назначи машина (по избор)"
 msgstr ""
 
-#: templates/order_create.html:160 templates/upload.html:82
+#: templates/order_create.html:165 templates/upload.html:82
 msgid "Без конкретна машина"
 msgstr ""
 
-#: templates/order_create.html:168
+#: templates/order_create.html:173
 msgid "Клиент / Фирма *"
 msgstr ""
 
-#: templates/order_create.html:170 templates/order_create.html:192
+#: templates/order_create.html:175 templates/order_create.html:197
 msgid "Бързо създаване"
 msgstr ""
 
-#: templates/order_create.html:177
+#: templates/order_create.html:182
 msgid "Изберете клиент"
 msgstr ""
 
-#: templates/order_create.html:184
+#: templates/order_create.html:189
 msgid ""
 "Все още нямате свързан клиент - използвайте \"Бързо създаване\", за да "
 "добавите данните си за поръчки (ще остане свързан с профила ви и "
 "следващия път)."
 msgstr ""
 
-#: templates/order_create.html:191
+#: templates/order_create.html:196
 msgid "Куриер (по избор)"
 msgstr ""
 
-#: templates/order_create.html:195
+#: templates/order_create.html:200
 msgid "Без конкретен куриер"
 msgstr ""
 
-#: templates/order_create.html:202
+#: templates/order_create.html:207
 msgid "Изпрати Поръчка"
 msgstr ""
 
-#: templates/order_create.html:368
+#: templates/order_create.html:373
 msgid "Бързо създаване на клиент"
 msgstr ""
 
-#: templates/order_create.html:372
+#: templates/order_create.html:377
 msgid "Тип клиент"
 msgstr ""
 
-#: templates/order_create.html:375
+#: templates/order_create.html:380
 msgid "Физическо лице"
 msgstr ""
 
-#: templates/order_create.html:378
+#: templates/order_create.html:383
 msgid "Юридическо лице"
 msgstr ""
 
-#: templates/order_create.html:383 templates/order_create.html:426
+#: templates/order_create.html:388 templates/order_create.html:431
 msgid "Име *"
 msgstr ""
 
-#: templates/order_create.html:384
+#: templates/order_create.html:389
 msgid "напр. Иван Иванов / Фирма ЕООД"
 msgstr ""
 
-#: templates/order_create.html:392 templates/order_create.html:435
+#: templates/order_create.html:397 templates/order_create.html:440
 msgid "напр. 0888 123 456"
 msgstr ""
 
-#: templates/order_create.html:396 templates/order_create.html:438
+#: templates/order_create.html:401 templates/order_create.html:443
 msgid "ЕИК / Булстат"
 msgstr ""
 
-#: templates/order_create.html:398 templates/order_create.html:440
+#: templates/order_create.html:403 templates/order_create.html:445
 msgid "Точно 9 цифри"
 msgstr ""
 
-#: templates/order_create.html:401 templates/order_create.html:443
+#: templates/order_create.html:406 templates/order_create.html:448
 msgid "ИН по ДДС"
 msgstr ""
 
-#: templates/order_create.html:405 templates/order_create.html:447
+#: templates/order_create.html:410 templates/order_create.html:452
 msgid "Адрес на управление"
 msgstr ""
 
-#: templates/order_create.html:406 templates/order_create.html:448
+#: templates/order_create.html:411 templates/order_create.html:453
 msgid "напр. София, бул. ..."
 msgstr ""
 
-#: templates/order_create.html:409 templates/order_create.html:451
+#: templates/order_create.html:414 templates/order_create.html:456
 msgid "МОЛ"
 msgstr ""
 
-#: templates/order_create.html:410 templates/order_create.html:452
+#: templates/order_create.html:415 templates/order_create.html:457
 msgid "напр. Иван Иванов"
 msgstr ""
 
-#: templates/order_create.html:413 templates/order_create.html:852
-#: templates/order_create.html:869
+#: templates/order_create.html:418 templates/order_create.html:894
+#: templates/order_create.html:911
 msgid "Добави клиент"
 msgstr ""
 
-#: templates/order_create.html:422
+#: templates/order_create.html:427
 msgid "Бързо създаване на куриер"
 msgstr ""
 
-#: templates/order_create.html:427
+#: templates/order_create.html:432
 msgid "напр. Спиди / Еконт"
 msgstr ""
 
-#: templates/order_create.html:454 templates/order_create.html:889
-#: templates/order_create.html:905
+#: templates/order_create.html:459 templates/order_create.html:931
+#: templates/order_create.html:947
 msgid "Добави куриер"
 msgstr ""
 
-#: templates/order_create.html:574
+#: templates/order_create.html:590
 msgid "Моля изберете услуга."
 msgstr ""
 
-#: templates/order_create.html:575
+#: templates/order_create.html:591
 msgid "Моля въведете валидна продължителност в минути."
 msgstr ""
 
-#: templates/order_create.html:608 templates/order_create.html:769
+#: templates/order_create.html:624 templates/order_create.html:810
 msgid "Премахни"
 msgstr ""
 
-#: templates/order_create.html:612 templates/order_create.html:748
+#: templates/order_create.html:628 templates/order_create.html:789
 msgid "мин"
 msgstr ""
 
-#: templates/order_create.html:621
+#: templates/order_create.html:637
 msgid "Операции общо:"
 msgstr ""
 
-#: templates/order_create.html:621
+#: templates/order_create.html:637
 msgid "€ на брой (плюс базовата цена на детайла)"
 msgstr ""
 
-#: templates/order_create.html:645
+#: templates/order_create.html:681
 msgid "Моля въведете валидно количество."
 msgstr ""
 
-#: templates/order_create.html:651
+#: templates/order_create.html:687
 msgid "Няма избран продукт."
 msgstr ""
 
-#: templates/order_create.html:664
+#: templates/order_create.html:700
 msgid "Няма избран детайл."
 msgstr ""
 
-#: templates/order_create.html:701
+#: templates/order_create.html:742
 msgid "Качване на PDF файла..."
 msgstr ""
 
-#: templates/order_create.html:711
+#: templates/order_create.html:752
 msgid "Грешка при качване на PDF файла."
 msgstr ""
 
-#: templates/order_create.html:715
+#: templates/order_create.html:756
 msgid "Връзката със сървъра беше прекъсната при качване на PDF файла."
 msgstr ""
 
-#: templates/order_create.html:743
+#: templates/order_create.html:784
 msgid "материал на клиента"
 msgstr ""
 
-#: templates/order_create.html:793
+#: templates/order_create.html:834
 msgid "Моля изберете или създайте клиент."
 msgstr ""
 
-#: templates/order_create.html:842 templates/order_create.html:879
+#: templates/order_create.html:884 templates/order_create.html:921
 msgid "Обработване..."
 msgstr ""
 
-#: templates/order_create.html:863 templates/order_create.html:899
+#: templates/order_create.html:905 templates/order_create.html:941
 msgid "Грешка при създаване."
 msgstr ""
 
-#: templates/order_create.html:870 templates/order_create.html:906
+#: templates/order_create.html:912 templates/order_create.html:948
 msgid "Връзката със сървъра беше прекъсната."
 msgstr ""
 
-#: templates/partials/navbar.html:195 templates/register.html:7
+#: templates/partials/navbar.html:188 templates/register.html:7
 #: templates/register.html:41
 msgid "Регистрация"
 msgstr ""
@@ -2647,15 +2668,15 @@ msgstr ""
 msgid "Напишете съобщение..."
 msgstr ""
 
-#: templates/partials/navbar.html:13
+#: templates/partials/navbar.html:6
 msgid "Отвори менюто"
 msgstr ""
 
-#: templates/partials/navbar.html:34
+#: templates/partials/navbar.html:27
 msgid "Лична Библиотека"
 msgstr ""
 
-#: templates/partials/navbar.html:192
+#: templates/partials/navbar.html:185
 msgid "Изход"
 msgstr ""
 

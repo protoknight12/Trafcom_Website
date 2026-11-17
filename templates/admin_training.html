@@ -48,7 +48,7 @@
                 <select id="new_employee_id" data-create="{{ create_url('user') }}" name="employee_id" required>
                     <option value="">-- изберете --</option>
                     {% for u in employees %}
-                    <option value="{{ u.id }}">{{ u.username }}</option>
+                    <option value="{{ u.id }}">{{ u.full_name }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -102,7 +102,7 @@
                 <select id="employee_filter" name="employee_id" onchange="this.form.submit()">
                     <option value="">-- всички --</option>
                     {% for u in employees %}
-                    <option value="{{ u.id }}" {% if employee_filter == u.id|string %}selected{% endif %}>{{ u.username }}</option>
+                    <option value="{{ u.id }}" {% if employee_filter == u.id|string %}selected{% endif %}>{{ u.full_name }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -127,7 +127,7 @@
                 <tbody>
                 {% for record in records %}
                 <tr>
-                    <td>{{ record.employee.username if record.employee else '—' }}</td>
+                    <td>{{ record.employee.full_name if record.employee else '—' }}</td>
                     <td style="max-width: 260px;">{{ record.topic }}</td>
                     <td>{{ record.training_type_label }}</td>
                     <td>{{ record.trainer_name or '—' }}</td>

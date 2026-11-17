@@ -46,7 +46,7 @@
                 <select id="new_auditor_id" data-create="{{ create_url('user') }}" name="auditor_id">
                     <option value="">-- няма --</option>
                     {% for u in users %}
-                    <option value="{{ u.id }}">{{ u.username }}</option>
+                    <option value="{{ u.id }}">{{ u.full_name }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -90,7 +90,7 @@
                 <tr>
                     <td><strong>{{ audit.audit_no }}</strong></td>
                     <td style="max-width: 280px;">{{ audit.scope }}</td>
-                    <td>{{ audit.auditor.username if audit.auditor else '—' }}</td>
+                    <td>{{ audit.auditor.full_name if audit.auditor else '—' }}</td>
                     <td>{{ audit.planned_date.strftime('%d.%m.%Y') if audit.planned_date else '—' }}</td>
                     <td>{{ audit.actual_date.strftime('%d.%m.%Y') if audit.actual_date else '—' }}</td>
                     <td>

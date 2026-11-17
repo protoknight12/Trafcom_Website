@@ -25,6 +25,23 @@
     <h2 style="margin-bottom: 20px;">{{ _('Моят профил') }}</h2>
 
     <div class="admin-card">
+        <h3 style="margin-top: 0;">{{ _('Име и фамилия') }}</h3>
+        <p class="section-subtitle">{{ _('Изписват се в документите, които съставяте.') }}</p>
+        <form method="POST" action="{{ url_for('account_update_name') }}" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="first-name">{{ _('Име') }}</label>
+                <input type="text" id="first-name" name="first_name" value="{{ current_user.first_name or '' }}" maxlength="50" autocomplete="given-name">
+            </div>
+            <div class="form-group">
+                <label for="last-name">{{ _('Фамилия') }}</label>
+                <input type="text" id="last-name" name="last_name" value="{{ current_user.last_name or '' }}" maxlength="50" autocomplete="family-name">
+            </div>
+            <button type="submit" class="btn-submit">{{ _('Запази') }}</button>
+        </form>
+    </div>
+
+    <div class="admin-card">
         <h3 style="margin-top: 0;">{{ _('Имейл') }}</h3>
         <p class="section-subtitle">{{ _('Използва се за възстановяване на паролата.') }}</p>
         {% if current_user.email %}

@@ -90,7 +90,7 @@
                 <select id="new_owner_id" data-create="{{ create_url('user') }}" name="owner_id">
                     <option value="">-- няма --</option>
                     {% for u in users %}
-                    <option value="{{ u.id }}">{{ u.username }}</option>
+                    <option value="{{ u.id }}">{{ u.full_name }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -150,7 +150,7 @@
                         <span class="badge badge-pass">{{ entry.risk_score }} - {{ entry.risk_level_label }}</span>
                         {% endif %}
                     </td>
-                    <td>{{ entry.owner.username if entry.owner else '—' }}</td>
+                    <td>{{ entry.owner.full_name if entry.owner else '—' }}</td>
                     <td>{{ entry.status_label }}</td>
                     <td>{{ entry.review_date.strftime('%d.%m.%Y') if entry.review_date else '—' }}</td>
                     <td class="text-right">

@@ -267,7 +267,7 @@
                     </td>
                     <td>{{ check.drawing_no or '—' }}</td>
                     <td>{{ check.batch_size or '—' }} / {{ check.sample_size }} пр.</td>
-                    <td>{{ check.inspector.username if check.inspector else '—' }}</td>
+                    <td>{{ check.inspector.full_name if check.inspector else '—' }}</td>
                     <td>
                         {% if check.overall_result == 'pass' %}
                         <span class="badge badge-pass">Годен</span>

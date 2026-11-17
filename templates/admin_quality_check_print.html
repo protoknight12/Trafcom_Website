@@ -226,7 +226,7 @@
                 <span class="mir-checkbox {{ 'checked' if 'other' in disp }}"></span>Other
             </td>
             <td class="mir-footer-label">Inspector</td>
-            <td>{{ check.inspector.username if check.inspector else '' }}</td>
+            <td>{{ check.inspector.full_name if check.inspector else '' }}</td>
         </tr>
         <tr>
             <td class="mir-footer-label">Defect reason</td>

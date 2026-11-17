@@ -65,7 +65,7 @@
                 <select id="auditor_id" data-create="{{ create_url('user') }}" name="auditor_id" {{ 'disabled' if readonly }}>
                     <option value="">-- няма --</option>
                     {% for u in users %}
-                    <option value="{{ u.id }}" {% if audit.auditor_id == u.id %}selected{% endif %}>{{ u.username }}</option>
+                    <option value="{{ u.id }}" {% if audit.auditor_id == u.id %}selected{% endif %}>{{ u.full_name }}</option>
                     {% endfor %}
                 </select>
             </div>

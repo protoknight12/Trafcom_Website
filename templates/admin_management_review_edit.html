@@ -59,7 +59,7 @@
             <h3 style="margin: 0;">Преглед от {{ review.review_date.strftime('%d.%m.%Y') }}</h3>
             <a href="{{ url_for('admin_management_reviews') }}" class="text-small">&larr; Обратно към прегледите</a>
         </div>
-        <p class="section-subtitle">Създаден на {{ (review.created_at|local).strftime('%d.%m.%Y') }}{% if review.created_by %} от {{ review.created_by.username }}{% endif %}.</p>
+        <p class="section-subtitle">Създаден на {{ (review.created_at|local).strftime('%d.%m.%Y') }}{% if review.created_by %} от {{ review.created_by.full_name }}{% endif %}.</p>
 
         <div class="snapshot-grid">
             <div class="snapshot-box">
@@ -136,7 +136,7 @@
                 <select id="responsible_id" data-create="{{ create_url('user') }}" name="responsible_id">
                     <option value="">-- няма --</option>
                     {% for u in users %}
-                    <option value="{{ u.id }}">{{ u.username }}</option>
+                    <option value="{{ u.id }}">{{ u.full_name }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -167,7 +167,7 @@
                 {% for action in review.actions %}
                 <tr>
                     <td style="max-width: 340px;">{{ action.description }}</td>
-                    <td>{{ action.responsible.username if action.responsible else '—' }}</td>
+                    <td>{{ action.responsible.full_name if action.responsible else '—' }}</td>
                     <td>{{ action.due_date.strftime('%d.%m.%Y') if action.due_date else '—' }}</td>
                     <td>
                         {% if action.capa %}

@@ -142,7 +142,7 @@
                 {% for f in files %}
                 <tr>
                     <td>{{ f.original_filename }}</td>
-                    <td>{{ f.uploaded_by.username if f.uploaded_by else '-' }}</td>
+                    <td>{{ f.uploaded_by.full_name if f.uploaded_by else '-' }}</td>
                     <td>{{ (f.uploaded_at|local).strftime('%d.%m.%Y %H:%M') if f.uploaded_at else '-' }}</td>
                     <td class="text-right">
                         {% if current_user.is_admin %}

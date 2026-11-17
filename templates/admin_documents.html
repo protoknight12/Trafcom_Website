@@ -104,7 +104,7 @@
                 <select id="new_owner_id" data-create="{{ create_url('user') }}" name="owner_id">
                     <option value="">-- няма --</option>
                     {% for u in users %}
-                    <option value="{{ u.id }}">{{ u.username }}</option>
+                    <option value="{{ u.id }}">{{ u.full_name }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -169,7 +169,7 @@
                                     <td>{{ (rev.created_at|local).strftime('%d.%m.%Y') }}</td>
                                     <td>{{ rev.change_description or '—' }}</td>
                                     <td>{{ rev.approved_by or '—' }}</td>
-                                    <td>{{ rev.revised_by.username if rev.revised_by else '—' }}</td>
+                                    <td>{{ rev.revised_by.full_name if rev.revised_by else '—' }}</td>
                                     <td>
                                         {% if rev.filename %}
                                         <a href="{{ url_for('admin_download_document_revision', revision_id=rev.id) }}">Изтегли</a>
@@ -194,7 +194,7 @@
                     </td>
                     <td>{{ doc.current_revision }}</td>
                     <td>{{ doc.effective_date.strftime('%d.%m.%Y') if doc.effective_date else '—' }}</td>
-                    <td>{{ doc.owner.username if doc.owner else '—' }}</td>
+                    <td>{{ doc.owner.full_name if doc.owner else '—' }}</td>
                     <td>{{ doc.approved_by or '—' }}</td>
                     <td class="text-right">
                         {% if doc.filename %}

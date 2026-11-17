@@ -135,13 +135,11 @@
 
     <div class="offer-signoff">
         <span>Дата: {{ (note.created_at|local).strftime('%d.%m.%Y') if note.created_at else '' }}</span>
-        <span>Съставил: {{ note.created_by.username if note.created_by else '' }}</span>
+        <span>Съставил: {{ note.created_by.full_name if note.created_by else '' }}</span>
     </div>
     {% if note.client %}
-    <div class="offer-signoff" style="margin-top: 56px;">
-        <span>Предал: ……………………………</span>
-        <span>Приел: ……………………………</span>
-    </div>
+    {% set save_url = url_for('note_signatures', note_id=note.id) %}
+    {% include 'partials/note_signatures.html' %}
     {% endif %}
 </div>
 <script src="{{ url_for('static', filename='js/print_prices.js') }}"></script>

@@ -277,6 +277,9 @@ class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(50), unique=True, nullable=False)
     password = db.Column(db.String(255), nullable=False)
+    # Real name for documents (Съставил, Предал/Приел) - see full_name. Optional, a login without it prints the username.
+    first_name = db.Column(db.String(50), nullable=True)
+    last_name = db.Column(db.String(50), nullable=True)
     # roles: 'regular_user', 'worker', 'admin', 'web_designer', 'quality_control'
     role = db.Column(db.String(20), default='regular_user')
     # Nullable so pre-existing accounts don't need a backfill - required
@@ -299,6 +302,11 @@ class User(db.Model, UserMixin):
     client = db.relationship('Client', backref='users')
 
     uploads = db.relationship('DxfFile', cascade='all, delete-orphan', backref='owner', lazy=True)
+
+    @property
+    def full_name(self):
+        """"Име Фамилия" for documents and lists of people; the username when no name is entered."""
+        return ' '.join(p for p in (self.first_name, self.last_name) if p) or self.username
 
     @property
     def is_admin(self):
@@ -1502,6 +1510,9 @@ class DeliveryNote(db.Model):
     note_date = db.Column(db.Date, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    # Names printed under Предал/Приел; NULL = the default (_note_signatures()).
+    handed_by = db.Column(db.String(150), nullable=True)
+    received_by = db.Column(db.String(150), nullable=True)
 
     supplier = db.relationship('Supplier')
     client = db.relationship('Client')
@@ -1564,6 +1575,9 @@ class ClientDeliveryNote(db.Model):
     note_date = db.Column(db.Date, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    # Names printed under Предал/Приел; NULL = the default (_note_signatures()).
+    handed_by = db.Column(db.String(150), nullable=True)
+    received_by = db.Column(db.String(150), nullable=True)
 
     client = db.relationship('Client')
     created_by = db.relationship('User')
@@ -10364,6 +10378,17 @@ def account():
     return render_template('account.html')
 
 
+@app.route('/account/name', methods=['POST'])
+@login_required
+def account_update_name():
+    """The user's own first/last name - printed on the documents they make."""
+    current_user.first_name = request.form.get('first_name', '').strip()[:50] or None
+    current_user.last_name = request.form.get('last_name', '').strip()[:50] or None
+    db.session.commit()
+    flash(gettext('Името е обновено.'), 'success')
+    return redirect(url_for('account'))
+
+
 @app.route('/account/email', methods=['POST'])
 @login_required
 def account_update_email():
@@ -12541,6 +12566,41 @@ def admin_client_delivery_note_print(note_id):
     return render_template('admin_client_delivery_note_print.html', note=note)
 
 
+def _note_signatures(note):
+    """(Предал, Приел) printed under a delivery note: what was saved on it, else the default - our side is the
+    note's author (User.full_name), the other side the client's / supplier's МОЛ. A DeliveryNote is received by us,
+    a ClientDeliveryNote handed over by us."""
+    author = note.created_by.full_name if note.created_by else ''
+    party = getattr(note, 'client', None) or getattr(note, 'supplier', None)
+    other = (getattr(party, 'mol', None) or '') if party else ''
+    handed, received = (other, author) if isinstance(note, DeliveryNote) else (author, other)
+    return note.handed_by or handed, note.received_by or received
+
+
+app.jinja_env.globals['note_signatures'] = _note_signatures
+
+
+@app.route('/admin/delivery-notes/<int:note_id>/signatures', methods=['POST'])
+@app.route('/admin/client-delivery-notes/<int:note_id>/signatures', methods=['POST'], endpoint='client_note_signatures')
+@role_required('admin')
+def note_signatures(note_id):
+    """Saves the Предал/Приел names of one note (print page form); a field left empty or equal to the default
+    goes back to the default."""
+    client_side = request.endpoint == 'client_note_signatures'
+    note = (ClientDeliveryNote if client_side else DeliveryNote).query.get_or_404(note_id)
+    note.handed_by = note.received_by = None
+    default_handed, default_received = _note_signatures(note)
+    handed = request.form.get('handed_by', '').strip()[:150]
+    received = request.form.get('received_by', '').strip()[:150]
+    note.handed_by = handed if handed and handed != default_handed else None
+    note.received_by = received if received and received != default_received else None
+    db.session.commit()
+    log_action(f'Предал/Приел на протокол №{note.number}: {handed or "-"} / {received or "-"}')
+    flash('Имената за Предал/Приел са запазени.', 'success')
+    return redirect(url_for('admin_client_delivery_note_print' if client_side else 'admin_delivery_note_print',
+                            note_id=note.id))
+
+
 @app.route('/admin/content')
 @login_required
 def admin_content():
@@ -12877,7 +12937,9 @@ def admin_create_user():
         client_id = None
 
     secure_pass = generate_password_hash(password, method='scrypt')
-    new_user = User(username=username, password=secure_pass, role=role, client_id=client_id)
+    new_user = User(username=username, password=secure_pass, role=role, client_id=client_id,
+                    first_name=request.form.get('first_name', '').strip()[:50] or None,
+                    last_name=request.form.get('last_name', '').strip()[:50] or None)
     db.session.add(new_user)
     db.session.commit()
     log_action(f'Създаден потребител "{username}" (роля {role})')
@@ -12931,8 +12993,11 @@ def admin_update_user(user_id):
 
     user_to_update.role = role
     user_to_update.client_id = client_id
+    for field in ('first_name', 'last_name'):
+        if field in request.form:
+            setattr(user_to_update, field, request.form[field].strip()[:50] or None)
     log_action(describe_changes(f'потребител "{user_to_update.username}"', user_to_update,
-                                {'role': 'роля', 'client_id': 'клиент'}))
+                                {'role': 'роля', 'client_id': 'клиент', 'first_name': 'име', 'last_name': 'фамилия'}))
     db.session.commit()
     flash(f'Потребителят {user_to_update.username} беше обновен успешно.', 'success')
     return redirect(url_for('admin_users'))

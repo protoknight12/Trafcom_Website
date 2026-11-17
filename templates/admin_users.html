@@ -34,6 +34,14 @@
                     <input type="text" id="username" name="username" placeholder="Въведете име..." required autocomplete="off">
                 </div>
                 <div class="form-group">
+                    <label for="first_name">Име</label>
+                    <input type="text" id="first_name" name="first_name" maxlength="50" autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label for="last_name">Фамилия</label>
+                    <input type="text" id="last_name" name="last_name" maxlength="50" autocomplete="off">
+                </div>
+                <div class="form-group">
                     <label for="password">Парола</label>
                     <input type="password" id="password" name="password" placeholder="Въведете парола..." required>
                 </div>
@@ -81,7 +89,7 @@
 
         {% if users %}
         <div class="form-group" style="max-width: 360px;">
-            <input type="text" id="adminUsersSearchInput" placeholder="Търсене по потребителско име...">
+            <input type="text" id="adminUsersSearchInput" placeholder="Търсене по потребителско име или име...">
         </div>
         {% endif %}
 
@@ -91,6 +99,7 @@
                 <tr>
                     <th>ID</th>
                     <th>Потребителско име</th>
+                    <th>Име и фамилия</th>
                     <th>Роля / Права</th>
                     <th>Клиент</th>
                     <th class="text-right">Действия</th>
@@ -98,11 +107,12 @@
                 </thead>
                 <tbody id="adminUsersTableBody">
                 {% for user in users %}
-                <tr data-search="{{ user.username | lower }}">
+                <tr data-search="{{ user.username | lower }} {{ (user.first_name or '') | lower }} {{ (user.last_name or '') | lower }}">
                     <td>#{{ user.id }}</td>
                     <td class="username-cell">
                         <strong>{{ user.username }}</strong>
                     </td>
+                    <td>{{ ' '.join([user.first_name or '', user.last_name or '']).strip() or '-' }}</td>
                     <td>
                         {% if user.is_admin %}
                         <span class="badge badge-admin">Администратор</span>
@@ -118,31 +128,31 @@
                     </td>
                     <td>{{ user.client.name if user.client else '-' }}</td>
                     <td class="text-right">
-                        {% if user.id == current_user.id %}
-                        <span class="text-muted text-small">Текуща сесия</span>
-                        {% else %}
                         <div style="display: flex; gap: 8px; justify-content: flex-end; align-items: center; flex-wrap: wrap;">
                             <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;" data-dialog="userEditDialog"
                                     data-action="{{ url_for('admin_update_user', user_id=user.id) }}"
                                     data-title="Редакция: {{ user.username }}"
-                                    data-values='{{ {"role": user.role, "client_id": user.client_id or ""}|tojson|forceescape }}'>Редактирай</button>
+                                    data-values='{{ {"role": user.role, "client_id": user.client_id or "", "first_name": user.first_name or "", "last_name": user.last_name or ""}|tojson|forceescape }}'>Редактирай</button>
+                            {% if user.id == current_user.id %}
+                            <span class="text-muted text-small">Текуща сесия</span>
+                            {% else %}
                             <form action="{{ url_for('admin_delete_user', user_id=user.id) }}" method="POST" onsubmit="return confirm('Изтриването на потребителя ще премахне и цялата му библиотека с чертежи! Потвърждавате ли?');" style="display:inline;">
                                 {% include 'partials/csrf_field.html' %}
                                 <button type="submit" class="btn-delete">Изтрий профила</button>
                             </form>
+                            {% endif %}
                         </div>
-                        {% endif %}
                     </td>
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="5" class="text-center no-data">
+                    <td colspan="6" class="text-center no-data">
                         Няма намерени регистрирани потребители в базата данни.
                     </td>
                 </tr>
                 {% endfor %}
                 {% if users %}
-                <tr class="search-empty-row" hidden><td colspan="5" class="text-center no-data">Няма съвпадения.</td></tr>
+                <tr class="search-empty-row" hidden><td colspan="6" class="text-center no-data">Няма съвпадения.</td></tr>
                 {% endif %}
                 </tbody>
             </table>
@@ -153,6 +163,14 @@
         <h3 data-dialog-title>Редакция на потребител</h3>
         <form method="POST" class="admin-form">
             {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="edit_user_first_name">Име</label>
+                <input type="text" id="edit_user_first_name" name="first_name" maxlength="50" autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="edit_user_last_name">Фамилия</label>
+                <input type="text" id="edit_user_last_name" name="last_name" maxlength="50" autocomplete="off">
+            </div>
             <div class="form-group">
                 <label for="edit_user_role">Роля</label>
                 <select id="edit_user_role" name="role">
