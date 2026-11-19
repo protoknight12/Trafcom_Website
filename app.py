@@ -1541,6 +1541,31 @@ class Supplier(db.Model):
     vat_number = db.Column(db.String(20), nullable=True)
     phone = db.Column(db.String(50), nullable=True)
     email = db.Column(db.String(150), nullable=True)
+    # More contact data (owner's decision 2026-11-19) - all optional, see SUPPLIER_EXTRA_FIELDS.
+    address = db.Column(db.String(255), nullable=True)            # адрес на управление (printed on notes)
+    warehouse_address = db.Column(db.String(255), nullable=True)  # склад / адрес за товарене
+    mol = db.Column(db.String(150), nullable=True)                # printed on notes + default "Предал"
+    contact_person = db.Column(db.String(150), nullable=True)
+    contact_phone = db.Column(db.String(50), nullable=True)
+    phone2 = db.Column(db.String(50), nullable=True)
+    website = db.Column(db.String(255), nullable=True)
+    bank_account = db.Column(db.String(100), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+
+
+# Supplier fields beyond name/eik/vat/phone/email: (column, label, input type) - one list drives the add form
+# (partials/supplier_fields.html), the edit window, admin_add_supplier()/update_supplier() and the list page.
+SUPPLIER_EXTRA_FIELDS = [
+    ('address', 'Адрес на управление', 'text'),
+    ('warehouse_address', 'Адрес на склада / за товарене', 'text'),
+    ('mol', 'МОЛ', 'text'),
+    ('contact_person', 'Лице за контакт', 'text'),
+    ('contact_phone', 'Телефон на лицето за контакт', 'text'),
+    ('phone2', 'Втори телефон', 'text'),
+    ('website', 'Уебсайт', 'text'),
+    ('bank_account', 'Банкова сметка (IBAN)', 'text'),
+    ('notes', 'Забележка', 'textarea'),
+]
 
 
 class DeliveryNote(db.Model):
@@ -6467,6 +6492,7 @@ app.jinja_env.globals['material_dimension_labels'] = material_dimension_labels
 app.jinja_env.globals['material_price_m2_label'] = material_price_m2_label
 app.jinja_env.globals['format_cut_dimensions'] = format_cut_dimensions
 app.jinja_env.globals['material_available_qty'] = _material_available_qty
+app.jinja_env.globals['supplier_extra_fields'] = SUPPLIER_EXTRA_FIELDS
 app.jinja_env.globals['material_stock_kg'] = material_stock_kg
 app.jinja_env.globals['material_native_kg'] = material_native_kg
 app.jinja_env.globals['material_kg_per_stock_unit'] = material_kg_per_stock_unit
@@ -12013,7 +12039,8 @@ def edit_supplier_window(supplier_id):
             {'name': 'eik', 'label': 'ЕИК / Булстат', 'value': supplier.eik or '', 'type': 'text',
              'pattern': r'\d{9}', 'maxlength': 9, 'inputmode': 'numeric', 'title': 'Точно 9 цифри'},
             {'name': 'vat_number', 'label': 'ИН по ДДС', 'value': supplier.vat_number or '', 'type': 'text'},
-        ]
+        ] + [{'name': column, 'label': label, 'value': getattr(supplier, column) or '', 'type': kind}
+             for column, label, kind in SUPPLIER_EXTRA_FIELDS]
     )
 
 
@@ -12034,8 +12061,12 @@ def update_supplier(supplier_id):
     supplier.phone = request.form.get('phone', '').strip() or None
     supplier.eik = eik
     supplier.vat_number = request.form.get('vat_number', '').strip() or None
+    for column, _, _ in SUPPLIER_EXTRA_FIELDS:
+        if column in request.form:   # an older form without the field keeps the stored value
+            setattr(supplier, column, request.form.get(column, '').strip() or None)
     log_action(describe_changes(f'доставчик "{supplier.name}"', supplier, {
         'name': 'име', 'email': 'имейл', 'phone': 'телефон', 'eik': 'ЕИК', 'vat_number': 'ДДС №',
+        **{column: label.lower() for column, label, _ in SUPPLIER_EXTRA_FIELDS},
     }))
     db.session.commit()
     flash('Доставчикът беше обновен успешно.', 'success')
@@ -12395,6 +12426,7 @@ def admin_add_supplier():
         vat_number=request.form.get('vat_number', '').strip() or None,
         phone=request.form.get('phone', '').strip() or None,
         email=request.form.get('email', '').strip() or None,
+        **{column: request.form.get(column, '').strip() or None for column, _, _ in SUPPLIER_EXTRA_FIELDS},
     )
     db.session.add(supplier)
     db.session.commit()

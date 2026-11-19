@@ -1,0 +1,12 @@
+{#- The optional contact fields of a new Supplier (SUPPLIER_EXTRA_FIELDS) - shared by the add forms on
+    admin_clients.html and admin_delivery_notes.html. #}
+{% for column, label, kind in supplier_extra_fields %}
+<div class="form-group"{% if kind == 'textarea' %} style="flex-basis: 100%;"{% endif %}>
+    <label for="supplier_{{ column }}">{{ label }}</label>
+    {% if kind == 'textarea' %}
+    <textarea id="supplier_{{ column }}" name="{{ column }}" rows="3"></textarea>
+    {% else %}
+    <input type="text" id="supplier_{{ column }}" name="{{ column }}" autocomplete="off">
+    {% endif %}
+</div>
+{% endfor %}

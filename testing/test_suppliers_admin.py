@@ -86,6 +86,34 @@ def test_list_add_edit_delete(ids):
         assert db.session.get(Supplier, ids['free']) is None
 
 
+def test_contact_details_saved_listed_and_printed(ids):
+    c = _login('qa_admin')
+    data = {'name': 'Детайлен ООД', 'back': 'clients', 'address': 'гр. Пловдив, ул. Първа 1',
+            'warehouse_address': 'Склад Кукленско шосе', 'mol': 'Петър Петров', 'contact_person': 'Мария',
+            'contact_phone': '0899 111 222', 'phone2': '032 123 456', 'website': 'javascript://x%0aalert(1)',
+            'bank_account': 'BG80BNBG96611020345678', 'notes': 'Доставя само в петък'}
+    c.post('/admin/suppliers/add', data=data)
+    with flask_app.app_context():
+        s = Supplier.query.filter_by(name='Детайлен ООД').one()
+        assert all(getattr(s, k) == v for k, v in data.items() if k not in ('back', 'name'))
+        sid = s.id
+    page = c.get('/admin/clients').get_data(as_text=True)
+    assert 'Склад: Склад Кукленско шосе' in page and 'Контакт: Мария, 0899 111 222' in page and 'Доставя само в петък' in page
+    assert 'href="javascript' not in page and 'href="https://javascript://' in page   # never a javascript: link
+    edit = c.get(f'/admin/suppliers/{sid}/edit').get_data(as_text=True)
+    assert 'BG80BNBG96611020345678' in edit and 'name="notes"' in edit
+    c.post(f'/admin/suppliers/{sid}/update', data={'name': 'Детайлен ООД', 'notes': '', 'mol': 'Иван Иванов'})
+    with flask_app.app_context():
+        s = db.session.get(Supplier, sid)
+        assert s.notes is None and s.mol == 'Иван Иванов' and s.address == 'гр. Пловдив, ул. Първа 1'   # absent field kept
+        note = DeliveryNote(supplier_id=sid, note_number='F-2', created_by_id=1)
+        db.session.add(note)
+        db.session.commit()
+        note_id = note.id
+    printed = c.get(f'/admin/delivery-notes/{note_id}/print').get_data(as_text=True)
+    assert 'Адрес: гр. Пловдив, ул. Първа 1' in printed and 'МОЛ: Иван Иванов' in printed
+
+
 def test_worker_cannot_edit_or_delete(ids):
     c = _login('qa_worker')
     c.post(f'/admin/suppliers/{ids["free"]}/update', data={'name': 'Хак'})

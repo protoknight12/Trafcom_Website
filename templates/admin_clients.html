@@ -250,6 +250,7 @@
                 <label for="supplier_vat">ИН по ДДС</label>
                 <input type="text" id="supplier_vat" name="vat_number" placeholder="напр. BG203040557">
             </div>
+            {% include 'partials/supplier_fields.html' %}
             <button type="submit" class="btn-submit">Добави доставчик</button>
         </form>
     </section>
@@ -266,10 +267,10 @@
                 <thead>
                 <tr>
                     <th>Име</th>
-                    <th>Имейл</th>
-                    <th>Телефон</th>
-                    <th>ЕИК</th>
-                    <th>ИН по ДДС</th>
+                    <th>Контакти</th>
+                    <th>Адреси</th>
+                    <th>ЕИК / ДДС</th>
+                    <th>Забележка</th>
                     <th class="text-right">Стокови разписки</th>
                     <th class="text-right">Редакция</th>
                     <th class="text-right">Изтриване</th>
@@ -277,12 +278,21 @@
                 </thead>
                 <tbody id="adminSuppliersTableBody">
                 {% for supplier in suppliers %}
-                <tr data-search="{{ (supplier.name ~ ' ' ~ (supplier.email or '') ~ ' ' ~ (supplier.phone or '') ~ ' ' ~ (supplier.eik or '') ~ ' ' ~ (supplier.vat_number or '')) | lower }}">
-                    <td><strong>{{ supplier.name }}</strong></td>
-                    <td>{{ supplier.email or '-' }}</td>
-                    <td>{{ supplier.phone or '-' }}</td>
-                    <td>{{ supplier.eik or '-' }}</td>
-                    <td>{{ supplier.vat_number or '-' }}</td>
+                <tr data-search="{{ ([supplier.name, supplier.email, supplier.phone, supplier.phone2, supplier.eik, supplier.vat_number, supplier.address, supplier.warehouse_address, supplier.mol, supplier.contact_person, supplier.contact_phone, supplier.website, supplier.notes]|select|join(' ')) | lower }}">
+                    <td><strong>{{ supplier.name }}</strong>{% if supplier.mol %}<div class="text-muted text-small">МОЛ: {{ supplier.mol }}</div>{% endif %}</td>
+                    <td class="text-small">
+                        {% for v in [supplier.phone, supplier.phone2, supplier.email] if v %}<div>{{ v }}</div>{% endfor %}
+                        {% if supplier.contact_person or supplier.contact_phone %}<div class="text-muted">Контакт: {{ [supplier.contact_person, supplier.contact_phone]|select|join(', ') }}</div>{% endif %}
+                        {% if supplier.website %}<div><a href="{{ supplier.website if supplier.website.lower().startswith(('http://', 'https://')) else 'https://' ~ supplier.website }}" target="_blank" rel="noopener noreferrer">{{ supplier.website }}</a></div>{% endif %}
+                        {% if not (supplier.phone or supplier.phone2 or supplier.email or supplier.contact_person or supplier.contact_phone or supplier.website) %}-{% endif %}
+                    </td>
+                    <td class="text-small">
+                        {% if supplier.address %}<div>{{ supplier.address }}</div>{% endif %}
+                        {% if supplier.warehouse_address %}<div class="text-muted">Склад: {{ supplier.warehouse_address }}</div>{% endif %}
+                        {% if not (supplier.address or supplier.warehouse_address) %}-{% endif %}
+                    </td>
+                    <td class="text-small">{{ [supplier.eik, supplier.vat_number]|select|join(' / ') or '-' }}{% if supplier.bank_account %}<div class="text-muted">{{ supplier.bank_account }}</div>{% endif %}</td>
+                    <td class="text-small" style="white-space: pre-line; max-width: 260px;">{{ supplier.notes or '-' }}</td>
                     <td class="text-right">{{ supplier_notes.get(supplier.id, 0) }}</td>
                     <td class="text-right">
                         <a href="{{ url_for('edit_supplier_window', supplier_id=supplier.id) }}" class="btn-secondary" data-frame style="padding: 6px 10px; font-size: 0.78rem;">Редакция</a>
