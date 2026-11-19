@@ -99,6 +99,7 @@ def test_same_materials_and_operations_are_summed_and_add_up_to_the_note(ids):
     assert list(mats) == ['Стомана, 2 мм']
     assert mats['Стомана, 2 мм']['qty'] == pytest.approx(10 * 0.01 + 5 * 0.02 + 2 * 0.01)   # m²
     assert mats['Стомана, 2 мм']['unit'] == 'м²'
+    assert mats['Стомана, 2 мм']['kg'] == pytest.approx(mats['Стомана, 2 мм']['qty'] * 15.7)   # 2 mm steel, 7.85 kg/dm³
     assert set(ops) == {'Огъване', 'Боядисване'}
     assert ops['Огъване']['qty'] == pytest.approx((10 * 6 + 5 * 3 + 2 * 6) / 60)            # hours
     assert ops['Огъване']['unit'] == 'ч'
@@ -181,3 +182,19 @@ def test_manual_note_has_no_scrap_columns(ids):
     note_id = _note(ids, [('detail', ids['a'], 2, 7.0)])
     html = _login('qa_admin').get(f'/admin/client-delivery-notes/{note_id}/breakdown').get_data(as_text=True)
     assert '>Брак<' not in html and 'id="scrapSeparate"' not in html
+
+
+def test_material_line_prints_its_weight(ids):
+    with flask_app.app_context():
+        lot = MaterialPrice.query.filter_by(key='steel').first()
+        lot.stock_quantity = 2
+        db.session.commit()
+        mid = lot.id
+    note_id = _note(ids, [('material', mid, 3, None)])
+    with flask_app.app_context():
+        bd = _note_breakdown(db.session.get(ClientDeliveryNote, note_id))
+    assert bd['materials'][0]['kg'] == pytest.approx(3 * 15.7)    # 3 sheets of 1 m²
+    c = _login('qa_admin')
+    assert '47.1 кг' in c.get(f'/admin/client-delivery-notes/{note_id}/print').get_data(as_text=True)
+    assert '47.1 кг' in c.get(f'/admin/client-delivery-notes/{note_id}/breakdown').get_data(as_text=True)
+    assert '31.4 кг' in c.get('/storage/materials').get_data(as_text=True)

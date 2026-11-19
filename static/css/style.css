@@ -1666,3 +1666,18 @@ a.entity-link:hover { color: var(--primary, #2563eb); text-decoration: underline
 @media print {
     .navbar, .subnav, .site-footer, #chatbot-widget, .flash-messages, .no-print { display: none !important; }
 }
+
+/* Collapsible tree rows (static/js/tree_table.js) */
+.tree-head { cursor: pointer; font-weight: 600; background: rgba(127, 127, 127, 0.10); }
+.tree-head .tree-chevron { display: inline-block; width: 1em; transition: transform 0.15s ease; }
+.tree-head.open .tree-chevron { transform: rotate(90deg); }
+.tree-head .tree-meta { font-weight: 400; opacity: 0.7; font-size: 0.85em; margin-left: 8px; }
+.tree-head.tree-l1 td:first-child { padding-left: 24px; }
+.tree-head.tree-l2 td:first-child { padding-left: 40px; }
+.tree-indent-1 td:first-child { padding-left: 40px; }
+.tree-indent-2 td:first-child { padding-left: 56px; }
+.tree-indent-3 td:first-child { padding-left: 72px; }
+.tree-collapsed { display: none; }
+[data-tree-section] { cursor: pointer; }
+[data-tree-section]::before { content: "▶"; display: inline-block; width: 1.1em; font-size: 0.8em; transform: rotate(90deg); transition: transform 0.15s ease; }
+[data-tree-section].tree-section-closed::before { transform: none; }

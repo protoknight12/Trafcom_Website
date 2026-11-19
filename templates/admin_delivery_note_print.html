@@ -70,6 +70,7 @@
         {% for item in note.items %}
         {% set line_total = (item.quantity * item.unit_price) if item.unit_price is not none else 0 %}
         {% set ns.total = ns.total + line_total %}
+        {% set mat = mats.get(item.target_id) if item.target_type == 'material' else none %}
         <tr>
             <td class="idx">{{ loop.index }}</td>
             <td>{{ item.description_snapshot }}</td>
@@ -81,7 +82,7 @@
                 {{ dims|join(' × ') }}{% if item.thickness %}{{ ', ' if dims else '' }}деб. {{ '%g'|format(item.thickness) }}{% endif %}
             </td>
             <td class="muted">{{ item.notes or '' }}</td>
-            <td class="num">{{ '%g'|format(item.quantity) }}</td>
+            <td class="num">{{ '%g'|format(item.quantity) }}{% if mat %}{% set kgt = material_stock_kg(mat, item.quantity)|kg|trim %}{% if kgt %}<div class="muted" style="font-size: .85em;">{{ kgt }}</div>{% endif %}{% endif %}</td>
             {% if priced %}
             <td class="num price">{{ item.unit_price|money if item.unit_price is not none else '' }}</td>
             <td class="num price">{{ line_total|money if item.unit_price is not none else '' }}</td>

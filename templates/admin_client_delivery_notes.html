@@ -90,6 +90,7 @@
                                     data-name="{{ m.display_name }}" data-w="{{ m.sheet_width_mm if m.sheet_width_mm is not none else '' }}"
                                     data-h="{{ m.sheet_length_mm if m.sheet_length_mm is not none else '' }}" data-t="{{ m.thickness_mm if m.thickness_mm is not none else '' }}"
                                     data-type="{{ m.type }}" data-id="{{ m.id }}" data-brand="{{ m.brand or '' }}"
+                                    data-density="{{ material_density(m) or '' }}" data-weight="{{ m.weight_kg or '' }}" data-hm="{{ m.height_mm or '' }}"
                                     data-owner="{{ m.owner_client_id or '' }}" data-unit="{{ material_price_unit(m.type) }}">{{ format_material_option(m) }} (наличност: {{ '%g'|format(m.stock_quantity or 0) }})</option>
                             {% endfor %}
                         </optgroup>
@@ -118,6 +119,10 @@
                     <label for="cdn_qty">Количество</label>
                     <input type="number" id="cdn_qty" value="1" min="0.01" step="0.01">
                 </div>
+                <div class="form-group qty-field" id="cdn_kg_group">
+                    <label for="cdn_kg">или кг</label>
+                    <input type="number" id="cdn_kg" min="0" step="any">
+                </div>
                 <div class="form-group qty-field">
                     <label for="cdn_price">Ед. цена (€, по избор)</label>
                     <input type="number" id="cdn_price" min="0" step="0.01">
@@ -129,6 +134,8 @@
                 <div class="form-group qty-field" id="cdn_remnant_box" style="display: none;">
                     <label for="cdn_remnant_qty">Остатък (кол.)</label>
                     <input type="number" id="cdn_remnant_qty" min="0" step="0.01" placeholder="няма = отпадък">
+                    <label for="cdn_remnant_kg" style="margin-top: 6px;">или кг</label>
+                    <input type="number" id="cdn_remnant_kg" min="0" step="any">
                 </div>
                 <div class="form-group qty-field cdn-remnant-dims" style="display: none;">
                     <label for="cdn_remnant_width">Остатък ширина (мм)</label>
@@ -280,6 +287,7 @@
 
 {% if current_user.is_admin %}
 <script src="{{ url_for('static', filename='js/material_picker.js') }}"></script>
+<script src="{{ url_for('static', filename='js/material_weight.js') }}"></script>
 <script>
     let cdnItems = [];
 
@@ -465,6 +473,7 @@
         ['cdn_notes', 'cdn_remnant_qty', 'cdn_remnant_width', 'cdn_remnant_height'].forEach(function (id) {
             document.getElementById(id).value = '';
         });
+        cdnRemnantKg.refresh();
         renderCdnTable();
     }
 
@@ -495,6 +504,8 @@
         document.getElementById('cdn_remnant_qty').value = item.remnant_qty || '';
         document.getElementById('cdn_remnant_width').value = item.remnant_width || '';
         document.getElementById('cdn_remnant_height').value = item.remnant_height || '';
+        cdnKg.refresh();
+        cdnRemnantKg.refresh();
         cdnEditingIndex = index;
         document.getElementById('cdnAddRowBtn').textContent = 'Запази реда';
         document.getElementById('cdn_qty').focus();
@@ -583,6 +594,39 @@
                 return row;
             })
         );
+    });
+
+    // "или кг" next to the quantity of a MATERIAL line (and of a consume line's remnant): kg of one stock unit
+    // (a sheet / a metre / a piece) of the picked lot; a sheet remnant weighs by its own width x length.
+    const CDN_TYPES = {{ material_types_js()|tojson }};
+    function cdnLotParams() {
+        const sel = document.getElementById('cdn_material_select');
+        const opt = sel.options[sel.selectedIndex];
+        return opt && opt.value ? MaterialKg.optionParams(opt, CDN_TYPES) : null;
+    }
+    function cdnKgPerUnit() {
+        if (document.querySelector('input[name="cdn_item_type"]:checked').value !== 'material') return undefined;
+        const p = cdnLotParams();
+        return p ? MaterialKg.kgPerStockUnit(p) : null;
+    }
+    function cdnRemnantKgPerUnit() {
+        const p = cdnLotParams();
+        if (!p) return null;
+        if (p.unit !== 'm2') return MaterialKg.kgPerStockUnit(p);
+        const per = MaterialKg.kgPerUnit(p);
+        const w = MaterialKg.num(document.getElementById('cdn_remnant_width'));
+        const h = MaterialKg.num(document.getElementById('cdn_remnant_height'));
+        return per && w && h ? per * w * h / 1e6 : null;
+    }
+    const cdnWatch = ['cdn_material_select', 'cdn_remnant_width', 'cdn_remnant_height', 'kind']
+        .map(function (id) { return document.getElementById(id); })
+        .concat(Array.from(document.querySelectorAll('input[name="cdn_item_type"]')));
+    const cdnKg = MaterialKg.bind(document.getElementById('cdn_qty'), document.getElementById('cdn_kg'),
+        cdnKgPerUnit, document.getElementById('cdn_kg_group'), cdnWatch);
+    const cdnRemnantKg = MaterialKg.bind(document.getElementById('cdn_remnant_qty'),
+        document.getElementById('cdn_remnant_kg'), cdnRemnantKgPerUnit, null, cdnWatch);
+    document.addEventListener('dialog-open', function (e) {
+        if (e.target.id === 'clientDeliveryNoteSection-dialog') { cdnKg.refresh(); cdnRemnantKg.refresh(); }
     });
 
     fillPriceFromSelection();

@@ -11,16 +11,51 @@
            link color otherwise - unreadable against this dark theme. */
         .data-table a { color: var(--text-main); text-decoration: none; }
         .data-table a:hover { color: var(--accent-primary); text-decoration: underline; }
-        .group-toggle-row { cursor: pointer; }
-        .group-toggle-row .toggle-chevron { display: inline-block; width: 1em; transition: transform 0.15s ease; }
-        .group-toggle-row.expanded .toggle-chevron { transform: rotate(90deg); }
-        .lot-row td:first-child { padding-left: 32px; }
         .lot-count-badge { opacity: 0.65; font-size: 0.85em; margin-left: 6px; }
     </style>
 </head>
 <body>
 {% set subnav = 'catalog' %}
 {% include 'partials/navbar.html' %}
+
+{#- One leaf (a single material or one price lot) as <tr>: filter data for the client-side filters
+    (tree_table.js treeFilter) + the stock-level colour. A client's lot carries no value. #}
+{% macro leaf_row(m, parent, indent, unit, bg) %}
+{% set kg = material_stock_kg(m) %}
+<tr class="tree-indent-{{ indent }}" data-parent="{{ parent }}"
+    data-search="{{ (format_material_option(m) ~ ' ' ~ material_type_label(m.type) ~ ' ' ~ (m.grade.name if m.grade else '')) | lower }}"
+    data-type="{{ m.type }}" data-grade="{{ m.grade_id or 'none' }}" data-brand="{{ (m.brand or '')|lower }}"
+    data-thickness="{{ m.thickness_mm if m.thickness_mm else '' }}"
+    data-out="{{ 1 if m.stock_quantity <= 0 else 0 }}"
+    data-low="{{ 1 if m.min_quantity is not none and m.stock_quantity <= m.min_quantity else 0 }}"
+    data-kg="{{ '%.3f'|format(kg) if kg is not none and kg > 0 else 0 }}"
+    data-value="{{ 0 if m.owner_client_id else '%.2f'|format(m.cost_per_m2 * material_available_qty(m)) }}"
+    {% if bg %}style="background-color: {{ bg }};"{% endif %}>
+    <td><a href="{{ url_for('admin_material_history', material_id=m.id) }}">{{ format_material_option(m) }}</a></td>
+    <td>{{ m.owner_client.name if m.owner_client_id and m.owner_client else 'Трафком' }}</td>
+    <td>{{ material_type_label(m.type) }}</td>
+    <td class="text-center">{{ m.stock_quantity|round(2) }}{{ kg|kg }}{% if reserved.get(m.id) %}<div class="text-muted text-small">Заделено: {{ reserved[m.id]|round(2) }}{{ material_stock_kg(m, reserved[m.id])|kg }}</div>{% endif %}</td>
+    {#- A client's material is not ours: no price, no value. #}
+    <td class="text-right">{{ '—' if m.owner_client_id else "%.2f"|format(m.cost_per_m2) ~ ' €/' ~ unit }}</td>
+    <td class="text-right">{{ "%.2f €"|format(m.price_per_unit) if m.price_per_unit is not none and not m.owner_client_id else '—' }}</td>
+    {#- Total value = unit price x AVAILABLE quantity (not the raw
+    stock_quantity shown above) - sheet/other stock is a whole-sheet
+    count, not a running m² total, so the real €-value of what's on
+    hand is price x (count x one sheet's own area) - see
+    material_available_qty()/_material_available_qty() in app.py. #}
+    <td class="text-right">{{ '—' if m.owner_client_id else "%.2f"|format(m.cost_per_m2 * material_available_qty(m)) ~ ' €' }}</td>
+</tr>
+{% endmacro %}
+
+{#- Тип / Вид header: live count + total kg + total value of the visible leaves under it. #}
+{% macro head_row(node, parent, level, title) %}
+<tr class="tree-head tree-l{{ level }}" data-node="{{ node }}"{% if parent %} data-parent="{{ parent }}"{% endif %}>
+    <td colspan="3"><span class="tree-chevron">▶</span>{{ title }}<span class="tree-meta">(<span data-count></span> поз.)</span></td>
+    <td class="text-center"><span data-sum="kg" data-dec="1" data-suffix=" кг"></span></td>
+    <td colspan="2"></td>
+    <td class="text-right"><span data-sum="value" data-dec="2" data-suffix=" €"></span></td>
+</tr>
+{% endmacro %}
 
 <main class="admin-container">
 
@@ -38,7 +73,7 @@
         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
             <div>
                 <h3 style="margin-bottom: 4px;">Склад &middot; Материали</h3>
-                <p class="section-subtitle" style="margin: 0;">Текуща наличност по материали.</p>
+                <p class="section-subtitle" style="margin: 0;">Текуща наличност по материали, групирана по тип и вид.</p>
             </div>
             <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                 <a class="btn-submit" style="text-decoration: none;" href="{{ url_for('storage_requests') }}">Заявки за материали</a>
@@ -48,14 +83,40 @@
             </div>
         </div>
 
-        <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-top: 16px;">
+        {% set all_lots = material_groups|map(attribute='lots')|sum(start=[]) %}
+        {% set brands = all_lots|map(attribute='brand')|select|unique|sort %}
+        {% set thicknesses = all_lots|map(attribute='thickness_mm')|select|unique|sort %}
+        {% set grades_seen = {} %}
+        {% for lot in all_lots if lot.grade %}{% if grades_seen.update({lot.grade_id: lot.grade.name}) %}{% endif %}{% endfor %}
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 16px;">
             {% if material_groups %}
-            <div class="form-group" style="margin: 0; max-width: 360px; flex: 1 1 260px;">
-                <input type="text" id="materialSearchInput" placeholder="Търсене по име, марка, тип...">
-            </div>
+            <input type="text" id="materialSearchInput" placeholder="Търсене по име, марка, тип..." style="flex: 2 1 220px;">
+            <select id="filterType" aria-label="Тип" style="flex: 1 1 140px;">
+                <option value="">Всички типове</option>
+                {% for type_key, type_label in material_type_labels().items() %}<option value="{{ type_key }}">{{ type_label }}</option>{% endfor %}
+            </select>
+            <select id="filterGrade" aria-label="Вид" style="flex: 1 1 140px;">
+                <option value="">Всички видове</option>
+                {% for gid, gname in grades_seen.items() %}<option value="{{ gid }}">{{ gname }}</option>{% endfor %}
+                <option value="none">Без вид</option>
+            </select>
+            <select id="filterBrand" aria-label="Марка" style="flex: 1 1 140px;">
+                <option value="">Всички марки</option>
+                {% for b in brands %}<option value="{{ b|lower }}">{{ b }}</option>{% endfor %}
+            </select>
+            <select id="filterThickness" aria-label="Дебелина" style="flex: 1 1 120px;">
+                <option value="">Всички дебелини</option>
+                {% for t in thicknesses %}<option value="{{ t }}">{{ t|round(2) }} мм</option>{% endfor %}
+            </select>
+            <select id="filterStatus" aria-label="Наличност" style="flex: 1 1 150px;">
+                <option value="">Всички наличности</option>
+                <option value="instock">Налични</option>
+                <option value="out">Без наличност</option>
+                <option value="low">Под минимума</option>
+            </select>
             {% endif %}
             {#- Собственик: all / own / client:<id> - applied server-side by storage_materials(). #}
-            <select id="ownerFilter" aria-label="Собственик" style="flex: 0 1 220px;"
+            <select id="ownerFilter" aria-label="Собственик" style="flex: 0 1 200px;"
                     onchange="location.href = '?owner=' + encodeURIComponent(this.value)">
                 <option value="all" {% if owner_filter == 'all' %}selected{% endif %}>Всички собственици</option>
                 <option value="own" {% if owner_filter == 'own' %}selected{% endif %}>Трафком</option>
@@ -63,6 +124,11 @@
                 <option value="client:{{ c.id }}" {% if owner_filter == 'client:' ~ c.id %}selected{% endif %}>{{ c.name }}</option>
                 {% endfor %}
             </select>
+            {% if material_groups %}
+            <button type="button" id="filterReset" class="btn-secondary" style="padding: 6px 12px;">Изчисти</button>
+            <button type="button" class="btn-secondary" style="padding: 6px 12px;" data-tree-all="expand">Разгъни всички</button>
+            <button type="button" class="btn-secondary" style="padding: 6px 12px;" data-tree-all="collapse">Сгъни всички</button>
+            {% endif %}
         </div>
 
         <div class="table-responsive" style="margin-top: 16px;">
@@ -78,62 +144,48 @@
                     <th class="text-right">Обща стойност</th>
                 </tr>
                 </thead>
-                <tbody id="materialsTableBody">
+                <tbody id="materialsTableBody" data-tree>
+                {% set ns = namespace(type=none, grade=none, n=0) %}
                 {% for group in material_groups %}
                 {% set lots = group.lots %}
-                {% set unit = material_unit_short(lots[0].type) %}
+                {% set first = lots[0] %}
+                {% set unit = material_unit_short(first.type) %}
+                {% set type_node = 't-' ~ first.type %}
+                {% set grade_node = 'g-' ~ first.type ~ '-' ~ (group.grade_id or 'none') %}
+                {% if ns.type != first.type %}
+                {% set ns.type = first.type %}{% set ns.grade = none %}
+                {{ head_row(type_node, none, 0, material_type_label(first.type)) }}
+                {% endif %}
+                {% if ns.grade != grade_node %}
+                {% set ns.grade = grade_node %}
+                {{ head_row(grade_node, type_node, 1, group.grade_name or 'Без вид') }}
+                {% endif %}
                 {% if lots|length == 1 %}
-                {% set material = lots[0] %}
-                {% if material.stock_quantity <= 0 %}
+                {% if first.stock_quantity <= 0 %}
                 {% set row_bg = 'rgba(220, 53, 69, 0.12)' %}
-                {% elif material.min_quantity is not none and material.stock_quantity <= material.min_quantity %}
+                {% elif first.min_quantity is not none and first.stock_quantity <= first.min_quantity %}
                 {% set row_bg = 'rgba(255, 193, 7, 0.12)' %}
                 {% else %}
                 {% set row_bg = none %}
                 {% endif %}
-                <tr data-search="{{ (format_material_option(material) ~ ' ' ~ material_type_label(material.type)) | lower }}" {% if row_bg %}style="background-color: {{ row_bg }};"{% endif %}>
-                    <td><a href="{{ url_for('admin_material_history', material_id=material.id) }}">{{ format_material_option(material) }}</a></td>
-                    <td>{{ material.owner_client.name if material.owner_client_id and material.owner_client else 'Трафком' }}</td>
-                    <td>{{ material_type_label(material.type) }}</td>
-                    <td class="text-center">{{ material.stock_quantity|round(2) }}{% if reserved.get(material.id) %}<div class="text-muted text-small">Заделено: {{ reserved[material.id]|round(2) }}</div>{% endif %}</td>
-                    {#- A client's material is not ours: no price, no value. #}
-                    <td class="text-right">{{ '—' if material.owner_client_id else "%.2f"|format(material.cost_per_m2) ~ ' €/' ~ unit }}</td>
-                    <td class="text-right">{{ "%.2f €"|format(material.price_per_unit) if material.price_per_unit is not none and not material.owner_client_id else '—' }}</td>
-                    {#- Total value = unit price x AVAILABLE quantity (not the raw
-                    stock_quantity shown above) - sheet/other stock is a whole-sheet
-                    count, not a running m² total, so the real €-value of what's on
-                    hand is price x (count x one sheet's own area) - see
-                    material_available_qty()/_material_available_qty() in app.py. #}
-                    <td class="text-right">{{ '—' if material.owner_client_id else "%.2f"|format(material.cost_per_m2 * material_available_qty(material)) ~ ' €' }}</td>
-                </tr>
+                {{ leaf_row(first, grade_node, 2, unit, row_bg) }}
                 {% else %}
-                {#- Several price-lots of the same name/dims/type (see
-                storage_materials() grouping) - one summary row, expandable
-                into each lot's own row underneath. Aggregate fields
-                (label/unit/total_stock/total_value/min_price/max_price/
-                row_bg) are precomputed in storage_materials(). #}
-                {% set ns = namespace(search_parts=[]) %}
-                {% for lot in lots %}{% set ns.search_parts = ns.search_parts + [format_material_option(lot)] %}{% endfor %}
-                {% set group_search = ns.search_parts|join(' ') ~ ' ' ~ material_type_label(lots[0].type) %}
-                <tr class="group-toggle-row" data-search="{{ group_search|lower }}" {% if group.row_bg %}style="background-color: {{ group.row_bg }};"{% endif %}>
-                    <td><span class="toggle-chevron">▶</span>{{ group.label }}<span class="lot-count-badge">{{ lots|length }} партиди</span></td>
-                    <td>{{ lots[0].owner_client.name if lots[0].owner_client_id and lots[0].owner_client else 'Трафком' }}</td>
-                    <td>{{ material_type_label(lots[0].type) }}</td>
-                    <td class="text-center">{{ group.total_stock|round(2) }}{% if group.total_reserved %}<div class="text-muted text-small">Заделено: {{ group.total_reserved|round(2) }}</div>{% endif %}</td>
-                    <td class="text-right">{{ '—' if lots[0].owner_client_id else "%.2f"|format(group.min_price) ~ '–' ~ "%.2f"|format(group.max_price) ~ ' €/' ~ group.unit }}</td>
+                {#- Several price-lots of the same name/dims/type (see storage_materials() grouping) - one
+                summary header, expandable into each lot's own row. Aggregate fields (label/unit/total_stock/
+                total_value/min_price/max_price/row_bg) are precomputed in storage_materials(). #}
+                {% set ns.n = ns.n + 1 %}
+                {% set mat_node = 'm-' ~ ns.n %}
+                <tr class="tree-head tree-l2" data-node="{{ mat_node }}" data-parent="{{ grade_node }}" {% if group.row_bg %}style="background-color: {{ group.row_bg }};"{% endif %}>
+                    <td><span class="tree-chevron">▶</span>{{ group.label }}<span class="lot-count-badge">{{ lots|length }} партиди</span></td>
+                    <td>{{ first.owner_client.name if first.owner_client_id and first.owner_client else 'Трафком' }}</td>
+                    <td>{{ material_type_label(first.type) }}</td>
+                    <td class="text-center">{{ group.total_stock|round(2) }}{{ group.total_kg|kg }}{% if group.total_reserved %}<div class="text-muted text-small">Заделено: {{ group.total_reserved|round(2) }}{{ group.reserved_kg|kg }}</div>{% endif %}</td>
+                    <td class="text-right">{{ '—' if first.owner_client_id else "%.2f"|format(group.min_price) ~ '–' ~ "%.2f"|format(group.max_price) ~ ' €/' ~ group.unit }}</td>
                     <td class="text-right">—</td>
-                    <td class="text-right">{{ '—' if lots[0].owner_client_id else "%.2f"|format(group.total_value) ~ ' €' }}</td>
+                    <td class="text-right">{{ '—' if first.owner_client_id else "%.2f"|format(group.total_value) ~ ' €' }}</td>
                 </tr>
                 {% for lot in lots %}
-                <tr class="lot-row" data-group-lot hidden>
-                    <td><a href="{{ url_for('admin_material_history', material_id=lot.id) }}">{{ format_material_option(lot) }}</a></td>
-                    <td>{{ lot.owner_client.name if lot.owner_client_id and lot.owner_client else 'Трафком' }}</td>
-                    <td>{{ material_type_label(lot.type) }}</td>
-                    <td class="text-center">{{ lot.stock_quantity|round(2) }}{% if reserved.get(lot.id) %}<div class="text-muted text-small">Заделено: {{ reserved[lot.id]|round(2) }}</div>{% endif %}</td>
-                    <td class="text-right">{{ '—' if lot.owner_client_id else "%.2f"|format(lot.cost_per_m2) ~ ' €/' ~ unit }}</td>
-                    <td class="text-right">{{ "%.2f €"|format(lot.price_per_unit) if lot.price_per_unit is not none and not lot.owner_client_id else '—' }}</td>
-                    <td class="text-right">{{ '—' if lot.owner_client_id else "%.2f"|format(lot.cost_per_m2 * material_available_qty(lot)) ~ ' €' }}</td>
-                </tr>
+                {{ leaf_row(lot, mat_node, 3, unit, none) }}
                 {% endfor %}
                 {% endif %}
                 {% else %}
@@ -148,25 +200,49 @@
     </section>
 
 </main>
-<script src="{{ url_for('static', filename='js/table_search.js') }}"></script>
+<script src="{{ url_for('static', filename='js/tree_table.js') }}"></script>
 <script>
-initTableSearch('materialSearchInput', 'materialsTableBody');
+(function () {
+    const q = document.getElementById('materialSearchInput');
+    const body = document.getElementById('materialsTableBody');
+    initTrees();
+    if (!q) return;
+    const f = {
+        type: document.getElementById('filterType'), grade: document.getElementById('filterGrade'),
+        brand: document.getElementById('filterBrand'), thick: document.getElementById('filterThickness'),
+        status: document.getElementById('filterStatus'),
+    };
 
-// Expand/collapse a multi-lot group's price-lot rows, which immediately
-// follow their .group-toggle-row summary row in the DOM (see
-// storage_materials() grouping) - independent of the search filter above,
-// which only ever hides/shows the summary row, never these.
-document.getElementById('materialsTableBody').addEventListener('click', function (e) {
-    const summaryRow = e.target.closest('.group-toggle-row');
-    if (!summaryRow) return;
-    summaryRow.classList.toggle('expanded');
-    const expanded = summaryRow.classList.contains('expanded');
-    let row = summaryRow.nextElementSibling;
-    while (row && row.classList.contains('lot-row')) {
-        row.hidden = !expanded;
-        row = row.nextElementSibling;
+    function matches(r) {
+        const text = q.value.trim().toLowerCase();
+        if (text && r.dataset.search.indexOf(text) === -1) return false;
+        if (f.type.value && r.dataset.type !== f.type.value) return false;
+        if (f.grade.value && r.dataset.grade !== f.grade.value) return false;
+        if (f.brand.value && r.dataset.brand !== f.brand.value) return false;
+        if (f.thick.value && parseFloat(r.dataset.thickness) !== parseFloat(f.thick.value)) return false;
+        switch (f.status.value) {
+            case 'instock': return r.dataset.out === '0';
+            case 'out': return r.dataset.out === '1';
+            case 'low': return r.dataset.low === '1';
+        }
+        return true;
     }
-});
+
+    function apply() {
+        const active = !!(q.value.trim() || f.type.value || f.grade.value || f.brand.value || f.thick.value || f.status.value);
+        treeFilter(body, matches, active);
+    }
+
+    let timer = null;
+    q.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(apply, 120); });
+    Object.keys(f).forEach(function (k) { f[k].addEventListener('change', apply); });
+    document.getElementById('filterReset').addEventListener('click', function () {
+        q.value = '';
+        Object.keys(f).forEach(function (k) { f[k].value = ''; });
+        apply();
+    });
+    apply();
+})();
 </script>
 </body>
 </html>

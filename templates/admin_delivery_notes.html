@@ -160,6 +160,10 @@
                     <label for="dn_qty">Количество</label>
                     <input type="number" id="dn_qty" value="1" min="0.01" step="0.01">
                 </div>
+                <div class="form-group qty-field" id="dn_kg_group">
+                    <label for="dn_kg">или кг</label>
+                    <input type="number" id="dn_kg" min="0" step="any">
+                </div>
                 <div class="form-group qty-field" id="dn_price_group">
                     <label for="dn_price">Цена за бройка (€, по избор)</label>
                     <input type="number" id="dn_price" min="0" step="0.01">
@@ -437,6 +441,7 @@
 
 {% if current_user.is_admin %}
 <script src="{{ url_for('static', filename='js/material_picker.js') }}"></script>
+<script src="{{ url_for('static', filename='js/material_weight.js') }}"></script>
 <script>
     const MATERIALS = {{ materials_data|tojson }};
     const DETAILS = {{ details_data|tojson }};
@@ -803,7 +808,33 @@
         if (type === 'detail') {
             document.getElementById('dn_detail_material_id').value = item && item.material_key ? item.material_key : '';
         }
+        if (typeof dnKg !== 'undefined') dnKg.refresh();
     }
+
+    // "или кг" next to the quantity of a MATERIAL line: kg of one quantity unit from the LINE's own type and
+    // size (it can be edited away from the catalog row; a new material guesses the density from its name).
+    function dnKgPerUnit() {
+        if (document.querySelector('input[name="dn_item_type"]:checked').value !== 'material') return undefined;
+        const sel = document.getElementById('dn_material_select');
+        const val = function (id) { return MaterialKg.num(document.getElementById(id)); };
+        const dims = { width: val('dn_width'), length: val('dn_height'), thickness: val('dn_thickness') };
+        let p;
+        if (sel.value === '__new__') {
+            const cfg = MATERIAL_TYPES[document.getElementById('dn_material_type').value] || {};
+            p = { unit: cfg.unit || 'm2', round: !!cfg.round, width: dims.width, length: dims.length,
+                  thickness: dims.thickness, height: null, weight: null,
+                  density: MaterialKg.guessDensity(document.getElementById('dn_material_name_new').value) };
+        } else {
+            const opt = sel.options[sel.selectedIndex];
+            if (!opt) return null;
+            p = MaterialKg.optionParams(opt, MATERIAL_TYPES, dims);
+        }
+        return MaterialKg.kgPerStockUnit(p);
+    }
+    var dnKg = MaterialKg.bind(document.getElementById('dn_qty'), document.getElementById('dn_kg'), dnKgPerUnit,
+        document.getElementById('dn_kg_group'),
+        ['dn_material_select', 'dn_material_type', 'dn_material_name_new', 'dn_width', 'dn_height', 'dn_thickness']
+            .map(function (id) { return document.getElementById(id); }));
 
     // Reads the CHECKED radio, not the event target: form_dialog.js fires
     // 'change' on every radio after a reset, so the last one (product) used to win.
@@ -954,6 +985,7 @@
         set('dn_thickness', item.thickness);
         set('dn_brand', item.brand);
         set('dn_notes', item.notes);
+        dnKg.refresh();
         dnEditingIndex = index;
         document.getElementById('dnAddRowBtn').textContent = 'Запази реда';
         document.getElementById('dn_qty').focus();
@@ -975,6 +1007,7 @@
         applyDnParty();
         stopDnRowEdit();
         renderDnTable();
+        dnKg.refresh();
     });
 
     const TYPE_LABELS = { material: 'Материал', detail: 'Детайл', product: 'Продукт' };

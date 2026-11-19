@@ -81,6 +81,13 @@
                 </select>
             </div>
             <div class="form-group">
+                <label for="new_grade_id">Вид на материала</label>
+                <select id="new_grade_id" name="grade_id">
+                    <option value="">— по името —</option>
+                    {% for gr in grades %}<option value="{{ gr.id }}">{{ gr.name }}{% if gr.density_kg_dm3 %} ({{ '%g'|format(gr.density_kg_dm3) }} кг/дм³){% endif %}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
                 <label for="new_brand">Марка (незадължително)</label>
                 <input type="text" id="new_brand" name="brand" placeholder="напр. Alcoa">
             </div>
@@ -152,6 +159,11 @@
                 <option value="">Всички типове</option>
                 {% for type_key, type_label in material_type_labels().items() %}<option value="{{ type_key }}">{{ type_label }}</option>{% endfor %}
             </select>
+            <select id="filterGrade" style="flex: 1 1 140px;">
+                <option value="">Всички видове</option>
+                {% for gr in grades %}<option value="{{ gr.id }}">{{ gr.name }}</option>{% endfor %}
+                <option value="none">Без вид</option>
+            </select>
             <select id="filterBrand" style="flex: 1 1 140px;">
                 <option value="">Всички марки</option>
                 {% for b in brands %}<option value="{{ b|lower }}">{{ b }}</option>{% endfor %}
@@ -173,18 +185,27 @@
                 <option value="noprice">Без доставна цена</option>
             </select>
             <button type="button" id="filterReset" class="btn-secondary" style="padding: 6px 12px;">Изчисти</button>
+            <button type="button" class="btn-secondary" style="padding: 6px 12px;" data-tree-all="expand">Разгъни всички</button>
+            <button type="button" class="btn-secondary" style="padding: 6px 12px;" data-tree-all="collapse">Сгъни всички</button>
         </div>
 
-        <h4 style="margin-top: 1.25rem;">Аналитичност (по текущия филтър)</h4>
+        <h4 style="margin-top: 1.25rem; display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap;">Аналитичност (по текущия филтър)
+            <select id="summaryGroup" style="width:auto; font-size:0.85rem; font-weight:400;">
+                <option value="type">по тип</option>
+                <option value="grade">по вид на материала</option>
+            </select>
+        </h4>
         <div class="table-responsive">
             <table class="users-table" id="materialsSummary">
                 <thead>
                 <tr>
+                    <th>Група</th>
                     <th class="text-right">Позиции</th>
                     <th class="text-right">Без наличност</th>
                     <th class="text-right">Под минимума</th>
                     <th class="text-right">Без доставна цена</th>
                     <th class="text-right">Стойност на склад (€)</th>
+                    <th class="text-right">Тегло на склад (кг)</th>
                 </tr>
                 </thead>
                 <tbody></tbody>
@@ -194,8 +215,8 @@
 
         {% for type_key, group in materials|groupby('type') %}
         {% set dim_labels = material_dimension_labels(type_key) %}
-        <h4 style="margin-top: 1.5rem;" data-type-heading="{{ type_key }}">{{ material_type_label(type_key) }}</h4>
-        <div class="table-responsive" data-type-table="{{ type_key }}">
+        <h4 style="margin-top: 1.5rem;" data-type-heading="{{ type_key }}" data-tree-section="box-{{ type_key }}" title="Сгъване / разгъване">{{ material_type_label(type_key) }}</h4>
+        <div class="table-responsive" id="box-{{ type_key }}" data-type-table="{{ type_key }}">
             <table class="users-table">
                 <thead>
                 <tr>
@@ -203,7 +224,7 @@
                     <th>Материал</th>
                     <th>Марка</th>
                     <th>Забележка</th>
-                    <th>Тип</th>
+                    <th>Вид</th>
                     <th>{{ material_price_m2_label(type_key) }} (доставна)</th>
                     <th>Цена за цяла бройка (€, доставна)</th>
                     <th>Скорост на рязане (мм/мин)</th>
@@ -222,16 +243,28 @@
                     <th class="text-right">Изтриване</th>
                 </tr>
                 </thead>
-                <tbody id="materialsTableBody-{{ type_key }}">
-                {% for material in group %}
+                <tbody id="materialsTableBody-{{ type_key }}" data-tree>
+                {#- Вид level: one collapsible header per grade (admin-ordered), "Без вид" last. #}
+                {% for gr in grades + [none] %}
+                {% if gr %}{% set grade_rows = group|selectattr('grade_id', 'equalto', gr.id)|list %}
+                {% else %}{% set grade_rows = group|selectattr('grade_id', 'none')|list %}{% endif %}
+                {% if grade_rows %}
+                {% set grade_node = 'g-' ~ type_key ~ '-' ~ (gr.id if gr else 'none') %}
+                <tr class="tree-head tree-l1" data-node="{{ grade_node }}">
+                    <td colspan="21"><span class="tree-chevron">▶</span>{{ gr.name if gr else 'Без вид' }}<span class="tree-meta">(<span data-count></span> поз. &middot; <span data-sum="kg" data-dec="1" data-suffix=" кг"></span> &middot; <span data-sum="ovalue" data-dec="2" data-suffix=" €"></span>)</span></td>
+                </tr>
+                {% for material in grade_rows %}
                 {% set avail = material_available_qty(material) or 0 %}
-                <tr data-search="{{ ('#' ~ material.id ~ ' ' ~ material.display_name ~ ' ' ~ (material.brand or '') ~ ' ' ~ (material.notes or '') ~ ' ' ~ (material.erp_number or '') ~ ' ' ~ (material.code_number or '')) | lower }}"
+                <tr class="tree-indent-1" data-parent="{{ grade_node }}" data-ovalue="{{ '%.2f'|format((material.cost_per_m2 or 0) * avail) if not material.owner_client_id else 0 }}" data-search="{{ ('#' ~ material.id ~ ' ' ~ material.display_name ~ ' ' ~ (material.brand or '') ~ ' ' ~ (material.notes or '') ~ ' ' ~ (material.erp_number or '') ~ ' ' ~ (material.code_number or '')) | lower }}"
                     data-type="{{ material.type }}" data-owner="{{ material.owner_client_id or 'own' }}" data-brand="{{ (material.brand or '')|lower }}"
                     data-thickness="{{ material.thickness_mm if material.thickness_mm else '' }}"
                     data-out="{{ 1 if (material.stock_quantity or 0) <= 0 else 0 }}"
                     data-low="{{ 1 if material.min_quantity is not none and (material.stock_quantity or 0) <= material.min_quantity else 0 }}"
                     data-noprice="{{ 0 if material.cost_per_m2 or material.owner_client_id else 1 }}"
-                    data-value="{{ '%.2f'|format((material.cost_per_m2 or 0) * avail) }}">
+                    data-value="{{ '%.2f'|format((material.cost_per_m2 or 0) * avail) }}"
+                    {% set stock_kg = material_stock_kg(material) %}
+                    data-grade="{{ material.grade_id or 'none' }}" data-grade-name="{{ material.grade.name if material.grade else 'Без вид' }}"
+                    data-kg="{{ '%.3f'|format(stock_kg) if stock_kg is not none and stock_kg > 0 else 0 }}">
                     <td>#{{ material.id }}</td>
                     <td>
                         <strong>{{ material.display_name }}</strong>
@@ -240,6 +273,7 @@
                     </td>
                     <td>{{ material.brand or '—' }}</td>
                     <td>{{ material.notes or '—' }}</td>
+                    <td>{{ material.grade.name if material.grade else '—' }}</td>
                     <td>{% if material.cost_per_m2 %}{{ '%.2f'|format(material.cost_per_m2) }}{% elif material.owner_client_id %}—{% else %}<span style="color: var(--warning-text); white-space: nowrap;" title="Материалът още не е заприходен със стокова разписка">⚠ няма доставна цена</span>{% endif %}</td>
                     <td>{{ '%.2f'|format(material.price_per_unit) if material.price_per_unit is not none else '—' }}</td>
                     <td>{{ '%g'|format(material.cutting_speed_mm_per_min) if material.cutting_speed_mm_per_min is not none else '—' }}</td>
@@ -250,7 +284,7 @@
                     <td>{{ '%g'|format(material.height_mm) if material.height_mm is not none else '—' }}</td>
                     <td>{{ '%g'|format(material.weight_kg) if material.weight_kg is not none else '—' }}</td>
                     <td>{{ '%g'|format(material.min_quantity) if material.min_quantity is not none else '—' }}</td>
-                    <td>{{ material.stock_quantity|round(2) }}</td>
+                    <td>{{ material.stock_quantity|round(2) }}{{ material_stock_kg(material)|kg }}</td>
                     <td>{{ material.erp_number or '—' }}</td>
                     <td>{{ material.code_number or '—' }}</td>
                     <td class="text-right">
@@ -263,7 +297,8 @@
                                     "pierce_time_sec": ((60.0 / material.pierce_rate_per_min)|round(2)) if material.pierce_rate_per_min else none,
                                     "sheet_length_mm": material.sheet_length_mm, "sheet_width_mm": material.sheet_width_mm,
                                     "thickness_mm": material.thickness_mm, "height_mm": material.height_mm,
-                                    "weight_kg": material.weight_kg, "min_quantity": material.min_quantity,
+                                    "weight_kg": material.weight_kg, "grade_id": material.grade_id,
+                                    "min_quantity": material.min_quantity,
                                     "erp_number": material.erp_number, "code_number": material.code_number
                                 }|tojson|forceescape }}'>Редактирай</button>
                         <button type="button" class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;" title="Нов материал по образец на този"
@@ -283,6 +318,8 @@
                         </form>
                     </td>
                 </tr>
+                {% endfor %}
+                {% endif %}
                 {% endfor %}
                 </tbody>
             </table>
@@ -342,6 +379,72 @@
             </table>
         </div>
     </section>
+
+    <section class="admin-card">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap;">
+            <h3 style="margin:0;">Видове материали</h3>
+            <button type="button" class="btn-submit" style="width:auto;" onclick="openGradeDialog(null)" data-new-button>+ Нов вид</button>
+        </div>
+        <p class="section-subtitle">Видът (стомана, алуминий, неръждаема ...) се избира при всеки материал. Плътността му превръща м² / м в килограми. Материал без вид се разпознава по името.</p>
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Вид</th>
+                    <th class="text-right">Плътност (кг/дм³)</th>
+                    <th class="text-right">Материали</th>
+                    <th class="text-right">Действие</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for gr in grades %}
+                <tr>
+                    <td><strong>{{ gr.name }}</strong></td>
+                    <td class="text-right">{{ '%g'|format(gr.density_kg_dm3) if gr.density_kg_dm3 else '—' }}</td>
+                    <td class="text-right">{{ grade_usage.get(gr.id, 0) }}</td>
+                    <td class="text-right" style="white-space:nowrap;">
+                        <button type="button" class="btn-save-price" onclick="openGradeDialog(this)"
+                                data-action="{{ url_for('admin_edit_material_grade', grade_id=gr.id) }}"
+                                data-grade='{{ {"name": gr.name, "density_kg_dm3": gr.density_kg_dm3, "sort_order": gr.sort_order}|tojson|forceescape }}'>Редактирай</button>
+                        {% if not grade_usage.get(gr.id) %}
+                        <form action="{{ url_for('admin_delete_material_grade', grade_id=gr.id) }}" method="POST" style="display:inline;"
+                              data-confirm="Изтриване на вида &quot;{{ gr.name }}&quot;?">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="4" class="text-center no-data">Няма видове материали.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <dialog id="gradeDialog" class="form-dialog">
+        <h3 id="gradeDialogTitle">Нов вид материал</h3>
+        <form id="gradeForm" action="{{ url_for('admin_add_material_grade') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="g_name">Име на вида</label>
+                <input type="text" id="g_name" name="name" required placeholder="напр. Поликарбонат">
+            </div>
+            <div class="form-group">
+                <label for="g_density">Плътност (кг/дм³ = г/см³)</label>
+                <input type="number" id="g_density" name="density_kg_dm3" step="0.001" min="0" max="30" placeholder="напр. 7.85">
+            </div>
+            <div class="form-group">
+                <label for="g_sort_order">Подредба</label>
+                <input type="number" id="g_sort_order" name="sort_order" step="1" value="0">
+            </div>
+            <div style="flex-basis:100%; display:flex; gap:0.5rem; justify-content:flex-end;">
+                <button type="button" class="btn-secondary" onclick="document.getElementById('gradeDialog').close()">Отказ</button>
+                <button type="submit" class="btn-submit" id="gradeFormSubmit">Добави вид</button>
+            </div>
+        </form>
+    </dialog>
 
     <dialog id="typeDialog" class="form-dialog">
         <h3 id="typeDialogTitle">Нов тип материал</h3>
@@ -428,7 +531,7 @@
         type: 'new_type', brand: 'new_brand', notes: 'new_notes',
         cutting_speed_mm_per_min: 'new_cutting_speed_mm_per_min', pierce_time_sec: 'new_pierce_time_sec',
         sheet_length_mm: 'new_sheet_length_mm', sheet_width_mm: 'new_sheet_width_mm', thickness_mm: 'new_thickness_mm',
-        height_mm: 'new_height_mm', weight_kg: 'new_weight_kg', min_quantity: 'new_min_quantity',
+        height_mm: 'new_height_mm', weight_kg: 'new_weight_kg', grade_id: 'new_grade_id', min_quantity: 'new_min_quantity',
         erp_number: 'new_material_erp_number', code_number: 'new_material_code_number',
     };
     const ADD_ACTION = document.getElementById('materialForm').action;
@@ -450,6 +553,23 @@
         }
         applyMaterialDimensionLabels();
         document.getElementById('materialDialog').showModal();
+    }
+
+    const GRADE_ADD_ACTION = document.getElementById('gradeForm').action;
+
+    function openGradeDialog(btn) {
+        const form = document.getElementById('gradeForm');
+        form.reset();
+        const data = btn ? JSON.parse(btn.dataset.grade) : null;
+        form.action = btn ? btn.dataset.action : GRADE_ADD_ACTION;
+        document.getElementById('gradeDialogTitle').textContent = data ? 'Редакция на вид: ' + data.name : 'Нов вид материал';
+        document.getElementById('gradeFormSubmit').textContent = data ? 'Запази' : 'Добави вид';
+        if (data) {
+            document.getElementById('g_name').value = data.name;
+            document.getElementById('g_density').value = data.density_kg_dm3 == null ? '' : data.density_kg_dm3;
+            document.getElementById('g_sort_order').value = data.sort_order;
+        }
+        document.getElementById('gradeDialog').showModal();
     }
 
     const TYPE_ADD_ACTION = document.getElementById('typeForm').action;
@@ -479,12 +599,14 @@
     }
 </script>
 
+<script src="{{ url_for('static', filename='js/tree_table.js') }}"></script>
 <script>
     // Combined filters + live analytics for the materials tables. Replaces
     // the generic initTableSearch() here since text search has to AND with
     // the type/brand/thickness/status dropdowns.
+    initTrees();
     (function () {
-        const TYPE_LABELS = {{ material_type_labels()|tojson }};
+        const TYPE_LABELS ={{ material_type_labels()|tojson }};
         const q = document.getElementById('materialsSearchInput');
         if (!q) return;
         const fType = document.getElementById('filterType');
@@ -492,13 +614,17 @@
         const fThick = document.getElementById('filterThickness');
         const fStatus = document.getElementById('filterStatus');
         const fOwner = document.getElementById('filterOwner');
+        const fGrade = document.getElementById('filterGrade');
+        const fGroup = document.getElementById('summaryGroup');
         const rows = Array.from(document.querySelectorAll('tr[data-type]'));
+        const trees = Array.from(document.querySelectorAll('tbody[data-tree]'));
         const summaryBody = document.querySelector('#materialsSummary tbody');
 
         function matches(r) {
             const text = q.value.trim().toLowerCase();
             if (text && r.dataset.search.indexOf(text) === -1) return false;
             if (fType.value && r.dataset.type !== fType.value) return false;
+            if (fGrade.value && r.dataset.grade !== fGrade.value) return false;
             if (fBrand.value && r.dataset.brand !== fBrand.value) return false;
             if (fOwner.value && r.dataset.owner !== fOwner.value) return false;
             if (fThick.value && parseFloat(r.dataset.thickness) !== parseFloat(fThick.value)) return false;
@@ -513,7 +639,7 @@
 
         function summaryRow(label, t, bold) {
             const tr = document.createElement('tr');
-            [label, t.n, t.out, t.low, t.noprice, t.value.toFixed(2)].forEach(function (v, i) {
+            [label, t.n, t.out, t.low, t.noprice, t.value.toFixed(2), t.kg.toFixed(1)].forEach(function (v, i) {
                 const td = document.createElement('td');
                 td.textContent = v;
                 if (i) td.className = 'text-right';
@@ -524,38 +650,46 @@
         }
 
         function apply() {
-            const totals = {};
+            const totals = {}, labels = {}, shown = {};
+            const byGrade = fGroup.value === 'grade';
+            // treeFilter hides failing rows + groups with no match (and opens groups that hold matches).
+            const active = !!(q.value.trim() || fType.value || fGrade.value || fBrand.value || fThick.value || fStatus.value || fOwner.value);
+            trees.forEach(function (tb) { treeFilter(tb, matches, active); });
             rows.forEach(function (r) {
-                const ok = matches(r);
-                r.hidden = !ok;
-                if (!ok) return;
-                const t = totals[r.dataset.type] = totals[r.dataset.type] || { n: 0, out: 0, low: 0, noprice: 0, value: 0 };
+                if (!matches(r)) return;
+                shown[r.dataset.type] = true;
+                const key = byGrade ? r.dataset.grade : r.dataset.type;
+                labels[key] = byGrade ? r.dataset.gradeName : TYPE_LABELS[key];
+                const t = totals[key] = totals[key] || { n: 0, out: 0, low: 0, noprice: 0, value: 0, kg: 0 };
                 t.n++; t.out += +r.dataset.out; t.low += +r.dataset.low; t.noprice += +r.dataset.noprice;
+                t.kg += parseFloat(r.dataset.kg) || 0;
                 // Client-owned stock is not ours: it carries no value.
                 if (r.dataset.owner === 'own') t.value += parseFloat(r.dataset.value) || 0;
             });
             // Hide a whole type section when nothing in it survives the filter.
             document.querySelectorAll('[data-type-table]').forEach(function (box) {
-                const has = !!totals[box.dataset.typeTable];
+                const has = !!shown[box.dataset.typeTable];
                 box.hidden = !has;
                 document.querySelector('[data-type-heading="' + box.dataset.typeTable + '"]').hidden = !has;
             });
-            const all = { n: 0, out: 0, low: 0, noprice: 0, value: 0 };
+            const all = { n: 0, out: 0, low: 0, noprice: 0, value: 0, kg: 0 };
             summaryBody.innerHTML = '';
-            Object.keys(TYPE_LABELS).forEach(function (k) {
+            const order = byGrade ? Object.keys(totals).sort(function (a, b) { return labels[a].localeCompare(labels[b], 'bg'); })
+                                  : Object.keys(TYPE_LABELS);
+            order.forEach(function (k) {
                 const t = totals[k];
                 if (!t) return;
                 Object.keys(all).forEach(function (f) { all[f] += t[f]; });
-                summaryBody.appendChild(summaryRow(TYPE_LABELS[k], t, false));
+                summaryBody.appendChild(summaryRow(labels[k], t, false));
             });
             summaryBody.appendChild(summaryRow('Общо', all, true));
         }
 
         let timer = null;
         q.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(apply, 120); });
-        [fType, fBrand, fThick, fStatus, fOwner].forEach(function (el) { el.addEventListener('change', apply); });
+        [fType, fGrade, fGroup, fBrand, fThick, fStatus, fOwner].forEach(function (el) { el.addEventListener('change', apply); });
         document.getElementById('filterReset').addEventListener('click', function () {
-            q.value = ''; fType.value = ''; fBrand.value = ''; fThick.value = ''; fStatus.value = ''; fOwner.value = '';
+            q.value = ''; fType.value = ''; fGrade.value = ''; fBrand.value = ''; fThick.value = ''; fStatus.value = ''; fOwner.value = '';
             apply();
         });
         apply();
