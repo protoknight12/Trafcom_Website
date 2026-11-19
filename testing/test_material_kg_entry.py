@@ -109,6 +109,9 @@ def test_pages_render_kg_input_and_option_data(ids):
         assert data[str(ids['unknown'])]['density'] == '', url
         assert data[str(ids['guessed'])]['density'] == '7.93', url   # guessed from the name
     assert 'id="cdn_remnant_kg"' in _get('/admin/client-delivery-notes')
+    # supplier note price: per unit (sent), per kg and line total filled from each other (dnPrice in the page JS)
+    body = _get('/admin/delivery-notes')
+    assert all(f'id="{i}"' in body for i in ('dn_price', 'dn_price_kg', 'dn_price_total', 'dn_price_hint'))
 
 
 @pytest.mark.parametrize('url', ['/admin/delivery-notes', '/admin/client-delivery-notes', '/storage/requests'])

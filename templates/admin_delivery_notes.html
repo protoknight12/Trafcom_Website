@@ -165,9 +165,14 @@
                     <label for="dn_kg">или кг</label>
                     <input type="number" id="dn_kg" min="0" step="any">
                 </div>
-                <div class="form-group qty-field" id="dn_price_group">
-                    <label for="dn_price">Цена за бройка (€, по избор)</label>
-                    <input type="number" id="dn_price" min="0" step="0.01">
+                <div class="form-group qty-field" id="dn_price_group" style="flex: 2 1 320px;">
+                    <label for="dn_price">Цена (€, по избор) - въведете едното, другите се изчисляват</label>
+                    <div style="display: flex; gap: 6px;">
+                        <input type="number" id="dn_price" min="0" step="0.01" placeholder="за бройка" title="Цена за бройка (лист / прът / брой)">
+                        <input type="number" id="dn_price_kg" min="0" step="any" placeholder="за кг" title="Цена за кг">
+                        <input type="number" id="dn_price_total" min="0" step="0.01" placeholder="общо за реда" title="Обща сума за реда">
+                    </div>
+                    <small class="text-muted" id="dn_price_hint"></small>
                 </div>
             </div>
 
@@ -462,6 +467,7 @@
         document.getElementById(isClient ? 'supplier_id' : 'client_id').value = '';
         document.getElementById('dn_price_group').style.display = isClient ? 'none' : '';
         if (isClient) document.getElementById('dn_price').value = '';
+        if (typeof dnPrice !== 'undefined') dnPrice.refresh();
     }
     document.querySelectorAll('input[name="dn_party"]').forEach(function (radio) {
         radio.addEventListener('change', applyDnParty);
@@ -810,6 +816,7 @@
             document.getElementById('dn_detail_material_id').value = item && item.material_key ? item.material_key : '';
         }
         if (typeof dnKg !== 'undefined') dnKg.refresh();
+        if (typeof dnPrice !== 'undefined') dnPrice.refresh('unit');
     }
 
     // "или кг" next to the quantity of a MATERIAL line: kg of one quantity unit from the LINE's own type and
@@ -836,6 +843,66 @@
         document.getElementById('dn_kg_group'),
         ['dn_material_select', 'dn_material_type', 'dn_material_name_new', 'dn_width', 'dn_height', 'dn_thickness']
             .map(function (id) { return document.getElementById(id); }));
+
+    // Price of the line: "за бройка" (dn_price - the ONLY one sent, the server's unit_price: one sheet, one
+    // rod/pipe/profile of the line's length, one piece), "за кг" and "общо за реда". Typing one fills the other
+    // two; a change of the quantity, kg, size or material recomputes them from the one typed last.
+    // Quantity is in stock units (sheets / metres / pieces), so for a linear line one bar = length/1000 of them.
+    var dnPrice = (function () {
+        const el = { unit: document.getElementById('dn_price'), kg: document.getElementById('dn_price_kg'),
+                     total: document.getElementById('dn_price_total') };
+        const hint = document.getElementById('dn_price_hint');
+        let source = 'unit';
+        function round(x, d) { const f = Math.pow(10, d); return Math.round(x * f) / f; }
+        function lineUnit() {   // 'm2' / 'm' / 'pcs' of a material line, null for a detail / product
+            if (document.querySelector('input[name="dn_item_type"]:checked').value !== 'material') return null;
+            const sel = document.getElementById('dn_material_select');
+            const key = sel.value === '__new__' ? document.getElementById('dn_material_type').value
+                                                : (sel.options[sel.selectedIndex] || {}).dataset && sel.options[sel.selectedIndex].dataset.type;
+            return (MATERIAL_TYPES[key] || {}).unit || 'm2';
+        }
+        function stockPerUnit(unit) {   // stock units in ONE priced unit (a bar of a linear line = its metres)
+            const len = MaterialKg.num(document.getElementById('dn_height'));
+            return unit === 'm' && len ? len / 1000 : 1;
+        }
+        function refresh(from) {
+            if (from) source = from;
+            const unit = lineUnit();
+            const qty = MaterialKg.num(document.getElementById('dn_qty'));
+            const kgStock = unit ? dnKgPerUnit() : null;          // kg of one stock unit
+            const per = stockPerUnit(unit);
+            el.kg.disabled = !kgStock;
+            el.kg.placeholder = unit ? (kgStock ? 'за кг' : 'за кг - няма плътност') : 'за кг (само материал)';
+            const v = MaterialKg.num(el[source]);
+            let stockPrice = null;                                 // price of ONE stock unit
+            if (v !== null) {
+                if (source === 'unit') stockPrice = v / per;
+                else if (source === 'kg') stockPrice = kgStock ? v * kgStock : null;
+                else stockPrice = qty ? v / qty : null;
+            }
+            if (source !== 'unit') el.unit.value = stockPrice !== null ? round(stockPrice * per, 4) : '';
+            if (source !== 'kg') el.kg.value = stockPrice !== null && kgStock ? round(stockPrice / kgStock, 4) : '';
+            if (source !== 'total') el.total.value = stockPrice !== null && qty ? round(stockPrice * qty, 2) : '';
+            hint.textContent = unit === 'm' && per !== 1 ? '"За бройка" = цената на един прът/профил от ' + round(per, 3) + ' м.'
+                : (unit === 'm' ? '"За бройка" = цена за метър (няма дължина).' : '');
+        }
+        Object.keys(el).forEach(function (k) {
+            el[k].addEventListener('input', function () { refresh(k); });
+        });
+        ['dn_qty', 'dn_kg', 'dn_material_select', 'dn_material_type', 'dn_material_name_new', 'dn_width', 'dn_height',
+         'dn_thickness'].forEach(function (id) {
+            const x = document.getElementById(id);
+            x.addEventListener('input', function () { refresh(); });
+            x.addEventListener('change', function () { refresh(); });
+        });
+        document.getElementById('dn_qty').addEventListener('qty-from-kg', function () { refresh(); });
+        document.querySelectorAll('input[name="dn_item_type"]').forEach(function (r) {
+            r.addEventListener('change', function () { refresh(); });
+        });
+        const form = el.unit.form;
+        if (form) form.addEventListener('reset', function () { setTimeout(function () { refresh('unit'); }, 0); });
+        return { refresh: refresh };
+    })();
 
     // Reads the CHECKED radio, not the event target: form_dialog.js fires
     // 'change' on every radio after a reset, so the last one (product) used to win.
@@ -987,6 +1054,7 @@
         set('dn_brand', item.brand);
         set('dn_notes', item.notes);
         dnKg.refresh();
+        dnPrice.refresh('unit');
         dnEditingIndex = index;
         document.getElementById('dnAddRowBtn').textContent = 'Запази реда';
         document.getElementById('dn_qty').focus();
