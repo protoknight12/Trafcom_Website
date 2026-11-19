@@ -158,8 +158,12 @@
                     <input type="text" id="dn_product_name_new" placeholder="Име на новия продукт" autocomplete="off" style="display: none; margin-top: 8px;">
                 </div>
                 <div class="form-group qty-field">
-                    <label for="dn_qty">Количество</label>
+                    <label for="dn_qty" id="dn_qty_label">Количество</label>
                     <input type="number" id="dn_qty" value="1" min="0.001" step="0.001">
+                </div>
+                <div class="form-group qty-field" id="dn_bars_group" style="display: none;">
+                    <label for="dn_bars" id="dn_bars_label">Брой пръти</label>
+                    <input type="number" id="dn_bars" min="0" step="any" title="Попълва количеството в метри: брой x дължината">
                 </div>
                 <div class="form-group qty-field" id="dn_kg_group" style="flex: 1 1 230px;">
                     <label for="dn_kg" id="dn_kg_label">Количество в кг (по избор)</label>
@@ -844,6 +848,7 @@
             document.getElementById('dn_detail_material_id').value = item && item.material_key ? item.material_key : '';
         }
         if (typeof dnKg !== 'undefined') dnKg.refresh();
+        if (typeof dnBarsRefresh !== 'undefined') dnBarsRefresh();
         if (typeof dnPrice !== 'undefined') dnPrice.refresh('unit');
     }
 
@@ -880,6 +885,48 @@
         document.getElementById('dn_kg_group'),
         ['dn_material_select', 'dn_material_type', 'dn_material_name_new', 'dn_width', 'dn_height', 'dn_thickness']
             .map(function (id) { return document.getElementById(id); }), dnRealWeight);
+    // Linear stock (rods/pipes/profiles) is kept in METRES: the quantity label names the unit, and a line with a
+    // length gets "Брой пръти" -> quantity = bars x length / 1000 (and back). The server still gets only metres.
+    var dnBarsRefresh = (function dnBars() {
+        const qty = document.getElementById('dn_qty'), bars = document.getElementById('dn_bars');
+        function unit() {
+            const type = document.querySelector('input[name="dn_item_type"]:checked').value;
+            if (type !== 'material') return null;
+            const sel = document.getElementById('dn_material_select');
+            const opt = sel.options[sel.selectedIndex];
+            const key = sel.value === '__new__' ? document.getElementById('dn_material_type').value : opt && opt.dataset.type;
+            return (MATERIAL_TYPES[key] || {}).unit || 'm2';
+        }
+        function len() { return unit() === 'm' ? MaterialKg.num(document.getElementById('dn_height')) : null; }
+        function round(x) { return Math.round(x * 1000) / 1000; }
+        function refresh() {
+            const u = unit(), l = len();
+            const sheet = u === 'm2' && MaterialKg.num(document.getElementById('dn_width')) && MaterialKg.num(document.getElementById('dn_height'));
+            document.getElementById('dn_qty_label').textContent = 'Количество (' +
+                (u === null || u === 'pcs' ? 'бр.' : u === 'm' ? 'м' : sheet ? 'листа' : 'м²') + ')';
+            document.getElementById('dn_bars_group').style.display = l ? '' : 'none';
+            document.getElementById('dn_bars_label').textContent = l ? 'Брой пръти по ' + l + ' мм' : 'Брой пръти';
+            const q = MaterialKg.num(qty);
+            if (document.activeElement !== bars) bars.value = l && q ? round(q * 1000 / l) : '';
+        }
+        bars.addEventListener('input', function () {
+            const l = len(), b = MaterialKg.num(bars);
+            if (!l || !(b > 0)) return;
+            qty.value = round(b * l / 1000);
+            qty.dispatchEvent(new Event('input'));
+        });
+        qty.addEventListener('input', refresh);
+        qty.addEventListener('change', refresh);
+        qty.addEventListener('qty-from-kg', refresh);
+        ['dn_material_select', 'dn_material_type', 'dn_width', 'dn_height'].forEach(function (id) {
+            document.getElementById(id).addEventListener('input', refresh);
+            document.getElementById(id).addEventListener('change', refresh);
+        });
+        document.querySelectorAll('input[name="dn_item_type"]').forEach(function (r) { r.addEventListener('change', refresh); });
+        if (qty.form) qty.form.addEventListener('reset', function () { setTimeout(refresh, 0); });
+        refresh();
+        return refresh;
+    })();
     // Label, "Запиши..." checkbox and the "изчислено: N кг" hint follow the basis.
     function dnWeightHint() {
         const real = dnRealWeight();
@@ -1138,6 +1185,7 @@
         document.getElementById('dn_set_lot_weight').checked = !!item.set_lot_weight;
         dnKg.refresh();
         if (real) set('dn_kg', item.weight_kg);
+        dnBarsRefresh();
         dnWeightHint();
         dnPrice.refresh('unit');
         dnEditingIndex = index;
