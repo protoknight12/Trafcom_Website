@@ -11481,7 +11481,11 @@ def admin_clients():
         return redirect(url_for('dashboard'))
     clients = Client.query.order_by(Client.name).all()
     deliverers = Deliverer.query.order_by(Deliverer.name).all()
-    return render_template('admin_clients.html', clients=clients, deliverers=deliverers, active_page='admin_clients')
+    suppliers = Supplier.query.order_by(Supplier.name).all()
+    supplier_notes = dict(db.session.query(DeliveryNote.supplier_id, db.func.count(DeliveryNote.id))
+                          .filter(DeliveryNote.supplier_id.isnot(None)).group_by(DeliveryNote.supplier_id).all())
+    return render_template('admin_clients.html', clients=clients, deliverers=deliverers, suppliers=suppliers,
+                           supplier_notes=supplier_notes, active_page='admin_clients')
 
 
 @app.route('/storage')
@@ -11994,6 +11998,68 @@ def admin_delete_deliverer(deliverer_id):
     return redirect(url_for('admin_clients'))
 
 
+@app.route('/admin/suppliers/<int:supplier_id>/edit')
+@role_required('admin')
+def edit_supplier_window(supplier_id):
+    """Edit window (edit_window.html) for a Supplier - "Редакция" in the Доставчици section of /admin/clients."""
+    supplier = db.session.get(Supplier, supplier_id) or abort(404)
+    return render_template(
+        'edit_window.html', item_label='доставчик', saved=request.args.get('saved') == '1',
+        action=url_for('update_supplier', supplier_id=supplier.id),
+        fields=[
+            {'name': 'name', 'label': 'Име', 'value': supplier.name, 'type': 'text', 'required': True},
+            {'name': 'email', 'label': 'Имейл', 'value': supplier.email or '', 'type': 'text'},
+            {'name': 'phone', 'label': 'Телефон', 'value': supplier.phone or '', 'type': 'text'},
+            {'name': 'eik', 'label': 'ЕИК / Булстат', 'value': supplier.eik or '', 'type': 'text',
+             'pattern': r'\d{9}', 'maxlength': 9, 'inputmode': 'numeric', 'title': 'Точно 9 цифри'},
+            {'name': 'vat_number', 'label': 'ИН по ДДС', 'value': supplier.vat_number or '', 'type': 'text'},
+        ]
+    )
+
+
+@app.route('/admin/suppliers/<int:supplier_id>/update', methods=['POST'])
+@role_required('admin')
+def update_supplier(supplier_id):
+    supplier = db.session.get(Supplier, supplier_id) or abort(404)
+    name = request.form.get('name', '').strip()
+    if not name:
+        flash('Моля въведете име на доставчика.', 'danger')
+        return redirect(url_for('admin_clients'))
+    eik, eik_error = _validate_eik(request.form.get('eik'))
+    if eik_error:
+        flash(eik_error, 'danger')
+        return redirect(url_for('admin_clients'))
+    supplier.name = name
+    supplier.email = request.form.get('email', '').strip() or None
+    supplier.phone = request.form.get('phone', '').strip() or None
+    supplier.eik = eik
+    supplier.vat_number = request.form.get('vat_number', '').strip() or None
+    log_action(describe_changes(f'доставчик "{supplier.name}"', supplier, {
+        'name': 'име', 'email': 'имейл', 'phone': 'телефон', 'eik': 'ЕИК', 'vat_number': 'ДДС №',
+    }))
+    db.session.commit()
+    flash('Доставчикът беше обновен успешно.', 'success')
+    if request.form.get('popup') == '1':
+        return redirect(url_for('edit_supplier_window', supplier_id=supplier_id, saved='1'))
+    return redirect(url_for('admin_clients'))
+
+
+@app.route('/admin/suppliers/<int:supplier_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_delete_supplier(supplier_id):
+    """Refused while a delivery note or a material request still names the supplier (no ON DELETE)."""
+    supplier = db.session.get(Supplier, supplier_id) or abort(404)
+    used_in = _fk_references(supplier)
+    if used_in:
+        flash(f'Доставчикът "{supplier.name}" не може да бъде изтрит - използва се в: {", ".join(used_in)}.', 'danger')
+        return redirect(url_for('admin_clients'))
+    db.session.delete(supplier)
+    db.session.commit()
+    log_action(f'Изтрит доставчик "{supplier.name}"')
+    flash(f'Доставчикът "{supplier.name}" беше изтрит.', 'success')
+    return redirect(url_for('admin_clients'))
+
+
 def _bump_stock(target, quantity):
     """Adds `quantity` to target.stock_quantity and returns the new total.
     A row already in the database is incremented by the database itself
@@ -12314,14 +12380,15 @@ def admin_delivery_notes():
 @app.route('/admin/suppliers/add', methods=['POST'])
 @role_required(['admin', 'worker'])
 def admin_add_supplier():
+    back = url_for('admin_clients' if request.form.get('back') == 'clients' else 'admin_delivery_notes')
     name = request.form.get('name', '').strip()
     if not name:
         flash('Моля въведете име на доставчика.', 'danger')
-        return redirect(url_for('admin_delivery_notes'))
+        return redirect(back)
     eik, eik_error = _validate_eik(request.form.get('eik'))
     if eik_error:
         flash(eik_error, 'danger')
-        return redirect(url_for('admin_delivery_notes'))
+        return redirect(back)
     supplier = Supplier(
         name=name,
         eik=eik,
@@ -12333,7 +12400,7 @@ def admin_add_supplier():
     db.session.commit()
     log_action(f'Създаден доставчик "{name}"')
     flash(f'Доставчикът "{name}" беше добавен успешно.', 'success')
-    return redirect(url_for('admin_delivery_notes'))
+    return redirect(back)   # back = /admin/clients when added from its Доставчици section
 
 
 @app.route('/admin/delivery-notes/create', methods=['POST'])

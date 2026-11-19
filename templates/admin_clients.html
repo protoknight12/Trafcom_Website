@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     {% include 'partials/favicon.html' %}
-    <title>Клиенти и Куриери - Trafcom DXF</title>
+    <title>Клиенти, Куриери и Доставчици - Trafcom DXF</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
@@ -224,12 +224,97 @@
         </div>
     </section>
 
+    <section class="admin-card" data-dialog-section="+ Нов доставчик">
+        <h3>Добавяне на нов доставчик</h3>
+        <form action="{{ url_for('admin_add_supplier') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <input type="hidden" name="back" value="clients">
+            <div class="form-group">
+                <label for="supplier_name">Име *</label>
+                <input type="text" id="supplier_name" name="name" placeholder="напр. Метал М ЕООД" required autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="supplier_email">Имейл</label>
+                <input type="email" id="supplier_email" name="email" placeholder="example@mail.com">
+            </div>
+            <div class="form-group">
+                <label for="supplier_phone">Телефон</label>
+                <input type="text" id="supplier_phone" name="phone" placeholder="напр. 0888 123 456">
+            </div>
+            <div class="form-group">
+                <label for="supplier_eik">ЕИК / Булстат</label>
+                <input type="text" id="supplier_eik" name="eik" placeholder="напр. 203040557"
+                       pattern="\d{9}" maxlength="9" inputmode="numeric" title="Точно 9 цифри">
+            </div>
+            <div class="form-group">
+                <label for="supplier_vat">ИН по ДДС</label>
+                <input type="text" id="supplier_vat" name="vat_number" placeholder="напр. BG203040557">
+            </div>
+            <button type="submit" class="btn-submit">Добави доставчик</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Списък с доставчици</h3>
+        {% if suppliers %}
+        <div class="form-group" style="max-width: 360px;">
+            <input type="text" id="adminSuppliersSearchInput" placeholder="Търсене по име, имейл, телефон, ЕИК...">
+        </div>
+        {% endif %}
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Име</th>
+                    <th>Имейл</th>
+                    <th>Телефон</th>
+                    <th>ЕИК</th>
+                    <th>ИН по ДДС</th>
+                    <th class="text-right">Стокови разписки</th>
+                    <th class="text-right">Редакция</th>
+                    <th class="text-right">Изтриване</th>
+                </tr>
+                </thead>
+                <tbody id="adminSuppliersTableBody">
+                {% for supplier in suppliers %}
+                <tr data-search="{{ (supplier.name ~ ' ' ~ (supplier.email or '') ~ ' ' ~ (supplier.phone or '') ~ ' ' ~ (supplier.eik or '') ~ ' ' ~ (supplier.vat_number or '')) | lower }}">
+                    <td><strong>{{ supplier.name }}</strong></td>
+                    <td>{{ supplier.email or '-' }}</td>
+                    <td>{{ supplier.phone or '-' }}</td>
+                    <td>{{ supplier.eik or '-' }}</td>
+                    <td>{{ supplier.vat_number or '-' }}</td>
+                    <td class="text-right">{{ supplier_notes.get(supplier.id, 0) }}</td>
+                    <td class="text-right">
+                        <a href="{{ url_for('edit_supplier_window', supplier_id=supplier.id) }}" class="btn-secondary" data-frame style="padding: 6px 10px; font-size: 0.78rem;">Редакция</a>
+                    </td>
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_delete_supplier', supplier_id=supplier.id) }}" method="POST"
+                              data-confirm="Изтриване на доставчика &quot;{{ supplier.name }}&quot;?" style="display:inline;">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="8" class="text-center no-data">Няма добавени доставчици.</td>
+                </tr>
+                {% endfor %}
+                {% if suppliers %}
+                <tr class="search-empty-row" hidden><td colspan="8" class="text-center no-data">Няма съвпадения.</td></tr>
+                {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
 </main>
 
 <script src="{{ url_for('static', filename='js/table_search.js') }}"></script>
 <script>
     initTableSearch('adminClientsSearchInput', 'adminClientsTableBody');
     initTableSearch('adminDeliverersSearchInput', 'adminDeliverersTableBody');
+    initTableSearch('adminSuppliersSearchInput', 'adminSuppliersTableBody');
 </script>
 </body>
 </html>
