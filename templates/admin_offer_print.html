@@ -78,7 +78,7 @@
             <td>{{ item.name or '' }}</td>
             <td class="item-desc">{{ item.description_html | safe if item.description_html else '' }}</td>
             <td>{{ item.dimensions or '' }}</td>
-            <td class="num">{{ '%g'|format(item.quantity) if item.quantity is not none else '' }}</td>
+            <td class="num">{{ (item.quantity|num2) if item.quantity is not none else '' }}</td>
             <td>{{ item.unit or '' }}</td>
             <td class="num price">{{ item.unit_price|money if item.unit_price is not none else '' }}</td>
             <td class="num price">{{ item.line_total|money if item.quantity is not none and item.unit_price is not none else '' }}</td>
@@ -90,7 +90,7 @@
     {% set before = [] %}
     {% if offer.discount_percent %}
     {% set before = [('Сума', (offer.subtotal|money) ~ ' EUR'),
-                     ('Отстъпка (-' ~ ('%g'|format(offer.discount_percent)) ~ '%)', '-' ~ (offer.discount_amount|money) ~ ' EUR')] %}
+                     ('Отстъпка (-' ~ (offer.discount_percent|num2) ~ '%)', '-' ~ (offer.discount_amount|money) ~ ' EUR')] %}
     {% endif %}
     {{ totals(offer.total, before) }}
     <div class="doc-notes price"><p>Единичните цени и стойностите са в EUR без ДДС.</p></div>

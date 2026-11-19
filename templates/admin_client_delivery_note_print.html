@@ -85,17 +85,17 @@
             <td class="idx">{{ loop.index }}</td>
             <td>{{ item.description_snapshot }}</td>
             {% if consume %}
-            <td class="num">{{ '%g'|format(item.quantity) }}{% if mat %}{% set kgt = material_stock_kg(mat, item.quantity)|kg|trim %}{% if kgt %}<div class="muted" style="font-size: .85em;">{{ kgt }}</div>{% endif %}{% endif %}</td>
+            <td class="num">{{ (item.quantity|num2) }}{% if mat %}{% set kgt = material_stock_kg(mat, item.quantity)|kg(2)|trim %}{% if kgt %}<div class="muted" style="font-size: .85em;">{{ kgt }}</div>{% endif %}{% endif %}</td>
             <td>
                 {%- if item.remnant_qty -%}
-                {% if item.remnant_width %}{{ '%g'|format(item.remnant_width) }} × {{ '%g'|format(item.remnant_height) }} мм, {% endif %}{{ '%g'|format(item.remnant_qty) }}
+                {% if item.remnant_width %}{{ (item.remnant_width|num2) }} × {{ (item.remnant_height|num2) }} мм, {% endif %}{{ (item.remnant_qty|num2) }}
                 {%- else %}—{% endif -%}
             </td>
             <td class="ctr">{{ 'не' if item.remnant_qty else 'да' }}</td>
             <td>{{ item.notes or '' }}</td>
             {% else %}
             <td class="muted">{{ item.notes or '' }}</td>
-            <td class="num">{{ '%g'|format(item.quantity) }}{% if mat %}{% set kgt = material_stock_kg(mat, item.quantity)|kg|trim %}{% if kgt %}<div class="muted" style="font-size: .85em;">{{ kgt }}</div>{% endif %}{% endif %}</td>
+            <td class="num">{{ (item.quantity|num2) }}{% if mat %}{% set kgt = material_stock_kg(mat, item.quantity)|kg(2)|trim %}{% if kgt %}<div class="muted" style="font-size: .85em;">{{ kgt }}</div>{% endif %}{% endif %}</td>
             {% endif %}
             {% if priced %}
             <td class="num price">{{ item.unit_price|money if item.unit_price is not none else '' }}</td>

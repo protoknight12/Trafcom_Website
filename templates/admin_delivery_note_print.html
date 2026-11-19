@@ -77,12 +77,12 @@
             <td>{{ item.brand or '' }}</td>
             <td>
                 {%- set dims = [] -%}
-                {%- if item.width %}{% set _ = dims.append('%g'|format(item.width)) %}{% endif -%}
-                {%- if item.height %}{% set _ = dims.append('%g'|format(item.height)) %}{% endif -%}
-                {{ dims|join(' × ') }}{% if item.thickness %}{{ ', ' if dims else '' }}деб. {{ '%g'|format(item.thickness) }}{% endif %}
+                {%- if item.width %}{% set _ = dims.append(item.width|num2) %}{% endif -%}
+                {%- if item.height %}{% set _ = dims.append(item.height|num2) %}{% endif -%}
+                {{ dims|join(' × ') }}{% if item.thickness %}{{ ', ' if dims else '' }}деб. {{ (item.thickness|num2) }}{% endif %}
             </td>
             <td class="muted">{{ item.notes or '' }}</td>
-            <td class="num">{{ '%g'|format(item.quantity) }}{% if mat %}{% set kgt = material_stock_kg(mat, item.quantity)|kg|trim %}{% if kgt %}<div class="muted" style="font-size: .85em;">{{ kgt }}</div>{% endif %}{% endif %}</td>
+            <td class="num">{{ (item.quantity|num2) }}{% if mat %}{% set kgt = material_stock_kg(mat, item.quantity)|kg(2)|trim %}{% if kgt %}<div class="muted" style="font-size: .85em;">{{ kgt }}</div>{% endif %}{% endif %}</td>
             {% if priced %}
             <td class="num price">{{ item.unit_price|money if item.unit_price is not none else '' }}</td>
             <td class="num price">{{ line_total|money if item.unit_price is not none else '' }}</td>

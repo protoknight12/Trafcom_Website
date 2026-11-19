@@ -34,10 +34,10 @@
     <td><a href="{{ url_for('admin_material_history', material_id=m.id) }}">{{ format_material_option(m) }}</a></td>
     <td>{{ m.owner_client.name if m.owner_client_id and m.owner_client else 'Трафком' }}</td>
     <td>{{ material_type_label(m.type) }}</td>
-    <td class="text-center">{{ m.stock_quantity|round(2) }}{{ kg|kg }}{% if reserved.get(m.id) %}<div class="text-muted text-small">Заделено: {{ reserved[m.id]|round(2) }}{{ material_stock_kg(m, reserved[m.id])|kg }}</div>{% endif %}</td>
+    <td class="text-center">{{ m.stock_quantity|num3 }}{{ kg|kg }}{% if reserved.get(m.id) %}<div class="text-muted text-small">Заделено: {{ reserved[m.id]|num3 }}{{ material_stock_kg(m, reserved[m.id])|kg }}</div>{% endif %}</td>
     {#- A client's material is not ours: no price, no value. #}
-    <td class="text-right">{{ '—' if m.owner_client_id else "%.2f"|format(m.cost_per_m2) ~ ' €/' ~ unit }}</td>
-    <td class="text-right">{{ "%.2f €"|format(m.price_per_unit) if m.price_per_unit is not none and not m.owner_client_id else '—' }}</td>
+    <td class="text-right">{{ '—' if m.owner_client_id else (m.cost_per_m2|price3) ~ ' €/' ~ unit }}</td>
+    <td class="text-right">{{ (m.price_per_unit|price3) ~ " €" if m.price_per_unit is not none and not m.owner_client_id else '—' }}</td>
     {#- Total value = unit price x AVAILABLE quantity (not the raw
     stock_quantity shown above) - sheet/other stock is a whole-sheet
     count, not a running m² total, so the real €-value of what's on
@@ -106,7 +106,7 @@
             </select>
             <select id="filterThickness" aria-label="Дебелина" style="flex: 1 1 120px;">
                 <option value="">Всички дебелини</option>
-                {% for t in thicknesses %}<option value="{{ t }}">{{ t|round(2) }} мм</option>{% endfor %}
+                {% for t in thicknesses %}<option value="{{ t }}">{{ t|num3 }} мм</option>{% endfor %}
             </select>
             <select id="filterStatus" aria-label="Наличност" style="flex: 1 1 150px;">
                 <option value="">Всички наличности</option>
@@ -179,8 +179,8 @@
                     <td><span class="tree-chevron">▶</span>{{ group.label }}<span class="lot-count-badge">{{ lots|length }} партиди</span></td>
                     <td>{{ first.owner_client.name if first.owner_client_id and first.owner_client else 'Трафком' }}</td>
                     <td>{{ material_type_label(first.type) }}</td>
-                    <td class="text-center">{{ group.total_stock|round(2) }}{{ group.total_kg|kg }}{% if group.total_reserved %}<div class="text-muted text-small">Заделено: {{ group.total_reserved|round(2) }}{{ group.reserved_kg|kg }}</div>{% endif %}</td>
-                    <td class="text-right">{{ '—' if first.owner_client_id else "%.2f"|format(group.min_price) ~ '–' ~ "%.2f"|format(group.max_price) ~ ' €/' ~ group.unit }}</td>
+                    <td class="text-center">{{ group.total_stock|num3 }}{{ group.total_kg|kg }}{% if group.total_reserved %}<div class="text-muted text-small">Заделено: {{ group.total_reserved|num3 }}{{ group.reserved_kg|kg }}</div>{% endif %}</td>
+                    <td class="text-right">{{ '—' if first.owner_client_id else (group.min_price|price3) ~ '–' ~ (group.max_price|price3) ~ ' €/' ~ group.unit }}</td>
                     <td class="text-right">—</td>
                     <td class="text-right">{{ '—' if first.owner_client_id else "%.2f"|format(group.total_value) ~ ' €' }}</td>
                 </tr>
@@ -201,6 +201,7 @@
 
 </main>
 <script src="{{ url_for('static', filename='js/tree_table.js') }}"></script>
+<script src="{{ url_for('static', filename='js/cascade_filters.js') }}"></script>
 <script>
 (function () {
     const q = document.getElementById('materialSearchInput');
@@ -228,8 +229,19 @@
         return true;
     }
 
+    // Each select offers only what exists under the other filters (cascade_filters.js); leaf rows only.
+    const STATUS_TEST = { instock: r => r.dataset.out === '0', out: r => r.dataset.out === '1', low: r => r.dataset.low === '1' };
+    const updateOptions = cascadeFilters(body.querySelectorAll('tr[data-search]:not(.tree-head)'), [
+        { el: f.type, test: (r, v) => r.dataset.type === v },
+        { el: f.grade, test: (r, v) => r.dataset.grade === v },
+        { el: f.brand, test: (r, v) => r.dataset.brand === v },
+        { el: f.thick, test: (r, v) => parseFloat(r.dataset.thickness) === parseFloat(v) },
+        { el: f.status, test: (r, v) => (STATUS_TEST[v] || (() => true))(r) },
+    ], r => { const text = q.value.trim().toLowerCase(); return !text || r.dataset.search.indexOf(text) !== -1; });
+
     function apply() {
-        const active = !!(q.value.trim() || f.type.value || f.grade.value || f.brand.value || f.thick.value || f.status.value);
+        updateOptions();
+        const active =!!(q.value.trim() || f.type.value || f.grade.value || f.brand.value || f.thick.value || f.status.value);
         treeFilter(body, matches, active);
     }
 

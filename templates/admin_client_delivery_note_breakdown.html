@@ -30,8 +30,8 @@
 
 {% set priced = breakdown.priced %}
 {% set doc_date = note.note_date or ((note.created_at|local) if note.created_at else none) %}
-{% macro qty(q) %}{{ '%g'|format(q|round(3)) if q else '—' }}{% endmacro %}
-{% macro kgline(k) %}{% if k %}<div class="doc-for">{{ k|kg|trim }}</div>{% endif %}{% endmacro %}
+{% macro qty(q) %}{{ q|num2 if q else '—' }}{% endmacro %}
+{% macro kgline(k) %}{% if k %}<div class="doc-for">{{ k|kg(2)|trim }}</div>{% endif %}{% endmacro %}
 {% macro section(title, rows, total_label, total, scrap=False) %}
     <span class="doc-section">{{ title }}</span>
     <table class="doc-table">
@@ -55,7 +55,7 @@
         <tr>
             <td class="idx">{{ loop.index }}</td>
             <td>{{ g.name }}
-                {%- if g.for %}<div class="doc-for">за: {% for name, n in g.for.items() %}{{ name }} ({{ '%g'|format(n) }} бр.){{ ', ' if not loop.last }}{% endfor %}</div>{% endif %}</td>
+                {%- if g.for %}<div class="doc-for">за: {% for name, n in g.for.items() %}{{ name }} ({{ (n|num2) }} бр.){{ ', ' if not loop.last }}{% endfor %}</div>{% endif %}</td>
             {% if scrap %}
             <td class="num scrap-sep">{{ qty(g.qty) }}{{ kgline(g.kg if g.kind == 'mat' else 0) }}</td>
             <td class="num scrap-sep">{{ qty(g.scrap) }}{{ kgline(g.scrap_kg if g.kind == 'mat' else 0) }}</td>

@@ -38,7 +38,7 @@ from werkzeug.security import generate_password_hash
 
 from app import (app as flask_app, db, User, Client, MaterialPrice, Detail, Product, Order, OrderItem,
                  OrderItemComponent, OrderMaterialReservation, OrderMaterialRemnant, OrderCutSheet, limiter,
-                 seed_material_types)
+                 seed_material_types, num3)
 
 
 @pytest.fixture
@@ -220,7 +220,8 @@ def test_remnant_is_decided_per_sheet(c, ids):
     item_a, item_b = _get(OrderItem, a_item), _get(OrderItem, b_item)
     assert item_a.material_consumed + item_b.material_consumed == pytest.approx(2)
     history = c.get(f'/admin/materials/{ids["ours"]}/history').get_data(as_text=True)
-    assert f'-{round(item_a.material_consumed, 2)}<' in history and f'-{round(item_b.material_consumed, 2)}<' in history
+    # screens show quantities to the 3rd decimal (|num3)
+    assert f'-{num3(item_a.material_consumed)}<' in history and f'-{num3(item_b.material_consumed)}<' in history
 
 
 def test_component_line_on_a_sheet(c, ids):

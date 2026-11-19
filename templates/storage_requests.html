@@ -54,10 +54,10 @@
                 </div>
                 <div class="form-group qty-field">
                     <label for="reqQty">Количество</label>
-                    <input type="number" id="reqQty" value="1" min="0.01" step="any">
+                    <input type="number" id="reqQty" value="1" min="0.001" step="any">
                 </div>
                 <div class="form-group qty-field">
-                    <label for="reqKg">или кг</label>
+                    <label for="reqKg">Количество в кг (по избор)</label>
                     <input type="number" id="reqKg" min="0" step="any">
                 </div>
                 <div class="form-group" style="flex: 0 0 auto;">
@@ -105,7 +105,7 @@
                 {% for req in requests %}
                 <tr>
                     <td>{{ elink('material', req.material_id, format_material_option(req.material)) if req.material else 'Изтрит материал' }}{% if req.note %}<div class="text-muted text-small">{{ req.note }}</div>{% endif %}</td>
-                    <td class="text-center">{{ req.quantity|round(2) }}{% if req.material %}{{ material_stock_kg(req.material, req.quantity)|kg }}{% endif %}</td>
+                    <td class="text-center">{{ req.quantity|num3 }}{% if req.material %}{{ material_stock_kg(req.material, req.quantity)|kg }}{% endif %}</td>
                     <td>{{ (req.created_at|local).strftime('%d.%m.%Y %H:%M') if req.created_at else '-' }} {% if req.created_by %}<div class="text-muted text-small">{{ req.created_by.full_name }}</div>{% endif %}</td>
                     <td class="text-center"><span class="status-badge status-{{ req.status }}">{{ req.status_label }}</span></td>
                     <td>{{ req.supplier.name if req.supplier else '-' }}</td>

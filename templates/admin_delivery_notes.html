@@ -159,19 +159,23 @@
                 </div>
                 <div class="form-group qty-field">
                     <label for="dn_qty">Количество</label>
-                    <input type="number" id="dn_qty" value="1" min="0.01" step="0.01">
+                    <input type="number" id="dn_qty" value="1" min="0.001" step="0.001">
                 </div>
                 <div class="form-group qty-field" id="dn_kg_group">
-                    <label for="dn_kg">или кг</label>
+                    <label for="dn_kg">Количество в кг (по избор)</label>
                     <input type="number" id="dn_kg" min="0" step="any">
                 </div>
                 <div class="form-group qty-field" id="dn_price_group" style="flex: 2 1 320px;">
-                    <label for="dn_price">Цена (€, по избор) - въведете едното, другите се изчисляват</label>
+                    <label>Цена (€, по избор)</label>
                     <div style="display: flex; gap: 6px;">
-                        <input type="number" id="dn_price" min="0" step="0.01" placeholder="за бройка" title="Цена за бройка (лист / прът / брой)">
-                        <input type="number" id="dn_price_kg" min="0" step="any" placeholder="за кг" title="Цена за кг">
-                        <input type="number" id="dn_price_total" min="0" step="0.01" placeholder="общо за реда" title="Обща сума за реда">
+                        <div style="flex: 1;"><label for="dn_price" class="text-small">Цена за бройка (€)</label>
+                        <input type="number" id="dn_price" min="0" step="0.001" title="Цена за бройка (лист / прът / брой)"></div>
+                        <div style="flex: 1;"><label for="dn_price_kg" class="text-small">Цена за кг (€)</label>
+                        <input type="number" id="dn_price_kg" min="0" step="any" title="Цена за кг"></div>
+                        <div style="flex: 1;"><label for="dn_price_total" class="text-small">Общо за реда (€)</label>
+                        <input type="number" id="dn_price_total" min="0" step="0.001" title="Обща сума за реда"></div>
                     </div>
+                    <small class="text-muted">Въведете едното - другите две се изчисляват.</small><br>
                     <small class="text-muted" id="dn_price_hint"></small>
                 </div>
             </div>
@@ -222,15 +226,15 @@
             <div class="add-item-row">
                 <div class="form-group qty-field">
                     <label for="dn_width">Ширина (мм)</label>
-                    <input type="number" id="dn_width" min="0" step="0.01">
+                    <input type="number" id="dn_width" min="0" step="0.001">
                 </div>
                 <div class="form-group qty-field">
                     <label for="dn_height">Дължина/Височина (мм)</label>
-                    <input type="number" id="dn_height" min="0" step="0.01">
+                    <input type="number" id="dn_height" min="0" step="0.001">
                 </div>
                 <div class="form-group qty-field" id="dn_thickness_group">
                     <label for="dn_thickness">Дебелина (мм)</label>
-                    <input type="number" id="dn_thickness" min="0" step="0.01">
+                    <input type="number" id="dn_thickness" min="0" step="0.001">
                 </div>
                 <div class="form-group">
                     <label for="dn_brand">Марка</label>
@@ -355,15 +359,15 @@
                 </div>
                 <div class="form-group" style="margin-bottom: 15px;" id="qm_sheet_length_mm_group">
                     <label for="qm_sheet_length_mm">Дължина на плочата (мм)</label>
-                    <input type="number" id="qm_sheet_length_mm" step="1" min="0" name="sheet_length_mm">
+                    <input type="number" id="qm_sheet_length_mm" step="0.001" min="0" name="sheet_length_mm">
                 </div>
                 <div class="form-group" style="margin-bottom: 15px;" id="qm_sheet_width_mm_group">
                     <label for="qm_sheet_width_mm">Ширина на плочата (мм)</label>
-                    <input type="number" id="qm_sheet_width_mm" step="1" min="0" name="sheet_width_mm">
+                    <input type="number" id="qm_sheet_width_mm" step="0.001" min="0" name="sheet_width_mm">
                 </div>
                 <div class="form-group" style="margin-bottom: 15px;" id="qm_thickness_mm_group">
                     <label for="qm_thickness_mm">Дебелина (мм)</label>
-                    <input type="number" id="qm_thickness_mm" step="0.01" min="0" name="thickness_mm">
+                    <input type="number" id="qm_thickness_mm" step="0.001" min="0" name="thickness_mm">
                 </div>
                 <div class="form-group" style="margin-bottom: 15px;">
                     <label for="qm_erp_number">ERP № (незадължително - оставете празно за автоматично генериране)</label>
@@ -404,13 +408,13 @@
                         {#- Format: (item) (brand) x (quantity) (parameters separated by ,) - see CLAUDE.md delivery-note history task #}
                         <div>
                             {%- if item.target_type == 'material' %}#{{ item.target_id }} {% endif -%}
-                            {% if item.target_type in ('material','detail','product') %}{{ elink(item.target_type, item.target_id, item.description_snapshot) }}{% else %}{{ item.description_snapshot }}{% endif %}{% if item.brand %} {{ item.brand }}{% endif %} &times; {{ item.quantity }}
+                            {% if item.target_type in ('material','detail','product') %}{{ elink(item.target_type, item.target_id, item.description_snapshot) }}{% else %}{{ item.description_snapshot }}{% endif %}{% if item.brand %} {{ item.brand }}{% endif %} &times; {{ item.quantity|num3 }}
                             {%- set params = [] %}
-                            {%- if item.width %}{% set _ = params.append('Ш: ' ~ item.width) %}{% endif %}
-                            {%- if item.height %}{% set _ = params.append('Д: ' ~ item.height) %}{% endif %}
-                            {%- if item.thickness %}{% set _ = params.append('Деб: ' ~ item.thickness) %}{% endif %}
+                            {%- if item.width %}{% set _ = params.append('Ш: ' ~ (item.width|num3)) %}{% endif %}
+                            {%- if item.height %}{% set _ = params.append('Д: ' ~ (item.height|num3)) %}{% endif %}
+                            {%- if item.thickness %}{% set _ = params.append('Деб: ' ~ (item.thickness|num3)) %}{% endif %}
                             {%- if params %} ({{ params|join(', ') }}){% endif %}
-                            {%- if item.unit_price %} @ {{ "%.2f"|format(item.unit_price) }} €{% endif %}
+                            {%- if item.unit_price %} @ {{ item.unit_price|price3 }} €{% endif %}
                             {%- if item.notes %} - {{ item.notes }}{% endif %}
                         </div>
                         {% endfor %}
@@ -880,9 +884,9 @@
                 else if (source === 'kg') stockPrice = kgStock ? v * kgStock : null;
                 else stockPrice = qty ? v / qty : null;
             }
-            if (source !== 'unit') el.unit.value = stockPrice !== null ? round(stockPrice * per, 4) : '';
-            if (source !== 'kg') el.kg.value = stockPrice !== null && kgStock ? round(stockPrice / kgStock, 4) : '';
-            if (source !== 'total') el.total.value = stockPrice !== null && qty ? round(stockPrice * qty, 2) : '';
+            if (source !== 'unit') el.unit.value = stockPrice !== null ? round(stockPrice * per, 3) : '';
+            if (source !== 'kg') el.kg.value = stockPrice !== null && kgStock ? round(stockPrice / kgStock, 3) : '';
+            if (source !== 'total') el.total.value = stockPrice !== null && qty ? round(stockPrice * qty, 3) : '';
             hint.textContent = unit === 'm' && per !== 1 ? '"За бройка" = цената на един прът/профил от ' + round(per, 3) + ' м.'
                 : (unit === 'm' ? '"За бройка" = цена за метър (няма дължина).' : '');
         }
@@ -1093,7 +1097,7 @@
                 tr.appendChild(cell(item.name));
                 tr.appendChild(cell(TYPE_LABELS[item.type]));
                 tr.appendChild(cell(item.qty, { className: 'text-center' }));
-                tr.appendChild(cell(item.unit_price != null ? item.unit_price.toFixed(2) + ' €' : '-', { className: 'text-right' }));
+                tr.appendChild(cell(item.unit_price != null ? item.unit_price.toFixed(3).replace(/0$/, '') + ' €' : '-', { className: 'text-right' }));
 
                 const params = [
                     item.width != null ? 'Ш: ' + item.width : null,

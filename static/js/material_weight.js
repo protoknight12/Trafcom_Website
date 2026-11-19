@@ -88,7 +88,7 @@
         kgEl.addEventListener('input', function () {
             var kg = parseFloat(kgEl.value);
             if (!perUnit || !(kg > 0)) return;
-            qtyEl.value = round(kg / perUnit, 4);
+            qtyEl.value = round(kg / perUnit, 3);
             qtyEl.dispatchEvent(new Event('qty-from-kg'));
         });
         (watch || []).forEach(function (el) {

@@ -6499,14 +6499,48 @@ app.jinja_env.globals['material_kg_per_stock_unit'] = material_kg_per_stock_unit
 app.jinja_env.globals['material_density'] = material_density
 
 
-def kg_text(value):
-    """' (≈ 12.5 кг)' after a quantity on a page/document, '' when the weight is unknown."""
+# Number precision (owner's decision 2026-11-19): purchase prices, kg, quantities and sizes are entered, kept and
+# shown on screen to the 3rd decimal; printed documents round them to the 2nd. Sale prices (orders/offers) stay
+# at the cent. Screens: |num3, |price3, |kg. Print documents: |num2, |money, |kg(2).
+def _trim(text):
+    """'12.500' -> '12.5', '3.000' -> '3' (a quantity reads without trailing zeros)."""
+    return text.rstrip('0').rstrip('.') if '.' in text else text
+
+
+def num3(value, places=3):
+    """A quantity / size / kg on a screen: rounded to 3 decimals, trailing zeros dropped (1.25, 0.942, 12)."""
+    if value is None or value == '':
+        return ''
+    return _trim(f'{float(value):.{places}f}')
+
+
+def num2(value):
+    """The same on a printed document: rounded to 2 decimals."""
+    return num3(value, 2)
+
+
+def price3(value):
+    """A purchase price on a screen: 3 decimals, at least 2 (14.50, 14.505)."""
+    if value is None or value == '':
+        return ''
+    text = f'{float(value):.3f}'
+    return text[:-1] if text.endswith('0') else text
+
+
+def kg_text(value, places=3):
+    """' (≈ 12.5 кг)' after a quantity - up to 3 decimals on a screen, |kg(2) on a printed document; '' when the
+    weight is unknown or zero."""
     if not value:   # unknown weight, or nothing in stock
         return ''
-    return f' (≈ {value:,.1f} кг)'.replace(',', ' ') if value >= 10 else f' (≈ {value:.2f} кг)'
+    return f' (≈ {num3(value, places)} кг)'
+
+
 
 
 app.jinja_env.filters['kg'] = kg_text
+app.jinja_env.filters['num3'] = num3
+app.jinja_env.filters['num2'] = num2
+app.jinja_env.filters['price3'] = price3
 app.jinja_env.globals['client_service_rate'] = client_service_rate
 app.jinja_env.globals['client_material_rate'] = client_material_rate
 
@@ -12254,7 +12288,7 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
         # longer enter one on admin_materials.html (see admin_add_material).
         if unit_price is not None:
             derived_cost_per_m2 = _cost_per_m2_from_unit_price(material_type, unit_price, width, height)
-            cost_per_m2 = round(derived_cost_per_m2 if derived_cost_per_m2 is not None else unit_price, 2)
+            cost_per_m2 = round(derived_cost_per_m2 if derived_cost_per_m2 is not None else unit_price, 3)
             price_per_unit = unit_price
         if existing and unit_price is not None:
             if not existing.cost_per_m2:
@@ -12262,7 +12296,7 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
                 # this price becomes the row's own, no separate lot needed.
                 existing.cost_per_m2 = cost_per_m2
                 existing.price_per_unit = price_per_unit
-            elif abs(existing.cost_per_m2 - cost_per_m2) > 0.001:
+            elif abs(existing.cost_per_m2 - cost_per_m2) > 0.0005:
                 cutting_speed_mm_per_min = existing.cutting_speed_mm_per_min
                 pierce_rate_per_min = existing.pierce_rate_per_min
                 existing = None
@@ -12754,7 +12788,7 @@ def _apply_delivery_note_items(note, items, kept=None):
                     target = None  # the lot's price belongs to other deliveries too - normal lot split
                 else:
                     derived = _cost_per_m2_from_unit_price(target.type, unit_price, width, height)
-                    target.cost_per_m2 = round(derived if derived is not None else unit_price, 2)
+                    target.cost_per_m2 = round(derived if derived is not None else unit_price, 3)
                     target.price_per_unit = unit_price
         if target is None:
             target = _find_or_create_delivery_target(
@@ -13870,9 +13904,9 @@ def admin_update_material(key):
     material.sheet_width_mm = sheet_width_mm
     material.thickness_mm = thickness_mm
     material.height_mm = height_mm
-    material.weight_kg = round(weight_kg, 2) if weight_kg is not None else None
+    material.weight_kg = round(weight_kg, 3) if weight_kg is not None else None
     material.grade_id = grade_id or guess_material_grade_id(material.display_name)
-    material.min_quantity = round(min_quantity, 2) if min_quantity is not None else None
+    material.min_quantity = round(min_quantity, 3) if min_quantity is not None else None
     material.erp_number = erp_number
     material.code_number = request.form.get('code_number', '').strip() or None
     material.type = _parse_material_type(request.form)
@@ -13965,9 +13999,9 @@ def admin_add_material():
         sheet_width_mm=sheet_width_mm,
         thickness_mm=thickness_mm,
         height_mm=height_mm,
-        weight_kg=round(weight_kg, 2) if weight_kg is not None else None,
+        weight_kg=round(weight_kg, 3) if weight_kg is not None else None,
         grade_id=grade_id if grade_id else guess_material_grade_id(display_name),
-        min_quantity=round(min_quantity, 2) if min_quantity is not None else None,
+        min_quantity=round(min_quantity, 3) if min_quantity is not None else None,
         erp_number=erp_number,
         code_number=request.form.get('code_number', '').strip() or None,
         type=material_type,
@@ -19041,7 +19075,7 @@ def api_quick_create_material():
         sheet_width_mm=sheet_width_mm,
         thickness_mm=thickness_mm,
         height_mm=height_mm,
-        weight_kg=round(weight_kg, 2) if weight_kg is not None else None,
+        weight_kg=round(weight_kg, 3) if weight_kg is not None else None,
         erp_number=erp_number,
         code_number=request.form.get('code_number', '').strip() or None,
         type=material_type,
