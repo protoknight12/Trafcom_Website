@@ -38,7 +38,7 @@
             </div>
             <div class="form-group" style="grid-column: span 2;">
                 <label for="detail_material">Материал</label>
-                <select id="detail_material" data-create="{{ create_url('material') }}" name="material" class="material-picker">
+                <select id="detail_material" data-create="{{ create_url('material') }}" name="material" data-picker="material">
                     {% include 'partials/material_options.html' %}
                 </select>
             </div>
@@ -211,7 +211,6 @@
         if (search) search.apply();
     })();
 </script>
-<script src="{{ url_for('static', filename='js/material_picker.js') }}"></script>
 <script>
     const ND_SERVICES = {{ services_data|tojson }};
     let ndPendingOps = [];
@@ -297,7 +296,7 @@
     applyDetailManualPriceVisibility();
 
     // A private detail may be cut from its owner's stored lot: show only our lots (data-owner="")
-    // and the chosen owner's; material_picker.js skips hidden options.
+    // and the chosen owner's; entity_picker.js skips hidden options.
     function applyDetailMaterialOwner() {
         const owner = document.getElementById('detail_owner_client_id').value;
         const select = document.getElementById('detail_material');

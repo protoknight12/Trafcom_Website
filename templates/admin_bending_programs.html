@@ -30,7 +30,7 @@
         <form action="{{ url_for('admin_bending_add_program') }}" method="POST" class="admin-form">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group"><label for="pg_d">Детайл *</label>
-                <select id="pg_d" name="detail_id" required>{% for d in details %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select></div>
+                <select id="pg_d" name="detail_id" required data-picker="detail">{% for d in details %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select></div>
             <div class="form-group"><label for="pg_m">Абкант *</label>
                 <select id="pg_m" name="machine_id" required>{% for m in machines %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}</select></div>
             <div class="form-group"><label for="pg_n">Име</label><input type="text" id="pg_n" name="name" placeholder="по подразбиране името на детайла"></div>

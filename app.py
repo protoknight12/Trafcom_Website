@@ -510,6 +510,10 @@ class MaterialPrice(db.Model):
     # material" - see own_materials_query().
     owner_client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True, index=True)
     owner_client = db.relationship('Client', foreign_keys=[owner_client_id])
+    # Калиброван материал (e.g. a ground rod) + its tolerance class ("h9") - parts of the composed name
+    # (compose_material_name()); calibration is only meaningful when calibrated is set.
+    calibrated = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    calibration = db.Column(db.String(30), nullable=True)
 
 
 class MaterialType(db.Model):
@@ -543,6 +547,8 @@ class MaterialType(db.Model):
     has_cutting = db.Column(db.Boolean, nullable=False, default=True)
     is_round = db.Column(db.Boolean, nullable=False, default=False)
     sort_order = db.Column(db.Integer, nullable=False, default=0)
+    # Singular word that starts a composed material name ("Лист", "Прът") - compose_material_name(); empty = label.
+    name_singular = db.Column(db.String(60), nullable=True)
 
 
 class MaterialGrade(db.Model):
@@ -595,13 +601,15 @@ def guess_material_grade_id(name):
 # existing material/detail price changes when this moved into the DB.
 DEFAULT_MATERIAL_TYPES = [
     dict(key='sheets', label='Листове/Плочи', price_unit='m2', length_label='Дължина на плочата (мм)',
-         width_label='Ширина на плочата (мм)', thickness_label='Дебелина (мм)', has_cutting=True, is_round=False, sort_order=1),
+         width_label='Ширина на плочата (мм)', thickness_label='Дебелина (мм)', has_cutting=True, is_round=False, sort_order=1,
+         name_singular='Лист'),
     dict(key='rods', label='Пръти', price_unit='m', length_label='Дължина (мм)', width_label='Диаметър (мм)',
-         has_cutting=False, is_round=True, sort_order=2),
+         has_cutting=False, is_round=True, sort_order=2, name_singular='Прът'),
     dict(key='profiles', label='Профили', price_unit='m', length_label='Дължина (мм)', width_label='Ширина (мм)',
-         thickness_label='Дебелина на стената (мм)', height_label='Височина (мм)', has_cutting=False, is_round=False, sort_order=3),
+         thickness_label='Дебелина на стената (мм)', height_label='Височина (мм)', has_cutting=False, is_round=False, sort_order=3,
+         name_singular='Профил'),
     dict(key='pipes', label='Тръби', price_unit='m', length_label='Дължина (мм)', width_label='Външен диаметър (мм)',
-         thickness_label='Дебелина на стената (мм)', has_cutting=True, is_round=True, sort_order=4),
+         thickness_label='Дебелина на стената (мм)', has_cutting=True, is_round=True, sort_order=4, name_singular='Тръба'),
     dict(key='other', label='Други', price_unit='m2', has_cutting=True, is_round=False, sort_order=5),
 ]
 
@@ -679,7 +687,7 @@ def material_types_js():
     """Per-type config for client-side form logic (which fields to show,
     their labels, cutting inputs on/off) - replaces the per-template
     hardcoded rods/pipes/profiles JS tables."""
-    return {k: {'label': t.label, 'unit': t.price_unit,
+    return {k: {'label': t.label, 'singular': t.name_singular, 'unit': t.price_unit,
                 'dims': [t.length_label, t.width_label, t.thickness_label],
                 'height': t.height_label, 'cutting': bool(t.has_cutting), 'round': bool(t.is_round)}
             for k, t in _material_types().items()}
@@ -918,14 +926,16 @@ class Detail(db.Model):
             return 'материал на клиента' + (f', +{p:g}% върху операциите' if p else '')
         width, height = self.effective_width, self.effective_height
         unit = material_price_unit(self.material.type)
-        rate = self.material.cost_per_m2
-        suffix = ''
         owner = self.owner_client
-        if owner and owner.material_adjustment_percent:
-            # the owner's Материали terms are in calculated_price, so the rate shown is the adjusted one
-            rate = _apply_adjustment(rate, owner.material_adjustment_type, owner.material_adjustment_percent)
+        # calculated_price carries _material_terms() (the owner's Материали terms or the standard markup),
+        # so the rate shown is the adjusted one
+        rate = _material_terms(self.material.cost_per_m2, owner)
+        if owner and owner.material_adjustment_type:
             sign = '-' if owner.material_adjustment_type == 'discount' else '+'
-            suffix = f", {sign}{owner.material_adjustment_percent:g}% на клиента"
+            suffix = f", {sign}{owner.material_adjustment_percent or 0:g}% на клиента"
+        else:
+            markup = company()['material_markup']
+            suffix = f", +{markup:g}% надценка" if markup else ''
         if unit == 'm':
             return f"{height:.0f} мм × {rate:.2f} €/м{suffix}"
         if unit == 'pcs':
@@ -3453,7 +3463,7 @@ class OfferItem(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     offer_id = db.Column(db.Integer, db.ForeignKey('offer.id'), nullable=False, index=True)
     position = db.Column(db.Integer, nullable=False, default=0)
-    item_type = db.Column(db.String(10), nullable=False)  # 'product', 'detail', 'text'
+    item_type = db.Column(db.String(10), nullable=False)  # 'product', 'detail', 'material', 'text'
     # Which catalog row this line was picked from, if any (nullable - 'text'
     # rows and hand-typed product/detail names have neither). Only used to
     # let admin_offer_create_order() turn a selected line back into a real
@@ -3461,6 +3471,9 @@ class OfferItem(db.Model):
     # columns below, never these.
     product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=True)
     detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=True)
+    # A 'material' line sells raw material: one of OUR lots (own_materials_query()), quantity in its stock unit
+    # (лист / м / бр - `unit`). Never becomes an order line (orders hold products/details only).
+    material_id = db.Column(db.Integer, db.ForeignKey('material_price.id'), nullable=True, index=True)
     code = db.Column(db.String(50), nullable=True)
     name = db.Column(db.String(255), nullable=True)
     description_html = db.Column(db.Text, nullable=True)
@@ -3477,10 +3490,18 @@ class OfferItem(db.Model):
         'items', order_by='OfferItem.position', cascade='all, delete-orphan'))
     product = db.relationship('Product')
     detail = db.relationship('Detail')
+    material = db.relationship('MaterialPrice')
 
     @property
     def line_total(self):
         return round((self.quantity or 0) * (self.unit_price or 0), 2)
+
+    @property
+    def material_kg(self):
+        """kg of a material line's quantity (stock units), None when unknown or not a material line."""
+        if not self.material or self.quantity is None:
+            return None
+        return material_stock_kg(self.material, self.quantity)
 
 
 class QualityCheck(db.Model):
@@ -5124,16 +5145,17 @@ def client_service_rate(service):
 
 
 def client_material_rate(material):
-    """MaterialPrice.cost_per_m2 adjusted for the logged-in viewer's linked
-    Client's Материали discount/markup - jinja global used by
+    """MaterialPrice.cost_per_m2 with _material_terms() for the logged-in
+    viewer's linked Client - jinja global used by
     partials/material_options.html (upload.html/generator.html's material
     picker) so the price shown while picking a material already matches what
-    the DXF calculator will actually charge. Anonymous/unlinked/staff viewers
-    see the plain list rate."""
-    client = _viewer_client()
-    if not client:
+    the DXF calculator will actually charge. Anonymous/unlinked viewers see the
+    rate with the standard material markup; staff see the lot's plain delivery
+    price (the same picker sits on the delivery-note and detail admin pages,
+    where the price identifies the lot)."""
+    if current_user.is_authenticated and current_user.is_staff:
         return material.cost_per_m2
-    return round(_apply_adjustment(material.cost_per_m2, client.material_adjustment_type, client.material_adjustment_percent), 2)
+    return round(_material_terms(material.cost_per_m2, _viewer_client()), 2)
 
 
 def detail_price_for(detail, client, own_material=False, material_key=None):
@@ -5246,11 +5268,13 @@ def _material_cost(width, height, material, client=None):
     real area, same reasoning as diameter * length for rods/pipes). Sheets
     are the only type where cost_per_m2 is genuinely an area rate.
 
-    `client`, when given, applies its "Материали" discount/markup: the live
-    calculator passes the viewer, and a Detail owned by a client stores its
-    material price with the owner's terms (calculate_material_price() /
-    _detail_material_price()). A frozen list price can't be decomposed back
-    into a material portion per client, so those are priced at write time.
+    The delivery cost then gets _material_terms(): `client`'s own "Материали"
+    terms, or the standard material markup. The live calculator passes the
+    viewer (None = the standard markup), and a Detail stores its material price
+    with its owner's terms (None = public part, the standard markup) - see
+    calculate_material_price() / _detail_material_price(). A frozen list price
+    can't be decomposed back into a material portion per client, so those are
+    priced at write time.
     """
     if material.owner_client_id:
         return 0.0   # the client's own stored lot - we charge nothing for the material
@@ -5262,9 +5286,16 @@ def _material_cost(width, height, material, client=None):
     else:
         area_m2 = (width * height) / 1_000_000
         cost = area_m2 * material.cost_per_m2
-    if client:
-        cost = _apply_adjustment(cost, client.material_adjustment_type, client.material_adjustment_percent)
-    return cost
+    return _material_terms(cost, client)
+
+
+def _material_terms(cost, client=None):
+    """The ONE place material is priced up from its delivery cost (owner's decision 2026-11-19): a client with own
+    Материали terms (material_adjustment_type set - discount or markup, any percent incl. 0) gets those, everyone
+    else (no client too) the standard markup from /admin/company (company()['material_markup'], default 20%)."""
+    if client is not None and client.material_adjustment_type:
+        return _apply_adjustment(cost, client.material_adjustment_type, client.material_adjustment_percent)
+    return cost * (1 + company()['material_markup'] / 100.0)
 
 
 def _cost_per_m2_from_unit_price(material_type, unit_price, width, height):
@@ -5415,6 +5446,22 @@ def _sum_kg(parts):
 def material_kg_per_stock_unit(material):
     """kg of ONE stock unit (one sheet, one metre, one piece) - what the delivery-note forms multiply by."""
     return material_stock_kg(material, 1.0)
+
+
+def material_stock_unit_label(material):
+    """Name of a lot's STOCK unit: 'лист' for a sheet lot with a size, else м² / м / бр (the price unit)."""
+    if material_price_unit(material.type) == 'm2' and _material_sheet_area_m2(material):
+        return 'лист'
+    return material_unit_short(material.type)
+
+
+def material_stock_unit_price(material, client=None):
+    """Sale price of ONE stock unit for `client` (offer "Материал" lines): the delivery cost of one sheet (cost_per_m2
+    x sheet area; m² when the sheet size is unknown) / one metre / one piece, through _material_terms(), rounded."""
+    native = 1.0
+    if material_price_unit(material.type) == 'm2':
+        native = _material_sheet_area_m2(material) or 1.0
+    return round(_material_terms((material.cost_per_m2 or 0) * native, client), 2)
 
 
 def _material_stock_delta(material, native_qty):
@@ -5863,6 +5910,26 @@ def _detail_material_price(detail):
                                     detail.material_key, detail.owner_client)
 
 
+def _reprice_material_details(*criteria):
+    """Recomputes the stored material price (_detail_material_price()) of every Detail priced from its material
+    (filtered further by `criteria`): one with a size - a manual-price Detail has width/height 0 and keeps its price -
+    and not cut from its owner's own lot (no material cost, Detail.total_price ignores calculated_price). Used when
+    the standard material markup or a client's Материали terms change, and by
+    migration/data_apply_standard_material_markup.py. Returns how many prices changed; the caller commits.
+    Orders/offers are untouched - their prices are frozen."""
+    changed = 0
+    query = (Detail.query.filter(Detail.width > 0, Detail.height > 0, *criteria)
+             .options(db.joinedload(Detail.material), db.joinedload(Detail.owner_client)))
+    for detail in query.all():
+        if detail.client_material:
+            continue
+        price = _detail_material_price(detail)
+        if detail.calculated_price is None or abs(detail.calculated_price - price) > 0.0001:
+            detail.calculated_price = price
+            changed += 1
+    return changed
+
+
 def calculate_cnc_price_multi_service(width, height, total_length, pierce_count, material_key, service_ids, client=None,
                                       own_material=False):
     """
@@ -6233,6 +6300,43 @@ def _format_material_dims(material):
                       (material.sheet_width_mm, material.sheet_length_mm, material.thickness_mm))
 
 
+MATERIAL_NAME_MAX = 100   # MaterialPrice.display_name is String(100)
+REMNANT_SUFFIX = ' - остатък'   # ends the name of a sheet remnant lot (_sheet_remnant_lot())
+
+
+def compose_material_name(material, **override):
+    """A material's name composed from its fields (owner's decision 2026-11-19), empty parts skipped:
+    Тип (ед. число) · "Калиброван" · Вид · Марка · Размери · Калибрация · Забележка, e.g.
+    "Прът Калиброван Стомана S235JR ⌀20×6000 h9 шлифован". Размери: round type "⌀" + width × length, else
+    width × height × length, then " N мм" thickness - only the dimensions the type has. `override` replaces
+    attributes (e.g. sheet_width_mm/sheet_length_mm of a remnant piece).
+    JS mirror: composeMaterialName() in static/js/material_name.js - keep both in sync by hand."""
+    def get(name):
+        return override[name] if name in override else getattr(material, name, None)
+    cfg = material_type_cfg(get('type'))
+    grade_id = get('grade_id')
+    grade = getattr(material, 'grade', None) if 'grade_id' not in override else None
+    if grade_id and (grade is None or grade.id != grade_id):
+        grade = db.session.get(MaterialGrade, grade_id)
+    width, height, length, thickness = (get(k) for k in ('sheet_width_mm', 'height_mm', 'sheet_length_mm', 'thickness_mm'))
+    dims = [('⌀' if cfg.is_round else '') + num3(width) if cfg.width_label and width else '',
+            num3(height) if cfg.height_label and height else '',
+            num3(length) if cfg.length_label and length else '']
+    size = '×'.join(d for d in dims if d)
+    if cfg.thickness_label and thickness:
+        size = f'{size} {num3(thickness)} мм'.strip()
+    calibrated = bool(get('calibrated'))
+    parts = [cfg.name_singular or cfg.label, 'Калиброван' if calibrated else '', grade.name if grade else '',
+             get('brand'), size, get('calibration') if calibrated else '', get('notes')]
+    return ' '.join((p or '').strip() for p in parts if (p or '').strip())[:MATERIAL_NAME_MAX]
+
+
+def _parse_calibration(form):
+    """(calibrated, calibration) from a material form: the class only counts when "Калиброван" is ticked."""
+    calibrated = bool(form.get('calibrated'))
+    return calibrated, ((form.get('calibration') or '').strip()[:30] or None) if calibrated else None
+
+
 def format_material_option(material):
     """
     Standardized display text for every material <select> in the app:
@@ -6326,6 +6430,8 @@ app.jinja_env.globals['create_url'] = create_url
 
 # Default Bulgarian VAT rate (company() 'vat_percent' overrides it); prices in the app are without VAT.
 VAT_PERCENT = 20
+# Default standard markup on material (company() 'material_markup_percent' overrides it) - see _material_terms().
+STANDARD_MATERIAL_MARKUP_PERCENT = 20
 
 # Our company's data printed on every document (header, Предал/Приел side, offers) - edited on /admin/company,
 # stored as EditableText 'settings.company.<key>' (settings.* keys are out of the content editor's reach).
@@ -6342,19 +6448,24 @@ COMPANY_FIELDS = (
     ('website', 'Уебсайт', 'trafcombg.com'),
     ('bank_accounts', 'Банкови сметки (по една на ред: банка, IBAN, BIC)', ''),
     ('vat_percent', 'ДДС ставка (%)', str(VAT_PERCENT)),
+    # Owner's decision 2026-11-19: added to the material's delivery price wherever material is sold, unless the
+    # client has own Материали terms - see _material_terms(). Changing it reprices the Details (admin_company()).
+    ('material_markup_percent', 'Стандартна надценка за материали (%)', str(STANDARD_MATERIAL_MARKUP_PERCENT)),
 )
 COMPANY_KEY_PREFIX = 'settings.company.'
 
 
 def company():
     """{key: value} of our company's data (COMPANY_FIELDS defaults filled in), one query per request (cached in g),
-    plus 'vat' = vat_percent as a number and 'accounts' = bank_accounts as a list of lines."""
+    plus 'vat' = vat_percent as a number, 'material_markup' = material_markup_percent as a number and 'accounts' =
+    bank_accounts as a list of lines."""
     if has_app_context() and 'company_info' in g:
         return g.company_info
     info = {key: default for key, _, default in COMPANY_FIELDS}
     info['logo'] = ''   # file name in static/uploads/company/ (admin_company() upload), '' = the TRAFCOM wordmark
     try:
-        for row in EditableText.query.filter(EditableText.key.startswith(COMPANY_KEY_PREFIX)):
+        # no app context (pricing helpers called from a plain script) - the defaults
+        for row in EditableText.query.filter(EditableText.key.startswith(COMPANY_KEY_PREFIX)) if has_app_context() else ():
             key = row.key[len(COMPANY_KEY_PREFIX):]
             if key in info:
                 info[key] = row.content or ''
@@ -6364,6 +6475,10 @@ def company():
         info['vat'] = float(info['vat_percent'].replace(',', '.'))
     except ValueError:
         info['vat'] = float(VAT_PERCENT)
+    try:
+        info['material_markup'] = float(info['material_markup_percent'].replace(',', '.'))
+    except ValueError:
+        info['material_markup'] = float(STANDARD_MATERIAL_MARKUP_PERCENT)
     info['accounts'] = [line for line in info['bank_accounts'].splitlines() if line.strip()]
     if has_app_context():
         g.company_info = info
@@ -6432,8 +6547,19 @@ def admin_company():
         except ValueError:
             flash('ДДС ставката трябва да е число между 0 и 100.', 'danger')
             return redirect(url_for('admin_company'))
+        markup = request.form.get('material_markup_percent')   # None = not on the form, the current value stays
+        if markup is not None:
+            try:
+                if not 0 <= float(markup.strip().replace(',', '.')) <= 1000:
+                    raise ValueError
+            except ValueError:
+                flash('Стандартната надценка за материали трябва да е число между 0 и 1000.', 'danger')
+                return redirect(url_for('admin_company'))
+        old_markup = company()['material_markup']
         changed = []
         for key, label, _ in COMPANY_FIELDS:
+            if key == 'material_markup_percent' and markup is None:
+                continue
             value = '\n'.join(line.strip() for line in request.form.get(key, '').splitlines() if line.strip())[:2000]
             row = db.session.get(EditableText, COMPANY_KEY_PREFIX + key)
             if row is None:
@@ -6450,6 +6576,12 @@ def admin_company():
         if logo_error:
             flash(logo_error, 'danger')
         g.pop('company_info', None)
+        if company()['material_markup'] != old_markup:
+            # the stored material price of every Detail follows the new standard markup (orders/offers stay frozen)
+            repriced = _reprice_material_details()
+            db.session.commit()
+            changed.append(f'преизчислени цени на {repriced} детайла')
+            flash(f'Цените на {repriced} детайла са преизчислени с новата надценка за материали.', 'info')
         log_action('Данни на фирмата' + (': ' + '; '.join(changed) if changed else ' (без промяна)'))
         flash('Данните на фирмата са запазени.', 'success')
         return redirect(url_for('admin_company'))
@@ -11217,6 +11349,7 @@ def _apply_material_type_form(mtype, form):
     if price_unit not in PRICE_UNIT_LABELS:
         return 'Невалидна мерна единица за цена.'
     mtype.label = label
+    mtype.name_singular = form.get('name_singular', '').strip()[:60] or None
     mtype.price_unit = price_unit
     for checkbox, column, default in MATERIAL_TYPE_PARAM_FIELDS:
         setattr(mtype, column, (form.get(column, '').strip() or default) if form.get(checkbox) else None)
@@ -11329,7 +11462,7 @@ def admin_edit_material_type(type_id):
         flash(error, 'danger')
         return redirect(url_for('admin_materials'))
     log_action(describe_changes(f'тип материал "{mtype.label}"', mtype, {
-        'label': 'име', 'price_unit': 'мерна единица', 'length_label': 'дължина', 'width_label': 'ширина',
+        'label': 'име', 'name_singular': 'име в наименованието', 'price_unit': 'мерна единица', 'length_label': 'дължина', 'width_label': 'ширина',
         'thickness_label': 'дебелина', 'height_label': 'височина', 'has_cutting': 'рязане',
         'is_round': 'кръгло сечение', 'sort_order': 'подредба',
     }))
@@ -11914,18 +12047,21 @@ def update_client_pricing(client_id):
         return redirect(url_for('dashboard'))
     client = Client.query.get_or_404(client_id)
 
-    def _read_adjustment(type_field, percent_field):
+    def _read_adjustment(type_field, percent_field, allow_zero=False):
         adj_type = request.form.get(type_field, '').strip()
         try:
             percent = float(request.form.get(percent_field, '') or 0)
         except ValueError:
             percent = 0.0
-        if adj_type not in ('discount', 'markup') or percent <= 0:
+        if adj_type not in ('discount', 'markup') or percent < 0 or (percent == 0 and not allow_zero):
             return None, None
         return adj_type, round(percent, 2)
 
+    old_material_terms = (client.material_adjustment_type, client.material_adjustment_percent)
+    # Материали allow 0%: own terms of 0% replace the standard material markup (_material_terms())
     client.material_adjustment_type, client.material_adjustment_percent = _read_adjustment(
-        'material_adjustment_type', 'material_adjustment_percent')
+        'material_adjustment_type', 'material_adjustment_percent', allow_zero=True)
+    material_terms_changed = old_material_terms != (client.material_adjustment_type, client.material_adjustment_percent)
     client.detail_adjustment_type, client.detail_adjustment_percent = _read_adjustment(
         'detail_adjustment_type', 'detail_adjustment_percent')
     client.product_adjustment_type, client.product_adjustment_percent = _read_adjustment(
@@ -11950,8 +12086,10 @@ def update_client_pricing(client_id):
             db.session.add(ClientServicePrice(client_id=client.id, service_id=service.id,
                                                adjustment_type=adj_type, adjustment_percent=percent))
 
+    repriced = _reprice_material_details(Detail.owner_client_id == client.id) if material_terms_changed else 0
     db.session.commit()
-    log_action(f'Обновено ценообразуване за клиент "{client.name}"')
+    log_action(f'Обновено ценообразуване за клиент "{client.name}"'
+               + (f' (преизчислени цени на {repriced} негови детайла)' if repriced else ''))
     flash('Ценообразуването за клиента беше обновено.', 'success')
     return redirect(url_for('admin_client_pricing', client_id=client.id))
 
@@ -12339,6 +12477,8 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
             pierce_rate_per_min=pierce_rate_per_min, sheet_width_mm=width, sheet_length_mm=height,
             thickness_mm=thickness, brand=brand, notes=notes, type=material_type, erp_number=_next_erp_number(),
             owner_client_id=owner_client_id,
+            calibrated=bool(source_row and source_row.calibrated),
+            calibration=source_row.calibration if source_row and source_row.calibrated else None,
         )
         db.session.add(new_row)
         db.session.flush()
@@ -12983,9 +13123,14 @@ def _sheet_remnant_lot(source, width, height):
     (_find_or_create_delivery_target()). Our lot keeps source's €/m²: the
     piece's own area at that rate is its unit price, so a remnant lot of the
     same size at another rate becomes its own price lot. None when it cannot
-    be created."""
+    be created. A source named by compose_material_name() gives a remnant named the same way with the
+    piece's size (what migration/data_compose_material_names.py gives existing remnants), else
+    "<source name> - остатък"."""
+    name = source.display_name
+    if name == compose_material_name(source):
+        name = compose_material_name(source, sheet_width_mm=width, sheet_length_mm=height, notes=None)
     lot = _find_or_create_delivery_target(
-        'material', f'{source.display_name} - остатък', source.brand, width, height, source.thickness_mm,
+        'material', f'{name[:MATERIAL_NAME_MAX - len(REMNANT_SUFFIX)]}{REMNANT_SUFFIX}', source.brand, width, height, source.thickness_mm,
         None if source.owner_client_id else (source.cost_per_m2 or 0) * width * height / 1_000_000,
         source.key, material_type=source.type, notes=None, owner_client_id=source.owner_client_id)
     if lot and lot.height_mm is None:
@@ -13203,9 +13348,12 @@ def _note_breakdown(note):
                 if m:
                     own = bool(m.owner_client_id)
                     name = m.display_name + (f', {m.thickness_mm:g} мм' if m.thickness_mm else '') + (' (материал на клиента)' if own else '')
+                    # the note line is in the lot's STOCK unit (whole sheets for a sheet lot with a size), the
+                    # breakdown in its native unit (m² / m / pcs): 1 sheet 1000x2000 = 2 m²
+                    native = n * (_material_sheet_area_m2(m) or 1.0) if material_price_unit(m.type) == 'm2' else n
                     lines.append((price, [('mat', (m.display_name, m.type, m.thickness_mm, own), name,
-                                           _BREAKDOWN_UNITS.get(material_price_unit(m.type), ''), n, 1, None,
-                                           material_native_kg(m, n))]))
+                                           _BREAKDOWN_UNITS.get(material_price_unit(m.type), ''), native, 1, None,
+                                           material_native_kg(m, native))]))
             elif row.target_type == 'detail':
                 d = db.session.get(Detail, row.target_id)
                 if d:
@@ -13897,7 +14045,10 @@ def admin_update_material(key):
         flash(f'ERP № {erp_number} вече се използва от {conflict}.', 'danger')
         return redirect(url_for('admin_materials'))
 
-    material.display_name = request.form.get('display_name', '').strip() or material.display_name
+    posted_name = request.form.get('display_name', '').strip()[:MATERIAL_NAME_MAX]
+    if posted_name:
+        material.display_name = posted_name
+    material.calibrated, material.calibration = _parse_calibration(request.form)
     material.cutting_speed_mm_per_min = round(cutting_speed_mm_per_min, 2) if cutting_speed_mm_per_min is not None else None
     material.pierce_rate_per_min = round(pierce_rate_per_min, 2) if pierce_rate_per_min is not None else None
     material.sheet_length_mm = sheet_length_mm
@@ -13914,12 +14065,15 @@ def admin_update_material(key):
     material.notes = request.form.get('notes', '').strip() or None
     material.display_name_en = request.form.get('display_name_en', '').strip() or None
     material.display_name_de = request.form.get('display_name_de', '').strip() or None
+    if not posted_name:
+        material.display_name = compose_material_name(material)
     log_action(describe_changes(f'материал "{material.display_name}"', material, {
         'cutting_speed_mm_per_min': 'ск. рязане mm/min',
         'pierce_rate_per_min': 'пробождания/min', 'sheet_length_mm': 'дължинаmm',
         'sheet_width_mm': 'ширина mm', 'thickness_mm': 'дебелина mm', 'height_mm': 'височина mm',
         'display_name': 'име', 'weight_kg': 'тегло кг', 'grade_id': 'вид', 'min_quantity': 'мин. количество', 'erp_number': 'ERP №',
         'code_number': 'КД №', 'type': 'тип', 'brand': 'марка', 'notes': 'забележка',
+        'calibrated': 'калиброван', 'calibration': 'калибрация',
     }))
     db.session.commit()
 
@@ -13934,13 +14088,10 @@ def admin_add_material():
         flash('Нямате достъп до тази страница.', 'danger')
         return redirect(url_for('dashboard'))
 
-    display_name = request.form.get('display_name', '').strip()
-    if not display_name:
-        flash('Моля въведете име на материала.', 'danger')
-        return redirect(url_for('admin_materials'))
-
+    display_name = request.form.get('display_name', '').strip()[:MATERIAL_NAME_MAX]
     material_type = _parse_material_type(request.form)
     brand = request.form.get('brand', '').strip() or None
+    calibrated, calibration = _parse_calibration(request.form)
 
     # Rods/profiles are cut to length on a saw, never pierced or DXF-cut -
     # no cutting/drill speed for either.
@@ -13969,6 +14120,12 @@ def admin_add_material():
         flash('Скоростта на рязане/времето за пробождане трябва да бъдат положителни числа, а мин. количество - неотрицателно.', 'danger')
         return redirect(url_for('admin_materials'))
     pierce_rate_per_min = 60.0 / pierce_time_sec if pierce_time_sec else None
+    notes = request.form.get('notes', '').strip() or None
+    if not display_name:  # blank name -> composed from the fields (compose_material_name())
+        display_name = compose_material_name(None, type=material_type, grade_id=grade_id, brand=brand, notes=notes,
+                                             calibrated=calibrated, calibration=calibration,
+                                             sheet_width_mm=sheet_width_mm, sheet_length_mm=sheet_length_mm,
+                                             thickness_mm=thickness_mm, height_mm=height_mm)
 
     # Only a byte-for-byte resubmit (double click) is rejected - a difference
     # in any property (e.g. thickness) always makes a distinct catalog row,
@@ -14006,7 +14163,9 @@ def admin_add_material():
         code_number=request.form.get('code_number', '').strip() or None,
         type=material_type,
         brand=brand,
-        notes=request.form.get('notes', '').strip() or None,
+        notes=notes,
+        calibrated=calibrated,
+        calibration=calibration,
         display_name_en=request.form.get('display_name_en', '').strip() or None,
         display_name_de=request.form.get('display_name_de', '').strip() or None,
     )
@@ -19025,12 +19184,12 @@ def api_quick_create_material():
     if not current_user.is_admin:
         return jsonify({'status': 'error', 'message': 'Нямате достъп.'}), 403
 
-    display_name = request.form.get('display_name', '').strip()
-    if not display_name:
-        return jsonify({'status': 'error', 'message': 'Моля въведете име на материала.'}), 400
-
+    display_name = request.form.get('display_name', '').strip()[:MATERIAL_NAME_MAX]
     material_type = _parse_material_type(request.form)
     brand = request.form.get('brand', '').strip() or None
+    notes = request.form.get('notes', '').strip() or None
+    calibrated, calibration = _parse_calibration(request.form)
+    grade_id = _parse_material_grade(request.form)
     # Rods/profiles are cut to length on a saw, never pierced or DXF-cut -
     # no cutting/drill speed for either.
     skip_speed_fields = not material_type_cfg(material_type).has_cutting
@@ -19051,6 +19210,11 @@ def api_quick_create_material():
             or (pierce_time_sec is not None and pierce_time_sec <= 0):
         return jsonify({'status': 'error', 'message': 'Скоростта на рязане/времето за пробождане трябва да бъдат положителни числа.'}), 400
     pierce_rate_per_min = 60.0 / pierce_time_sec if pierce_time_sec else None
+    if not display_name:  # blank name -> composed from the fields, same as admin_add_material()
+        display_name = compose_material_name(None, type=material_type, grade_id=grade_id, brand=brand, notes=notes,
+                                             calibrated=calibrated, calibration=calibration,
+                                             sheet_width_mm=sheet_width_mm, sheet_length_mm=sheet_length_mm,
+                                             thickness_mm=thickness_mm, height_mm=height_mm)
 
     # Only a byte-for-byte resubmit (double click) is rejected - a difference
     # in any property (e.g. thickness) always makes a distinct catalog row,
@@ -19079,7 +19243,11 @@ def api_quick_create_material():
         erp_number=erp_number,
         code_number=request.form.get('code_number', '').strip() or None,
         type=material_type,
-        brand=brand
+        brand=brand,
+        notes=notes,
+        calibrated=calibrated,
+        calibration=calibration,
+        grade_id=grade_id or guess_material_grade_id(display_name),
     )
     db.session.add(new_material)
     db.session.flush()
@@ -19366,6 +19534,8 @@ def admin_delete_material(key):
         used_in.append('поръчка (върнат остатък)')
     if ClientDeliveryNoteItem.query.filter_by(remnant_material_id=material.id).first():
         used_in.append('издадена стокова разписка (остатък)')
+    if OfferItem.query.filter_by(material_id=material.id).first():
+        used_in.append('оферта')
     if (OrderItem.query.filter_by(consumed_material_id=material.id).first()
             or OrderItemComponent.query.filter_by(consumed_material_id=material.id).first()):
         used_in.append('поръчка (изразходван материал)')
@@ -27084,6 +27254,16 @@ def _offer_product_json(p, clients=()):
     }
 
 
+def _offer_material_json(m, clients=()):
+    """One entry of admin_offer_edit.html's MATERIALS array: price = material_stock_unit_price() with the standard
+    markup, client_prices = the same for each client with own Материали terms (the JS never re-derives it)."""
+    return {
+        'id': m.id, 'key': m.key, 'name': m.display_name, 'unit': material_stock_unit_label(m),
+        'kg': material_kg_per_stock_unit(m), 'price': material_stock_unit_price(m),
+        'client_prices': {c.id: material_stock_unit_price(m, c) for c in clients if c.material_adjustment_type},
+    }
+
+
 def _offer_picker_context():
     """Shared context for the offer create/edit form: catalog rows to pick
     from (as plain JSON-friendly dicts, for the add-item panel's JS) and the
@@ -27113,7 +27293,9 @@ def _offer_picker_context():
                'product_type': c.product_adjustment_type, 'product_percent': c.product_adjustment_percent}
         for c in clients
     }
-    return products, details, clients, client_pricing
+    # our lots only - a client's stored lot is his own material, nothing to sell him (own_materials_query())
+    materials = own_materials_query().order_by(MaterialPrice.type, MaterialPrice.display_name).all()
+    return products, details, clients, client_pricing, materials
 
 
 def _offer_items_json(offer):
@@ -27127,7 +27309,7 @@ def _offer_items_json(offer):
         'description_html': item.description_html or '', 'dimensions': item.dimensions or '',
         'quantity': item.quantity, 'unit': item.unit or '', 'unit_price': item.unit_price,
         'image_filename': item.image_filename or '',
-        'product_id': item.product_id, 'detail_id': item.detail_id,
+        'product_id': item.product_id, 'detail_id': item.detail_id, 'material_id': item.material_id,
         'current_price': _offer_item_current_price(item, offer.client),
     } for item in offer.items]
 
@@ -27143,6 +27325,9 @@ def _offer_item_current_price(item, client):
     if item.detail_id:
         detail = db.session.get(Detail, item.detail_id)
         return round(detail_price_for(detail, client), 2) if detail else None
+    if item.material_id:
+        material = db.session.get(MaterialPrice, item.material_id)
+        return material_stock_unit_price(material, client) if material else None
     return None
 
 
@@ -27215,7 +27400,7 @@ def _save_offer(offer):
         if not isinstance(row, dict):
             continue
         item_type = row.get('type')
-        if item_type not in ('product', 'detail', 'text'):
+        if item_type not in ('product', 'detail', 'material', 'text'):
             continue
 
         def _optional_row_float(key):
@@ -27233,7 +27418,18 @@ def _save_offer(offer):
 
         product_id = None
         detail_id = None
-        if item_type in ('product', 'detail'):
+        material_id = None
+        if item_type == 'material':
+            # one of OUR lots (a client's stored lot is not for sale), qty in its stock unit, a real price
+            raw_id = row.get('material_id')
+            material = (own_materials_query().filter(MaterialPrice.id == int(raw_id)).first()
+                        if isinstance(raw_id, (int, str)) and str(raw_id).isdigit() else None)
+            if not material or quantity is None or quantity <= 0 or unit_price is None or unit_price < 0:
+                continue
+            material_id = material.id
+            name = name or material.display_name
+            unit = material_stock_unit_label(material)
+        elif item_type in ('product', 'detail'):
             # A catalog pick must be a real quantity/price, same as before.
             if not name or quantity is None or quantity <= 0 or unit_price is None or unit_price < 0:
                 continue
@@ -27261,7 +27457,7 @@ def _save_offer(offer):
 
         db.session.add(OfferItem(
             offer=offer, position=position, item_type=item_type,
-            product_id=product_id, detail_id=detail_id,
+            product_id=product_id, detail_id=detail_id, material_id=material_id,
             code=code, name=name, description_html=description_html,
             dimensions=(row.get('dimensions') or '').strip() or None,
             quantity=quantity, unit=unit, unit_price=unit_price,
@@ -27285,10 +27481,12 @@ def _save_offer(offer):
 def admin_offer_new():
     if request.method == 'POST':
         return _save_offer(None)
-    products, details, clients, client_pricing = _offer_picker_context()
+    products, details, clients, client_pricing, materials = _offer_picker_context()
     return render_template('admin_offer_edit.html', offer=None, initial_items=[],
                             products=products, details=details, clients=clients,
-                            client_pricing=client_pricing, active_page='admin_offers')
+                            client_pricing=client_pricing, materials=materials,
+                            materials_json=[_offer_material_json(m, clients) for m in materials],
+                            active_page='admin_offers')
 
 
 @app.route('/admin/offers/<int:offer_id>/edit', methods=['GET', 'POST'])
@@ -27297,10 +27495,12 @@ def admin_offer_edit(offer_id):
     offer = Offer.query.get_or_404(offer_id)
     if request.method == 'POST':
         return _save_offer(offer)
-    products, details, clients, client_pricing = _offer_picker_context()
+    products, details, clients, client_pricing, materials = _offer_picker_context()
     return render_template('admin_offer_edit.html', offer=offer, initial_items=_offer_items_json(offer),
                             products=products, details=details, clients=clients,
-                            client_pricing=client_pricing, active_page='admin_offers')
+                            client_pricing=client_pricing, materials=materials,
+                            materials_json=[_offer_material_json(m, clients) for m in materials],
+                            active_page='admin_offers')
 
 
 @app.route('/admin/offers/<int:offer_id>/create-order', methods=['POST'])
@@ -27486,7 +27686,7 @@ def admin_offer_duplicate(offer_id):
     for item in source.items:
         db.session.add(OfferItem(
             offer_id=new_offer.id, position=item.position, item_type=item.item_type,
-            code=item.code, name=item.name, description_html=item.description_html,
+            material_id=item.material_id, code=item.code, name=item.name, description_html=item.description_html,
             dimensions=item.dimensions, quantity=item.quantity, unit=item.unit,
             unit_price=item.unit_price, image_filename=item.image_filename,
         ))

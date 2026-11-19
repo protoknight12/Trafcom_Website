@@ -69,7 +69,7 @@ def test_create_per_piece_type_and_price_by_piece(admin_client):
     _fresh_types()
     assert material_dimension_labels(t.key) == ('Дължина на болта (мм)', 'Ширина (мм)', None)
     m = MaterialPrice(key='b', display_name='Болт M8', type=t.key, cost_per_m2=0.35)
-    assert _material_cost(500, 800, m) == pytest.approx(0.35), 'per-piece price ignores part size'
+    assert _material_cost(500, 800, m) == pytest.approx(0.35 * 1.2), 'per-piece price ignores part size (+ 20 % standard markup)'
     assert _cost_per_m2_from_unit_price(t.key, 0.35, None, None) == 0.35
 
     # a saw-cut type needs no cutting speed on a new material

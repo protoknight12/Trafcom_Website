@@ -1649,7 +1649,7 @@ html.embedded .navbar, html.embedded .subnav, html.embedded .site-footer, html.e
 .subnav .subnav-current { color: var(--text-main); font-weight: 600; white-space: nowrap; }
 /* "+" create-new button next to an entity <select> (form_dialog.js, data-create) */
 .select-create-row { display: flex; gap: 6px; align-items: stretch; width: 100%; }
-.select-create-row > select, .select-create-row > .mp-wrap { flex: 1 1 auto; min-width: 0; }
+.select-create-row > select { flex: 1 1 auto; min-width: 0; }
 .btn-create-new {
     flex: 0 0 auto; min-width: 38px; padding: 0 10px;
     background: var(--bg-input); color: var(--accent-primary);
@@ -1657,6 +1657,25 @@ html.embedded .navbar, html.embedded .subnav, html.embedded .site-footer, html.e
     font-size: 1.2rem; font-weight: 700; line-height: 1; cursor: pointer;
 }
 .btn-create-new:hover { border-color: var(--accent-primary); }
+/* Picker window for <select data-picker> (static/js/entity_picker.js) */
+select[data-picker]:not([data-picker="off"]) { cursor: pointer; }
+.form-dialog.entity-picker { width: min(1100px, calc(100vw - 32px)); height: calc(100vh - 48px); display: flex; flex-direction: column; }
+.form-dialog.entity-picker:not([open]) { display: none; }
+.entity-picker h3 { margin: 0 0 0.75rem; }
+.entity-picker .ep-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 0.75rem; }
+.entity-picker .ep-search { flex: 2 1 220px; }
+.entity-picker .ep-facet { flex: 1 1 140px; width: auto; }
+.entity-picker .ep-action { width: auto; }
+.entity-picker .ep-table-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); }
+.entity-picker .ep-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.entity-picker .ep-table th { position: sticky; top: 0; background: var(--bg-surface); text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border-color); color: var(--text-muted); font-weight: 600; }
+.entity-picker .ep-table td { padding: 7px 10px; border-bottom: 1px solid var(--border-color); }
+.entity-picker .ep-group td { background: var(--bg-base); color: var(--text-muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; }
+.entity-picker .ep-row { cursor: pointer; }
+.entity-picker .ep-row:hover, .entity-picker .ep-row.ep-active { background: var(--bg-input); }
+.entity-picker .ep-row.ep-current td:first-child { color: var(--accent-primary); font-weight: 600; }
+.entity-picker .ep-row.ep-current { box-shadow: inset 3px 0 0 var(--accent-primary); }
+.entity-picker .ep-empty { padding: 10px; margin: 0; }
 
 /* Names of details/products/materials/orders/offers link to their page (partials/entity_link.html) */
 a.entity-link { color: inherit; text-decoration: underline dotted; text-underline-offset: 3px; }
@@ -1681,3 +1700,16 @@ a.entity-link:hover { color: var(--primary, #2563eb); text-decoration: underline
 [data-tree-section] { cursor: pointer; }
 [data-tree-section]::before { content: "▶"; display: inline-block; width: 1.1em; font-size: 0.8em; transform: rotate(90deg); transition: transform 0.15s ease; }
 [data-tree-section].tree-section-closed::before { transform: none; }
+
+/* table_tools.js: search + column filters above list tables */
+.tt-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    margin: 0.5rem 0;
+}
+.tt-bar input { flex: 2 1 220px; }
+.tt-bar select { flex: 1 1 140px; max-width: 260px; }
+.tt-bar .btn-secondary { padding: 6px 12px; }
+.tt-empty td { text-align: center; color: var(--text-muted); }

@@ -192,12 +192,13 @@
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="material_material">Материал</label>
-                <select id="material_material" data-create="{{ create_url('material') }}" name="material" onchange="applyDetailMaterialDimensionLabels()">
+                <select id="material_material" data-create="{{ create_url('material') }}" name="material" data-picker="material" onchange="applyDetailMaterialDimensionLabels()">
                     {% for type_key, group in materials|groupby('type') %}
                     <optgroup label="{{ material_type_label(type_key) }}">
                         {% for material in group %}
                         <option value="{{ material.key }}" data-owner="{{ material.owner_client_id or '' }}" data-type="{{ material.type }}"
                                 data-thickness="{{ material.thickness_mm if material.thickness_mm is not none else '' }}"
+                                data-t="{{ material.thickness_mm if material.thickness_mm is not none else '' }}" data-w="{{ material.sheet_width_mm if material.sheet_width_mm is not none else '' }}" data-h="{{ material.sheet_length_mm if material.sheet_length_mm is not none else '' }}" data-brand="{{ material.brand or '' }}" data-grade="{{ material.grade.name if material.grade else 'Без вид' }}" data-owner-name="{{ material.owner_client.name if material.owner_client else 'Трафком' }}"
                                 {% if material.key == detail.material_key %}selected{% endif %}>{{ format_material_option(material) }}</option>
                         {% endfor %}
                     </optgroup>
@@ -293,11 +294,11 @@
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="alt_material_key">Материал</label>
-                <select id="alt_material_key" name="material_key" required>
+                <select id="alt_material_key" name="material_key" required data-picker="material">
                     {% for type_key, group in materials|groupby('type') %}
                     <optgroup label="{{ material_type_label(type_key) }}">
                         {% for material in group if material.key not in used_keys %}
-                        <option value="{{ material.key }}">{{ format_material_option(material) }}</option>
+                        <option value="{{ material.key }}" data-type="{{ material.type }}" data-t="{{ material.thickness_mm if material.thickness_mm is not none else '' }}" data-w="{{ material.sheet_width_mm if material.sheet_width_mm is not none else '' }}" data-h="{{ material.sheet_length_mm if material.sheet_length_mm is not none else '' }}" data-brand="{{ material.brand or '' }}" data-grade="{{ material.grade.name if material.grade else 'Без вид' }}" data-owner-name="{{ material.owner_client.name if material.owner_client else 'Трафком' }}">{{ format_material_option(material) }}</option>
                         {% endfor %}
                     </optgroup>
                     {% endfor %}

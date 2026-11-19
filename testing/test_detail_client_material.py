@@ -84,7 +84,7 @@ def _add(adm, name, owner, material):
 
 def test_material_cost_of_client_lot_is_zero(setup):
     assert _material_cost(1000, 1000, setup['lot_a']) == 0.0
-    assert _material_cost(1000, 1000, setup['steel']) == 100
+    assert _material_cost(1000, 1000, setup['steel']) == 120   # + the standard 20 % material markup
 
 
 def test_detail_on_owner_lot_prices_operations_only(setup):
@@ -127,7 +127,7 @@ def test_owner_change_blocked_until_material_changed(setup):
     assert r.status_code == 302
     db.session.expire_all()
     d = db.session.get(Detail, d.id)
-    assert d.material_key == 'steel' and d.calculated_price == 100
+    assert d.material_key == 'steel' and d.calculated_price == 120   # our lot: + 20 % standard markup
     adm.post(f'/admin/details/{d.id}/owner', data={'owner_client_id': str(s['b'].id)})
     db.session.expire_all()
     assert db.session.get(Detail, d.id).owner_client_id == s['b'].id

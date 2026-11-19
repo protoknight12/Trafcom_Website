@@ -62,7 +62,11 @@
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="new_display_name">Име на материала</label>
-                <input type="text" id="new_display_name" name="display_name" placeholder="напр. Алуминий 2мм" required autocomplete="off">
+                <div style="display:flex; gap:6px;">
+                    <input type="text" id="new_display_name" name="display_name" placeholder="съставя се от полетата" maxlength="100" autocomplete="off" style="flex:1;">
+                    <button type="button" class="btn-secondary" id="new_display_name_refresh" title="Съставя името отново от полетата (Тип, Калиброван, Вид, Марка, размери, Калибрация, Забележка)" style="padding:4px 10px; white-space:nowrap;">↻ по полетата</button>
+                </div>
+                <small class="text-muted">Попълва се от полетата, докато не го промените на ръка. Празно = по полетата.</small>
             </div>
             <div class="form-group">
                 <label for="new_display_name_en">Име (EN, незадължително)</label>
@@ -90,11 +94,18 @@
             </div>
             <div class="form-group">
                 <label for="new_brand">Марка (незадължително)</label>
-                <input type="text" id="new_brand" name="brand" placeholder="напр. Alcoa">
+                <input type="text" id="new_brand" name="brand" placeholder="напр. S235JR, DC01, AISI 304">
             </div>
             <div class="form-group">
                 <label for="new_notes">Забележка (незадължително)</label>
-                <input type="text" id="new_notes" name="notes" placeholder="напр. само за вътрешна употреба">
+                <input type="text" id="new_notes" name="notes" placeholder="напр. шлифован">
+            </div>
+            <div class="form-group">
+                <label><input type="checkbox" id="new_calibrated" name="calibrated" value="1"> Калиброван</label>
+            </div>
+            <div class="form-group">
+                <label for="new_calibration">Калибрация</label>
+                <input type="text" id="new_calibration" name="calibration" maxlength="30" placeholder="напр. h9">
             </div>
             <p class="section-subtitle" style="flex-basis:100%;">Цената не се въвежда тук - формира се от доставната цена при заприхождаване (стокова разписка).</p>
             <div class="form-group" id="new_cutting_speed_mm_per_min_group">
@@ -256,7 +267,7 @@
                 </tr>
                 {% for material in grade_rows %}
                 {% set avail = material_available_qty(material) or 0 %}
-                <tr class="tree-indent-1" data-parent="{{ grade_node }}" data-ovalue="{{ '%.2f'|format((material.cost_per_m2 or 0) * avail) if not material.owner_client_id else 0 }}" data-search="{{ ('#' ~ material.id ~ ' ' ~ material.display_name ~ ' ' ~ (material.brand or '') ~ ' ' ~ (material.notes or '') ~ ' ' ~ (material.erp_number or '') ~ ' ' ~ (material.code_number or '')) | lower }}"
+                <tr class="tree-indent-1" data-parent="{{ grade_node }}" data-ovalue="{{ '%.2f'|format((material.cost_per_m2 or 0) * avail) if not material.owner_client_id else 0 }}" data-search="{{ ('#' ~ material.id ~ ' ' ~ material.display_name ~ ' ' ~ (material.brand or '') ~ ' ' ~ (material.notes or '') ~ ' ' ~ ('калиброван ' ~ (material.calibration or '') if material.calibrated else '') ~ ' ' ~ (material.erp_number or '') ~ ' ' ~ (material.code_number or '')) | lower }}"
                     data-type="{{ material.type }}" data-owner="{{ material.owner_client_id or 'own' }}" data-brand="{{ (material.brand or '')|lower }}"
                     data-thickness="{{ material.thickness_mm if material.thickness_mm else '' }}"
                     data-out="{{ 1 if (material.stock_quantity or 0) <= 0 else 0 }}"
@@ -269,6 +280,7 @@
                     <td>#{{ material.id }}</td>
                     <td>
                         <strong>{{ material.display_name }}</strong>
+                        {% if material.calibrated %}<div class="text-muted" style="font-size:0.8rem;">Калиброван{% if material.calibration %} {{ material.calibration }}{% endif %}</div>{% endif %}
                         {% if material.owner_client_id %}<div class="text-muted" style="font-size:0.8rem;">Собственик: {{ material.owner_client.name if material.owner_client else '—' }}</div>{% endif %}
                         {% if material.display_name_en or material.display_name_de %}<div class="text-muted" style="font-size:0.8rem;">{{ [material.display_name_en, material.display_name_de]|select|join(' / ') }}</div>{% endif %}
                     </td>
@@ -300,7 +312,8 @@
                                     "thickness_mm": material.thickness_mm, "height_mm": material.height_mm,
                                     "weight_kg": material.weight_kg, "grade_id": material.grade_id,
                                     "min_quantity": material.min_quantity,
-                                    "erp_number": material.erp_number, "code_number": material.code_number
+                                    "erp_number": material.erp_number, "code_number": material.code_number,
+                                    "calibrated": material.calibrated, "calibration": material.calibration
                                 }|tojson|forceescape }}'>Редактирай</button>
                         <button type="button" class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;" title="Нов материал по образец на този"
                                 onclick="openMaterialDialog(this.previousElementSibling, true)">Дублирай</button>
@@ -352,7 +365,7 @@
                 <tbody>
                 {% for t in material_types %}
                 <tr>
-                    <td><strong>{{ t.label }}</strong></td>
+                    <td><strong>{{ t.label }}</strong>{% if t.name_singular %} <span class="text-muted">({{ t.name_singular }})</span>{% endif %}</td>
                     <td>{{ PRICE_UNIT_LABELS[t.price_unit] }}</td>
                     <td>{{ [t.length_label, t.width_label, t.thickness_label, t.height_label]|select|join(', ') or '—' }}</td>
                     <td>{{ 'да' if t.has_cutting else 'не' }}</td>
@@ -361,7 +374,7 @@
                     <td class="text-right" style="white-space:nowrap;">
                         <button type="button" class="btn-save-price" onclick="openTypeDialog(this)"
                                 data-action="{{ url_for('admin_edit_material_type', type_id=t.id) }}"
-                                data-type='{{ {"label": t.label, "price_unit": t.price_unit, "length_label": t.length_label,
+                                data-type='{{ {"label": t.label, "name_singular": t.name_singular, "price_unit": t.price_unit, "length_label": t.length_label,
                                     "width_label": t.width_label, "thickness_label": t.thickness_label, "height_label": t.height_label,
                                     "has_cutting": t.has_cutting, "is_round": t.is_round, "sort_order": t.sort_order}|tojson|forceescape }}'>Редактирай</button>
                         {% if not type_usage.get(t.key) %}
@@ -456,6 +469,11 @@
                 <input type="text" id="t_label" name="label" required placeholder="напр. Шини">
             </div>
             <div class="form-group">
+                <label for="t_name_singular">Име в наименованието (ед. число)</label>
+                <input type="text" id="t_name_singular" name="name_singular" maxlength="60" placeholder="напр. Шина">
+                <small class="text-muted">С него започва името на материала; празно = името на типа.</small>
+            </div>
+            <div class="form-group">
                 <label for="t_price_unit">Цената е за</label>
                 <select id="t_price_unit" name="price_unit">
                     {% for k, v in PRICE_UNIT_LABELS.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}
@@ -490,6 +508,7 @@
 
 </main>
 
+<script src="{{ url_for('static', filename='js/material_name.js') }}"></script>
 <script>
     // Shows/relabels the material form's parameter fields for the chosen
     // type - driven by MaterialType (material_types_js() in app.py), so a
@@ -533,7 +552,7 @@
         cutting_speed_mm_per_min: 'new_cutting_speed_mm_per_min', pierce_time_sec: 'new_pierce_time_sec',
         sheet_length_mm: 'new_sheet_length_mm', sheet_width_mm: 'new_sheet_width_mm', thickness_mm: 'new_thickness_mm',
         height_mm: 'new_height_mm', weight_kg: 'new_weight_kg', grade_id: 'new_grade_id', min_quantity: 'new_min_quantity',
-        erp_number: 'new_material_erp_number', code_number: 'new_material_code_number',
+        erp_number: 'new_material_erp_number', code_number: 'new_material_code_number', calibration: 'new_calibration',
     };
     const ADD_ACTION = document.getElementById('materialForm').action;
 
@@ -552,25 +571,18 @@
                 document.getElementById(FIELD_IDS[k]).value = v == null ? '' : v;
             });
         }
+        document.getElementById('new_calibrated').checked = !!(data && data.calibrated);
         applyMaterialDimensionLabels();
-        materialIsNew = !data || !!copy;
-        gradeShown = gradeName(document.getElementById('new_grade_id'));
+        // The name follows the fields (material_name.js) - a new material always, an edited/copied one only
+        // while its name still IS the composed one (a hand-made name is kept until "↻ по полетата").
+        materialName.reset(!!data && data.display_name !== materialName.composed());
         document.getElementById('materialDialog').showModal();
     }
 
-    // A NEW material: picking its Вид fills the name - blank name -> the grade's name; a name that starts with
-    // the previously picked grade gets that part swapped ("Стомана 2мм" -> "Алуминий 2мм"). Editing never renames.
-    let materialIsNew = true, gradeShown = '';
-    function gradeName(sel) { return sel.value ? sel.selectedOptions[0].textContent.replace(/\s*\([^)]*кг\/дм³\)\s*$/, '').trim() : ''; }
-    document.getElementById('new_grade_id').addEventListener('change', function () {
-        const grade = gradeName(this);
-        const nameEl = document.getElementById('new_display_name');
-        const name = nameEl.value.trim();
-        if (materialIsNew && grade) {
-            if (!name) nameEl.value = grade;
-            else if (gradeShown && name.toLowerCase().startsWith(gradeShown.toLowerCase())) nameEl.value = grade + name.slice(gradeShown.length);
-        }
-        gradeShown = grade;
+    const materialName = bindMaterialName(MATERIAL_TYPES, {
+        name: 'new_display_name', type: 'new_type', grade: 'new_grade_id', brand: 'new_brand',
+        width: 'new_sheet_width_mm', height: 'new_height_mm', length: 'new_sheet_length_mm', thickness: 'new_thickness_mm',
+        calibrated: 'new_calibrated', calibration: 'new_calibration', notes: 'new_notes', refresh: 'new_display_name_refresh',
     });
 
     const GRADE_ADD_ACTION = document.getElementById('gradeForm').action;
@@ -604,6 +616,7 @@
         document.getElementById('typeUnitWarning').hidden = !data;
         if (data) {
             document.getElementById('t_label').value = data.label;
+            document.getElementById('t_name_singular').value = data.name_singular || '';
             document.getElementById('t_price_unit').value = data.price_unit;
             document.getElementById('t_sort_order').value = data.sort_order;
             TYPE_PARAMS.forEach(function (pair) {

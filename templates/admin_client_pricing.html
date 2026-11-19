@@ -44,10 +44,12 @@
             <div class="form-group">
                 <label for="material_adjustment_percent">Материали - процент (%)</label>
                 <input type="text" id="material_adjustment_percent" name="material_adjustment_percent"
-                       value="{{ client.material_adjustment_percent or '' }}" inputmode="decimal" placeholder="напр. 10">
+                       value="{{ client.material_adjustment_percent if client.material_adjustment_type else '' }}" inputmode="decimal" placeholder="напр. 10">
             </div>
             <p class="text-small text-muted" style="grid-column: 1 / -1; margin-top: -8px;">
-                Важи само за живото изчисление на цена при качване на DXF чертеж - не променя вече зададена цена на каталожен Детайл/Продукт.
+                „Без корекция“ = стандартната надценка за материали от „Данни на фирмата“ ({{ '%g'|format(company().material_markup) }}%).
+                Отстъпка или надценка (и 0%) я заменя. Важи за живото изчисление на цена при качване на DXF чертеж и за
+                цената на детайлите, собственост на този клиент - общите каталожни Детайли/Продукти не се променят.
             </p>
 
             <div class="form-group">

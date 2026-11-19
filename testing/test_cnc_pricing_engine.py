@@ -41,13 +41,13 @@ with app.app_context():
     price = calculate_cnc_price(width=100, height=50, total_length=200, pierce_count=5,
                                  material_key=material.key, service_id=service.id)
     area_m2 = (100 * 50) / 1_000_000
-    material_cost = area_m2 * 20.0
+    material_cost = area_m2 * 20.0 * 1.2   # + the standard 20 % material markup (no client, see _material_terms())
     cutting_time_min = 200 / 1.2
     pierce_time_min = 5 / 10.0
     time_cost = (cutting_time_min + pierce_time_min) * (50.0 / 60.0)
     expected = round(material_cost + time_cost + 5.00, 2)  # BASE_SETUP_FEE = 5.00
     assert abs(price - expected) < 0.01, f"expected {expected}, got {price}"
-    assert abs(price - 144.41) < 0.01, f"expected ~144.41 for the worked example, got {price}"
+    assert abs(price - 144.43) < 0.01, f"expected ~144.43 for the worked example, got {price}"
 
     # -- Invalid material/service must fall back to 0.0, not raise ----------
     assert calculate_cnc_price(100, 50, 200, 5, 'no-such-material', service.id) == 0.0

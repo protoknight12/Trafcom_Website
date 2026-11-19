@@ -138,7 +138,7 @@
             <div class="fl-title">{{ _('Запис като Детайл в каталога') }}</div>
             <div class="fl-row"><input type="text" id="d-name" placeholder="{{ _('Име на детайла') }}"></div>
             <div class="fl-row">
-                <select id="d-material" class="material-picker">{% include 'partials/material_options.html' %}</select>
+                <select id="d-material" data-picker="material">{% include 'partials/material_options.html' %}</select>
             </div>
             <div class="fl-row">
                 <select id="d-service"><option value="">-- {{ _('Без услуга за рязане') }} --</option>
@@ -185,7 +185,6 @@
     </div>
 </main>
 
-<script src="{{ url_for('static', filename='js/material_picker.js') }}"></script>
 <script>
 (function () {
     const DEFAULTS = {

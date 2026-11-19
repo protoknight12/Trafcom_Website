@@ -146,7 +146,7 @@ def test_offer_create_order_unpriced_product_line_applies_clients_product_terms_
 def test_offer_picker_context_exposes_client_detail_terms(app):
     flask_app, offer_id, offer_item_id, client_id, detail_id = app
     with flask_app.app_context():
-        products, details, clients, client_pricing = _offer_picker_context()
+        products, details, clients, client_pricing, _materials = _offer_picker_context()
         assert client_pricing[client_id]['detail_type'] == 'discount'
         assert client_pricing[client_id]['detail_percent'] == 20
         detail_row = next(d for d in details if d.get('id') == detail_id)

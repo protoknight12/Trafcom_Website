@@ -42,7 +42,7 @@
             <div class="po-wizard-row">
                 <div class="form-group">
                     <label for="po_detail_select">Детайл *</label>
-                    <select id="po_detail_select" data-create="{{ create_url('detail') }}" name="detail_id" required>
+                    <select id="po_detail_select" data-create="{{ create_url('detail') }}" name="detail_id" required data-picker="detail">
                         {% for d in details %}
                         <option value="{{ d.id }}">{{ d.name }} (наличност: {{ d.stock_quantity|round(0) }} бр.)</option>
                         {% else %}
@@ -56,7 +56,7 @@
                 </div>
                 <div class="form-group">
                     <label for="po_material_select">Материал (партида) *</label>
-                    <select id="po_material_select" name="material_id" required></select>
+                    <select id="po_material_select" name="material_id" required data-picker="material"></select>
                     <p id="po_material_stock" class="po-preview" style="margin: 6px 0 0;"></p>
                 </div>
             </div>

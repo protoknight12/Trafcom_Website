@@ -48,7 +48,12 @@
                           placeholder="ОББ, BG00UBBS00000000000000, UBBSBGSF">{{ info[key] }}</textarea>
                 {% else %}
                 <input type="text" id="company_{{ key }}" name="{{ key }}" value="{{ info[key] }}"
-                       {% if key in ('name', 'vat_percent') %}required{% endif %}>
+                       {% if key in ('name', 'vat_percent', 'material_markup_percent') %}required{% endif %}>
+                {% if key == 'material_markup_percent' %}
+                <small class="text-muted">Добавя се към доставната цена на материала навсякъде (калкулатор, детайли,
+                    продукти, нови поръчки и оферти), освен за клиент със собствени условия за „Материали“.
+                    При промяна цените на детайлите се преизчисляват; записаните поръчки и оферти не се променят.</small>
+                {% endif %}
                 {% endif %}
             </div>
             {% endfor %}

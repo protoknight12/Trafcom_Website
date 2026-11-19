@@ -56,12 +56,13 @@ with app.app_context():
                                        adjustment_type='discount', adjustment_percent=20))
     db.session.commit()
 
-    # --- _material_cost: client's Материали discount applies, unlinked/no-client doesn't ---
-    base_cost = _material_cost(1000, 500, material)  # 0.5 m^2 * 10 = 5.0
-    assert base_cost == 5.0
-    assert _material_cost(1000, 500, material, client_discount) == 4.5, "10% discount on material cost"
-    assert _material_cost(1000, 500, material, client_plain) == 5.0, "client with no terms set -> unchanged"
-    assert _material_cost(1000, 500, material, None) == 5.0
+    # --- _material_cost: client's Материали discount applies INSTEAD of the standard 20 % material markup,
+    #     which unlinked/no-client/no-terms get (_material_terms()) ---
+    base_cost = _material_cost(1000, 500, material)  # 0.5 m^2 * 10 = 5.0, + 20 % = 6.0
+    assert base_cost == 6.0
+    assert _material_cost(1000, 500, material, client_discount) == 4.5, "10% discount on material cost, no 20 %"
+    assert _material_cost(1000, 500, material, client_plain) == 6.0, "client with no terms set -> standard 20 %"
+    assert _material_cost(1000, 500, material, None) == 6.0
 
     # --- _client_service_adjustment: override row vs. no row ---
     assert _client_service_adjustment(client_discount, service) == ('discount', 20)

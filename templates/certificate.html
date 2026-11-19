@@ -32,7 +32,7 @@
 <div class="doc-form no-print">
     <div class="form-group" style="grid-column: span 2;">
         <label for="selectDetail">Изберете детайл от продукта</label>
-        <select id="selectDetail">
+        <select id="selectDetail" data-picker="detail">
             <option value="">-- Изберете компонент --</option>
             {% for pd in product.product_details %}
             <option value="{{ pd.id }}" data-name="{{ pd.detail.name }}" data-qty="{{ pd.quantity }}" data-material="{{ pd.detail.material.display_name }}">

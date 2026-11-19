@@ -113,25 +113,34 @@
         <div class="item-type-toggle" style="display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 12px;">
             <label><input type="radio" name="item_type" value="product" checked> Продукт</label>
             <label><input type="radio" name="item_type" value="detail"> Детайл</label>
+            <label><input type="radio" name="item_type" value="material"> Материал</label>
             <label><input type="radio" name="item_type" value="text"> Свободен текст</label>
         </div>
 
         <div id="product_selector" class="form-group">
             <label for="item_product_id">Продукт</label>
-            <select id="item_product_id" data-create="{{ create_url('product') }}">
+            <select id="item_product_id" data-create="{{ create_url('product') }}" data-picker="product">
                 <option value="">-- избери продукт --</option>
                 {% for p in products %}
-                <option value="{{ p.id }}">{{ p.name }}</option>
+                <option value="{{ p.id }}" data-price="{{ '%.2f'|format(p.price) if p.price is not none else '' }}">{{ p.name }}</option>
                 {% endfor %}
             </select>
         </div>
         <div id="detail_selector" class="form-group" style="display:none;">
             <label for="item_detail_id">Детайл</label>
-            <select id="item_detail_id" data-create="{{ create_url('detail') }}">
+            {% set client_names = {} %}{% for c in clients %}{% set _ = client_names.update({c.id: c.name}) %}{% endfor %}
+            <select id="item_detail_id" data-create="{{ create_url('detail') }}" data-picker="detail">
                 <option value="">-- избери детайл --</option>
                 {% for d in details %}
-                <option value="{{ d.id }}">{{ d.name }}</option>
+                <option value="{{ d.id }}" data-price="{{ '%.2f'|format(d.price) if d.price is not none else '' }}" data-owner-name="{{ client_names.get(d.owner_client_id, '') if d.owner_client_id else 'Трафком' }}">{{ d.name }}</option>
                 {% endfor %}
+            </select>
+        </div>
+        <div id="material_selector" class="form-group" style="display:none;">
+            <label for="item_material_key">Материал (продажба на суров материал; количеството е в мярката на склада - лист / м / бр)</label>
+            <select id="item_material_key" data-picker="material">
+                <option value="">-- избери материал --</option>
+                {% include 'partials/material_options.html' %}
             </select>
         </div>
         <div id="name_manual_group" class="form-group" style="display:none;">
@@ -154,7 +163,8 @@
             </div>
             <div class="form-group">
                 <label for="item_qty">Количество</label>
-                <input type="number" id="item_qty" value="1" min="0.01" step="0.01">
+                <input type="number" id="item_qty" value="1" min="0.001" step="0.001">
+                <div id="item_kg_hint" class="text-small text-muted" style="margin-top: 4px;"></div>
             </div>
             <div class="form-group">
                 <label for="item_unit">Мярка</label>
@@ -227,6 +237,7 @@
         <p class="section-subtitle">
             Отметни продукт/детайл редовете по-долу (текстовите редове и редовете, добавени в тази сесия и още
             незапазени, нямат връзка към каталога и не са включени в списъка), после натисни бутона.
+            Редовете „Материал“ (продажба на суров материал) не влизат в поръчка - поръчката съдържа само продукти и детайли.
         </p>
         <div class="table-responsive">
             <table class="users-table" id="orderSelectorTable">
@@ -262,6 +273,9 @@
 <script>
     const PRODUCTS = {{ products|tojson }};
     const DETAILS = {{ details|tojson }};
+    // Our material lots: price of ONE stock unit (лист / м / бр) from the server - standard markup, client_prices for
+    // clients with own Материали terms (_offer_material_json()); kg of one stock unit, null when unknown.
+    const MATERIALS = {{ materials_json|tojson }};
     // Each Client's Детайли discount/markup, mirrored by hand from
     // _apply_adjustment() - see _offer_picker_context(). Only used to
     // pre-fill #item_unit_price for a freshly-picked catalog row; the field
@@ -318,9 +332,33 @@
         radio.addEventListener('change', function () {
             document.getElementById('product_selector').style.display = this.value === 'product' ? 'block' : 'none';
             document.getElementById('detail_selector').style.display = this.value === 'detail' ? 'block' : 'none';
+            document.getElementById('material_selector').style.display = this.value === 'material' ? 'block' : 'none';
             document.getElementById('name_manual_group').style.display = this.value === 'text' ? 'block' : 'none';
+            document.getElementById('item_unit').readOnly = this.value === 'material';   // the lot's stock unit
+            updateKgHint();
         });
     });
+
+    function pickedMaterial() {
+        const key = document.getElementById('item_material_key').value;
+        return key ? MATERIALS.find(function (m) { return m.key === key; }) : null;
+    }
+
+    // Sale price of one stock unit for the offer's client - the server's own figure, never re-derived here.
+    function materialAdjustedPrice(m) {
+        const cid = document.getElementById('client_id').value;
+        return cid && m.client_prices[cid] !== undefined ? m.client_prices[cid] : m.price;
+    }
+
+    // "≈ x кг" under the quantity of a material line (3 decimals on screen).
+    function updateKgHint() {
+        const hint = document.getElementById('item_kg_hint');
+        const isMaterial = document.querySelector('input[name="item_type"]:checked').value === 'material';
+        const m = isMaterial ? pickedMaterial() : null;
+        const qty = parseFloat(document.getElementById('item_qty').value);
+        hint.textContent = m && m.kg && qty > 0 ? '≈ ' + Number((qty * m.kg).toFixed(3)) + ' кг' : '';
+    }
+    document.getElementById('item_qty').addEventListener('input', updateKgHint);
 
     function applyClientAdjustment(amount, type, percent) {
         if (!type || !percent) return amount;
@@ -383,6 +421,14 @@
         const d = DETAILS.find(function (x) { return x.id === parseInt(this.value, 10); }.bind(this));
         if (d) document.getElementById('item_unit_price').value = detailAdjustedPrice(d).toFixed(2);
     });
+    document.getElementById('item_material_key').addEventListener('change', function () {
+        const m = pickedMaterial();
+        if (m) {
+            document.getElementById('item_unit_price').value = materialAdjustedPrice(m).toFixed(2);
+            document.getElementById('item_unit').value = m.unit;
+        }
+        updateKgHint();
+    });
     // Re-fill the staged price if the admin switches the offer's client
     // after already picking a catalog row (before it's added to the cart).
     document.getElementById('client_id').addEventListener('change', function () {
@@ -396,6 +442,9 @@
             const detailSel = document.getElementById('item_detail_id');
             const d = detailSel.value ? DETAILS.find(function (x) { return x.id === parseInt(detailSel.value, 10); }) : null;
             if (d) document.getElementById('item_unit_price').value = detailAdjustedPrice(d).toFixed(2);
+        } else if (type === 'material') {
+            const m = pickedMaterial();
+            if (m) document.getElementById('item_unit_price').value = materialAdjustedPrice(m).toFixed(2);
         }
     });
 
@@ -439,6 +488,7 @@
         setItemType('product');
         document.getElementById('item_product_id').value = '';
         document.getElementById('item_detail_id').value = '';
+        document.getElementById('item_material_key').value = '';
         document.getElementById('item_code').value = '';
         document.getElementById('item_name_manual').value = '';
         clearDimensions();
@@ -447,6 +497,7 @@
         document.getElementById('item_unit_price').value = '';
         clearPendingImage();
         document.getElementById('item_description').innerHTML = '';
+        updateKgHint();
         document.getElementById('offerItemSubmit').textContent = 'Добави ред';
     }
 
@@ -456,6 +507,8 @@
         // the row's own (possibly hand-edited) price with the catalog price
         document.getElementById('item_product_id').value = item.product_id || '';
         document.getElementById('item_detail_id').value = item.detail_id || '';
+        const lot = item.material_id ? MATERIALS.find(function (m) { return m.id === item.material_id; }) : null;
+        document.getElementById('item_material_key').value = lot ? lot.key : '';
         document.getElementById('item_name_manual').value = item.type === 'text' ? (item.name || '') : '';
         document.getElementById('item_code').value = item.code || '';
         const dims = (item.dimensions || '').split('/').map(function (v) { return v.trim(); });
@@ -470,6 +523,7 @@
             previewEl.src = OFFER_IMAGE_URL_PREFIX + item.image_filename;
             previewEl.style.display = 'inline-block';
         }
+        updateKgHint();
         document.getElementById('offerItemSubmit').textContent = 'Запази реда';
     }
 
@@ -491,9 +545,15 @@
         let name;
         let productId = null;
         let detailId = null;
+        let materialId = null;
         const editing = editingIndex !== null ? cart[editingIndex] : null;
         if (type === 'text') {
             name = document.getElementById('item_name_manual').value.trim();
+        } else if (type === 'material') {
+            const m = pickedMaterial();
+            if (!m) { alert('Моля изберете материал.'); return; }
+            name = m.name;
+            materialId = m.id;
         } else {
             const sel = document.getElementById(type === 'product' ? 'item_product_id' : 'item_detail_id');
             const source = (type === 'product' ? PRODUCTS : DETAILS).find(function (x) { return x.id === parseInt(sel.value, 10); });
@@ -533,11 +593,12 @@
             dimensions: readDimensions(), quantity: qty,
             unit: document.getElementById('item_unit').value.trim(), unit_price: unitPrice,
             image_filename: pendingImageFilename || '',
-            product_id: productId, detail_id: detailId,
+            product_id: productId, detail_id: detailId, material_id: materialId,
         };
         if (editing) {
             if (editing.id != null) item.id = editing.id;  // keeps the order-selector tick on this row
-            if (editing.product_id === item.product_id && editing.detail_id === item.detail_id) item.current_price = editing.current_price;
+            if (editing.product_id === item.product_id && editing.detail_id === item.detail_id
+                && (editing.material_id || null) === item.material_id) item.current_price = editing.current_price;
             cart[editingIndex] = item;
         } else {
             cart.push(item);
@@ -597,7 +658,8 @@
     function itemNameLink(item) {
         const text = escapeHtml(item.name);
         const href = item.product_id ? '/admin/products/' + encodeURIComponent(item.product_id) + '/edit'
-            : item.detail_id ? '/details/' + encodeURIComponent(item.detail_id) + '/files' : '';
+            : item.detail_id ? '/details/' + encodeURIComponent(item.detail_id) + '/files'
+            : item.material_id ? '/admin/materials?dialog=edit:' + encodeURIComponent(item.material_id) : '';
         return href ? '<a href="' + href + '" target="_blank" rel="noopener" class="entity-link">' + text + '</a>' : text;
     }
 
@@ -634,7 +696,9 @@
                 tr.appendChild(cell(nameHtml || '-'));
                 tr.appendChild(cell(escapeHtml(item.dimensions)));
                 tr.appendChild(cell(item.quantity != null ? item.quantity : '', { className: 'text-center' }));
-                tr.appendChild(cell(escapeHtml(item.unit)));
+                const lot = item.material_id ? MATERIALS.find(function (m) { return m.id === item.material_id; }) : null;
+                const kg = lot && lot.kg && item.quantity ? Number((item.quantity * lot.kg).toFixed(3)) : null;
+                tr.appendChild(cell(escapeHtml(item.unit) + (kg ? ' <span class="text-small text-muted">(≈ ' + kg + ' кг)</span>' : '')));
                 tr.appendChild(cell(item.unit_price != null ? round2(item.unit_price).toFixed(2) + ' €' : '', { className: 'text-right' }));
                 tr.appendChild(cell(total != null ? total.toFixed(2) + ' €' : '', { className: 'text-right' }));
 
@@ -764,7 +828,7 @@
         selectedItemIds = remainingSelected;
         document.getElementById('createOrderBtn').disabled = selectedItemIds.size === 0;
 
-        const skippedNew = cart.some(function (item) { return item.id == null && item.type !== 'text'; });
+        const skippedNew = cart.some(function (item) { return item.id == null && (item.product_id || item.detail_id); });
         document.getElementById('orderSelectorNote').textContent = skippedNew
             ? 'Запази офертата, за да можеш да избереш редовете, добавени в тази сесия.'
             : '';

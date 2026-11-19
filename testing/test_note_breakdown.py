@@ -198,3 +198,28 @@ def test_material_line_prints_its_weight(ids):
     assert '47.1 кг' in c.get(f'/admin/client-delivery-notes/{note_id}/print').get_data(as_text=True)
     assert '47.1 кг' in c.get(f'/admin/client-delivery-notes/{note_id}/breakdown').get_data(as_text=True)
     assert '31.4 кг' in c.get('/storage/materials').get_data(as_text=True)
+
+
+def test_material_line_sheets_become_square_metres(ids):
+    """A note line counts whole sheets (stock unit); the breakdown is in m²: 1 sheet 2000x1000 = 2 m²."""
+    with flask_app.app_context():
+        lot = MaterialPrice(key='inox2', display_name='Неръждаема стомана', cost_per_m2=0, type='sheets',
+                            thickness_mm=2, sheet_width_mm=1000, sheet_length_mm=2000)
+        db.session.add(lot)
+        db.session.commit()
+        mid = lot.id
+    note_id = _note(ids, [('material', mid, 1, None)])
+    with flask_app.app_context():
+        bd = _note_breakdown(db.session.get(ClientDeliveryNote, note_id))
+    row = bd['materials'][0]
+    assert (row['qty'], row['unit']) == (pytest.approx(2.0), 'м²')
+    assert row['kg'] == pytest.approx(2 * 7.93 * 2)                 # guessed stainless density
+
+
+def test_history_shows_numbers_and_filters(ids):
+    note_id = _note(ids, [('detail', ids['a'], 2, 7.0)])
+    html = _login('qa_admin').get('/admin/client-delivery-notes').get_data(as_text=True)
+    with flask_app.app_context():
+        number = db.session.get(ClientDeliveryNote, note_id).number
+    assert f'<strong>{number}</strong>' in html
+    assert all(f'id="{i}"' in html for i in ('cdnHistorySearchInput', 'filterClient', 'filterKind', 'filterFrom', 'filterTo'))

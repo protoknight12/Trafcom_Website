@@ -143,12 +143,12 @@ def test_update_material_recomputes_material_only_price_without_touching_cutting
     detail_id = res.get_json()['detail']['id']
 
     c.post(f'/details/{detail_id}/update-material', data={
-        'material': 'qa_mat', 'width': '1000', 'height': '500',  # 0.5 m^2 * 10 EUR/m^2 = 5.0
+        'material': 'qa_mat', 'width': '1000', 'height': '500',  # 0.5 m^2 * 10 EUR/m^2 = 5.0, + 20 % standard material markup = 6.0
     })
 
     with flask_app.app_context():
         detail = db.session.get(Detail, detail_id)
-        assert detail.calculated_price == 5.0
+        assert detail.calculated_price == 6.0
         # The cutting Operation from creation time is untouched by the material update.
         ops = Operation.query.filter_by(detail_id=detail.id).all()
         assert len(ops) == 1
@@ -163,7 +163,7 @@ def test_update_material_with_extra_margin_is_priced_into_calculated_price(clien
     }, content_type='multipart/form-data')
     detail_id = res.get_json()['detail']['id']
 
-    # (1000+100) x (500+50) mm = 1.1 x 0.55 m^2 = 0.605 m^2 * 10 EUR/m^2 = 6.05
+    # (1000+100) x (500+50) mm = 1.1 x 0.55 m^2 = 0.605 m^2 * 10 EUR/m^2 = 6.05, + 20 % standard material markup = 7.26
     c.post(f'/details/{detail_id}/update-material', data={
         'material': 'qa_mat', 'width': '1000', 'height': '500',
         'extra_width': '100', 'extra_height': '50',
@@ -175,7 +175,7 @@ def test_update_material_with_extra_margin_is_priced_into_calculated_price(clien
         assert detail.extra_height_mm == 50.0
         assert detail.effective_width == 1100.0
         assert detail.effective_height == 550.0
-        assert detail.calculated_price == 6.05
+        assert detail.calculated_price == 7.26
 
         # Blank extra fields clear back to no margin (net width/height only).
         c.post(f'/details/{detail_id}/update-material', data={
@@ -184,4 +184,4 @@ def test_update_material_with_extra_margin_is_priced_into_calculated_price(clien
         db.session.refresh(detail)
         assert detail.extra_width_mm is None
         assert detail.extra_height_mm is None
-        assert detail.calculated_price == 5.0
+        assert detail.calculated_price == 6.0

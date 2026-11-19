@@ -172,7 +172,7 @@
                         <form method="POST" action="{{ url_for('admin_order_item_material', item_id=item.id) }}"
                               style="display: flex; gap: 6px; margin-top: 4px;">
                             {% include 'partials/csrf_field.html' %}
-                            <select name="material_key" style="font-size: 0.78rem; max-width: 320px;">
+                            <select name="material_key" data-picker="material" style="font-size: 0.78rem; max-width: 320px;">
                                 {% for m in choices %}
                                 <option value="{{ m.key }}" {% if m.key == (item.material_key or item.detail.material_key) %}selected{% endif %}>{{ format_material_option(m) }}</option>
                                 {% endfor %}

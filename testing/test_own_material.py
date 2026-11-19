@@ -76,11 +76,11 @@ def test_detail_and_product_prices(setup):
 
 def test_dxf_price_own_material(setup):
     s = setup
-    # 100 material; 1000mm cut = 1 min + 1 pierce (1/60 min) at 1 EUR/min = 1.02; setup fee 5
+    # 100 material + 20 % standard material markup; 1000mm cut = 1 min + 1 pierce (1/60 min) at 1 EUR/min = 1.02; setup fee 5
     normal = calculate_cnc_price_multi_service(1000, 1000, 1000, 1, 'steel', [s['svc'].id])
     own = calculate_cnc_price_multi_service(1000, 1000, 1000, 1, 'steel', [s['svc'].id], client=s['client'],
                                             own_material=True)
-    assert normal == 106.02
+    assert normal == 126.02
     assert own == 7.22  # (1.0167 + 5) x 1.20, no material
 
 

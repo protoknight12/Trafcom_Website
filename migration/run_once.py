@@ -42,6 +42,8 @@ ONCE = (
     'data_reprice_owned_details',     # owned Details created before the owner-pricing rule get the owner's Материали terms in calculated_price
     'data_backfill_offer_orders',     # offers turned into orders before offer.order_id existed get linked to them from the ActivityLog
     'data_client_note_issue_kind',    # old 'return' client notes with detail/product lines become 'issue' (издаване); material-only stay 'return'
+    'data_apply_standard_material_markup',  # owner's decision 2026-11-19: Details' stored material price gets the standard 20% markup (or the owner's Материали terms)
+    'data_compose_material_names',    # owner's decision 2026-11-19: material names composed from Тип/Вид/Марка/размери/калибрация/забележка + note line snapshots
 )
 
 

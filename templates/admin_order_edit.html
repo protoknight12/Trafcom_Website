@@ -103,13 +103,13 @@
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="new_item">Продукт / детайл</label>
-                <select id="new_item" name="item" required>
+                <select id="new_item" name="item" required data-picker="detail">
                     <option value="">-- Изберете --</option>
                     <optgroup label="Продукти">
                         {% for p in products %}<option value="product:{{ p.id }}">{{ p.name }}</option>{% endfor %}
                     </optgroup>
                     <optgroup label="Детайли">
-                        {% for d in details %}<option value="detail:{{ d.id }}">{{ d.name }}{% if d.material %} ({{ d.material.display_name }}){% endif %}</option>{% endfor %}
+                        {% for d in details %}<option value="detail:{{ d.id }}"{% if d.material %} data-material="{{ d.material.display_name }}"{% endif %}>{{ d.name }}{% if d.material %} ({{ d.material.display_name }}){% endif %}</option>{% endfor %}
                     </optgroup>
                 </select>
             </div>
@@ -122,7 +122,7 @@
             </div>
             <div class="form-group" id="new_material_group">
                 <label for="new_material">Материал на детайла</label>
-                <select id="new_material" name="material_key">
+                <select id="new_material" name="material_key" data-picker="material">
                     {% for d in details if d.alt_materials %}
                     {% for m in detail_material_choices(d) %}
                     <option value="{{ m.key }}" data-detail="{{ d.id }}">{{ format_material_option(m) }}</option>

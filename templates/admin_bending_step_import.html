@@ -59,7 +59,7 @@
                         <td>{{ r.bends if r.ok else '-' }}</td>
                         <td>{% if r.ok %}{{ r.size[0] }} &times; {{ r.size[1] }}{% else %}{{ r.bbox[0] }} &times; {{ r.bbox[1] }} &times; {{ r.bbox[2] }} (габарит){% endif %}</td>
                         <td>{% if r.ok %}
-                            <select name="material_{{ r.i }}" required aria-label="Материал">
+                            <select name="material_{{ r.i }}" required aria-label="Материал" data-picker="material">
                                 {% for m in r.materials %}<option value="{{ m.key }}">{{ format_material_option(m) }}</option>{% endfor %}
                             </select>{% else %}-{% endif %}</td>
                     </tr>

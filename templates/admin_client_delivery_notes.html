@@ -81,7 +81,7 @@
             <div class="add-item-row">
                 <div class="form-group" id="material_selector">
                     <label for="cdn_material_select">Материал *</label>
-                    <select id="cdn_material_select" data-create="{{ create_url('material') }}" class="material-picker">
+                    <select id="cdn_material_select" data-create="{{ create_url('material') }}" data-picker="material">
                         <option value="">-- Изберете материал --</option>
                         {% for type_key, group in materials|groupby('type') %}
                         <optgroup label="{{ material_type_label(type_key) }}">
@@ -91,7 +91,8 @@
                                     data-h="{{ m.sheet_length_mm if m.sheet_length_mm is not none else '' }}" data-t="{{ m.thickness_mm if m.thickness_mm is not none else '' }}"
                                     data-type="{{ m.type }}" data-id="{{ m.id }}" data-brand="{{ m.brand or '' }}"
                                     data-density="{{ material_density(m) or '' }}" data-weight="{{ m.weight_kg or '' }}" data-hm="{{ m.height_mm or '' }}"
-                                    data-owner="{{ m.owner_client_id or '' }}" data-unit="{{ material_price_unit(m.type) }}">{{ format_material_option(m) }} (наличност: {{ (m.stock_quantity or 0)|num3 }})</option>
+                                    data-owner="{{ m.owner_client_id or '' }}" data-unit="{{ material_price_unit(m.type) }}"
+                                    data-grade="{{ m.grade.name if m.grade else 'Без вид' }}" data-owner-name="{{ m.owner_client.name if m.owner_client else 'Трафком' }}" data-stock-kg="{{ material_stock_kg(m)|num3 }}">{{ format_material_option(m) }} (наличност: {{ (m.stock_quantity or 0)|num3 }})</option>
                             {% endfor %}
                         </optgroup>
                         {% endfor %}
@@ -99,19 +100,20 @@
                 </div>
                 <div class="form-group" id="detail_selector" style="display: none;">
                     <label for="cdn_detail_select">Детайл *</label>
-                    <select id="cdn_detail_select" data-create="{{ create_url('detail') }}">
+                    {% set client_names = {} %}{% for c in clients %}{% set _ = client_names.update({c.id: c.name}) %}{% endfor %}
+                    <select id="cdn_detail_select" data-create="{{ create_url('detail') }}" data-picker="detail">
                         <option value="">-- Изберете детайл --</option>
                         {% for d in details_data %}
-                        <option value="{{ d.id }}" data-price="{{ d.price if d.price is not none else '' }}" data-stock="{{ d.stock if d.stock is not none else 0 }}" data-owner="{{ d.owner or '' }}">{{ d.name }} (наличност: {{ (d.stock or 0)|num3 }})</option>
+                        <option value="{{ d.id }}" data-price="{{ d.price if d.price is not none else '' }}" data-stock="{{ d.stock if d.stock is not none else 0 }}" data-owner="{{ d.owner or '' }}" data-owner-name="{{ client_names.get(d.owner, 'Клиент #' ~ d.owner) if d.owner else 'Трафком' }}">{{ d.name }} (наличност: {{ (d.stock or 0)|num3 }})</option>
                         {% endfor %}
                     </select>
                 </div>
                 <div class="form-group" id="product_selector" style="display: none;">
                     <label for="cdn_product_select">Продукт *</label>
-                    <select id="cdn_product_select" data-create="{{ create_url('product') }}">
+                    <select id="cdn_product_select" data-create="{{ create_url('product') }}" data-picker="product">
                         <option value="">-- Изберете продукт --</option>
                         {% for p in products_data %}
-                        <option value="{{ p.id }}" data-price="{{ p.price if p.price is not none else '' }}" data-stock="{{ p.stock if p.stock is not none else 0 }}" data-owner="{{ p.owner or '' }}">{{ p.name }} (наличност: {{ (p.stock or 0)|num3 }})</option>
+                        <option value="{{ p.id }}" data-price="{{ p.price if p.price is not none else '' }}" data-stock="{{ p.stock if p.stock is not none else 0 }}" data-owner="{{ p.owner or '' }}" data-owner-name="{{ client_names.get(p.owner, 'Клиент #' ~ p.owner) if p.owner else 'Трафком' }}">{{ p.name }} (наличност: {{ (p.stock or 0)|num3 }})</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -227,21 +229,45 @@
 
     <section class="admin-card">
         <h3>История на разписките</h3>
+        {% if notes %}
+        {#- Client-side filters (remembered per page, dependent selects - cascade_filters.js). #}
+        <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem;">
+            <input type="text" id="cdnHistorySearchInput" placeholder="Търсене по №, клиент, фактура, артикул..." style="flex: 2 1 240px;">
+            <select id="filterClient" style="flex: 1 1 180px;">
+                <option value="">Всички клиенти</option>
+                {% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+                <option value="none">Без клиент</option>
+            </select>
+            <select id="filterKind" style="flex: 1 1 150px;">
+                <option value="">Всички видове</option>
+                {% for k, label in kinds.items() %}<option value="{{ k }}">{{ label }}</option>{% endfor %}
+            </select>
+            <label style="display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;">от
+                <input type="date" id="filterFrom" data-remember style="width: auto;"></label>
+            <label style="display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;">до
+                <input type="date" id="filterTo" data-remember style="width: auto;"></label>
+            <button type="button" id="cdnFilterReset" class="btn-secondary" style="padding: 6px 12px;">Изчисти</button>
+        </div>
+        {% endif %}
         <div class="table-responsive">
             <table class="users-table">
                 <thead>
                 <tr>
-                    <th>Дата на записване</th>
+                    <th>№</th>
+                    <th>Дата</th>
                     <th>Клиент</th>
                     <th>Фактура №</th>
                     <th>Артикули</th>
                     <th></th>
                 </tr>
                 </thead>
-                <tbody>
+                <tbody id="cdnHistoryBody">
                 {% for note in notes %}
-                <tr>
-                    <td>{{ (note.created_at|local).strftime('%d.%m.%Y %H:%M') }}</td>
+                {% set day = note.note_date or (note.created_at|local).date() %}
+                <tr data-search="{{ ([note.number, note.note_number, note.client.name if note.client else '', kinds[note.kind]] + note.items|map(attribute='description_snapshot')|list)|select|join(' ')|lower }}"
+                    data-client="{{ note.client_id or 'none' }}" data-kind="{{ note.kind }}" data-date="{{ day.isoformat() }}">
+                    <td><strong>{{ note.number }}</strong></td>
+                    <td>{{ day.strftime('%d.%m.%Y') }}<div class="text-muted text-small">записан {{ (note.created_at|local).strftime('%d.%m.%Y %H:%M') }}</div></td>
                     <td>{{ note.client.name if note.client else '-' }}
                         {%- if note.kind != 'issue' %}<div style="font-size: 0.8rem; color: var(--text-muted);">{{ kinds[note.kind] }}</div>{% endif %}</td>
                     <td>{{ note.note_number or '-' }}</td>
@@ -275,9 +301,12 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="5" class="text-center no-data">Няма записани разписки.</td>
+                    <td colspan="6" class="text-center no-data">Няма записани разписки.</td>
                 </tr>
                 {% endfor %}
+                {% if notes %}
+                <tr class="search-empty-row" hidden><td colspan="6" class="text-center no-data">Няма съвпадения.</td></tr>
+                {% endif %}
                 </tbody>
             </table>
         </div>
@@ -285,8 +314,50 @@
 
 </main>
 
+{% if notes %}
+<script src="{{ url_for('static', filename='js/cascade_filters.js') }}"></script>
+<script>
+    // History filters: text, client, kind, date range (from/to on the note's date).
+    (function () {
+        const q = document.getElementById('cdnHistorySearchInput');
+        const fClient = document.getElementById('filterClient'), fKind = document.getElementById('filterKind');
+        const fFrom = document.getElementById('filterFrom'), fTo = document.getElementById('filterTo');
+        const body = document.getElementById('cdnHistoryBody');
+        const rows = Array.from(body.querySelectorAll('tr[data-search]'));
+        const empty = body.querySelector('.search-empty-row');
+        function base(r) {   // everything except the two selects (cascadeFilters adds those)
+            const text = q.value.trim().toLowerCase();
+            return (!text || r.dataset.search.indexOf(text) !== -1)
+                && (!fFrom.value || r.dataset.date >= fFrom.value) && (!fTo.value || r.dataset.date <= fTo.value);
+        }
+        const updateOptions = cascadeFilters(rows, [
+            { el: fClient, test: (r, v) => r.dataset.client === v },
+            { el: fKind, test: (r, v) => r.dataset.kind === v },
+        ], base);
+        function apply() {
+            updateOptions();
+            let shown = 0;
+            rows.forEach(function (r) {
+                const ok = base(r) && (!fClient.value || r.dataset.client === fClient.value)
+                    && (!fKind.value || r.dataset.kind === fKind.value);
+                r.hidden = !ok;
+                if (ok) shown++;
+            });
+            empty.hidden = shown !== 0;
+        }
+        let timer = null;
+        q.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(apply, 120); });
+        [fClient, fKind, fFrom, fTo].forEach(function (el) { el.addEventListener('change', apply); el.addEventListener('input', apply); });
+        document.getElementById('cdnFilterReset').addEventListener('click', function () {
+            q.value = ''; fClient.value = ''; fKind.value = ''; fFrom.value = ''; fTo.value = '';
+            apply();
+        });
+        apply();
+    })();
+</script>
+{% endif %}
+
 {% if current_user.is_admin %}
-<script src="{{ url_for('static', filename='js/material_picker.js') }}"></script>
 <script src="{{ url_for('static', filename='js/material_weight.js') }}"></script>
 <script>
     let cdnItems = [];

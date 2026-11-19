@@ -81,8 +81,8 @@ def _admin():
 
 def test_calculate_material_price_applies_client_terms(setup):
     s = setup
-    assert calculate_material_price(1000, 1000, 'steel') == 100
-    assert calculate_material_price(1000, 1000, 'steel', None) == 100
+    assert calculate_material_price(1000, 1000, 'steel') == 120          # no owner: the standard 20 % markup
+    assert calculate_material_price(1000, 1000, 'steel', None) == 120
     assert calculate_material_price(1000, 1000, 'steel', s['a']) == 110
     assert calculate_material_price(1000, 1000, 'steel', s['b']) == 90
 
@@ -90,7 +90,7 @@ def test_calculate_material_price_applies_client_terms(setup):
 def test_admin_add_detail_prices_with_owner(setup):
     s = setup
     adm = _admin()
-    for name, owner, expected in (('Публичен', '', 100), ('Мой А', s['a'].id, 110), ('Мой Б', s['b'].id, 90)):
+    for name, owner, expected in (('Публичен', '', 120), ('Мой А', s['a'].id, 110), ('Мой Б', s['b'].id, 90)):
         r = adm.post('/admin/details/add', data={'name': name, 'material': 'steel', 'owner_client_id': str(owner),
                                                  'file': (io.BytesIO(_square_dxf()), 'sq.dxf')},
                      content_type='multipart/form-data')
@@ -110,7 +110,7 @@ def test_owner_change_reprices(setup):
 
     assert set_owner(s['a'].id) == 110
     assert set_owner(s['b'].id) == 90
-    assert set_owner('') == 100
+    assert set_owner('') == 120
 
 
 def test_detail_price_for_owner_skips_detail_terms(setup):
@@ -146,7 +146,7 @@ def test_create_order_for_owner_freezes_stored_price(setup):
 def test_breakdown_shows_owner_rate(setup):
     with flask_app.app_context():
         d = db.session.get(Detail, setup['detail'].id)
-        assert d.material_price_breakdown == '1.000 м² × 100.00 €/м²'
+        assert d.material_price_breakdown == '1.000 м² × 120.00 €/м², +20% надценка'
         d.owner_client_id = setup['a'].id
         db.session.commit()
         db.session.refresh(d)

@@ -90,10 +90,10 @@
                     <button type="button" onclick="openQuickDetailModal()" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: var(--accent-contrast); border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
                     {% endif %}
                 </div>
-                <select id="detail_id" name="detail_id">
+                <select id="detail_id" name="detail_id" data-picker="detail">
                     <optgroup label="Детайли">
                     {% for detail in all_details %}
-                    <option value="{{ detail.id }}">{{ detail.name }} ({{ detail.material.display_name }}, {{ "%.2f"|format(detail.total_price) }} €)</option>
+                    <option value="{{ detail.id }}" data-material="{{ detail.material.display_name }}" data-price="{{ "%.2f"|format(detail.total_price) }}">{{ detail.name }} ({{ detail.material.display_name }}, {{ "%.2f"|format(detail.total_price) }} €)</option>
                     {% else %}
                     <option disabled>Няма налични детайли - добавете такива в Админ Панела</option>
                     {% endfor %}
@@ -279,7 +279,7 @@
                     <label for="qd_material" style="margin-bottom: 0;">Материал</label>
                     <button type="button" onclick="openQuickMaterialModal('qd_material')" style="font-size: 0.75rem; padding: 4px 8px; background-color: var(--accent-primary); color: var(--accent-contrast); border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">⚡ Бързо създаване</button>
                 </div>
-                <select id="qd_material" name="material" class="material-picker">
+                <select id="qd_material" name="material" data-picker="material">
                     {% include 'partials/material_options.html' %}
                 </select>
             </div>
@@ -318,6 +318,7 @@
     </div>
 </dialog>
 
+<script src="{{ url_for('static', filename='js/material_name.js') }}"></script>
 <dialog id="quickMaterialModal" class="form-dialog">
     <div>
         <span onclick="closeQuickMaterialModal()" style="position: absolute; right: 20px; top: 20px; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
@@ -326,7 +327,7 @@
             {% include 'partials/csrf_field.html' %}
             <div class="form-group" style="margin-bottom: 15px;">
                 <label for="qm_display_name">Име на материала</label>
-                <input type="text" id="qm_display_name" name="display_name" required placeholder="напр. Алуминий 2мм">
+                <input type="text" id="qm_display_name" name="display_name" required placeholder="съставя се от полетата">
             </div>
             <div class="form-group" style="margin-bottom: 15px;">
                 <label for="qm_type">Тип (форма на суровината)</label>
@@ -338,7 +339,14 @@
             </div>
             <div class="form-group" style="margin-bottom: 15px;">
                 <label for="qm_brand">Марка (незадължително)</label>
-                <input type="text" id="qm_brand" name="brand" placeholder="напр. Alcoa">
+                <input type="text" id="qm_brand" name="brand" placeholder="напр. S235JR, DC01, AISI 304">
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label><input type="checkbox" id="qm_calibrated" name="calibrated" value="1"> Калиброван</label>
+            </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label for="qm_calibration">Калибрация</label>
+                <input type="text" id="qm_calibration" name="calibration" maxlength="30" placeholder="напр. h9">
             </div>
             <div class="form-group" style="margin-bottom: 15px;" id="qm_cutting_speed_mm_per_min_group">
                 <label for="qm_cutting_speed_mm_per_min">Скорост на рязане (мм/мин)</label>
@@ -374,7 +382,6 @@
     </div>
 </dialog>
 
-<script src="{{ url_for('static', filename='js/material_picker.js') }}"></script>
 <script>
     let qmTargetSelectId = null;
     function openQuickMaterialModal(targetSelectId) {
@@ -386,6 +393,7 @@
         document.getElementById('quickMaterialModal').close();
         document.getElementById('quickMaterialForm').reset();
         applyQuickMaterialDimensionLabels();
+        qmName.reset(false);
     }
 
     // Relabels/hides the 3 generic dimension fields based on the chosen type -
@@ -428,6 +436,10 @@
 
     document.getElementById('qm_type').addEventListener('change', applyQuickMaterialDimensionLabels);
     applyQuickMaterialDimensionLabels();
+    // The name follows type/brand/size/calibration until typed over (static/js/material_name.js).
+    const qmName = bindMaterialName(MATERIAL_TYPES, {name: 'qm_display_name', type: 'qm_type', brand: 'qm_brand',
+        width: 'qm_sheet_width_mm', length: 'qm_sheet_length_mm', thickness: 'qm_thickness_mm',
+        calibrated: 'qm_calibrated', calibration: 'qm_calibration'});
 
     document.getElementById('quickMaterialForm').addEventListener('submit', function (e) {
         e.preventDefault();

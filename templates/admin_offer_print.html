@@ -79,7 +79,7 @@
             <td class="item-desc">{{ item.description_html | safe if item.description_html else '' }}</td>
             <td>{{ item.dimensions or '' }}</td>
             <td class="num">{{ (item.quantity|num2) if item.quantity is not none else '' }}</td>
-            <td>{{ item.unit or '' }}</td>
+            <td>{{ item.unit or '' }}{{ item.material_kg|kg(2) }}</td>
             <td class="num price">{{ item.unit_price|money if item.unit_price is not none else '' }}</td>
             <td class="num price">{{ item.line_total|money if item.quantity is not none and item.unit_price is not none else '' }}</td>
         </tr>
