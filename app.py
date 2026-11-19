@@ -5387,15 +5387,17 @@ def material_density(material):
     return guess_material_grade(material.display_name)[1]
 
 
-def material_kg_per_unit(material):
+def material_kg_per_unit(material, measured=True):
     """
     kg per NATIVE unit of a lot (the unit _detail_material_unit_qty() uses): kg/m² for 'm2', kg/m for 'm',
-    kg/piece for 'pcs'; None when unknown. A measured weight_kg wins (a whole sheet for 'm2' - divided by
-    the sheet area -, one metre for 'm', one piece for 'pcs'), else density x geometry: sheet thickness;
-    round bar ⌀ (width) or tube ⌀ with wall (thickness); profile width x height, hollow with a wall.
+    kg/piece for 'pcs'; None when unknown. Two weights (owner's decision 2026-11-19 - real and computed differ by
+    tolerances): the REAL weight_kg, when entered, wins (a whole sheet for 'm2' - divided by the sheet area -,
+    one metre for 'm', one piece for 'pcs'); else the COMPUTED one, density x geometry: sheet thickness; round
+    bar ⌀ (width) or tube ⌀ with wall (thickness); profile width x height, hollow with a wall.
+    measured=False always gives the computed one (shown next to the real one on the materials page).
     """
     unit = material_price_unit(material.type)
-    weight = material.weight_kg or None
+    weight = (material.weight_kg or None) if measured else None
     if unit == 'pcs':
         return weight
     if unit == 'm2':
@@ -5446,6 +5448,14 @@ def _sum_kg(parts):
 def material_kg_per_stock_unit(material):
     """kg of ONE stock unit (one sheet, one metre, one piece) - what the delivery-note forms multiply by."""
     return material_stock_kg(material, 1.0)
+
+
+def material_computed_kg_per_stock_unit(material):
+    """The COMPUTED weight (density x geometry) of one stock unit, ignoring a real weight_kg; None if unknown."""
+    per = material_kg_per_unit(material, measured=False)
+    if per is None:
+        return None
+    return per * (_material_sheet_area_m2(material) or 1.0) if material_price_unit(material.type) == 'm2' else per
 
 
 def material_stock_unit_label(material):
@@ -6628,6 +6638,7 @@ app.jinja_env.globals['supplier_extra_fields'] = SUPPLIER_EXTRA_FIELDS
 app.jinja_env.globals['material_stock_kg'] = material_stock_kg
 app.jinja_env.globals['material_native_kg'] = material_native_kg
 app.jinja_env.globals['material_kg_per_stock_unit'] = material_kg_per_stock_unit
+app.jinja_env.globals['material_computed_kg_per_stock_unit'] = material_computed_kg_per_stock_unit
 app.jinja_env.globals['material_density'] = material_density
 
 

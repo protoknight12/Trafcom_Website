@@ -88,7 +88,7 @@
                 <label for="new_grade_id">Вид на материала</label>
                 <select id="new_grade_id" name="grade_id">
                     <option value="">— по името —</option>
-                    {% for gr in grades %}<option value="{{ gr.id }}">{{ gr.name }}{% if gr.density_kg_dm3 %} ({{ gr.density_kg_dm3|num3 }} кг/дм³){% endif %}</option>{% endfor %}
+                    {% for gr in grades %}<option value="{{ gr.id }}" data-density="{{ gr.density_kg_dm3 or '' }}">{{ gr.name }}{% if gr.density_kg_dm3 %} ({{ gr.density_kg_dm3|num3 }} кг/дм³){% endif %}</option>{% endfor %}
                 </select>
                 <small class="text-muted">Определя плътността за кг; празно = по името.</small>
             </div>
@@ -133,8 +133,10 @@
                 <input type="number" id="new_height_mm" step="0.001" min="0" name="height_mm" placeholder="напр. 40">
             </div>
             <div class="form-group">
-                <label for="new_weight_kg">Тегло (кг, незадължително)</label>
-                <input type="number" id="new_weight_kg" step="0.001" min="0" name="weight_kg" placeholder="напр. 45.00">
+                <label for="new_weight_kg">Реално тегло (кг, за <span id="weightUnitLabel">1 лист</span>, по избор)</label>
+                <input type="number" id="new_weight_kg" step="0.001" min="0" name="weight_kg" placeholder="претеглено">
+                <small class="text-muted" id="computedWeightHint">Изчислено: —</small>
+                <small class="text-muted" style="display:block;">Ако е въведено, навсякъде се ползва реалното тегло; иначе изчисленото от вида (плътност) и размерите.</small>
             </div>
             <div class="form-group">
                 <label for="new_min_quantity">Минимално количество (незадължително)</label>
@@ -245,7 +247,7 @@
                     <th>{{ dim_labels[1] or '—' }}</th>
                     <th>{{ dim_labels[2] or '—' }}</th>
                     <th>Височина (мм)</th>
-                    <th>Тегло (кг)</th>
+                    <th title="Реално (претеглено) тегло за единица; изч. = изчислено от плътността и размерите">Тегло за ед. (кг)</th>
                     <th>Мин. количество</th>
                     <th>На склад</th>
                     <th>ERP №</th>
@@ -295,7 +297,12 @@
                     <td>{{ material.sheet_width_mm|num3 if material.sheet_width_mm is not none else '—' }}</td>
                     <td>{{ material.thickness_mm|num3 if material.thickness_mm is not none else '—' }}</td>
                     <td>{{ material.height_mm|num3 if material.height_mm is not none else '—' }}</td>
-                    <td>{{ material.weight_kg|num3 if material.weight_kg is not none else '—' }}</td>
+                    {% set computed_kg = material_computed_kg_per_stock_unit(material) %}
+                    <td style="white-space: nowrap;">
+                        {%- if material.weight_kg %}<strong title="Реално тегло - ползва се">{{ material.weight_kg|num3 }}</strong>{% if computed_kg %}<div class="text-muted text-small">изч. {{ computed_kg|num3 }}</div>{% endif %}
+                        {%- elif computed_kg %}<span title="Изчислено - няма въведено реално тегло">{{ computed_kg|num3 }} <span class="text-muted text-small">изч.</span></span>
+                        {%- else %}—{% endif -%}
+                    </td>
                     <td>{{ material.min_quantity|num3 if material.min_quantity is not none else '—' }}</td>
                     <td>{{ material.stock_quantity|num3 }}{{ material_stock_kg(material)|kg }}</td>
                     <td>{{ material.erp_number or '—' }}</td>
@@ -509,6 +516,37 @@
 </main>
 
 <script src="{{ url_for('static', filename='js/material_name.js') }}"></script>
+<script src="{{ url_for('static', filename='js/material_weight.js') }}"></script>
+<script>
+    // "Изчислено: N кг" under the real weight - density (the picked Вид, else guessed from the name) x the
+    // dialog's sizes, same rule as material_computed_kg_per_stock_unit() in app.py (material_weight.js).
+    (function () {
+        const MATERIAL_TYPES_FOR_WEIGHT = {{ material_types_js()|tojson }};
+        const $ = id => document.getElementById(id);
+        const UNIT_WORD = { m2: '1 лист', m: '1 м', pcs: '1 бр.' };
+        function refresh() {
+            const cfg = (MATERIAL_TYPES_FOR_WEIGHT[$('new_type').value] || {});
+            const unit = cfg.unit || 'm2';
+            const opt = $('new_grade_id').selectedOptions[0];
+            const density = (opt && parseFloat(opt.dataset.density)) || MaterialKg.guessDensity($('new_display_name').value);
+            const kg = MaterialKg.kgPerStockUnit({
+                unit: unit, round: !!cfg.round, width: MaterialKg.num($('new_sheet_width_mm')),
+                length: MaterialKg.num($('new_sheet_length_mm')), thickness: MaterialKg.num($('new_thickness_mm')),
+                height: MaterialKg.num($('new_height_mm')), weight: null, density: density || null });
+            $('weightUnitLabel').textContent = unit === 'm2' && !(MaterialKg.num($('new_sheet_width_mm')) && MaterialKg.num($('new_sheet_length_mm')))
+                ? '1 м²' : UNIT_WORD[unit];
+            $('computedWeightHint').textContent = 'Изчислено: ' + (kg ? (Math.round(kg * 1000) / 1000) + ' кг' : '— (няма плътност или размер)');
+        }
+        ['new_type', 'new_grade_id', 'new_display_name', 'new_sheet_width_mm', 'new_sheet_length_mm', 'new_thickness_mm',
+         'new_height_mm'].forEach(function (id) {
+            $(id).addEventListener('input', refresh);
+            $(id).addEventListener('change', refresh);
+        });
+        new MutationObserver(function () { if ($('materialDialog').open) refresh(); })
+            .observe($('materialDialog'), { attributes: true, attributeFilter: ['open'] });
+        refresh();
+    })();
+</script>
 <script>
     // Shows/relabels the material form's parameter fields for the chosen
     // type - driven by MaterialType (material_types_js() in app.py), so a

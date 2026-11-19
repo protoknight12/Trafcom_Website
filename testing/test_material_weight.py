@@ -4,7 +4,8 @@ else density (own or guessed from the name) x geometry per type. Run: python -m 
 """
 import math
 
-from app import MaterialPrice, MaterialGrade,material_kg_per_unit, material_stock_kg, material_kg_per_stock_unit, material_density
+from app import (MaterialPrice, MaterialGrade, material_kg_per_unit, material_stock_kg, material_kg_per_stock_unit,
+                 material_density, material_computed_kg_per_stock_unit)
 
 
 def mat(**kw):
@@ -21,6 +22,7 @@ def main():
     assert math.isclose(material_stock_kg(sheet), 94.2)                    # 3 sheets
     measured = mat(thickness_mm=2, sheet_width_mm=1000, sheet_length_mm=2000, weight_kg=30)
     assert math.isclose(material_kg_per_stock_unit(measured), 30)          # measured sheet weight wins
+    assert math.isclose(material_computed_kg_per_stock_unit(measured), 31.4)   # the computed one stays visible
     assert material_density(mat(display_name='Неръждаема стомана AISI 304')) == 7.93
     assert material_density(mat(display_name='Алуминий 5754')) == 2.70
     assert material_density(mat(display_name='Поликарбонат')) is None
