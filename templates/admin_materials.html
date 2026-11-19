@@ -552,8 +552,25 @@
             });
         }
         applyMaterialDimensionLabels();
+        materialIsNew = !data || !!copy;
+        gradeShown = gradeName(document.getElementById('new_grade_id'));
         document.getElementById('materialDialog').showModal();
     }
+
+    // A NEW material: picking its Вид fills the name - blank name -> the grade's name; a name that starts with
+    // the previously picked grade gets that part swapped ("Стомана 2мм" -> "Алуминий 2мм"). Editing never renames.
+    let materialIsNew = true, gradeShown = '';
+    function gradeName(sel) { return sel.value ? sel.selectedOptions[0].textContent.replace(/\s*\([^)]*кг\/дм³\)\s*$/, '').trim() : ''; }
+    document.getElementById('new_grade_id').addEventListener('change', function () {
+        const grade = gradeName(this);
+        const nameEl = document.getElementById('new_display_name');
+        const name = nameEl.value.trim();
+        if (materialIsNew && grade) {
+            if (!name) nameEl.value = grade;
+            else if (gradeShown && name.toLowerCase().startsWith(gradeShown.toLowerCase())) nameEl.value = grade + name.slice(gradeShown.length);
+        }
+        gradeShown = grade;
+    });
 
     const GRADE_ADD_ACTION = document.getElementById('gradeForm').action;
 

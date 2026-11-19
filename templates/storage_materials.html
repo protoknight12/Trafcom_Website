@@ -116,7 +116,7 @@
             </select>
             {% endif %}
             {#- Собственик: all / own / client:<id> - applied server-side by storage_materials(). #}
-            <select id="ownerFilter" aria-label="Собственик" style="flex: 0 1 200px;"
+            <select id="ownerFilter" aria-label="Собственик" style="flex: 0 1 200px;" data-url-param="owner"
                     onchange="location.href = '?owner=' + encodeURIComponent(this.value)">
                 <option value="all" {% if owner_filter == 'all' %}selected{% endif %}>Всички собственици</option>
                 <option value="own" {% if owner_filter == 'own' %}selected{% endif %}>Трафком</option>
