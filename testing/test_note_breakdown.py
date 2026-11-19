@@ -174,9 +174,10 @@ def test_production_scrap_is_added_to_the_material(ids):
     assert steel_row['scrap'] == pytest.approx(1.76)
     html = c.get(f'/admin/client-delivery-notes/{note_id}/breakdown').get_data(as_text=True)
     assert 'Брак' in html and '1.8' in html          # общо 0.04 + 1.76
+    assert 'id="scrapSeparate"' in html and 'class="scrap-tog">Количество' in html   # together/separate toggle
 
 
 def test_manual_note_has_no_scrap_columns(ids):
     note_id = _note(ids, [('detail', ids['a'], 2, 7.0)])
     html = _login('qa_admin').get(f'/admin/client-delivery-notes/{note_id}/breakdown').get_data(as_text=True)
-    assert '>Брак<' not in html
+    assert '>Брак<' not in html and 'id="scrapSeparate"' not in html

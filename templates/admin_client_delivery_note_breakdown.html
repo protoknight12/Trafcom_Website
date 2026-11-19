@@ -14,6 +14,8 @@
         .doc-section { display: block; margin: 5mm 0 1.5mm; font-weight: 700; font-size: 10pt; }
         .doc-for { font-size: 8pt; color: #6b6b6b; margin-top: .5mm; }
         table.doc-table tr.doc-subtotal td { border-top: .5px solid #8a8a8a; font-weight: 700; }
+        /* "Брака отделно" off -> one quantity column with the scrap included */
+        body.scrap-together .scrap-sep, body:not(.scrap-together) .scrap-tog, body.scrap-together .scrap-note { display: none !important; }
     </style>
 </head>
 <body class="doc-page">
@@ -21,6 +23,7 @@
 
 <div class="doc-toolbar no-print">
     <a href="{{ url_for('admin_client_delivery_note_print', note_id=note.id) }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">← Протокола</a>
+    {% if breakdown.scrap_known %}<label style="display: inline-flex; align-items: center; gap: 8px; color: var(--text-main); white-space: nowrap; cursor: pointer;"><input type="checkbox" id="scrapSeparate" checked> Брака отделно</label>{% endif %}
     {% if breakdown.priced %}<label style="display: inline-flex; align-items: center; gap: 8px; color: var(--text-main); white-space: nowrap; cursor: pointer;"><input type="checkbox" data-print-prices="client-note-breakdown" checked> Показвай цените</label>{% endif %}
     <button class="btn-submit" style="padding: 12px 24px;" onclick="window.print()">Печат / PDF</button>
 </div>
@@ -36,9 +39,9 @@
             <th class="idx">№</th>
             <th>Наименование</th>
             {% if scrap %}
-            <th class="num">В изделията</th>
-            <th class="num">Брак</th>
-            <th class="num">Общо</th>
+            <th class="num scrap-sep">В изделията</th>
+            <th class="num scrap-sep">Брак</th>
+            <th class="num"><span class="scrap-sep">Общо</span><span class="scrap-tog">Количество</span></th>
             {% else %}
             <th class="num">Количество</th>
             {% endif %}
@@ -52,10 +55,12 @@
             <td class="idx">{{ loop.index }}</td>
             <td>{{ g.name }}
                 {%- if g.for %}<div class="doc-for">за: {% for name, n in g.for.items() %}{{ name }} ({{ '%g'|format(n) }} бр.){{ ', ' if not loop.last }}{% endfor %}</div>{% endif %}</td>
-            <td class="num">{{ qty(g.qty) }}</td>
             {% if scrap %}
-            <td class="num">{{ qty(g.scrap) }}</td>
+            <td class="num scrap-sep">{{ qty(g.qty) }}</td>
+            <td class="num scrap-sep">{{ qty(g.scrap) }}</td>
             <td class="num">{{ qty(g.qty + g.scrap) }}</td>
+            {% else %}
+            <td class="num">{{ qty(g.qty) }}</td>
             {% endif %}
             <td>{{ g.unit }}</td>
             {% if priced %}<td class="num price">{{ g.value|money if g.value is not none else '' }}</td>{% endif %}
@@ -63,7 +68,9 @@
         {% endfor %}
         {% if priced %}
         <tr class="doc-subtotal price">
-            <td></td><td colspan="{{ 5 if scrap else 3 }}">{{ total_label }}</td><td class="num">{{ total|money }}</td>
+            <td></td><td>{{ total_label }}</td>
+            {% if scrap %}<td class="scrap-sep"></td><td class="scrap-sep"></td>{% endif %}<td></td><td></td>
+            <td class="num">{{ total|money }}</td>
         </tr>
         {% endif %}
         </tbody>
@@ -99,7 +106,7 @@
 
     {% if priced %}
     {{ totals(breakdown.total) }}
-    <div class="doc-notes price"><p>Стойностите са в EUR без ДДС. Цената на всеки артикул от протокола е разпределена между материала и операциите му.{% if breakdown.scrap_known %} Бракът е материалът, изразходван при производството извън изделията (отпадък от листа и бракувани остатъци).{% endif %}</p></div>
+    <div class="doc-notes price"><p>Стойностите са в EUR без ДДС. Цената на всеки артикул от протокола е разпределена между материала и операциите му.{% if breakdown.scrap_known %}<span class="scrap-sep"> Бракът е материалът, изразходван при производството извън изделията (отпадък от листа и бракувани остатъци).</span><span class="scrap-tog"> Количеството на материалите включва и брака при производството.</span>{% endif %}</p></div>
     <div class="price">{{ bank_accounts() }}</div>
     {% endif %}
 
@@ -110,5 +117,19 @@
 </table>
 </div>
 <script src="{{ url_for('static', filename='js/print_prices.js') }}"></script>
+<script>
+    // "Брака отделно" - remembered per browser like "Показвай цените"
+    (function () {
+        var cb = document.getElementById('scrapSeparate');
+        if (!cb) return;
+        try { if (localStorage.getItem('breakdownScrapSeparate') === '0') cb.checked = false; } catch (e) {}
+        function apply() { document.body.classList.toggle('scrap-together', !cb.checked); }
+        apply();
+        cb.addEventListener('change', function () {
+            apply();
+            try { localStorage.setItem('breakdownScrapSeparate', cb.checked ? '1' : '0'); } catch (e) {}
+        });
+    })();
+</script>
 </body>
 </html>

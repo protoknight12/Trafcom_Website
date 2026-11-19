@@ -15618,8 +15618,12 @@ def admin_production_report():
     # used by one cannot be deleted) - listed at the bottom so an admin can delete them.
     cancelled_orders = (live_orders().filter(Order.status == 'cancelled')
                         .order_by(Order.created_at.desc()).all()) if current_user.is_admin else []
+    decided_remnants = {}
+    for r in (OrderMaterialRemnant.query.filter(OrderMaterialRemnant.order_id.in_([o.id for o in orders]))
+              .options(db.joinedload(OrderMaterialRemnant.material)).order_by(OrderMaterialRemnant.id)):
+        decided_remnants.setdefault(r.order_id, []).append(r)
     return render_template('production_report.html', orders=orders, machines=machines,
-                           cancelled_orders=cancelled_orders,
+                           cancelled_orders=cancelled_orders, decided_remnants=decided_remnants,
                            reservations=_open_material_reservations(), remnants=_pending_remnants(orders),
                            cut_plans=_order_cut_groups(orders), active_page='production')
 
@@ -15711,6 +15715,45 @@ def admin_order_remnants():
     log_action(f'Остатък по поръчка {order.order_number}: {which} "{lot.display_name}", '
                f'{scrap} брак, {len(created)} върнати{sizes}')
     return jsonify({'status': 'success', 'message': f'Записано: {scrap} брак, {len(created)} върнати в склада.'})
+
+
+@app.route('/admin/production/remnants/<int:remnant_id>/undo', methods=['POST'])
+@role_required(['admin', 'worker'])
+@retry_on_db_busy
+def admin_order_remnant_undo(remnant_id):
+    """
+    "Промени" on a recorded remnant decision (production report): the exact reverse of
+    admin_order_remnants() - the returned sheets are taken out of their remnant lots again
+    (refused when such a lot was used since, _remnant_lot_used(), as an order delete), the
+    extra_taken goes back into the cut lot and the decision is deleted. The group / cut sheet is
+    then pending again and is decided anew with the usual "Реши за остатъка" dialog. Refused for
+    a cancelled / deleted order.
+    """
+    decision = db.session.get(OrderMaterialRemnant, remnant_id) or abort(404)
+    order = _lock_or_404(Order, decision.order_id)
+    back_to = redirect(url_for('admin_production_report') + f'#order-{order.id}')
+    if order.deleted_at or order.status == 'cancelled':
+        flash('Поръчката е отказана или изтрита.', 'danger')
+        return back_to
+    decision = _lock_or_404(OrderMaterialRemnant, remnant_id)
+    returned = Counter(s['material_id'] for s in decision.returned)
+    lots = {m: _lock_or_404(MaterialPrice, m) for m in sorted({decision.material_id} | set(returned))}
+    for lot_id, count in sorted(returned.items()):
+        if _remnant_lot_used(lots[lot_id], count):
+            db.session.rollback()
+            flash(f'Отказано: остатъкът "{format_material_option(lots[lot_id])}" вече е използван или преместен - '
+                  f'решението не може да се промени.', 'danger')
+            return back_to
+        _bump_stock(lots[lot_id], -count)
+    if decision.extra_taken:
+        _bump_stock(lots[decision.material_id], decision.extra_taken)
+    what = f'{decision.scrap_count} брак, {len(decision.returned)} върнати'
+    lot_name = lots[decision.material_id].display_name
+    db.session.delete(decision)
+    db.session.commit()
+    log_action(f'Отменено решение за остатък по поръчка {order.order_number}, "{lot_name}" ({what})')
+    flash(f'Решението за остатъка ({what}) е отменено - решете отново с "Реши за остатъка".', 'success')
+    return back_to
 
 
 @app.route('/admin/production/cut-plan', methods=['POST'])

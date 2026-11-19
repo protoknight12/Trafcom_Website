@@ -226,3 +226,42 @@ def test_later_leaves_a_badge_until_decided(c, ids):
     assert page.count('class="remnant-pending"') == 1 and 'data-remnant=' in page
     _decide(c, order_id, ids['ours'], [{'action': 'scrap'}])
     assert 'class="remnant-pending"' not in c.get('/admin/production').get_data(as_text=True)
+
+
+def test_decision_can_be_undone_and_decided_again(c, ids):
+    """"Промени" on a recorded decision: returned sheet out of the remnant lot, extra back into the lot, decision gone,
+    the group asks again; the new decision is applied like a first one. Refused when the remnant lot was used."""
+    order_id, (a_item, b_item) = ids['orders']['ORD-R-2']
+    _produce(c, a_item, 10)
+    _produce(c, b_item, 5)
+    _decide(c, order_id, ids['ours'], [{'action': 'scrap'}, {'action': 'return', 'width': 600, 'height': 400}])
+    with flask_app.app_context():
+        rid = OrderMaterialRemnant.query.one().id
+    page = c.get('/admin/production').get_data(as_text=True)
+    assert f'/admin/production/remnants/{rid}/undo' in page and '1 брак, 1 върнати (600x400)' in page
+
+    res = c.post(f'/admin/production/remnants/{rid}/undo')
+    assert res.status_code == 302
+    assert _stock(ids['ours']) == pytest.approx(8.5)          # 0.5 extra back, the 1.5 consumed stays out
+    [(lot_id, *_, stock, _, _, _)] = _remnant_lots()
+    assert stock == pytest.approx(0)
+    with flask_app.app_context():
+        assert OrderMaterialRemnant.query.count() == 0
+    assert c.get('/admin/production').get_data(as_text=True).count('class="remnant-pending"') == 1
+
+    # decided again: both sheets back, one of them the 600x400 lot is reused
+    res = _decide(c, order_id, ids['ours'], [{'action': 'return', 'width': 600, 'height': 400},
+                                             {'action': 'return', 'width': 600, 'height': 400}])
+    assert res.get_json()['status'] == 'success'
+    assert _stock(ids['ours']) == pytest.approx(8) and _stock(lot_id) == pytest.approx(2)
+
+    # the remnant lot is used by another order's decision -> undo refused, nothing moves
+    with flask_app.app_context():
+        r = OrderMaterialRemnant.query.one()
+        rid = r.id
+        db.session.add(OrderMaterialRemnant(order_id=r.order_id, material_id=lot_id, sheets=1, scrap_count=1))
+        db.session.commit()
+    c.post(f'/admin/production/remnants/{rid}/undo')
+    assert _stock(lot_id) == pytest.approx(2) and _stock(ids['ours']) == pytest.approx(8)
+    with flask_app.app_context():
+        assert db.session.get(OrderMaterialRemnant, rid) is not None

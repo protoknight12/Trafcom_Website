@@ -70,6 +70,15 @@
                     </div>
                     {% endfor %}
                 </div>
+                {#- Recorded decisions - "Промени" undoes one (admin_order_remnant_undo()), then it is decided again. #}
+                {% for r in decided_remnants.get(order.id, []) %}
+                <form method="post" action="{{ url_for('admin_order_remnant_undo', remnant_id=r.id) }}" data-once
+                      data-confirm="Да се отмени решението за остатъка ({{ r.scrap_count }} брак, {{ r.returned|length }} върнати)? Върнатите листове се изваждат от склада и решавате отново." style="margin-top: 4px;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <span class="status-badge status-completed">Остатък: {{ r.scrap_count }} брак, {{ r.returned|length }} върнати{% for s in r.returned %}{{ ' (' if loop.first else ', ' }}{{ '%g'|format(s.width) }}x{{ '%g'|format(s.height) }}{{ ')' if loop.last }}{% endfor %} - {{ elink('material', r.material_id, r.material.display_name) }}</span>
+                    <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Промени</button>
+                </form>
+                {% endfor %}
                 {#- Cutting plan per sheet lot ("разкрой по листове") - see _order_cut_groups(), admin_cut_sheet(). #}
                 {% for g in cut_plans.get(order.id, []) %}
                 {% if g.sheets or (order.status != 'completed' and not g.blocked) %}
