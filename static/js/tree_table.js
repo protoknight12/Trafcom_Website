@@ -51,7 +51,8 @@
         t.heads.forEach(function (h) {
             const ls = leaves(h, []).filter(function (l) { return !l.filtered; });
             h.live = ls;
-            h.eff = h.open || (t.active && ls.length > 0);
+            // a filter opens the groups that hold matches - unless the user toggled this group since the filter changed
+            h.eff = h.userSet ? h.open : (h.open || (t.active && ls.length > 0));
         });
         t.rows.forEach(function (n) {
             let show = n.head ? n.live.length > 0 : !n.filtered;
@@ -82,13 +83,14 @@
     window.treeFilter = function (tbody, predicate, active) {
         const t = build(tbody);
         t.active = !!active;
+        t.heads.forEach(function (h) { h.userSet = false; });   // a new filter auto-opens its matches again
         t.rows.forEach(function (n) { if (!n.head) n.filtered = !predicate(n.el); });
         render(t);
     };
 
     window.treeSetAll = function (open) {
         trees.forEach(function (t) {
-            t.heads.forEach(function (h) { h.open = open; });
+            t.heads.forEach(function (h) { h.open = open; h.userSet = true; });
             persist(t); render(t);
         });
         document.querySelectorAll('[data-tree-section]').forEach(function (h) { setSection(h, !open); });
@@ -114,6 +116,7 @@
                 const n = t.byId[row.dataset.node];
                 if (!n) return;
                 n.open = !n.eff;
+                n.userSet = true;
                 persist(t); render(t);
             });
             render(t);
