@@ -12745,6 +12745,125 @@ def admin_client_delivery_note_print(note_id):
     return render_template('admin_client_delivery_note_print.html', note=note)
 
 
+_BREAKDOWN_UNITS = {'m2': 'м²', 'm': 'м', 'pcs': 'бр.'}
+
+
+def _breakdown_detail_parts(detail, n, material=None, own=False, extra_ops=()):
+    """The parts of `n` pieces of `detail`: ('mat'|'op', group key, name, unit, quantity, weight). The weight is
+    the part's list cost - only used to split a line's frozen price between its parts. The material is the one it
+    is cut from (`material`, else the default); the client's material (own line or the client's lot) is listed
+    with no weight."""
+    parts = []
+    material = material or detail.material
+    ops = list(detail.operations) + list(extra_ops)
+    if material:
+        own = own or bool(material.owner_client_id)
+        ops_cost = sum(op.cost for op in detail.operations)
+        weight = 0 if own else max(0.0, _detail_total_price(detail, material) - ops_cost) * n
+        name = material.display_name + (f', {material.thickness_mm:g} мм' if material.thickness_mm else '')
+        if own:
+            name += ' (материал на клиента)'
+        parts.append(('mat', (material.display_name, material.type, material.thickness_mm, own), name,
+                      _BREAKDOWN_UNITS.get(material_price_unit(material.type), ''),
+                      _detail_material_unit_qty(detail, material) * n if detail.width and detail.height else 0, weight))
+    for op in ops:
+        by_length = getattr(op, 'length_mm', None) is not None and op.service.pricing_mode == 'length'
+        name = op.service.name + (f' - {op.description}' if op.description else '')
+        qty = (op.length_mm or 0) / 1000.0 if by_length else op.duration_minutes / 60.0
+        parts.append(('op', (op.service_id, op.description or '', by_length), name, 'м' if by_length else 'ч',
+                      qty * n, op.cost * n))
+    return parts
+
+
+def _breakdown_product_parts(product, n, components=None, own=False):
+    """A product's parts: its details (`components` = [(detail, pieces)] when frozen on an order, else the
+    recipe x n) and its extra costs (painting, assembly...) as operations, n times."""
+    parts = []
+    for detail, pieces in components if components is not None else [(pd.detail, pd.quantity * n) for pd in product.product_details]:
+        if detail:
+            parts += _breakdown_detail_parts(detail, pieces, own=own)
+    parts += [('op', ('extra', ec.label), ec.label, 'бр.', n, ec.amount * n) for ec in product.extra_costs]
+    return parts
+
+
+def _note_breakdown(note):
+    """A client delivery note split into its materials and its operations, the same ones summed:
+    {'materials': [...], 'operations': [...]} with {name, unit, qty, value} rows (value None when the line had
+    no price), plus 'priced' and their totals. Each line's frozen price (note line, or the order line when the
+    note was issued from an order - Order.issued_note_id) is split between its parts by their list costs, so the
+    rows add up to the note's total; the client's own material carries no value."""
+    lines = []   # (price or None, parts)
+    order = Order.query.filter_by(issued_note_id=note.id).first()
+    if order:    # the order knows the chosen material, the client's-material flag and the order-time operations
+        for item in order.items:
+            if item.detail:
+                n = item.quantity_produced
+                lines.append((item.unit_price * n, _breakdown_detail_parts(
+                    item.detail, n, _line_material(item, item.detail), item.own_material, item.operations)))
+            elif item.product and not item.components:
+                n = item.quantity_produced
+                lines.append((item.unit_price * n, _breakdown_product_parts(item.product, n, own=item.own_material)))
+            elif item.product:
+                comps = [(c.detail, c.quantity_produced) for c in item.components]
+                if any(q for _, q in comps):
+                    lines.append((item.unit_price * item.quantity_ordered, _breakdown_product_parts(
+                        item.product, item.quantity_ordered, comps, own=item.own_material)))
+    else:
+        for row in note.items:
+            n = row.quantity
+            price = row.quantity * row.unit_price if row.unit_price is not None else None
+            if row.target_type == 'material':
+                m = db.session.get(MaterialPrice, row.target_id)
+                if m:
+                    own = bool(m.owner_client_id)
+                    name = m.display_name + (f', {m.thickness_mm:g} мм' if m.thickness_mm else '') + (' (материал на клиента)' if own else '')
+                    lines.append((price, [('mat', (m.display_name, m.type, m.thickness_mm, own), name,
+                                           _BREAKDOWN_UNITS.get(material_price_unit(m.type), ''), n, 1)]))
+            elif row.target_type == 'detail':
+                d = db.session.get(Detail, row.target_id)
+                if d:
+                    lines.append((price, _breakdown_detail_parts(d, n)))
+            elif row.target_type == 'product':
+                p = db.session.get(Product, row.target_id)
+                if p:
+                    lines.append((price, _breakdown_product_parts(p, n)))
+
+    groups = {}
+    for price, parts in lines:
+        total_weight = sum(p[5] for p in parts)
+        for kind, key, name, unit, qty, weight in parts:
+            g = groups.setdefault((kind, key), {'kind': kind, 'name': name, 'unit': unit, 'qty': 0.0, 'value': None})
+            g['qty'] += qty
+            if price is not None:
+                share = weight / total_weight if total_weight else (1.0 / len(parts))
+                g['value'] = (g['value'] or 0.0) + price * share
+    rows = list(groups.values())
+    priced = [g for g in rows if g['value'] is not None]
+    for g in priced:
+        g['value'] = round(g['value'], 2)
+    # the rounded rows add up to the rounded total: the cent left over goes to the biggest row
+    target = round(sum(p for p, _ in lines if p is not None), 2)
+    if priced:
+        biggest = max(priced, key=lambda g: g['value'])
+        biggest['value'] = round(biggest['value'] + target - sum(g['value'] for g in priced), 2)
+    materials = [g for g in rows if g['kind'] == 'mat']
+    operations = [g for g in rows if g['kind'] == 'op']
+    return {'materials': materials, 'operations': operations, 'priced': bool(priced),
+            'materials_total': round(sum(g['value'] or 0 for g in materials), 2),
+            'operations_total': round(sum(g['value'] or 0 for g in operations), 2), 'total': target}
+
+
+@app.route('/admin/client-delivery-notes/<int:note_id>/breakdown')
+@role_required(['admin', 'worker'])
+def admin_client_delivery_note_breakdown(note_id):
+    """Print view of an issue/return note split into materials and operations, the same ones summed - some
+    clients want it that way (_note_breakdown())."""
+    note = ClientDeliveryNote.query.get_or_404(note_id)
+    if note.kind == 'consume':
+        abort(404)
+    return render_template('admin_client_delivery_note_breakdown.html', note=note, breakdown=_note_breakdown(note))
+
+
 def _note_signatures(note):
     """(Предал, Приел) printed under a delivery note: what was saved on it, else the default - our side is the
     note's author (User.full_name), the other side the client's / supplier's МОЛ. A DeliveryNote is received by us,
