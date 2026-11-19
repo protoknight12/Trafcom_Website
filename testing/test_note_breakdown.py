@@ -32,7 +32,7 @@ from flask import g
 from werkzeug.security import generate_password_hash
 
 from app import (app as flask_app, db, User, Client, Detail, Product, ProductDetail, ProductExtraCost, MaterialPrice,
-                 Service, Operation, Order, OrderItem, OrderItemOperation, ClientDeliveryNote, ClientDeliveryNoteItem,
+                 Service, Operation, Order, OrderItem, OrderMaterialRemnant, OrderItemOperation, ClientDeliveryNote, ClientDeliveryNoteItem,
                  limiter, seed_material_types, _note_breakdown)
 
 
@@ -47,7 +47,8 @@ def ids():
         client = Client(name='Клиент А')
         admin = User(username='qa_admin', password=pw, role='admin')
         db.session.add_all([admin, User(username='qa_worker', password=pw, role='worker'), client,
-                            MaterialPrice(key='steel', display_name='Стомана', cost_per_m2=10, type='sheets', thickness_mm=2)])
+                            MaterialPrice(key='steel', display_name='Стомана', cost_per_m2=10, type='sheets', thickness_mm=2,
+                                          sheet_width_mm=1000, sheet_length_mm=1000)])
         bend = Service(name='Огъване', price_per_hour_eur=60)
         weld = Service(name='Заваряване', price_per_hour_eur=30)
         db.session.add_all([bend, weld])
@@ -101,6 +102,10 @@ def test_same_materials_and_operations_are_summed_and_add_up_to_the_note(ids):
     assert set(ops) == {'Огъване', 'Боядисване'}
     assert ops['Огъване']['qty'] == pytest.approx((10 * 6 + 5 * 3 + 2 * 6) / 60)            # hours
     assert ops['Огъване']['unit'] == 'ч'
+    # each row names the details it is for (pieces summed; the product's details count too)
+    assert mats['Стомана, 2 мм']['for'] == {'Планка': 12, 'Скоба': 5}
+    assert ops['Огъване']['for'] == {'Планка': 12, 'Скоба': 5}
+    assert ops['Боядисване']['for'] == {'Кутия': 1}
     # the price of a line is split by list cost: Планка 70 € = material 1 : bending 60
     assert bd['total'] == 110.0
     assert round(bd['materials_total'] + bd['operations_total'], 2) == 110.0
@@ -142,3 +147,36 @@ def test_print_page_button_worker_access_and_consume_refused(ids):
     assert f'/admin/client-delivery-notes/{note_id}/breakdown' in c.get(f'/admin/client-delivery-notes/{note_id}/print').get_data(as_text=True)
     assert c.get(f'/admin/client-delivery-notes/{consume_id}/breakdown').status_code == 404
     assert f'/{consume_id}/breakdown' not in c.get(f'/admin/client-delivery-notes/{consume_id}/print').get_data(as_text=True)
+
+
+def test_production_scrap_is_added_to_the_material(ids):
+    """4 pieces of 0.01 m² cut from a 1 m² sheet lot: the lines took 1 sheet, the remnant decision wrote off one
+    more and returned a 500x400 offcut -> scrap = 1 + 1 - 0.2 - 0.04 m²."""
+    with flask_app.app_context():
+        steel = MaterialPrice.query.filter_by(key='steel').one()
+        order = Order(order_number='ORD-7', user_id=ids['admin'], customer_name='QA', status='completed', client_id=ids['client'])
+        db.session.add(order)
+        db.session.flush()
+        db.session.add(OrderItem(order_id=order.id, detail_id=ids['a'], quantity_ordered=4, quantity_produced=4, unit_price=9.0,
+                                 material_consumed=1.0, consumed_material_id=steel.id))
+        db.session.add(OrderMaterialRemnant(order_id=order.id, material_id=steel.id, sheets=2, scrap_count=1, extra_taken=1.0,
+                                            returned_json='[{"width": 500, "height": 400, "material_id": 999}]'))
+        db.session.commit()
+        order_id = order.id
+    c = _login('qa_admin')
+    assert c.post(f'/admin/orders/{order_id}/issue').status_code == 302
+    with flask_app.app_context():
+        note_id = db.session.get(Order, order_id).issued_note_id
+        bd = _note_breakdown(db.session.get(ClientDeliveryNote, note_id))
+    steel_row = _by_name(bd['materials'])['Стомана, 2 мм']
+    assert bd['scrap_known']
+    assert steel_row['qty'] == pytest.approx(0.04)
+    assert steel_row['scrap'] == pytest.approx(1.76)
+    html = c.get(f'/admin/client-delivery-notes/{note_id}/breakdown').get_data(as_text=True)
+    assert 'Брак' in html and '1.8' in html          # общо 0.04 + 1.76
+
+
+def test_manual_note_has_no_scrap_columns(ids):
+    note_id = _note(ids, [('detail', ids['a'], 2, 7.0)])
+    html = _login('qa_admin').get(f'/admin/client-delivery-notes/{note_id}/breakdown').get_data(as_text=True)
+    assert '>Брак<' not in html

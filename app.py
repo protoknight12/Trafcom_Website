@@ -1,5 +1,5 @@
 from bisect import bisect_right
-from collections import Counter, deque
+from collections import Counter, defaultdict, deque
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import os
@@ -12749,7 +12749,8 @@ _BREAKDOWN_UNITS = {'m2': 'м²', 'm': 'м', 'pcs': 'бр.'}
 
 
 def _breakdown_detail_parts(detail, n, material=None, own=False, extra_ops=()):
-    """The parts of `n` pieces of `detail`: ('mat'|'op', group key, name, unit, quantity, weight). The weight is
+    """The parts of `n` pieces of `detail`: ('mat'|'op', group key, name, unit, quantity, weight, (detail name, n)).
+    The weight is
     the part's list cost - only used to split a line's frozen price between its parts. The material is the one it
     is cut from (`material`, else the default); the client's material (own line or the client's lot) is listed
     with no weight."""
@@ -12765,13 +12766,14 @@ def _breakdown_detail_parts(detail, n, material=None, own=False, extra_ops=()):
             name += ' (материал на клиента)'
         parts.append(('mat', (material.display_name, material.type, material.thickness_mm, own), name,
                       _BREAKDOWN_UNITS.get(material_price_unit(material.type), ''),
-                      _detail_material_unit_qty(detail, material) * n if detail.width and detail.height else 0, weight))
+                      _detail_material_unit_qty(detail, material) * n if detail.width and detail.height else 0, weight,
+                      (detail.name, n)))
     for op in ops:
         by_length = getattr(op, 'length_mm', None) is not None and op.service.pricing_mode == 'length'
         name = op.service.name + (f' - {op.description}' if op.description else '')
         qty = (op.length_mm or 0) / 1000.0 if by_length else op.duration_minutes / 60.0
         parts.append(('op', (op.service_id, op.description or '', by_length), name, 'м' if by_length else 'ч',
-                      qty * n, op.cost * n))
+                      qty * n, op.cost * n, (detail.name, n)))
     return parts
 
 
@@ -12782,8 +12784,31 @@ def _breakdown_product_parts(product, n, components=None, own=False):
     for detail, pieces in components if components is not None else [(pd.detail, pd.quantity * n) for pd in product.product_details]:
         if detail:
             parts += _breakdown_detail_parts(detail, pieces, own=own)
-    parts += [('op', ('extra', ec.label), ec.label, 'бр.', n, ec.amount * n) for ec in product.extra_costs]
+    parts += [('op', ('extra', ec.label), ec.label, 'бр.', n, ec.amount * n, (product.name, n)) for ec in product.extra_costs]
     return parts
+
+
+def _order_scrap(order):
+    """{lot: scrap} in the lot's native unit (m², м, бр.) for every lot `order` took material from: what its rows
+    consumed (material_consumed, whole cut sheets included) plus the sheets a remnant decision wrote off
+    (extra_taken), minus the returned remnant sheets, minus what the produced pieces need
+    (_detail_material_unit_qty()). Never below 0."""
+    def native(lot, stock_qty):
+        area = _material_sheet_area_m2(lot) if material_price_unit(lot.type) == 'm2' else None
+        return stock_qty * area if area else stock_qty
+
+    taken, net, lots = defaultdict(float), defaultdict(float), {}
+    rows = [(i, i.detail) for i in order.items] + [(c, c.detail) for i in order.items for c in i.components]
+    for row, detail in rows:
+        if row.consumed_material_id and row.material_consumed:
+            lot = lots.setdefault(row.consumed_material_id, db.session.get(MaterialPrice, row.consumed_material_id))
+            taken[lot.id] += native(lot, row.material_consumed)
+            if detail and detail.width and detail.height:
+                net[lot.id] += _detail_material_unit_qty(detail, lot) * row.quantity_produced
+    for rem in OrderMaterialRemnant.query.filter_by(order_id=order.id):
+        lot = lots.setdefault(rem.material_id, rem.material)
+        taken[lot.id] += native(lot, rem.extra_taken) - sum(s['width'] * s['height'] / 1_000_000.0 for s in rem.returned)
+    return {lots[m]: max(0.0, taken[m] - net[m]) for m in taken if taken[m] - net[m] > 1e-6}
 
 
 def _note_breakdown(note):
@@ -12818,7 +12843,7 @@ def _note_breakdown(note):
                     own = bool(m.owner_client_id)
                     name = m.display_name + (f', {m.thickness_mm:g} мм' if m.thickness_mm else '') + (' (материал на клиента)' if own else '')
                     lines.append((price, [('mat', (m.display_name, m.type, m.thickness_mm, own), name,
-                                           _BREAKDOWN_UNITS.get(material_price_unit(m.type), ''), n, 1)]))
+                                           _BREAKDOWN_UNITS.get(material_price_unit(m.type), ''), n, 1, None)]))
             elif row.target_type == 'detail':
                 d = db.session.get(Detail, row.target_id)
                 if d:
@@ -12829,11 +12854,22 @@ def _note_breakdown(note):
                     lines.append((price, _breakdown_product_parts(p, n)))
 
     groups = {}
+    if order:   # scrap: what production really took from each lot minus what went into the pieces
+        for lot, scrap in _order_scrap(order).items():
+            own = bool(lot.owner_client_id)
+            name = lot.display_name + (f', {lot.thickness_mm:g} мм' if lot.thickness_mm else '') + (' (материал на клиента)' if own else '')
+            g = groups.setdefault(('mat', (lot.display_name, lot.type, lot.thickness_mm, own)), {
+                'kind': 'mat', 'name': name, 'unit': _BREAKDOWN_UNITS.get(material_price_unit(lot.type), ''),
+                'qty': 0.0, 'value': None})
+            g['scrap'] = g.get('scrap', 0.0) + scrap
     for price, parts in lines:
         total_weight = sum(p[5] for p in parts)
-        for kind, key, name, unit, qty, weight in parts:
+        for kind, key, name, unit, qty, weight, src in parts:
             g = groups.setdefault((kind, key), {'kind': kind, 'name': name, 'unit': unit, 'qty': 0.0, 'value': None})
             g['qty'] += qty
+            if src:   # which details (pieces) the row is for - printed under its name
+                g.setdefault('for', {})
+                g['for'][src[0]] = g['for'].get(src[0], 0) + src[1]
             if price is not None:
                 share = weight / total_weight if total_weight else (1.0 / len(parts))
                 g['value'] = (g['value'] or 0.0) + price * share
@@ -12848,7 +12884,9 @@ def _note_breakdown(note):
         biggest['value'] = round(biggest['value'] + target - sum(g['value'] for g in priced), 2)
     materials = [g for g in rows if g['kind'] == 'mat']
     operations = [g for g in rows if g['kind'] == 'op']
-    return {'materials': materials, 'operations': operations, 'priced': bool(priced),
+    for g in materials:
+        g.setdefault('scrap', 0.0)
+    return {'materials': materials, 'operations': operations, 'priced': bool(priced), 'scrap_known': bool(order),
             'materials_total': round(sum(g['value'] or 0 for g in materials), 2),
             'operations_total': round(sum(g['value'] or 0 for g in operations), 2), 'total': target}
 
