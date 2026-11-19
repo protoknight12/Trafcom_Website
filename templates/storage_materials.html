@@ -18,6 +18,8 @@
 {% set subnav = 'catalog' %}
 {% include 'partials/navbar.html' %}
 
+{#- Stock quantity; linear stock is kept in metres - shown with "м" and, with a known length, as bars. #}
+{% macro qty_text(m, q, kg) %}{{ q|num3 }}{% if material_unit_short(m.type) == 'м' %} м{% endif %}{{ kg|kg }}{% if material_unit_short(m.type) == 'м' %}{% if m.sheet_length_mm %}<div class="text-muted text-small">= {{ (q * 1000 / m.sheet_length_mm)|num3 }} бр. по {{ m.sheet_length_mm|num3 }} мм</div>{% endif %}{% endif %}{% endmacro %}
 {#- One leaf (a single material or one price lot) as <tr>: filter data for the client-side filters
     (tree_table.js treeFilter) + the stock-level colour. A client's lot carries no value. #}
 {% macro leaf_row(m, parent, indent, unit, bg) %}
@@ -34,7 +36,7 @@
     <td><a href="{{ url_for('admin_material_history', material_id=m.id) }}">{{ format_material_option(m) }}</a></td>
     <td>{{ m.owner_client.name if m.owner_client_id and m.owner_client else 'Трафком' }}</td>
     <td>{{ material_type_label(m.type) }}</td>
-    <td class="text-center">{{ m.stock_quantity|num3 }}{{ kg|kg }}{% if reserved.get(m.id) %}<div class="text-muted text-small">Заделено: {{ reserved[m.id]|num3 }}{{ material_stock_kg(m, reserved[m.id])|kg }}</div>{% endif %}</td>
+    <td class="text-center">{{ qty_text(m, m.stock_quantity, kg) }}{% if reserved.get(m.id) %}<div class="text-muted text-small">Заделено: {{ reserved[m.id]|num3 }}{{ material_stock_kg(m, reserved[m.id])|kg }}</div>{% endif %}</td>
     {#- A client's material is not ours: no price, no value. #}
     <td class="text-right">{{ '—' if m.owner_client_id else (m.cost_per_m2|price3) ~ ' €/' ~ unit }}</td>
     <td class="text-right">{{ (m.price_per_unit|price3) ~ " €" if m.price_per_unit is not none and not m.owner_client_id else '—' }}</td>
@@ -179,7 +181,7 @@
                     <td><span class="tree-chevron">▶</span>{{ group.label }}<span class="lot-count-badge">{{ lots|length }} партиди</span></td>
                     <td>{{ first.owner_client.name if first.owner_client_id and first.owner_client else 'Трафком' }}</td>
                     <td>{{ material_type_label(first.type) }}</td>
-                    <td class="text-center">{{ group.total_stock|num3 }}{{ group.total_kg|kg }}{% if group.total_reserved %}<div class="text-muted text-small">Заделено: {{ group.total_reserved|num3 }}{{ group.reserved_kg|kg }}</div>{% endif %}</td>
+                    <td class="text-center">{{ qty_text(first, group.total_stock, group.total_kg) }}{% if group.total_reserved %}<div class="text-muted text-small">Заделено: {{ group.total_reserved|num3 }}{{ group.reserved_kg|kg }}</div>{% endif %}</td>
                     <td class="text-right">{{ '—' if first.owner_client_id else (group.min_price|price3) ~ '–' ~ (group.max_price|price3) ~ ' €/' ~ group.unit }}</td>
                     <td class="text-right">—</td>
                     <td class="text-right">{{ '—' if first.owner_client_id else "%.2f"|format(group.total_value) ~ ' €' }}</td>

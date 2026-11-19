@@ -109,6 +109,38 @@
         return { refresh: refresh };
     }
 
+    // Linear stock (rods/pipes/profiles) is kept in METRES. Names the quantity's unit in qtyLabel ("Количество (м)")
+    // and, for a linear lot with a length, shows barsEl's form-group: bars <-> quantity = bars x length / 1000.
+    // getParams() = the line's params (see optionParams) or null for a detail / product line (unit "бр.").
+    function bindBars(qtyEl, barsEl, getParams, watch, qtyLabel) {
+        var group = barsEl.closest('.form-group'), label = group.querySelector('label');
+        var baseText = qtyLabel.textContent.replace(/\s*\(.*\)$/, '');
+        function len() { var p = getParams(); return p && p.unit === 'm' ? p.length : null; }
+        function refresh() {
+            var p = getParams(), u = p ? p.unit : null, l = len();
+            qtyLabel.textContent = baseText + ' (' + (u === null || u === 'pcs' ? 'бр.' : u === 'm' ? 'м'
+                : sheetArea(p) ? 'листа' : 'м²') + ')';
+            group.style.display = l ? '' : 'none';
+            label.textContent = l ? 'Брой пръти по ' + l + ' мм' : 'Брой пръти';
+            var q = parseFloat(qtyEl.value);
+            if (document.activeElement !== barsEl) barsEl.value = l && q > 0 ? round(q * 1000 / l, 3) : '';
+        }
+        barsEl.addEventListener('input', function () {
+            var l = len(), b = parseFloat(barsEl.value);
+            if (!l || !(b > 0)) return;
+            qtyEl.value = round(b * l / 1000, 3);
+            qtyEl.dispatchEvent(new Event('input'));
+        });
+        ['input', 'change', 'qty-from-kg'].forEach(function (ev) { qtyEl.addEventListener(ev, refresh); });
+        (watch || []).forEach(function (el) {
+            el.addEventListener('input', refresh);
+            el.addEventListener('change', refresh);
+        });
+        if (qtyEl.form) qtyEl.form.addEventListener('reset', function () { setTimeout(refresh, 0); });
+        refresh();
+        return { refresh: refresh };
+    }
+
     // Params from a material <option> (data-type/-w/-h/-t/-density/-weight/-hm, see partials/material_options.html).
     // types = material_types_js(); dims = optional {width, length, thickness} typed on the line.
     // A measured weight belongs to the catalog size: a line edited to another size falls back to density.
@@ -128,7 +160,7 @@
         return p;
     }
 
-    var api = {guessDensity: guessDensity, kgPerUnit: kgPerUnit, kgPerStockUnit: kgPerStockUnit, bind: bind,
+    var api = {guessDensity: guessDensity, kgPerUnit: kgPerUnit, kgPerStockUnit: kgPerStockUnit, bind: bind, bindBars: bindBars,
                optionParams: optionParams, sheetArea: sheetArea, num: num};
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.MaterialKg = api;

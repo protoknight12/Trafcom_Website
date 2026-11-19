@@ -118,8 +118,12 @@
                     </select>
                 </div>
                 <div class="form-group qty-field">
-                    <label for="cdn_qty">Количество</label>
+                    <label for="cdn_qty" id="cdn_qty_label">Количество</label>
                     <input type="number" id="cdn_qty" value="1" min="0.001" step="0.001">
+                </div>
+                <div class="form-group qty-field" style="display: none;">
+                    <label for="cdn_bars">Брой пръти</label>
+                    <input type="number" id="cdn_bars" min="0" step="any" title="Попълва количеството в метри: брой x дължината">
                 </div>
                 <div class="form-group qty-field" id="cdn_kg_group">
                     <label for="cdn_kg">Количество в кг (по избор)</label>
@@ -577,6 +581,7 @@
         document.getElementById('cdn_remnant_height').value = item.remnant_height || '';
         cdnKg.refresh();
         cdnRemnantKg.refresh();
+        cdnBars.refresh();
         cdnEditingIndex = index;
         document.getElementById('cdnAddRowBtn').textContent = 'Запази реда';
         document.getElementById('cdn_qty').focus();
@@ -696,8 +701,12 @@
         cdnKgPerUnit, document.getElementById('cdn_kg_group'), cdnWatch);
     const cdnRemnantKg = MaterialKg.bind(document.getElementById('cdn_remnant_qty'),
         document.getElementById('cdn_remnant_kg'), cdnRemnantKgPerUnit, null, cdnWatch);
+    // Linear stock is kept in METRES: unit in the quantity label + "Брой пръти" (static/js/material_weight.js).
+    const cdnBars = MaterialKg.bindBars(document.getElementById('cdn_qty'), document.getElementById('cdn_bars'), function () {
+        return document.querySelector('input[name="cdn_item_type"]:checked').value === 'material' ? cdnLotParams() : null;
+    }, cdnWatch, document.getElementById('cdn_qty_label'));
     document.addEventListener('dialog-open', function (e) {
-        if (e.target.id === 'clientDeliveryNoteSection-dialog') { cdnKg.refresh(); cdnRemnantKg.refresh(); }
+        if (e.target.id === 'clientDeliveryNoteSection-dialog') { cdnKg.refresh(); cdnRemnantKg.refresh(); cdnBars.refresh(); }
     });
 
     fillPriceFromSelection();
