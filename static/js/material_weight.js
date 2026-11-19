@@ -71,11 +71,19 @@
     // Pairs a quantity input with a kg input. getKg() returns kg per one quantity unit (null = unknown,
     // undefined = not a material line: `group` is hidden). Typing kg fills the quantity and the other way
     // round; call refresh() after the quantity or the parameters were set from code.
-    function bind(qtyEl, kgEl, getKg, group, watch) {
+    // isFree() true = the kg is typed on its own (a real invoice weight): no link with the quantity either way.
+    function bind(qtyEl, kgEl, getKg, group, watch, isFree) {
         var perUnit = null;
         function refresh() {
             var k = getKg();
             if (group) group.style.display = k === undefined ? 'none' : '';
+            if (isFree && isFree()) {
+                perUnit = null;
+                kgEl.disabled = false;
+                kgEl.placeholder = 'кг по фактура';
+                kgEl.title = 'Теглото от фактурата за целия ред';
+                return;
+            }
             perUnit = k || null;
             kgEl.disabled = !perUnit;
             kgEl.placeholder = perUnit ? 'кг' : 'няма плътност';
@@ -87,7 +95,7 @@
         qtyEl.addEventListener('change', refresh);
         kgEl.addEventListener('input', function () {
             var kg = parseFloat(kgEl.value);
-            if (!perUnit || !(kg > 0)) return;
+            if ((isFree && isFree()) || !perUnit || !(kg > 0)) return;
             qtyEl.value = round(kg / perUnit, 3);
             qtyEl.dispatchEvent(new Event('qty-from-kg'));
         });

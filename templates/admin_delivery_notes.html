@@ -161,9 +161,20 @@
                     <label for="dn_qty">Количество</label>
                     <input type="number" id="dn_qty" value="1" min="0.001" step="0.001">
                 </div>
-                <div class="form-group qty-field" id="dn_kg_group">
-                    <label for="dn_kg">Количество в кг (по избор)</label>
-                    <input type="number" id="dn_kg" min="0" step="any">
+                <div class="form-group qty-field" id="dn_kg_group" style="flex: 1 1 230px;">
+                    <label for="dn_kg" id="dn_kg_label">Количество в кг (по избор)</label>
+                    <input type="number" id="dn_kg" min="0" step="0.001">
+                    <div class="item-type-toggle" style="gap: 10px; flex-wrap: wrap; margin: 4px 0 0;">
+                        <span class="text-small">Тегло:</span>
+                        <label class="text-small" title="кг следват количеството по изчисленото (или записаното) тегло на материала">
+                            <input type="radio" name="dn_weight_basis" value="computed" checked> изчислено</label>
+                        <label class="text-small" title="кг = теглото от фактурата за целия ред; не зависи от количеството, цената за кг работи с него">
+                            <input type="radio" name="dn_weight_basis" value="real"> реално (по фактура)</label>
+                    </div>
+                    <small class="text-muted" id="dn_kg_hint"></small>
+                    <label class="text-small" id="dn_set_lot_weight_group" style="display: none; font-weight: normal; text-transform: none; letter-spacing: normal;"
+                           title="Теглото на една бройка (лист / метър / брой) на партидата става реалното от фактурата">
+                        <input type="checkbox" id="dn_set_lot_weight" checked> Запиши като реално тегло на материала</label>
                 </div>
                 <div class="form-group qty-field" id="dn_price_group" style="flex: 2 1 320px;">
                     <label>Цена (€, по избор)</label>
@@ -416,7 +427,7 @@
                         {#- Format: (item) (brand) x (quantity) (parameters separated by ,) - see CLAUDE.md delivery-note history task #}
                         <div>
                             {%- if item.target_type == 'material' %}#{{ item.target_id }} {% endif -%}
-                            {% if item.target_type in ('material','detail','product') %}{{ elink(item.target_type, item.target_id, item.description_snapshot) }}{% else %}{{ item.description_snapshot }}{% endif %}{% if item.brand %} {{ item.brand }}{% endif %} &times; {{ item.quantity|num3 }}
+                            {% if item.target_type in ('material','detail','product') %}{{ elink(item.target_type, item.target_id, item.description_snapshot) }}{% else %}{{ item.description_snapshot }}{% endif %}{% if item.brand %} {{ item.brand }}{% endif %} &times; {{ item.quantity|num3 }}{% if item.weight_kg %} (реално {{ item.weight_kg|num3 }} кг){% endif %}
                             {%- set params = [] %}
                             {%- if item.width %}{% set _ = params.append('Ш: ' ~ (item.width|num3)) %}{% endif %}
                             {%- if item.height %}{% set _ = params.append('Д: ' ~ (item.height|num3)) %}{% endif %}
@@ -856,10 +867,45 @@
         }
         return MaterialKg.kgPerStockUnit(p);
     }
+    // Weight basis of a material line (owner's decision 2026-11-19): "изчислено" = kg follows the quantity (above);
+    // "реално (по фактура)" = dn_kg is the invoice weight of the whole line, typed on its own - the per-kg price and
+    // the line total then work with it (dnRealKg()), and it is sent as weight_kg.
+    function dnRealWeight() {
+        return document.querySelector('input[name="dn_weight_basis"]:checked').value === 'real';
+    }
+    function dnRealKg() {   // the invoice kg of the line in real mode, else null
+        return dnRealWeight() ? MaterialKg.num(document.getElementById('dn_kg')) : null;
+    }
     var dnKg = MaterialKg.bind(document.getElementById('dn_qty'), document.getElementById('dn_kg'), dnKgPerUnit,
         document.getElementById('dn_kg_group'),
         ['dn_material_select', 'dn_material_type', 'dn_material_name_new', 'dn_width', 'dn_height', 'dn_thickness']
-            .map(function (id) { return document.getElementById(id); }));
+            .map(function (id) { return document.getElementById(id); }), dnRealWeight);
+    // Label, "Запиши..." checkbox and the "изчислено: N кг" hint follow the basis.
+    function dnWeightHint() {
+        const real = dnRealWeight();
+        document.getElementById('dn_kg_label').textContent = real ? 'Тегло по фактура за целия ред (кг)' : 'Количество в кг (по избор)';
+        document.getElementById('dn_set_lot_weight_group').style.display = real ? 'block' : 'none';
+        const hint = document.getElementById('dn_kg_hint');
+        hint.textContent = '';
+        if (!real) return;
+        const per = dnKgPerUnit(), qty = MaterialKg.num(document.getElementById('dn_qty')), kg = dnRealKg();
+        if (!per || !qty) { hint.textContent = 'изчислено: няма плътност'; return; }
+        const calc = per * qty;
+        hint.textContent = 'изчислено: ' + (Math.round(calc * 1000) / 1000) + ' кг'
+            + (kg ? ', разлика ' + (kg >= calc ? '+' : '') + (Math.round((kg - calc) / calc * 1000) / 10) + '%' : '');
+    }
+    document.querySelectorAll('input[name="dn_weight_basis"]').forEach(function (r) {
+        r.addEventListener('change', function () { dnKg.refresh(); dnWeightHint(); dnPrice.refresh(); });
+    });
+    ['dn_qty', 'dn_kg', 'dn_material_select', 'dn_material_type', 'dn_material_name_new', 'dn_width', 'dn_height',
+     'dn_thickness'].forEach(function (id) {
+        document.getElementById(id).addEventListener('input', dnWeightHint);
+        document.getElementById(id).addEventListener('change', dnWeightHint);
+    });
+    (function () {
+        const form = document.getElementById('dn_kg').form;
+        if (form) form.addEventListener('reset', function () { setTimeout(dnWeightHint, 0); });
+    })();
 
     // Price of the line: "за бройка" (dn_price - the ONLY one sent, the server's unit_price: one sheet, one
     // rod/pipe/profile of the line's length, one piece), "за кг" and "общо за реда". Typing one fills the other
@@ -886,10 +932,13 @@
             if (from) source = from;
             const unit = lineUnit();
             const qty = MaterialKg.num(document.getElementById('dn_qty'));
-            const kgStock = unit ? dnKgPerUnit() : null;          // kg of one stock unit
+            // kg of one stock unit: real mode = invoice kg / quantity, so total = per-kg x real kg
+            const realKg = unit ? dnRealKg() : null;
+            const kgStock = !unit ? null : (dnRealWeight() ? (realKg && qty ? realKg / qty : null) : dnKgPerUnit());
             const per = stockPerUnit(unit);
             el.kg.disabled = !kgStock;
-            el.kg.placeholder = unit ? (kgStock ? 'за кг' : 'за кг - няма плътност') : 'за кг (само материал)';
+            el.kg.placeholder = !unit ? 'за кг (само материал)'
+                : (kgStock ? 'за кг' : (dnRealWeight() ? 'за кг - въведете кг по фактура' : 'за кг - няма плътност'));
             const v = MaterialKg.num(el[source]);
             let stockPrice = null;                                 // price of ONE stock unit
             if (v !== null) {
@@ -1032,7 +1081,14 @@
             cost_per_m2: costPerM2, cutting_speed_mm_per_min: cuttingSpeed, pierce_rate_per_min: pierceRate,
             material_type: materialType,
             components: components,
+            // real invoice weight of the whole line (null = computed basis) - see dnRealWeight()
+            weight_kg: type === 'material' ? dnRealKg() : null,
+            set_lot_weight: type === 'material' && dnRealKg() !== null && document.getElementById('dn_set_lot_weight').checked,
         };
+        if (type === 'material' && dnRealWeight() && !newRow.weight_kg) {
+            alert('Въведете теглото по фактура (кг) или изберете "изчислено".');
+            return;
+        }
         if (dnEditingIndex !== null) {
             // an existing line of an edited note keeps its item_id (see edit_delivery_note)
             if (dnItems[dnEditingIndex].item_id) newRow.item_id = dnItems[dnEditingIndex].item_id;
@@ -1077,7 +1133,12 @@
         set('dn_thickness', item.thickness);
         set('dn_brand', item.brand);
         set('dn_notes', item.notes);
+        const real = item.type === 'material' && item.weight_kg != null;
+        document.querySelector('input[name="dn_weight_basis"][value="' + (real ? 'real' : 'computed') + '"]').checked = true;
+        document.getElementById('dn_set_lot_weight').checked = !!item.set_lot_weight;
         dnKg.refresh();
+        if (real) set('dn_kg', item.weight_kg);
+        dnWeightHint();
         dnPrice.refresh('unit');
         dnEditingIndex = index;
         document.getElementById('dnAddRowBtn').textContent = 'Запази реда';
@@ -1116,7 +1177,8 @@
                 const tr = document.createElement('tr');
                 tr.appendChild(cell(item.name));
                 tr.appendChild(cell(TYPE_LABELS[item.type]));
-                tr.appendChild(cell(item.qty, { className: 'text-center' }));
+                tr.appendChild(cell(item.weight_kg != null ? item.qty + ' (реално ' + item.weight_kg + ' кг)' : item.qty,
+                                    { className: 'text-center' }));
                 tr.appendChild(cell(item.unit_price != null ? item.unit_price.toFixed(3).replace(/0$/, '') + ' €' : '-', { className: 'text-right' }));
 
                 const params = [
@@ -1166,6 +1228,7 @@
                     width: c.width, height: c.height, thickness: c.thickness, brand: c.brand, notes: c.notes,
                     cost_per_m2: c.cost_per_m2, cutting_speed_mm_per_min: c.cutting_speed_mm_per_min, pierce_rate_per_min: c.pierce_rate_per_min,
                     material_type: c.material_type, components: c.components, item_id: c.item_id || null,
+                    weight_kg: c.weight_kg != null ? c.weight_kg : null, set_lot_weight: !!c.set_lot_weight,
                 };
             })
         );

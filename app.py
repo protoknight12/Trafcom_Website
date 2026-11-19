@@ -1638,6 +1638,9 @@ class DeliveryNoteItem(db.Model):
     height = db.Column(db.Float, nullable=True)
     thickness = db.Column(db.Float, nullable=True)
     brand = db.Column(db.String(100), nullable=True)
+    # REAL weight of the whole line (kg, from the supplier's invoice) when the user chose that basis on a
+    # material line; NULL = the computed weight (material_stock_kg). See _apply_delivery_note_items().
+    weight_kg = db.Column(db.Float, nullable=True)
     __table_args__ = (db.Index('ix_delivery_note_item_target', 'target_type', 'target_id'),)
 
 
@@ -12576,7 +12579,9 @@ def admin_delivery_notes():
                    'width': it.width, 'height': it.height, 'thickness': it.thickness, 'brand': it.brand,
                    'notes': it.notes, 'material_key': None, 'material_type': None, 'components': [],
                    'cost_per_m2': None, 'cutting_speed_mm_per_min': None, 'pierce_rate_per_min': None,
-                   'name': it.description_snapshot}
+                   'name': it.description_snapshot,
+                   # the lot's weight was already set when the note was saved - re-tick to write it again
+                   'weight_kg': it.weight_kg, 'set_lot_weight': False}
             if it.target_type == 'material' and target:
                 row.update(name=target.display_name, material_key=target.key, material_type=target.type)
             elif it.target_type == 'detail' and target:
@@ -12952,12 +12957,21 @@ def _apply_delivery_note_items(note, items, kept=None):
             rejected.append(f'Редът "{name}" не беше записан (липсват данни за нов материал).')
             continue
 
+        # "Реално (по фактура)": the invoice weight of the whole line (owner's decision 2026-11-19). With
+        # set_lot_weight it becomes the lot's real weight per STOCK unit (one sheet / metre / piece) - not for
+        # a sheet lot without a size (there weight_kg means a whole sheet, the stock unit is m²).
+        weight_kg = _optional_float('weight_kg') if item_type == 'material' else None
+        weight_kg = round(weight_kg, 3) if weight_kg and weight_kg > 0 else None
+        if weight_kg and row.get('set_lot_weight') and (
+                material_price_unit(target.type) != 'm2' or _material_sheet_area_m2(target)):
+            target.weight_kg = round(weight_kg / quantity, 3)
+
         description = target.display_name if item_type == 'material' else target.name
         db.session.add(DeliveryNoteItem(
             delivery_note_id=note.id, target_type=item_type, target_id=target.id,
             description_snapshot=description, quantity=quantity, unit_price=unit_price,
             notes=notes,
-            width=width, height=height, thickness=thickness, brand=brand,
+            width=width, height=height, thickness=thickness, brand=brand, weight_kg=weight_kg,
         ))
         _bump_stock(target, quantity)
         added_any = True
@@ -16163,7 +16177,7 @@ def admin_production_report():
     for r in (OrderMaterialRemnant.query.filter(OrderMaterialRemnant.order_id.in_([o.id for o in orders]))
               .options(db.joinedload(OrderMaterialRemnant.material)).order_by(OrderMaterialRemnant.id)):
         decided_remnants.setdefault(r.order_id, []).append(r)
-    return render_template('production_report.html', orders=orders, machines=machines,
+    return render_template('production_report.html', orders=orders, machines=machines, status_labels=STATUS_LABELS,
                            cancelled_orders=cancelled_orders, decided_remnants=decided_remnants,
                            reservations=_open_material_reservations(), remnants=_pending_remnants(orders),
                            cut_plans=_order_cut_groups(orders), active_page='production')

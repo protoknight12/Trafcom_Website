@@ -295,6 +295,9 @@ def test_production_report_and_storage_show_the_reservation(c, ids):
     second, _ = _order(c, [{'type': 'detail', 'id': ids['detail'], 'qty': 7}])
     html = _as(c).get('/admin/production').get_data(as_text=True)
     assert html.count('Материал заделен') == 1 and html.count('Чака материал:') == 1
+    # the report's filter bar: search + status/client/machine/material selects, each card carries its values
+    assert all(f'id="{i}"' in html for i in ('prodSearchInput', 'filterStatus', 'filterClient', 'filterMachine', 'filterMaterial'))
+    assert html.count('data-material="wait"') == 1 and html.count('data-material="reserved"') == 1
     assert 'Заделено: 1.4' in c.get('/storage/materials').get_data(as_text=True)
 
 

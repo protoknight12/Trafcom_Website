@@ -39,8 +39,47 @@
     <h2 style="margin-bottom: 20px;">Текущо състояние на поръчките</h2>
     <p class="section-subtitle" style="margin-top: -10px;">Прогресът на всеки продукт се изчислява по неговите съставни детайли - въведете реално изработените бройки за всеки компонент.</p>
 
+    {% if orders %}
+    {#- Filters over the order cards (remembered per page, dependent selects - cascade_filters.js). #}
+    <div class="material-filters" style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 1rem;">
+        <input type="text" id="prodSearchInput" placeholder="Търсене по поръчка, клиент, детайл, продукт..." style="flex: 2 1 260px;">
+        <select id="filterStatus" style="flex: 1 1 140px;">
+            <option value="">Всички статуси</option>
+            {% for key, label in status_labels.items() if key != 'cancelled' %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+        </select>
+        <select id="filterClient" style="flex: 1 1 170px;">
+            <option value="">Всички клиенти</option>
+            {% for name in orders|map(attribute='customer_name')|select|unique|sort %}<option value="{{ name }}">{{ name }}</option>{% endfor %}
+        </select>
+        <select id="filterMachine" style="flex: 1 1 150px;">
+            <option value="">Всички машини</option>
+            {% for m in machines %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}
+            <option value="none">Без машина</option>
+        </select>
+        <select id="filterMaterial" style="flex: 1 1 170px;">
+            <option value="">Материал: всички</option>
+            <option value="wait">Чакащи материал</option>
+            <option value="reserved">Със заделен материал</option>
+            <option value="none">Без резервация</option>
+        </select>
+        <label style="display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;">от
+            <input type="date" id="prodFrom" data-remember style="width: auto;"></label>
+        <label style="display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;">до
+            <input type="date" id="prodTo" data-remember style="width: auto;"></label>
+        <button type="button" id="prodFilterReset" class="btn-secondary" style="padding: 6px 12px;">Изчисти</button>
+        <span class="text-muted text-small" id="prodFilterCount"></span>
+    </div>
+    <p class="no-data text-center" id="prodNoMatch" hidden>Няма поръчки по избраните филтри.</p>
+    {% endif %}
+
     {% for order in orders %}
-    <section class="admin-card" id="order-{{ order.id }}">
+    {% set res_lots = reservations.get(order.id, []) %}
+    <section class="admin-card prod-order" id="order-{{ order.id }}"
+             data-search="{{ ([order.order_number, order.customer_name] + order.items|map(attribute='item_name')|list)|select|join(' ')|lower }}"
+             data-status="{{ order.status }}" data-client="{{ order.customer_name or '' }}"
+             data-machine="{{ order.machine_id or 'none' }}"
+             data-material="{{ 'wait' if res_lots|selectattr('missing')|list else ('reserved' if res_lots else 'none') }}"
+             data-date="{{ (order.created_at|local).date().isoformat() }}">
         <div class="order-card-header">
             <div>
                 <strong style="font-size: 1.1rem;">{{ elink('order', order.id, order.order_number) }}</strong> &nbsp;—&nbsp; {{ order.customer_name }}
@@ -384,6 +423,8 @@
                     badge.className = 'status-badge status-' + data.order_status;
                     badge.textContent = data.order_status_label;
                 }
+                const card = document.getElementById('order-' + orderId);
+                if (card) card.dataset.status = data.order_status;   // the status filter reads it
 
                 if (data.remnant_prompt) {
                     addRemnantBadge(data.remnant_prompt);   // stays when the worker picks "По-късно"
@@ -874,5 +915,54 @@
         });
     }
 </script>
+{% if orders %}
+<script src="{{ url_for('static', filename='js/cascade_filters.js') }}"></script>
+<script>
+    // Search + filters over the order cards: text, status, client, machine, material state, created from/to.
+    (function () {
+        const $ = id => document.getElementById(id);
+        const q = $('prodSearchInput'), from = $('prodFrom'), to = $('prodTo');
+        const sel = { status: $('filterStatus'), client: $('filterClient'), machine: $('filterMachine'), material: $('filterMaterial') };
+        const cards = Array.from(document.querySelectorAll('section.prod-order'));
+        function base(c) {
+            const text = q.value.trim().toLowerCase();
+            return (!text || c.dataset.search.indexOf(text) !== -1)
+                && (!from.value || c.dataset.date >= from.value) && (!to.value || c.dataset.date <= to.value);
+        }
+        const updateOptions = cascadeFilters(cards, Object.keys(sel).map(function (k) {
+            return { el: sel[k], test: function (c, v) { return c.dataset[k] === v; } };
+        }), base);
+        function apply() {
+            updateOptions();
+            let shown = 0;
+            cards.forEach(function (c) {
+                const ok = base(c) && Object.keys(sel).every(function (k) { return !sel[k].value || c.dataset[k] === sel[k].value; });
+                c.hidden = !ok;
+                if (ok) shown++;
+            });
+            $('prodNoMatch').hidden = shown !== 0;
+            $('prodFilterCount').textContent = shown === cards.length ? cards.length + ' поръчки' : shown + ' от ' + cards.length + ' поръчки';
+        }
+        let timer = null;
+        q.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(apply, 120); });
+        Object.values(sel).concat([from, to]).forEach(function (el) {
+            el.addEventListener('change', apply); el.addEventListener('input', apply);
+        });
+        $('prodFilterReset').addEventListener('click', function () {
+            q.value = ''; from.value = ''; to.value = '';
+            Object.values(sel).forEach(function (s) { s.value = ''; });
+            apply();
+        });
+        // a link to one order (#order-ID) must never land on a filtered-out card
+        if (location.hash.indexOf('#order-') === 0) {
+            const target = document.querySelector(location.hash);
+            if (target && target.classList.contains('prod-order')) {
+                window.addEventListener('load', function () { if (target.hidden) { $('prodFilterReset').click(); target.scrollIntoView(); } });
+            }
+        }
+        apply();
+    })();
+</script>
+{% endif %}
 </body>
 </html>
