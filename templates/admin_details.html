@@ -87,13 +87,15 @@
                     <select id="nd_op_service_id" data-create="{{ create_url('service') }}" style="flex: 1; min-width: 200px;">
                         <option value="">-- Изберете услуга --</option>
                         {% for s in services %}
-                        <option value="{{ s.id }}">{{ s.name }} ({{ "%.2f"|format(s.price_per_hour_eur) }} €/час)</option>
+                        <option value="{{ s.id }}">{{ s.name }} ({% if s.pricing_mode == 'length' %}{{ "%.2f"|format(s.price_per_meter_eur or 0) }} €/м{% else %}{{ "%.2f"|format(s.price_per_hour_eur) }} €/час{% endif %})</option>
                         {% endfor %}
                     </select>
                     <input type="text" id="nd_op_description" placeholder="Описание (незадължително, напр. външно лазерно рязане)" style="flex: 1; min-width: 200px;">
                     <input type="number" id="nd_op_duration_minutes" step="0.01" min="0.01" placeholder="Продължителност (мин)" style="width: 180px;">
+                    <input type="number" id="nd_op_length_mm" step="0.01" min="0.01" placeholder="Дължина (мм)" style="width: 180px; display: none;">
                     <button type="button" class="btn-secondary" onclick="addPendingDetailOperation()">+ Добави в списъка</button>
                 </div>
+                <div id="nd_op_price_preview" class="text-small" style="margin-top: 6px; font-weight: 700; min-height: 1.2em;"></div>
                 <table class="data-table" id="ndPendingOpsTable" style="margin-top: 10px;">
                     <tbody id="ndPendingOpsBody">
                         <tr id="ndPendingOpsEmptyRow"><td class="text-center no-data">Няма избрани допълнителни операции.</td></tr>
@@ -215,30 +217,59 @@
     const ND_SERVICES = {{ services_data|tojson }};
     let ndPendingOps = [];
 
-    function ndOpCost(serviceId, durationMinutes) {
-        const service = ND_SERVICES.find(function (s) { return s.id === serviceId; });
-        return service ? durationMinutes * (service.price_per_hour_eur / 60) : 0;
+    function ndService(serviceId) {
+        return ND_SERVICES.find(function (s) { return s.id === serviceId; });
     }
+    // Same as Operation.cost in app.py: length x €/м for a length-priced service, else minutes x €/час.
+    function ndOpCost(serviceId, durationMinutes, lengthMm) {
+        const service = ndService(serviceId);
+        if (!service) return 0;
+        if (service.pricing_mode === 'length') return (lengthMm || 0) / 1000 * (service.price_per_meter_eur || 0);
+        return (durationMinutes || 0) * (service.price_per_hour_eur / 60);
+    }
+    // Duration or length input by the chosen service + the price before "+ Добави в списъка".
+    function ndUpdateOpPreview() {
+        const service = ndService(parseInt(document.getElementById('nd_op_service_id').value, 10));
+        const isLength = !!service && service.pricing_mode === 'length';
+        document.getElementById('nd_op_duration_minutes').style.display = isLength ? 'none' : '';
+        document.getElementById('nd_op_length_mm').style.display = isLength ? '' : 'none';
+        const el = document.getElementById('nd_op_price_preview');
+        if (!service) { el.textContent = ''; return; }
+        const value = parseFloat(document.getElementById(isLength ? 'nd_op_length_mm' : 'nd_op_duration_minutes').value);
+        if (!(value > 0)) { el.textContent = ''; return; }
+        const cost = isLength ? ndOpCost(service.id, null, value) : ndOpCost(service.id, value, null);
+        el.textContent = (isLength ? value + ' мм × ' + (service.price_per_meter_eur || 0).toFixed(2) + ' €/м'
+                                   : value + ' мин × ' + service.price_per_hour_eur.toFixed(2) + ' €/час')
+            + ' = ' + cost.toFixed(2) + ' €';
+    }
+    ['nd_op_service_id', 'nd_op_duration_minutes', 'nd_op_length_mm'].forEach(function (id) {
+        document.getElementById(id).addEventListener('input', ndUpdateOpPreview);
+        document.getElementById(id).addEventListener('change', ndUpdateOpPreview);
+    });
 
     function addPendingDetailOperation() {
         const serviceSelect = document.getElementById('nd_op_service_id');
         const descriptionInput = document.getElementById('nd_op_description');
         const durationInput = document.getElementById('nd_op_duration_minutes');
+        const lengthInput = document.getElementById('nd_op_length_mm');
         const serviceId = parseInt(serviceSelect.value, 10);
-        const duration = parseFloat(durationInput.value);
-
         if (!serviceId) { alert('Моля изберете услуга.'); return; }
-        if (!duration || duration <= 0) { alert('Моля въведете валидна продължителност в минути.'); return; }
+        const isLength = ndService(serviceId).pricing_mode === 'length';
+        const value = parseFloat((isLength ? lengthInput : durationInput).value);
+        if (!value || value <= 0) { alert(isLength ? 'Моля въведете валидна дължина в мм.' : 'Моля въведете валидна продължителност в минути.'); return; }
 
         ndPendingOps.push({
             serviceId: serviceId,
             serviceName: serviceSelect.options[serviceSelect.selectedIndex].text,
             description: descriptionInput.value.trim(),
-            durationMinutes: duration,
+            durationMinutes: isLength ? null : value,
+            lengthMm: isLength ? value : null,
         });
         descriptionInput.value = '';
         durationInput.value = '';
+        lengthInput.value = '';
         renderPendingDetailOperations();
+        ndUpdateOpPreview();
     }
 
     function removePendingDetailOperation(index) {
@@ -255,7 +286,7 @@
             body.innerHTML = '<tr id="ndPendingOpsEmptyRow"><td class="text-center no-data">Няма избрани допълнителни операции.</td></tr>';
         } else {
             ndPendingOps.forEach(function (op, idx) {
-                const cost = ndOpCost(op.serviceId, op.durationMinutes);
+                const cost = ndOpCost(op.serviceId, op.durationMinutes, op.lengthMm);
                 total += cost;
                 const tr = document.createElement('tr');
                 const removeBtn = document.createElement('button');
@@ -265,7 +296,7 @@
                 removeBtn.addEventListener('click', function () { removePendingDetailOperation(idx); });
                 const td = document.createElement('td');
                 td.textContent = op.serviceName + (op.description ? ' (' + op.description + ')' : '') +
-                    ' — ' + op.durationMinutes + ' мин — ' + cost.toFixed(2) + ' €';
+                    ' — ' + (op.lengthMm != null ? op.lengthMm + ' мм' : op.durationMinutes + ' мин') + ' — ' + cost.toFixed(2) + ' €';
                 td.appendChild(document.createElement('br'));
                 td.appendChild(removeBtn);
                 tr.appendChild(td);
@@ -280,7 +311,8 @@
     document.querySelector('form[action="{{ url_for("admin_add_detail") }}"]').addEventListener('submit', function () {
         document.getElementById('ndOperationsJsonInput').value = JSON.stringify(
             ndPendingOps.map(function (op) {
-                return { service_id: op.serviceId, duration_minutes: op.durationMinutes, description: op.description };
+                return { service_id: op.serviceId, duration_minutes: op.durationMinutes, length_mm: op.lengthMm,
+                         description: op.description };
             })
         );
     });

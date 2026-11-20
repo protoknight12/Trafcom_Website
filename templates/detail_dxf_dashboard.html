@@ -437,6 +437,7 @@
                 <input type="number" id="op_length_mm" step="0.01" min="0.01" value="{{ detail.total_length if detail.total_length else '' }}" placeholder="напр. 1500">
             </div>
             <div class="form-group" style="flex: 0 0 auto;">
+                <div id="op_price_preview" class="text-small" style="margin-bottom: 6px; min-height: 1.2em;"></div>
                 <button type="button" class="btn-secondary" onclick="addPendingOperation()" style="padding: 12px 20px;">+ Добави в списъка</button>
             </div>
         </form>
@@ -576,6 +577,7 @@
             const timePerPierceMin = OP_PIERCE_RATE_PER_MIN ? 1 / OP_PIERCE_RATE_PER_MIN : 0;
             const pierceTime = OP_PIERCE_COUNT * timePerPierceMin;
             document.getElementById('op_duration_minutes').value = (cuttingTime + pierceTime).toFixed(2);
+            updateOpPricePreview();
         }
 
         function opServiceById(id) {
@@ -596,7 +598,28 @@
             const isLength = service && service.pricing_mode === 'length';
             document.getElementById('op_duration_group').style.display = isLength ? 'none' : '';
             document.getElementById('op_length_group').style.display = isLength ? '' : 'none';
+            updateOpPricePreview();
         }
+
+        // The price of the operation being added, before "+ Добави в списъка": duration x €/час, or length x €/м
+        // for a length-priced service - opCost(), the same as Operation.cost in app.py.
+        function updateOpPricePreview() {
+            const el = document.getElementById('op_price_preview');
+            const service = opServiceById(parseInt(document.getElementById('op_service_id').value, 10));
+            if (!service) { el.textContent = ''; return; }
+            const isLength = service.pricing_mode === 'length';
+            const value = parseFloat(document.getElementById(isLength ? 'op_length_mm' : 'op_duration_minutes').value);
+            if (!(value > 0)) { el.textContent = isLength ? 'Въведете дължина, за да видите цената.' : 'Въведете продължителност, за да видите цената.'; return; }
+            const cost = isLength ? opCost(service.id, null, value) : opCost(service.id, value, null);
+            el.textContent = (isLength ? value + ' мм × ' + (service.price_per_meter_eur || 0).toFixed(2) + ' €/м'
+                                       : value + ' мин × ' + service.price_per_hour_eur.toFixed(2) + ' €/час')
+                + ' = ' + cost.toFixed(2) + ' €';
+            el.style.fontWeight = '700';
+        }
+        ['op_duration_minutes', 'op_length_mm'].forEach(function (id) {
+            document.getElementById(id).addEventListener('input', updateOpPricePreview);
+        });
+        document.getElementById('op_service_id').addEventListener('change', updateOpPricePreview);
 
         function addPendingOperation() {
             const serviceSelect = document.getElementById('op_service_id');
@@ -629,6 +652,7 @@
             durationInput.value = '';
             lengthInput.value = OP_DEFAULT_LENGTH_MM;
             renderPendingOps();
+            updateOpPricePreview();
         }
 
         function removePendingOperation(index) {

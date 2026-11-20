@@ -11752,7 +11752,8 @@ def admin_details():
                .options(db.joinedload(Detail.material), db.joinedload(Detail.owner_client),
                         db.selectinload(Detail.operations).joinedload(Operation.service)).all())
     services = Service.query.order_by(Service.name).all()
-    services_data = [{'id': s.id, 'name': s.name, 'price_per_hour_eur': s.price_per_hour_eur} for s in services]
+    services_data = [{'id': s.id, 'name': s.name, 'price_per_hour_eur': s.price_per_hour_eur,
+                      'pricing_mode': s.pricing_mode, 'price_per_meter_eur': s.price_per_meter_eur} for s in services]
     clients = Client.query.order_by(Client.name).all()
     return render_template('admin_details.html', materials=materials, details=details, services=services,
                             services_data=services_data, clients=clients, active_page='admin_details')
