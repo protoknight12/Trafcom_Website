@@ -197,3 +197,18 @@ console.log(JSON.stringify(out));
     assert run.returncode == 0, run.stderr
     out = json.loads(run.stdout)
     assert out == {'computed': 157, 'qtyAfterKg': '5', 'kgAfterQty': '160', 'back': 188.4}, out
+
+
+def test_linear_line_shows_bars_and_prices_per_bar(admin_client):
+    """A rod line: quantity in metres, unit_price per bar of the line's length - print/list/history show
+    "2 бр. = 12 м" and the value is bars x price (40.00), not metres x price (240.00)."""
+    line = {'type': 'material', 'name': 'Прът ⌀20', 'material_key': 'rod', 'qty': 12, 'unit_price': 20,
+            'width': 20, 'height': 6000, 'material_type': 'rods'}
+    _post(admin_client, '/admin/delivery-notes/create', [line])
+    note = DeliveryNote.query.one()
+    html = admin_client.get(f'/admin/delivery-notes/{note.id}/print').get_data(as_text=True)
+    assert '2 бр. = 12 м' in html
+    assert '40.00' in html and '240.00' not in html
+    assert '2 бр. = 12 м' in admin_client.get('/admin/delivery-notes').get_data(as_text=True)
+    lot = _lot('rod')
+    assert '2 бр. = 12 м' in admin_client.get(f'/admin/materials/{lot.id}/history').get_data(as_text=True)

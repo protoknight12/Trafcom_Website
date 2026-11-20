@@ -431,7 +431,7 @@
                         {#- Format: (item) (brand) x (quantity) (parameters separated by ,) - see CLAUDE.md delivery-note history task #}
                         <div>
                             {%- if item.target_type == 'material' %}#{{ item.target_id }} {% endif -%}
-                            {% if item.target_type in ('material','detail','product') %}{{ elink(item.target_type, item.target_id, item.description_snapshot) }}{% else %}{{ item.description_snapshot }}{% endif %}{% if item.brand %} {{ item.brand }}{% endif %} &times; {{ item.quantity|num3 }}{% if item.weight_kg %} (реално {{ item.weight_kg|num3 }} кг){% endif %}
+                            {% if item.target_type in ('material','detail','product') %}{{ elink(item.target_type, item.target_id, item.description_snapshot) }}{% else %}{{ item.description_snapshot }}{% endif %}{% if item.brand %} {{ item.brand }}{% endif %} &times; {{ delivery_item_qty_text(item) }}{% if item.weight_kg %} (реално {{ item.weight_kg|num3 }} кг){% endif %}
                             {%- set params = [] %}
                             {%- if item.width %}{% set _ = params.append('Ш: ' ~ (item.width|num3)) %}{% endif %}
                             {%- if item.height %}{% set _ = params.append('Д: ' ~ (item.height|num3)) %}{% endif %}
@@ -1179,6 +1179,14 @@
 
     const TYPE_LABELS = { material: 'Материал', detail: 'Детайл', product: 'Продукт' };
 
+    // "3 бр. = 9 м" for a linear material line (stock in metres, bars of the line's length), else the number -
+    // same text as delivery_item_qty_text() in app.py.
+    function dnQtyText(item) {
+        const unit = item.type === 'material' ? (MATERIAL_TYPES[item.material_type] || {}).unit : null;
+        if (unit !== 'm') return String(item.qty);
+        const r = function (x) { return String(Math.round(x * 1000) / 1000); };
+        return (item.height ? r(item.qty * 1000 / item.height) + ' бр. = ' : '') + r(item.qty) + ' м';
+    }
     function renderDnTable() {
         const body = document.getElementById('dnTableBody');
         body.innerHTML = '';
@@ -1190,7 +1198,7 @@
                 const tr = document.createElement('tr');
                 tr.appendChild(cell(item.name));
                 tr.appendChild(cell(TYPE_LABELS[item.type]));
-                tr.appendChild(cell(item.weight_kg != null ? item.qty + ' (реално ' + item.weight_kg + ' кг)' : item.qty,
+                tr.appendChild(cell(item.weight_kg != null ? dnQtyText(item) + ' (реално ' + item.weight_kg + ' кг)' : dnQtyText(item),
                                     { className: 'text-center' }));
                 tr.appendChild(cell(item.unit_price != null ? item.unit_price.toFixed(3).replace(/0$/, '') + ' €' : '-', { className: 'text-right' }));
 

@@ -30,7 +30,7 @@
         <p class="section-subtitle">
             {{ material_type_label(material.type) }} &middot;
             {{ material.cost_per_m2|price3 }} €/{{ material_unit_short(material.type) }} &middot;
-            Текуща наличност: {{ material.stock_quantity|num3 }}{{ material_stock_kg(material)|kg }}.
+            Текуща наличност: {{ material_qty_text(material) }}{{ material_stock_kg(material)|kg }}.
             Всяко постъпление (от доставчик или на съхранение от клиент) и всяко издаване (връщане, изписване, остатък), записани през складовите разписки, и изразходваното в производството (задачи и поръчки).
         </p>
         <p><a href="{{ url_for('storage_materials') }}" class="btn-secondary">&larr; Обратно към материалите</a></p>
@@ -84,7 +84,7 @@
                     </td>
                     <td>{{ m.party }}</td>
                     <td>{{ m.note_number or '-' }}</td>
-                    <td><span>{{ '+' if m.direction == 'in' else '-' }}{{ m.quantity|num3 }}</span><span class="text-muted">{{ material_stock_kg(material, m.quantity)|kg }}</span></td>
+                    <td><span>{{ '+' if m.direction == 'in' else '-' }}{{ material_qty_text(material, m.quantity) }}</span><span class="text-muted">{{ material_stock_kg(material, m.quantity)|kg }}</span></td>
                     <td>{{ m.unit_price|price3 if m.unit_price is not none else "-" }}</td>
                     <td>{{ m.notes or '-' }}</td>
                 </tr>

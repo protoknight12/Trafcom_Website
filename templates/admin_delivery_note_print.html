@@ -68,7 +68,7 @@
         <tbody>
         {% set ns = namespace(total=0) %}
         {% for item in note.items %}
-        {% set line_total = (item.quantity * item.unit_price) if item.unit_price is not none else 0 %}
+        {% set line_total = delivery_item_line_total(item) %}
         {% set ns.total = ns.total + line_total %}
         {% set mat = mats.get(item.target_id) if item.target_type == 'material' else none %}
         <tr>
@@ -82,7 +82,7 @@
                 {{ dims|join(' × ') }}{% if item.thickness %}{{ ', ' if dims else '' }}деб. {{ (item.thickness|num2) }}{% endif %}
             </td>
             <td class="muted">{{ item.notes or '' }}</td>
-            <td class="num">{{ (item.quantity|num2) }}{% if item.weight_kg %}<div class="muted" style="font-size: .85em;">реално {{ item.weight_kg|num2 }} кг</div>{% elif mat %}{% set kgt = material_stock_kg(mat, item.quantity)|kg(2)|trim %}{% if kgt %}<div class="muted" style="font-size: .85em;">{{ kgt }}</div>{% endif %}{% endif %}</td>
+            <td class="num">{{ delivery_item_qty_text(item, 2) }}{% if item.weight_kg %}<div class="muted" style="font-size: .85em;">реално {{ item.weight_kg|num2 }} кг</div>{% elif mat %}{% set kgt = material_stock_kg(mat, item.quantity)|kg(2)|trim %}{% if kgt %}<div class="muted" style="font-size: .85em;">{{ kgt }}</div>{% endif %}{% endif %}</td>
             {% if priced %}
             <td class="num price">{{ item.unit_price|money if item.unit_price is not none else '' }}</td>
             <td class="num price">{{ line_total|money if item.unit_price is not none else '' }}</td>

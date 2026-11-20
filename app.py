@@ -6681,18 +6681,48 @@ def kg_text(value, places=3):
     return f' (≈ {num3(value, places)} кг)'
 
 
-def material_qty_text(material, qty=None):
+def material_qty_text(material, qty=None, length=None, places=3):
     """A quantity of a lot in its STOCK unit as text (default its stock): linear stock is kept in metres, shown as
-    "3 бр. = 18 м" when the bar length is known (the length is in the name), else "18 м"; other types the bare number."""
+    "3 бр. = 18 м" when the bar length is known (`length` = a delivery line's own, else the lot's; the length is in
+    the name), else "18 м"; other types the bare number. places=2 on printed documents."""
     q = (material.stock_quantity or 0) if qty is None else qty
     if material_price_unit(material.type) != 'm':
-        return num3(q)
-    bars = f'{num3(q * 1000 / material.sheet_length_mm)} бр. = ' if material.sheet_length_mm else ''
-    return f'{bars}{num3(q)} м'
+        return num3(q, places)
+    length = length or material.sheet_length_mm
+    bars = f'{num3(q * 1000 / length, places)} бр. = ' if length else ''
+    return f'{bars}{num3(q, places)} м'
+
+
+def _delivery_item_material(item):
+    """The MaterialPrice of a delivery-note line, None for a detail/product line (identity map - no extra query when
+    the page already loaded it)."""
+    return db.session.get(MaterialPrice, item.target_id) if item.target_type == 'material' else None
+
+
+def delivery_item_qty_text(item, places=3):
+    """A supplier or client delivery-note line's quantity as text - "3 бр. = 9 м" for a linear material line (see
+    material_qty_text), else the number."""
+    m = _delivery_item_material(item)
+    return material_qty_text(m, item.quantity, getattr(item, 'height', None), places) if m else num3(item.quantity, places)
+
+
+def delivery_item_line_total(item):
+    """Value of a supplier delivery-note line. unit_price is the price of ONE priced unit - a sheet, a piece, or for a
+    linear line one BAR of the line's length - while quantity is in stock units (metres for linear stock), so a
+    linear line is bars x unit_price (same rule as dnPrice in admin_delivery_notes.html)."""
+    if item.unit_price is None:
+        return 0
+    m = _delivery_item_material(item)
+    units = item.quantity
+    if m and material_price_unit(m.type) == 'm' and item.height:
+        units = item.quantity * 1000 / item.height
+    return units * item.unit_price
 
 
 app.jinja_env.filters['kg'] = kg_text
 app.jinja_env.globals['material_qty_text'] = material_qty_text
+app.jinja_env.globals['delivery_item_qty_text'] = delivery_item_qty_text
+app.jinja_env.globals['delivery_item_line_total'] = delivery_item_line_total
 app.jinja_env.filters['num3'] = num3
 app.jinja_env.filters['num2'] = num2
 app.jinja_env.filters['price3'] = price3
