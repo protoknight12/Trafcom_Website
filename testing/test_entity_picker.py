@@ -108,7 +108,7 @@ def test_material_options_carry_picker_data(ids):
     html = _get('ep_admin', '/admin/delivery-notes')
     opt = _option(html, 'ep_steel')
     for attr in ('data-grade="Стомана"', 'data-brand="EPBrand"', 'data-owner-name="Трафком"', 'data-stock="4"',
-                 'data-stock-kg="125.6"', 'data-t="2.0"', 'data-owner=""'):
+                 'data-stock-kg="125.6"', 'data-t="2.0"', 'data-owner=""', 'data-cost="10.00 €/м²"'):
         assert attr in opt, attr
     # the client delivery note lists the client's lot with its owner's name; a grade-less lot reads "Без вид"
     html = _get('ep_admin', '/admin/client-delivery-notes')
@@ -120,6 +120,7 @@ def test_customer_never_gets_our_stock(ids):
     opt = _option(html, 'ep_steel')
     assert 'data-grade="Стомана"' in opt
     assert 'data-stock' not in opt
+    assert 'data-cost' not in opt          # nor our delivery price
 
 
 def test_script_parses_under_node():

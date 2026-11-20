@@ -6693,6 +6693,15 @@ def material_qty_text(material, qty=None, length=None, places=3):
     return f'{bars}{num3(q, places)} м'
 
 
+def material_cost_text(material):
+    """Delivery price of a lot for the material picker's "Доставна цена" column ("3.000 €/м") - staff only, '' for a
+    customer, a client's own lot or a never-priced one. Tells apart price lots of the same material."""
+    if not (current_user.is_authenticated and current_user.is_staff) or material.owner_client_id \
+            or not material.cost_per_m2:
+        return ''
+    return f'{price3(material.cost_per_m2)} €/{material_unit_short(material.type)}'
+
+
 def _delivery_item_material(item):
     """The MaterialPrice of a delivery-note line, None for a detail/product line (identity map - no extra query when
     the page already loaded it)."""
@@ -6721,6 +6730,7 @@ def delivery_item_line_total(item):
 
 app.jinja_env.filters['kg'] = kg_text
 app.jinja_env.globals['material_qty_text'] = material_qty_text
+app.jinja_env.globals['material_cost_text'] = material_cost_text
 app.jinja_env.globals['delivery_item_qty_text'] = delivery_item_qty_text
 app.jinja_env.globals['delivery_item_line_total'] = delivery_item_line_total
 app.jinja_env.filters['num3'] = num3

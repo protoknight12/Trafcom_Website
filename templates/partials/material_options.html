@@ -15,7 +15,7 @@
             data-density="{{ material_density(material) or '' }}" data-weight="{{ material.weight_kg or '' }}" data-hm="{{ material.height_mm or '' }}"
             data-type="{{ material.type }}" data-unit="{{ material_unit_short(material.type) }}" data-brand="{{ material.brand or '' }}"
             data-grade="{{ material.grade.name if material.grade else 'Без вид' }}" data-owner-name="{{ material.owner_client.name if material.owner_client else 'Трафком' }}"
-            {% if current_user.is_staff %}data-stock="{{ (material.stock_quantity or 0)|num3 }}" data-stock-text="{{ material_qty_text(material) }}" data-stock-kg="{{ material_stock_kg(material)|num3 }}"{% endif %}
+            {% if current_user.is_staff %}data-stock="{{ (material.stock_quantity or 0)|num3 }}" data-stock-text="{{ material_qty_text(material) }}" data-cost="{{ material_cost_text(material) }}" data-stock-kg="{{ material_stock_kg(material)|num3 }}"{% endif %}
             data-price="{{ client_material_rate(material) }}">{{ format_material_option(material) }}</option>
     {% endfor %}
 </optgroup>

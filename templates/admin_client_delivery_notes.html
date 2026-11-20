@@ -86,7 +86,7 @@
                         {% for type_key, group in materials|groupby('type') %}
                         <optgroup label="{{ material_type_label(type_key) }}">
                             {% for m in group %}
-                            <option value="{{ m.id }}" data-price="" data-stock="{{ m.stock_quantity or 0 }}" data-stock-text="{{ material_qty_text(m) }}"
+                            <option value="{{ m.id }}" data-price="" data-stock="{{ m.stock_quantity or 0 }}" data-stock-text="{{ material_qty_text(m) }}" data-cost="{{ material_cost_text(m) }}"
                                     data-name="{{ m.display_name }}" data-w="{{ m.sheet_width_mm if m.sheet_width_mm is not none else '' }}"
                                     data-h="{{ m.sheet_length_mm if m.sheet_length_mm is not none else '' }}" data-t="{{ m.thickness_mm if m.thickness_mm is not none else '' }}"
                                     data-type="{{ m.type }}" data-id="{{ m.id }}" data-brand="{{ m.brand or '' }}"

@@ -34,6 +34,7 @@
             { label: 'Дебелина', get: function (o) { return num(o.dataset.t); }, facet: true },
             { label: 'Размер', get: function (o) { return dimsText(o.dataset); } },
             { label: 'Наличност', get: function (o) { return stockText(o.dataset); } },
+            { label: 'Доставна цена', get: function (o) { return o.dataset.cost || ''; } },   // staff only (data-cost)
             { label: 'Собственик', get: function (o) { return ownerText(o.dataset); }, facet: true },
         ],
         detail: [
