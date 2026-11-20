@@ -16758,6 +16758,65 @@ def _order_pricing_client(order):
     return order.client or (order.user.client if order.user else None)
 
 
+def _order_item_current_price(item, client):
+    """What an order line would cost `client` if it were added today - the same pricing as _add_order_line():
+    a product's calculate_product_pricing() sell price; a detail's detail_price_for() in the line's material +
+    its order-time operations (client's service terms, x the own-material factor). "Материал на клиента" kept.
+    None when the catalog row is gone or the line's material is no longer allowed. The order edit page offers it
+    as "Обнови" when it differs from the frozen unit_price; it is never applied by itself."""
+    if item.product_id:
+        product = db.session.get(Product, item.product_id)
+        return calculate_product_pricing(product, client, item.own_material)['sell_price'] if product else None
+    detail = db.session.get(Detail, item.detail_id) if item.detail_id else None
+    if not detail:
+        return None
+    try:
+        price = detail_price_for(detail, client, item.own_material, item.material_key)
+    except ValueError:
+        return None
+    ops = 0.0
+    for op in item.operations:
+        if not op.service:
+            continue
+        cost = (op.duration_minutes or 0) * (op.service.price_per_hour_eur / 60.0)
+        if client:
+            cost = _apply_adjustment(cost, *_client_service_adjustment(client, op.service))
+        ops += cost
+    ops = round(ops, 2)
+    if item.own_material:
+        ops *= _own_material_factor(client)
+    return round(price + ops, 2)
+
+
+@app.route('/admin/orders/<int:order_id>/refresh-prices', methods=['POST'])
+@role_required('admin')
+def admin_order_refresh_prices(order_id):
+    """"Обнови" on the order edit page: sets the frozen unit_price of one line (`item_id`) or of every line to its
+    _order_item_current_price() for the order's client. Stock, production and reservations are untouched; a client
+    delivery note already issued from the order keeps its own prices."""
+    order, refused = _editable_order_or_redirect(order_id)
+    if refused:
+        return refused
+    raw = request.form.get('item_id', '')
+    client = _order_pricing_client(order)
+    changes = []
+    for item in _lock_order_lines(order):
+        if raw and str(item.id) != raw:
+            continue
+        price = _order_item_current_price(item, client)
+        if price is None or abs(price - (item.unit_price or 0)) < 0.005:
+            continue
+        changes.append(f'{item.item_name}: {item.unit_price:.2f} → {price:.2f} €')
+        item.unit_price = price
+    db.session.commit()
+    if changes:
+        log_action(f'Обновени цени в поръчка {order.order_number}: ' + '; '.join(changes))
+        flash(f'Обновени цени: {len(changes)} ред(а).', 'success')
+    else:
+        flash('Цените вече са актуални.', 'info')
+    return redirect(url_for('admin_order_edit', order_id=order.id))
+
+
 def _editable_order_or_redirect(order_id):
     """(locked order, None) when the admin may edit it, else (None, redirect with a flash)."""
     order = _lock_or_404(Order, order_id)
@@ -16793,7 +16852,13 @@ def admin_order_edit(order_id):
         details = (Detail.query.order_by(Detail.name)
                    .options(db.joinedload(Detail.material),
                             db.selectinload(Detail.alt_materials).joinedload(DetailMaterial.material)).all())
+        client = _order_pricing_client(order)
+        current_prices = {item.id: _order_item_current_price(item, client) for item in order.items}
+        stale_prices = sum(1 for item in order.items if current_prices[item.id] is not None
+                           and abs(current_prices[item.id] - (item.unit_price or 0)) >= 0.005)
         return render_template('admin_order_edit.html', order=order,
+                               current_prices=current_prices, stale_prices=stale_prices,
+                               order_from_offer=Offer.query.filter_by(order_id=order.id).first() is not None,
                                line_state={item.id: _order_line_state(item) for item in order.items},
                                products=Product.query.order_by(Product.name).all(), details=details,
                                clients=Client.query.order_by(Client.name).all(),

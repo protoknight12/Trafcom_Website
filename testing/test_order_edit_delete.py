@@ -392,3 +392,29 @@ def test_cancelled_order_is_not_editable(c, ids):
                   follow_redirects=True).get_data(as_text=True)
     assert 'отказана' in page and _items(order_id)[0].quantity_ordered == 2
     assert c.get(f'/admin/orders/{order_id}/edit').status_code == 302
+
+
+def test_refresh_prices_after_a_catalog_change(c, ids):
+    """"Обнови" on the order edit page: an unchanged line shows nothing; after the detail's price changes the page
+    shows "сега:" and refreshing one line / all lines sets unit_price to the price a new order would get (same
+    client terms, own material and order-time operations kept). Never applied by itself."""
+    row = {'type': 'detail', 'id': ids['detail'], 'qty': 2, 'own_material': False,
+           'operations': [{'service_id': ids['service'], 'duration_minutes': 3}]}
+    order_id = _order(c, [row, {'type': 'product', 'id': ids['product'], 'qty': 1}], client_id=str(ids['owner']))
+    detail_line, product_line = _items(order_id)
+    assert 'сега:' not in c.get(f'/admin/orders/{order_id}/edit').get_data(as_text=True)
+    db.session.get(Detail, ids['detail']).calculated_price = 8.0   # the fixture's session = the requests' one
+    db.session.commit()
+    page = c.get(f'/admin/orders/{order_id}/edit').get_data(as_text=True)
+    assert page.count('сега:') == 2 and 'Обнови всички цени (2)' in page
+    assert _get(OrderItem, detail_line.id).unit_price == detail_line.unit_price          # not applied by itself
+    c.post(f'/admin/orders/{order_id}/refresh-prices', data={'item_id': str(detail_line.id)})
+    reference = _order(c, [row], client_id=str(ids['owner']))
+    (expected,) = _items(reference)
+    assert _get(OrderItem, detail_line.id).unit_price == expected.unit_price != detail_line.unit_price
+    assert _get(OrderItem, product_line.id).unit_price == product_line.unit_price        # only that line
+    c.post(f'/admin/orders/{order_id}/refresh-prices', data={})
+    assert _get(OrderItem, product_line.id).unit_price != product_line.unit_price
+    assert 'сега:' not in c.get(f'/admin/orders/{order_id}/edit').get_data(as_text=True)
+    g.pop('_login_user', None)
+    assert _login('qa_worker').post(f'/admin/orders/{order_id}/refresh-prices').status_code in (302, 403)

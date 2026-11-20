@@ -71,7 +71,14 @@
                         <div class="text-small"><a href="{{ url_for('admin_production_report') }}#order-{{ order.id }}" target="_top">Смяна на материала - от производствената справка</a></div>
                         {% endif %}
                     </td>
-                    <td class="text-center">{{ '%.2f'|format(item.unit_price) }} €</td>
+                    {% set cur = current_prices.get(item.id) %}
+                    <td class="text-center">{{ '%.2f'|format(item.unit_price) }} €
+                        {%- if cur is not none and (cur - item.unit_price)|abs >= 0.005 %}
+                        <div class="text-small" style="color: var(--warning, #b8860b);">сега: {{ '%.2f'|format(cur) }} €
+                            <button type="submit" form="refresh-prices" name="item_id" value="{{ item.id }}" class="btn-secondary"
+                                    style="padding: 2px 8px; font-size: 0.75rem;" title="Записва текущата цена в реда">Обнови</button></div>
+                        {%- endif %}
+                    </td>
                     <td class="text-center"><input type="number" name="qty_{{ item.id }}" value="{{ item.quantity_ordered }}" min="{{ floor }}" step="1" style="width: 90px;" required></td>
                     <td class="text-center">{{ item.percent_complete }}%</td>
                     <td class="text-center">
@@ -84,9 +91,20 @@
                 </tbody>
             </table>
         </div>
-        <div style="display: flex; gap: 10px; margin-top: 12px;">
+        <div style="display: flex; gap: 10px; margin-top: 12px; align-items: center; flex-wrap: wrap;">
             <button type="submit" class="btn-submit">Запази</button>
+            {% if stale_prices >= 2 %}
+            <button type="submit" form="refresh-prices" class="btn-secondary">Обнови всички цени ({{ stale_prices }})</button>
+            {% endif %}
         </div>
+        {% if stale_prices %}
+        <p class="text-small text-muted" style="margin-top: 8px;">Цената на {{ stale_prices }} ред(а) се е променила след приемането на поръчката{% if order_from_offer %} (поръчката е от оферта - замразената цена е офертната, с отстъпката){% endif %}. „Обнови“ записва текущата цена за клиента; незаписаните промени по количествата първо запазете.</p>
+        {% endif %}
+    </form>
+
+    {#- "Обнови" (admin_order_refresh_prices): item_id from the clicked button, none = every changed line. #}
+    <form id="refresh-prices" method="POST" action="{{ url_for('admin_order_refresh_prices', order_id=order.id) }}" hidden>
+        {% include 'partials/csrf_field.html' %}
     </form>
 
     {% for item in order.items %}
