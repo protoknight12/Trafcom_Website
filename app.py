@@ -865,6 +865,9 @@ class Detail(db.Model):
     # since older catalog parts won't have these set.
     erp_number = db.Column(db.Integer, nullable=True, unique=True)
     code_number = db.Column(db.String(100), nullable=True)
+    # The client's own nomenclature number of this part (owner's decision 2026-11-20) - "Външен ном. №"; ours is
+    # erp_number ("Наш ном. №"), the drawing is code_number ("КД №"). Free text, not unique.
+    external_number = db.Column(db.String(100), nullable=True)
     # Stock on hand, bumped by recording delivery notes (see DeliveryNoteItem
     # / admin_delivery_notes.html) - not editable by hand elsewhere.
     stock_quantity = db.Column(db.Float, nullable=False, default=0.0)
@@ -1005,6 +1008,8 @@ class Operation(db.Model):
     # Service.pricing_mode == 'length' (e.g. a length-based laser cutting
     # operation) - see cost. Unused (0) for time-based operations.
     length_mm = db.Column(db.Float, nullable=True)
+    # How many times per detail, for a Service.pricing_mode == 'piece' (e.g. 4 holes) - see cost.
+    pieces = db.Column(db.Float, nullable=True)
     # Free-text note distinguishing operations that share a Service but mean
     # different things in practice (e.g. "лазерно рязане" in-house vs.
     # "външно лазерно рязане" outsourced) - optional, purely descriptive.
@@ -1017,10 +1022,12 @@ class Operation(db.Model):
 
     @property
     def cost(self):
-        """duration_minutes priced at the linked Service's EUR/hour rate, or
-        length_mm priced at its EUR/meter rate when the Service is length-based."""
+        """duration_minutes priced at the linked Service's EUR/hour rate, length_mm at its EUR/meter rate when
+        the Service is length-based, or pieces x its EUR/piece rate when it is per piece."""
         if self.service.pricing_mode == 'length':
             return round((self.length_mm or 0) / 1000.0 * (self.service.price_per_meter_eur or 0), 2)
+        if self.service.pricing_mode == 'piece':
+            return round((self.pieces or 0) * (self.service.price_per_piece_eur or 0), 2)
         return round(self.duration_minutes * (self.service.price_per_hour_eur / 60.0), 2)
 
 
@@ -1110,6 +1117,10 @@ class Order(db.Model):
     # The stock note "Изпиши към клиента" (admin_order_issue()) issued for this order; set once, cleared
     # when that note or the order is deleted.
     issued_note_id = db.Column(db.Integer, db.ForeignKey('client_delivery_note.id'), nullable=True, index=True)
+    # The client's request for this order as a file (owner's decision 2026-11-20: his order letter/PDF/scan) -
+    # stored name in ORDER_ITEM_FILE_FOLDER + the uploaded name; see _set_order_request_file().
+    request_file = db.Column(db.String(255), nullable=True)
+    request_file_name = db.Column(db.String(255), nullable=True)
 
     user = db.relationship('User', foreign_keys=[user_id], backref=db.backref('orders', lazy=True))
     machine = db.relationship('Machine', backref='orders')
@@ -2187,6 +2198,9 @@ class Service(db.Model):
     pricing_mode = db.Column(db.String(10), nullable=False, default='time')
     # EUR per meter (1000 mm) of cut length - only used when pricing_mode == 'length'.
     price_per_meter_eur = db.Column(db.Float, nullable=True)
+    # 'piece' (owner's decision 2026-11-20): EUR per piece/occurrence (a hole, a thread, an insert) x the
+    # operation's `pieces` count - see Operation.cost.
+    price_per_piece_eur = db.Column(db.Float, nullable=True)
     description = db.Column(db.Text, nullable=True)
     # Optional customer-facing translations - see localized(). Empty/NULL
     # falls back to name/description (Bulgarian).
@@ -11753,7 +11767,8 @@ def admin_details():
                         db.selectinload(Detail.operations).joinedload(Operation.service)).all())
     services = Service.query.order_by(Service.name).all()
     services_data = [{'id': s.id, 'name': s.name, 'price_per_hour_eur': s.price_per_hour_eur,
-                      'pricing_mode': s.pricing_mode, 'price_per_meter_eur': s.price_per_meter_eur} for s in services]
+                      'pricing_mode': s.pricing_mode, 'price_per_meter_eur': s.price_per_meter_eur,
+                      'price_per_piece_eur': s.price_per_piece_eur} for s in services]
     clients = Client.query.order_by(Client.name).all()
     return render_template('admin_details.html', materials=materials, details=details, services=services,
                             services_data=services_data, clients=clients, active_page='admin_details')
@@ -13481,6 +13496,8 @@ def admin_client_delivery_note_declarations(note_id):
             lines[key]['qty'] += it.quantity
             continue
         lines[key] = {'name': it.description_snapshot, 'code': (row.code_number or '') if row else '',
+                      'external': (getattr(row, 'external_number', None) or '') if row else '',
+                      'erp': (row.erp_number or '') if row else '',
                       'qty': it.quantity, 'material': material,
                       'kind': 'Продукт' if it.target_type == 'product' else 'Детайл', 'notes': it.notes or ''}
     if not lines:
@@ -13558,9 +13575,15 @@ def _breakdown_detail_parts(detail, n, material=None, own=False, extra_ops=()):
                       if detail.width and detail.height else 0.0))
     for op in ops:
         by_length = getattr(op, 'length_mm', None) is not None and op.service.pricing_mode == 'length'
+        by_piece = getattr(op, 'pieces', None) is not None and op.service.pricing_mode == 'piece'
         name = op.service.name + (f' - {op.description}' if op.description else '')
-        qty = (op.length_mm or 0) / 1000.0 if by_length else op.duration_minutes / 60.0
-        parts.append(('op', (op.service_id, op.description or '', by_length), name, 'м' if by_length else 'ч',
+        if by_piece:
+            qty, unit, mode = op.pieces, 'бр.', 'piece'
+        elif by_length:
+            qty, unit, mode = (op.length_mm or 0) / 1000.0, 'м', True
+        else:
+            qty, unit, mode = op.duration_minutes / 60.0, 'ч', False
+        parts.append(('op', (op.service_id, op.description or '', mode), name, unit,
                       qty * n, op.cost * n, (detail.name, n), None))
     return parts
 
@@ -14649,7 +14672,7 @@ def _parse_service_pricing(form):
         return None, None, None, 'Цената на час трябва да бъде положително число.'
 
     pricing_mode = form.get('pricing_mode', 'time').strip()
-    if pricing_mode not in ('time', 'length'):
+    if pricing_mode not in ('time', 'length', 'piece'):
         pricing_mode = 'time'
 
     price_per_meter_eur = None
@@ -14660,8 +14683,21 @@ def _parse_service_pricing(form):
             return None, None, None, 'Цената на метър рязане трябва да бъде валидно число.'
         if price_per_meter_eur <= 0:
             return None, None, None, 'Цената на метър рязане трябва да бъде положително число.'
+    elif pricing_mode == 'piece':
+        # the per-piece rate rides in the same slot; the callers store it in price_per_piece_eur (_service_rates())
+        try:
+            price_per_meter_eur = float(form.get('price_per_piece_eur', ''))
+        except ValueError:
+            return None, None, None, 'Цената на брой трябва да бъде валидно число.'
+        if price_per_meter_eur <= 0:
+            return None, None, None, 'Цената на брой трябва да бъде положително число.'
 
     return round(price_per_hour_eur, 2), pricing_mode, price_per_meter_eur, None
+
+
+def _service_rates(mode, rate):
+    """(price_per_meter_eur, price_per_piece_eur) for a service from _parse_service_pricing()'s mode and rate."""
+    return (rate if mode == 'length' else None), (rate if mode == 'piece' else None)
 
 
 @app.route('/admin/services/add', methods=['POST'])
@@ -14681,12 +14717,14 @@ def admin_add_service():
         flash(error, 'danger')
         return redirect(url_for('admin_services'))
 
+    per_meter, per_piece = _service_rates(pricing_mode, price_per_meter_eur)
     new_service = Service(
         name=name,
         machine_type=request.form.get('machine_type', '').strip() or None,
         price_per_hour_eur=price_per_hour_eur,
         pricing_mode=pricing_mode,
-        price_per_meter_eur=price_per_meter_eur,
+        price_per_meter_eur=per_meter,
+        price_per_piece_eur=per_piece,
         description=request.form.get('description', '').strip() or None,
         name_en=request.form.get('name_en', '').strip() or None,
         name_de=request.form.get('name_de', '').strip() or None,
@@ -14724,7 +14762,7 @@ def admin_update_service(service_id):
     service.machine_type = request.form.get('machine_type', '').strip() or None
     service.price_per_hour_eur = price_per_hour_eur
     service.pricing_mode = pricing_mode
-    service.price_per_meter_eur = price_per_meter_eur
+    service.price_per_meter_eur, service.price_per_piece_eur = _service_rates(pricing_mode, price_per_meter_eur)
     service.description = request.form.get('description', '').strip() or None
     service.name_en = request.form.get('name_en', '').strip() or None
     service.name_de = request.form.get('name_de', '').strip() or None
@@ -14734,7 +14772,8 @@ def admin_update_service(service_id):
     service.machines = _selected_machines(request.form)
     log_action(describe_changes(f'услуга "{service.name}"', service, {
         'name': 'име', 'machine_type': 'тип машина', 'price_per_hour_eur': 'цена €/час',
-        'pricing_mode': 'режим ценообр.', 'price_per_meter_eur': 'цена €/м', 'description': 'описание',
+        'pricing_mode': 'режим ценообр.', 'price_per_meter_eur': 'цена €/м', 'price_per_piece_eur': 'цена €/бр.',
+        'description': 'описание',
         'show_price': 'видима цена в /services',
     }))
     db.session.commit()
@@ -14916,6 +14955,7 @@ def admin_add_detail():
                 erp_number=erp_number, code_number=code_number, cutting_service_id=service_id,
                 owner_client_id=owner_client_id
             )
+        new_detail.external_number = request.form.get('external_number', '').strip()[:100] or None
         db.session.add(new_detail)
         db.session.flush()  # assigns new_detail.id for the DetailDxfFile/Operation FKs below
         if has_dxf:
@@ -14978,7 +15018,8 @@ def detail_dxf_dashboard(detail_id):
     # detail_dxf_dashboard.html) to compute a live running total without a
     # round-trip per row - same convention as order_create()'s products_data.
     services_data = [{'id': s.id, 'name': s.name, 'price_per_hour_eur': s.price_per_hour_eur,
-                       'pricing_mode': s.pricing_mode, 'price_per_meter_eur': s.price_per_meter_eur}
+                       'pricing_mode': s.pricing_mode, 'price_per_meter_eur': s.price_per_meter_eur,
+                       'price_per_piece_eur': s.price_per_piece_eur}
                       for s in services]
     # Other allowed materials with the list price of the detail in each (admin tab "Материал и размери").
     alt_materials = [(dm, _detail_total_price(detail, dm.material)) for dm in detail.alt_materials if dm.material]
@@ -15296,6 +15337,7 @@ def _add_operations_from_rows(detail, rows):
             continue
         duration_minutes = 0.0
         length_mm = None
+        pieces = None
         if service.pricing_mode == 'length':
             try:
                 length_mm = float(row.get('length_mm'))
@@ -15304,6 +15346,14 @@ def _add_operations_from_rows(detail, rows):
             if length_mm <= 0:
                 continue
             length_mm = round(length_mm, 2)
+        elif service.pricing_mode == 'piece':
+            try:
+                pieces = float(row.get('pieces'))
+            except (TypeError, ValueError):
+                continue
+            if pieces <= 0:
+                continue
+            pieces = round(pieces, 3)
         else:
             try:
                 duration_minutes = float(row.get('duration_minutes'))
@@ -15315,7 +15365,7 @@ def _add_operations_from_rows(detail, rows):
         description = (row.get('description') or '').strip() or None
         db.session.add(Operation(
             detail_id=detail.id, service_id=service_id, sequence=next_sequence,
-            duration_minutes=duration_minutes, length_mm=length_mm, description=description
+            duration_minutes=duration_minutes, length_mm=length_mm, pieces=pieces, description=description
         ))
         next_sequence += 1
         added += 1
@@ -15466,6 +15516,32 @@ def edit_detail_window(detail_id):
         action=url_for('admin_rename_detail', detail_id=detail.id),
         fields=[{'name': 'name', 'label': 'Име на детайла', 'value': detail.name, 'type': 'text', 'required': True}]
     )
+
+
+@app.route('/admin/details/<int:detail_id>/numbers', methods=['POST'])
+@role_required('admin')
+def admin_update_detail_numbers(detail_id):
+    """"Номера" on the detail page: our nomenclature № (erp_number - blank = the next free one, unique across
+    details/products/materials), the client's (external_number) and the drawing (code_number)."""
+    detail = Detail.query.get_or_404(detail_id)
+    back = redirect(url_for('detail_dxf_dashboard', detail_id=detail.id))
+    try:
+        erp_number = _parse_erp_number(request.form)
+    except ValueError:
+        flash('Нашият номенклатурен № (ERP) трябва да бъде цяло число.', 'danger')
+        return back
+    conflict = _erp_number_conflict(erp_number, exclude_type='detail', exclude_id=detail.id)
+    if conflict:
+        flash(f'ERP № {erp_number} вече се използва от {conflict}.', 'danger')
+        return back
+    detail.erp_number = erp_number
+    detail.external_number = request.form.get('external_number', '').strip()[:100] or None
+    detail.code_number = request.form.get('code_number', '').strip()[:100] or None
+    log_action(describe_changes(f'детайл "{detail.name}"', detail, {
+        'erp_number': 'наш ном. №', 'external_number': 'външен ном. №', 'code_number': 'КД №'}))
+    db.session.commit()
+    flash('Номерата на детайла са записани.', 'success')
+    return back
 
 
 @app.route('/admin/details/<int:detail_id>/rename', methods=['POST'])
@@ -16099,6 +16175,11 @@ def create_order():
         )
         db.session.add(new_order)
         db.session.flush()  # Взимаме ID-то преди commit
+        file_error, _ = _set_order_request_file(new_order)
+        if file_error:
+            db.session.rollback()
+            flash(file_error, 'danger')
+            return redirect(url_for('create_order'))
 
         added_any = False
         for row in cart:
@@ -16959,6 +17040,38 @@ def _order_pricing_client(order):
     return order.client or (order.user.client if order.user else None)
 
 
+ORDER_REQUEST_FILE_EXTENSIONS = {'pdf', 'png', 'jpg', 'jpeg', 'doc', 'docx', 'xls', 'xlsx', 'eml', 'msg', 'txt'}
+
+
+def _set_order_request_file(order):
+    """The client's request file of an order from the posted form (`request_file`; `request_file_remove` drops it):
+    saved into ORDER_ITEM_FILE_FOLDER, a new one replaces the old. Returns (error or None, file to remove after the
+    commit or None)."""
+    upload = request.files.get('request_file')
+    old = order.request_file
+    if request.form.get('request_file_remove') == '1':
+        order.request_file = order.request_file_name = None
+    if upload and upload.filename:
+        stored = _save_upload(upload, app.config['ORDER_ITEM_FILE_FOLDER'], ORDER_REQUEST_FILE_EXTENSIONS)
+        if not stored:
+            return ('Файлът с искането трябва да е PDF, снимка, Word, Excel или имейл ('
+                    + ', '.join(sorted(ORDER_REQUEST_FILE_EXTENSIONS)) + ').'), None
+        order.request_file, order.request_file_name = stored, upload.filename[:255]
+    removed = old if old and old != order.request_file else None
+    return None, (os.path.join(app.config['ORDER_ITEM_FILE_FOLDER'], removed) if removed else None)
+
+
+@app.route('/orders/<int:order_id>/request-file')
+@login_required
+def order_request_file(order_id):
+    """The client's request file of an order - staff, or the account that placed the order."""
+    order = live_orders().filter_by(id=order_id).first_or_404()
+    if not (current_user.is_staff or order.user_id == current_user.id) or not order.request_file:
+        abort(404)
+    return send_from_directory(app.config['ORDER_ITEM_FILE_FOLDER'], order.request_file,
+                               download_name=order.request_file_name or order.request_file)
+
+
 def _order_item_current_price(item, client):
     """What an order line would cost `client` if it were added today - the same pricing as _add_order_line():
     a product's calculate_product_pricing() sell price; a detail's detail_price_for() in the line's material +
@@ -17114,12 +17227,18 @@ def admin_order_edit(order_id):
 
     order.customer_name = customer_name
     order.client_id, order.deliverer_id, order.machine_id = picked['client_id'], picked['deliverer_id'], picked['machine_id']
+    file_error, old_request_file = _set_order_request_file(order)
+    if file_error:
+        return refuse(file_error)
     summary = describe_changes(f'Редактирана поръчка {order.order_number}', order,
                                {'customer_name': 'клиент', 'client_id': 'клиент (каталог) №',
-                                'deliverer_id': 'куриер №', 'machine_id': 'машина №'})
+                                'deliverer_id': 'куриер №', 'machine_id': 'машина №',
+                                'request_file_name': 'файл с искане'})
     warnings = _sync_order_reservation(order, needs_before) + [w for w in plan_warnings if w]
     refresh_order_status(order)
     db.session.commit()
+    if old_request_file:
+        _remove_files([old_request_file])
     log_action(summary + (f'; {"; ".join(line_logs)}' if line_logs else ''))
     flash(f'Поръчка {order.order_number} е запазена.', 'success')
     for warning in warnings:
@@ -17314,6 +17433,8 @@ def admin_delete_order(order_id):
             flash(f'Поръчка {order.order_number} се използва в: {", ".join(used_in)} - не може да бъде изтрита.', 'danger')
             return redirect(url_for('admin_production_report'))
         files = [os.path.join(app.config['ORDER_ITEM_FILE_FOLDER'], a.filename) for item in items for a in item.attachments]
+        if order.request_file:
+            files.append(os.path.join(app.config['ORDER_ITEM_FILE_FOLDER'], order.request_file))
         number = order.order_number
         db.session.delete(order)
         db.session.commit()
@@ -19411,6 +19532,7 @@ def api_quick_create_detail():
                 calculated_price=manual_price, geometry_json=None,
                 erp_number=erp_number, code_number=code_number, cutting_service_id=service_id
             )
+        new_detail.external_number = request.form.get('external_number', '').strip()[:100] or None
         db.session.add(new_detail)
         db.session.flush()  # assigns new_detail.id for the optional DetailDxfFile/Operation below
         if has_dxf:
@@ -28342,6 +28464,8 @@ def list_service_prices() -> str:
     for s in services:
         if s.pricing_mode == 'length' and s.price_per_meter_eur is not None:
             lines.append(f'{s.name}: {s.price_per_meter_eur:g} €/м')
+        elif s.pricing_mode == 'piece' and s.price_per_piece_eur is not None:
+            lines.append(f'{s.name}: {s.price_per_piece_eur:g} €/бр.')
         else:
             lines.append(f'{s.name}: {s.price_per_hour_eur:g} €/час')
     return '\n'.join(lines)

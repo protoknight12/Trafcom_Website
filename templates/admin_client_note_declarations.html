@@ -65,6 +65,8 @@
     <table class="doc-table doc-kv">
         <tbody>
         <tr><td class="kv-label">{{ line.kind }}</td><td style="font-weight: 700;">{{ line.name }}{% if line.code %} (КД № {{ line.code }}){% endif %}</td></tr>
+        {% if line.external %}<tr><td class="kv-label">Ном. № на клиента</td><td>{{ line.external }}</td></tr>{% endif %}
+        {% if line.erp %}<tr><td class="kv-label">Наш ном. №</td><td>{{ line.erp }}</td></tr>{% endif %}
         <tr><td class="kv-label">Количество</td><td style="font-weight: 700;">{{ line.qty|num2 }} бр.</td></tr>
         <tr><td class="kv-label">Партида</td><td contenteditable="true"></td></tr>
         <tr><td class="kv-label">Чертеж</td><td contenteditable="true">{{ line.code }}</td></tr>

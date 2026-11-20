@@ -104,6 +104,26 @@
     {% endwith %}
 
     {% if current_user.is_admin %}
+    {#- The three numbers of a detail (admin_update_detail_numbers): ours (ERP), the client's and the drawing (КД). #}
+    <section class="admin-card" style="padding-top: 12px; padding-bottom: 12px;">
+        <form action="{{ url_for('admin_update_detail_numbers', detail_id=detail.id) }}" method="POST" class="admin-form"
+              style="display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin: 0;">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group" style="margin: 0; flex: 1 1 160px;">
+                <label for="num_erp">Наш ном. № (ERP)</label>
+                <input type="number" id="num_erp" name="erp_number" value="{{ detail.erp_number or '' }}" placeholder="празно = следващ">
+            </div>
+            <div class="form-group" style="margin: 0; flex: 1 1 200px;">
+                <label for="num_external">Външен ном. № (на клиента)</label>
+                <input type="text" id="num_external" name="external_number" maxlength="100" value="{{ detail.external_number or '' }}">
+            </div>
+            <div class="form-group" style="margin: 0; flex: 1 1 200px;">
+                <label for="num_code">КД №</label>
+                <input type="text" id="num_code" name="code_number" maxlength="100" value="{{ detail.code_number or '' }}">
+            </div>
+            <button type="submit" class="btn-secondary" style="padding: 10px 16px;">Запази номерата</button>
+        </form>
+    </section>
     <div class="tabs-nav">
         <button type="button" class="btn-secondary tab-btn active" data-tab="files">Файлове</button>
         <button type="button" class="btn-secondary tab-btn" data-tab="material">Материал и размери</button>
@@ -414,8 +434,13 @@
                         <option value="{{ s.id }}">{{ s.name }} ({{ "%.2f"|format(s.price_per_meter_eur) }} €/м)</option>
                         {% endfor %}
                     </optgroup>
+                    <optgroup label="По брой">
+                        {% for s in services if s.pricing_mode == 'piece' %}
+                        <option value="{{ s.id }}">{{ s.name }} ({{ s.price_per_piece_eur|price3 }} €/бр.)</option>
+                        {% endfor %}
+                    </optgroup>
                     <optgroup label="По време (мин)">
-                        {% for s in services if s.pricing_mode != 'length' %}
+                        {% for s in services if s.pricing_mode not in ('length', 'piece') %}
                         <option value="{{ s.id }}">{{ s.name }} ({{ "%.2f"|format(s.price_per_hour_eur) }} €/час)</option>
                         {% endfor %}
                     </optgroup>
@@ -431,6 +456,10 @@
                     <input type="number" id="op_duration_minutes" step="0.01" min="0.01" placeholder="напр. 12" style="flex: 1;">
                     <button type="button" class="btn-secondary" onclick="calcOpDurationFromDxf()" title="Изчисли от дължината на рязане и броя пробождания на DXF файла, по скоростта на текущия материал">⏱ От DXF</button>
                 </div>
+            </div>
+            <div class="form-group" id="op_pieces_group" style="display: none;">
+                <label for="op_pieces">Брой (на детайл)</label>
+                <input type="number" id="op_pieces" step="1" min="1" placeholder="напр. 4">
             </div>
             <div class="form-group" id="op_length_group" style="display: none;">
                 <label for="op_length_mm">Дължина на рязане (мм)</label>
@@ -480,7 +509,7 @@
                 <tr>
                     <td>{{ op.service.name }}</td>
                     <td>{{ op.description or '-' }}</td>
-                    <td>{% if op.service.pricing_mode == 'length' %}{{ op.length_mm }} мм{% else %}{{ op.duration_minutes }} мин{% endif %}</td>
+                    <td>{% if op.service.pricing_mode == 'length' %}{{ op.length_mm }} мм{% elif op.service.pricing_mode == 'piece' %}{{ op.pieces|num3 }} бр.{% else %}{{ op.duration_minutes }} мин{% endif %}</td>
                     <td>{{ "%.2f"|format(op.cost) }} €</td>
                     <td class="text-right">
                         <form action="{{ url_for('admin_delete_operation', operation_id=op.id) }}" method="POST" style="display:inline;">
@@ -584,20 +613,24 @@
             return OP_SERVICES.find(function (s) { return s.id === id; });
         }
 
-        function opCost(serviceId, durationMinutes, lengthMm) {
+        function opCost(serviceId, durationMinutes, lengthMm, pieces) {
             const service = opServiceById(serviceId);
             if (!service) { return 0; }
             if (service.pricing_mode === 'length') {
                 return (lengthMm || 0) / 1000 * (service.price_per_meter_eur || 0);
+            }
+            if (service.pricing_mode === 'piece') {
+                return (pieces || 0) * (service.price_per_piece_eur || 0);
             }
             return (durationMinutes || 0) * (service.price_per_hour_eur / 60);
         }
 
         function toggleOpValueInput() {
             const service = opServiceById(parseInt(document.getElementById('op_service_id').value, 10));
-            const isLength = service && service.pricing_mode === 'length';
-            document.getElementById('op_duration_group').style.display = isLength ? 'none' : '';
-            document.getElementById('op_length_group').style.display = isLength ? '' : 'none';
+            const mode = service ? service.pricing_mode : 'time';
+            document.getElementById('op_duration_group').style.display = mode === 'length' || mode === 'piece' ? 'none' : '';
+            document.getElementById('op_length_group').style.display = mode === 'length' ? '' : 'none';
+            document.getElementById('op_pieces_group').style.display = mode === 'piece' ? '' : 'none';
             updateOpPricePreview();
         }
 
@@ -607,16 +640,18 @@
             const el = document.getElementById('op_price_preview');
             const service = opServiceById(parseInt(document.getElementById('op_service_id').value, 10));
             if (!service) { el.textContent = ''; return; }
-            const isLength = service.pricing_mode === 'length';
-            const value = parseFloat(document.getElementById(isLength ? 'op_length_mm' : 'op_duration_minutes').value);
-            if (!(value > 0)) { el.textContent = isLength ? 'Въведете дължина, за да видите цената.' : 'Въведете продължителност, за да видите цената.'; return; }
-            const cost = isLength ? opCost(service.id, null, value) : opCost(service.id, value, null);
-            el.textContent = (isLength ? value + ' мм × ' + (service.price_per_meter_eur || 0).toFixed(2) + ' €/м'
-                                       : value + ' мин × ' + service.price_per_hour_eur.toFixed(2) + ' €/час')
+            const mode = service.pricing_mode;
+            const input = {length: 'op_length_mm', piece: 'op_pieces'}[mode] || 'op_duration_minutes';
+            const value = parseFloat(document.getElementById(input).value);
+            if (!(value > 0)) { el.textContent = {length: 'Въведете дължина', piece: 'Въведете брой'}[mode] || 'Въведете продължителност'; el.textContent += ', за да видите цената.'; return; }
+            const cost = mode === 'length' ? opCost(service.id, null, value) : mode === 'piece' ? opCost(service.id, null, null, value) : opCost(service.id, value, null);
+            el.textContent = (mode === 'length' ? value + ' мм × ' + (service.price_per_meter_eur || 0).toFixed(2) + ' €/м'
+                             : mode === 'piece' ? value + ' бр. × ' + (service.price_per_piece_eur || 0).toFixed(3).replace(/0$/, '') + ' €/бр.'
+                             : value + ' мин × ' + service.price_per_hour_eur.toFixed(2) + ' €/час')
                 + ' = ' + cost.toFixed(2) + ' €';
             el.style.fontWeight = '700';
         }
-        ['op_duration_minutes', 'op_length_mm'].forEach(function (id) {
+        ['op_duration_minutes', 'op_length_mm', 'op_pieces'].forEach(function (id) {
             document.getElementById(id).addEventListener('input', updateOpPricePreview);
         });
         document.getElementById('op_service_id').addEventListener('change', updateOpPricePreview);
@@ -633,9 +668,14 @@
 
             let duration = null;
             let length = null;
+            let pieces = null;
+            const piecesInput = document.getElementById('op_pieces');
             if (service.pricing_mode === 'length') {
                 length = parseFloat(lengthInput.value);
                 if (!length || length <= 0) { alert('Моля въведете валидна дължина на рязане в мм.'); return; }
+            } else if (service.pricing_mode === 'piece') {
+                pieces = parseFloat(piecesInput.value);
+                if (!pieces || pieces <= 0) { alert('Моля въведете валиден брой.'); return; }
             } else {
                 duration = parseFloat(durationInput.value);
                 if (!duration || duration <= 0) { alert('Моля въведете валидна продължителност в минути.'); return; }
@@ -647,9 +687,11 @@
                 description: descriptionInput.value.trim(),
                 durationMinutes: duration,
                 lengthMm: length,
+                pieces: pieces,
             });
             descriptionInput.value = '';
             durationInput.value = '';
+            piecesInput.value = '';
             lengthInput.value = OP_DEFAULT_LENGTH_MM;
             renderPendingOps();
             updateOpPricePreview();
@@ -669,14 +711,15 @@
                 body.innerHTML = '<tr id="pendingOpsEmptyRow"><td colspan="5" class="text-center no-data">Няма избрани операции за добавяне.</td></tr>';
             } else {
                 pendingOps.forEach(function (op, idx) {
-                    const cost = opCost(op.serviceId, op.durationMinutes, op.lengthMm);
+                    const cost = opCost(op.serviceId, op.durationMinutes, op.lengthMm, op.pieces);
                     pendingTotal += cost;
                     const tr = document.createElement('tr');
                     tr.innerHTML =
                         '<td></td><td></td><td></td><td></td><td class="text-right"></td>';
                     tr.children[0].textContent = op.serviceName;
                     tr.children[1].textContent = op.description || '-';
-                    tr.children[2].textContent = op.lengthMm != null ? (op.lengthMm + ' мм') : (op.durationMinutes + ' мин');
+                    tr.children[2].textContent = op.lengthMm != null ? (op.lengthMm + ' мм')
+                        : op.pieces != null ? (op.pieces + ' бр.') : (op.durationMinutes + ' мин');
                     tr.children[3].textContent = cost.toFixed(2) + ' €';
                     const removeBtn = document.createElement('button');
                     removeBtn.type = 'button';
@@ -698,7 +741,7 @@
                 pendingOps.map(function (op) {
                     return {
                         service_id: op.serviceId, duration_minutes: op.durationMinutes,
-                        length_mm: op.lengthMm, description: op.description
+                        length_mm: op.lengthMm, pieces: op.pieces, description: op.description
                     };
                 })
             );

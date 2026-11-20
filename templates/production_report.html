@@ -83,7 +83,8 @@
         <div class="order-card-header">
             <div>
                 <strong style="font-size: 1.1rem;">{{ elink('order', order.id, order.order_number) }}</strong> &nbsp;—&nbsp; {{ order.customer_name }}
-                <div class="text-muted text-small">{{ (order.created_at|local).strftime('%d.%m.%Y %H:%M') }} · Потребител: {{ order.user.full_name if order.user else 'Изтрит потребител' }}</div>
+                <div class="text-muted text-small">{{ (order.created_at|local).strftime('%d.%m.%Y %H:%M') }} · Потребител: {{ order.user.full_name if order.user else 'Изтрит потребител' }}
+                    {%- if order.request_file %} · <a href="{{ url_for('order_request_file', order_id=order.id) }}" target="_blank" rel="noopener">Искане от клиента: {{ order.request_file_name }}</a>{% endif %}</div>
                 {#- Material reserved for the order, first come first served - see _open_material_reservations(). #}
                 {% set lots = reservations.get(order.id, []) %}
                 {% set short = lots|selectattr('missing')|list %}

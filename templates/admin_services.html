@@ -114,11 +114,16 @@
                 <select id="new_service_pricing_mode" name="pricing_mode" onchange="toggleNewServicePriceMeter()">
                     <option value="time">По време (продължителност в минути)</option>
                     <option value="length">По дължина на рязане (мм)</option>
+                    <option value="piece">По брой (напр. отвори, резби)</option>
                 </select>
             </div>
             <div class="form-group" id="new_service_price_meter_group" style="display: none;">
                 <label for="new_service_price_meter">Цена на метър рязане (€/м)</label>
                 <input type="number" id="new_service_price_meter" step="0.01" min="0.01" name="price_per_meter_eur" placeholder="напр. 3.00">
+            </div>
+            <div class="form-group" id="new_service_price_piece_group" style="display: none;">
+                <label for="new_service_price_piece">Цена на брой (€/бр.)</label>
+                <input type="number" id="new_service_price_piece" step="0.001" min="0.001" name="price_per_piece_eur" placeholder="напр. 0.50">
             </div>
             <div class="form-group">
                 <label for="new_service_description">Описание (незадължително)</label>
@@ -151,6 +156,7 @@
         function toggleNewServicePriceMeter() {
             const mode = document.getElementById('new_service_pricing_mode').value;
             document.getElementById('new_service_price_meter_group').style.display = mode === 'length' ? '' : 'none';
+            document.getElementById('new_service_price_piece_group').style.display = mode === 'piece' ? '' : 'none';
         }
     </script>
 
@@ -167,7 +173,7 @@
                     <th>Машини</th>
                     <th>Цена на час (€)</th>
                     <th>Ценообразуване</th>
-                    <th>Цена на метър (€)</th>
+                    <th>Цена на метър / брой (€)</th>
                     <th>Описание</th>
                     <th class="text-center">Цена в /services</th>
                     <th class="text-right">Действие</th>
@@ -184,8 +190,8 @@
                     <td>{{ service.machine_type or '—' }}</td>
                     <td>{{ service.machines|map(attribute='name')|join(', ') or '—' }}</td>
                     <td>{{ '%.2f'|format(service.price_per_hour_eur) }}</td>
-                    <td>{{ 'По дължина' if service.pricing_mode == 'length' else 'По време' }}</td>
-                    <td>{{ '%.2f'|format(service.price_per_meter_eur) if service.pricing_mode == 'length' and service.price_per_meter_eur else '—' }}</td>
+                    <td>{{ {'length': 'По дължина', 'piece': 'По брой'}.get(service.pricing_mode, 'По време') }}</td>
+                    <td>{% if service.pricing_mode == 'length' and service.price_per_meter_eur %}{{ '%.2f'|format(service.price_per_meter_eur) }} / м{% elif service.pricing_mode == 'piece' and service.price_per_piece_eur %}{{ service.price_per_piece_eur|price3 }} / бр.{% else %}—{% endif %}</td>
                     <td>{{ service.description or '—' }}</td>
                     <td class="text-center">{{ '✓' if service.show_price else '—' }}</td>
                     <td class="text-right">
@@ -195,7 +201,8 @@
                                 data-values='{{ {"name": service.name, "name_en": service.name_en, "name_de": service.name_de,
                                     "machine_type": service.machine_type or "", "machine_ids": service.machines|map(attribute="id")|list,
                                     "price_per_hour_eur": service.price_per_hour_eur, "pricing_mode": service.pricing_mode or "time",
-                                    "price_per_meter_eur": service.price_per_meter_eur, "description": service.description,
+                                    "price_per_meter_eur": service.price_per_meter_eur, "price_per_piece_eur": service.price_per_piece_eur,
+                                    "description": service.description,
                                     "description_en": service.description_en, "description_de": service.description_de,
                                     "show_price": service.show_price}|tojson|forceescape }}'>Редактирай</button>
                     </td>

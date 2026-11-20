@@ -47,7 +47,7 @@
                 <select id="detail_service" data-create="{{ create_url('service') }}" name="service_id">
                     <option value="">-- Изберете услуга --</option>
                     {% for s in services %}
-                    <option value="{{ s.id }}">{{ s.name }} ({% if s.pricing_mode == 'length' %}{{ "%.2f"|format(s.price_per_meter_eur) }} €/м{% else %}{{ "%.2f"|format(s.price_per_hour_eur) }} €/час{% endif %})</option>
+                    <option value="{{ s.id }}">{{ s.name }} ({% if s.pricing_mode == 'length' %}{{ "%.2f"|format(s.price_per_meter_eur or 0) }} €/м{% elif s.pricing_mode == 'piece' %}{{ "%.2f"|format(s.price_per_piece_eur or 0) }} €/бр.{% else %}{{ "%.2f"|format(s.price_per_hour_eur) }} €/час{% endif %})</option>
                     {% endfor %}
                 </select>
             </div>
@@ -72,6 +72,10 @@
                 <input type="text" id="detail_code_number" name="code_number" placeholder="напр. Bulspike 01.01.01.00.02">
             </div>
             <div class="form-group">
+                <label for="detail_external_number">Външен ном. № (на клиента, незадължително)</label>
+                <input type="text" id="detail_external_number" name="external_number">
+            </div>
+            <div class="form-group">
                 <label for="detail_owner_client_id">Собственик (клиент) - празно = публичен детайл</label>
                 <select id="detail_owner_client_id" data-create="{{ create_url('client') }}" name="owner_client_id">
                     <option value="">-- Публичен (видим за всички клиенти) --</option>
@@ -87,12 +91,13 @@
                     <select id="nd_op_service_id" data-create="{{ create_url('service') }}" style="flex: 1; min-width: 200px;">
                         <option value="">-- Изберете услуга --</option>
                         {% for s in services %}
-                        <option value="{{ s.id }}">{{ s.name }} ({% if s.pricing_mode == 'length' %}{{ "%.2f"|format(s.price_per_meter_eur or 0) }} €/м{% else %}{{ "%.2f"|format(s.price_per_hour_eur) }} €/час{% endif %})</option>
+                        <option value="{{ s.id }}">{{ s.name }} ({% if s.pricing_mode == 'length' %}{{ "%.2f"|format(s.price_per_meter_eur or 0) }} €/м{% elif s.pricing_mode == 'piece' %}{{ "%.2f"|format(s.price_per_piece_eur or 0) }} €/бр.{% else %}{{ "%.2f"|format(s.price_per_hour_eur) }} €/час{% endif %})</option>
                         {% endfor %}
                     </select>
                     <input type="text" id="nd_op_description" placeholder="Описание (незадължително, напр. външно лазерно рязане)" style="flex: 1; min-width: 200px;">
                     <input type="number" id="nd_op_duration_minutes" step="0.01" min="0.01" placeholder="Продължителност (мин)" style="width: 180px;">
                     <input type="number" id="nd_op_length_mm" step="0.01" min="0.01" placeholder="Дължина (мм)" style="width: 180px; display: none;">
+                    <input type="number" id="nd_op_pieces" step="1" min="1" placeholder="Брой (на детайл)" style="width: 180px; display: none;">
                     <button type="button" class="btn-secondary" onclick="addPendingDetailOperation()">+ Добави в списъка</button>
                 </div>
                 <div id="nd_op_price_preview" class="text-small" style="margin-top: 6px; font-weight: 700; min-height: 1.2em;"></div>
@@ -129,7 +134,7 @@
                     <th>Цена на материала (€)</th>
                     <th>Обща цена с операции (€)</th>
                     <th>На склад</th>
-                    <th>ERP № / КД №</th>
+                    <th>Наш № / Външен № / КД №</th>
                     <th>Собственик</th>
                     <th class="text-right">Етикет</th>
                     <th class="text-right">Действие</th>
@@ -137,14 +142,14 @@
                 </thead>
                 <tbody id="adminDetailsTableBody">
                 {% for detail in details %}
-                <tr data-owner="{{ detail.owner_client_id or 'public' }}" data-search="{{ (detail.name ~ ' ' ~ (detail.material.display_name if detail.material else '') ~ ' ' ~ (detail.erp_number or '') ~ ' ' ~ (detail.code_number or '')) | lower }}">
+                <tr data-owner="{{ detail.owner_client_id or 'public' }}" data-search="{{ (detail.name ~ ' ' ~ (detail.material.display_name if detail.material else '') ~ ' ' ~ (detail.erp_number or '') ~ ' ' ~ (detail.code_number or '') ~ ' ' ~ (detail.external_number or '')) | lower }}">
                     <td><strong><a href="{{ url_for('detail_dxf_dashboard', detail_id=detail.id) }}">{{ detail.name }}</a></strong></td>
                     <td><span class="badge badge-user">{{ detail.material.display_name if detail.material else 'Неизвестен' }}</span></td>
                     <td>{{ format_cut_dimensions(detail.width, detail.height, detail.material.type if detail.material else 'sheets') }}</td>
                     <td>{{ "%.2f"|format(detail.calculated_price) }} €</td>
                     <td>{{ "%.2f"|format(detail.total_price) }} €</td>
                     <td>{{ detail.stock_quantity|round(2) }}</td>
-                    <td class="text-small text-muted">{{ detail.erp_number or '-' }} / {{ detail.code_number or '-' }}</td>
+                    <td class="text-small text-muted">{{ detail.erp_number or '-' }} / {{ detail.external_number or '-' }} / {{ detail.code_number or '-' }}</td>
                     <td>
                         {{ detail.owner_client.name if detail.owner_client else 'Публичен' }}
                         <button type="button" class="btn-secondary" style="padding: 4px 8px; font-size: 0.75rem; margin-left: 4px;" data-dialog="detailOwnerDialog"
@@ -221,28 +226,32 @@
         return ND_SERVICES.find(function (s) { return s.id === serviceId; });
     }
     // Same as Operation.cost in app.py: length x €/м for a length-priced service, else minutes x €/час.
-    function ndOpCost(serviceId, durationMinutes, lengthMm) {
+    function ndOpCost(serviceId, durationMinutes, lengthMm, pieces) {
         const service = ndService(serviceId);
         if (!service) return 0;
         if (service.pricing_mode === 'length') return (lengthMm || 0) / 1000 * (service.price_per_meter_eur || 0);
+        if (service.pricing_mode === 'piece') return (pieces || 0) * (service.price_per_piece_eur || 0);
         return (durationMinutes || 0) * (service.price_per_hour_eur / 60);
     }
     // Duration or length input by the chosen service + the price before "+ Добави в списъка".
     function ndUpdateOpPreview() {
         const service = ndService(parseInt(document.getElementById('nd_op_service_id').value, 10));
-        const isLength = !!service && service.pricing_mode === 'length';
-        document.getElementById('nd_op_duration_minutes').style.display = isLength ? 'none' : '';
-        document.getElementById('nd_op_length_mm').style.display = isLength ? '' : 'none';
+        const mode = service ? service.pricing_mode : 'time';
+        document.getElementById('nd_op_duration_minutes').style.display = mode === 'length' || mode === 'piece' ? 'none' : '';
+        document.getElementById('nd_op_length_mm').style.display = mode === 'length' ? '' : 'none';
+        document.getElementById('nd_op_pieces').style.display = mode === 'piece' ? '' : 'none';
         const el = document.getElementById('nd_op_price_preview');
         if (!service) { el.textContent = ''; return; }
-        const value = parseFloat(document.getElementById(isLength ? 'nd_op_length_mm' : 'nd_op_duration_minutes').value);
+        const input = {length: 'nd_op_length_mm', piece: 'nd_op_pieces'}[mode] || 'nd_op_duration_minutes';
+        const value = parseFloat(document.getElementById(input).value);
         if (!(value > 0)) { el.textContent = ''; return; }
-        const cost = isLength ? ndOpCost(service.id, null, value) : ndOpCost(service.id, value, null);
-        el.textContent = (isLength ? value + ' мм × ' + (service.price_per_meter_eur || 0).toFixed(2) + ' €/м'
-                                   : value + ' мин × ' + service.price_per_hour_eur.toFixed(2) + ' €/час')
+        const cost = mode === 'length' ? ndOpCost(service.id, null, value) : mode === 'piece' ? ndOpCost(service.id, null, null, value) : ndOpCost(service.id, value, null);
+        el.textContent = (mode === 'length' ? value + ' мм × ' + (service.price_per_meter_eur || 0).toFixed(2) + ' €/м'
+                         : mode === 'piece' ? value + ' бр. × ' + (service.price_per_piece_eur || 0).toFixed(3).replace(/0$/, '') + ' €/бр.'
+                         : value + ' мин × ' + service.price_per_hour_eur.toFixed(2) + ' €/час')
             + ' = ' + cost.toFixed(2) + ' €';
     }
-    ['nd_op_service_id', 'nd_op_duration_minutes', 'nd_op_length_mm'].forEach(function (id) {
+    ['nd_op_service_id', 'nd_op_duration_minutes', 'nd_op_length_mm', 'nd_op_pieces'].forEach(function (id) {
         document.getElementById(id).addEventListener('input', ndUpdateOpPreview);
         document.getElementById(id).addEventListener('change', ndUpdateOpPreview);
     });
@@ -254,20 +263,24 @@
         const lengthInput = document.getElementById('nd_op_length_mm');
         const serviceId = parseInt(serviceSelect.value, 10);
         if (!serviceId) { alert('Моля изберете услуга.'); return; }
-        const isLength = ndService(serviceId).pricing_mode === 'length';
-        const value = parseFloat((isLength ? lengthInput : durationInput).value);
-        if (!value || value <= 0) { alert(isLength ? 'Моля въведете валидна дължина в мм.' : 'Моля въведете валидна продължителност в минути.'); return; }
+        const piecesInput = document.getElementById('nd_op_pieces');
+        const mode = ndService(serviceId).pricing_mode;
+        const isLength = mode === 'length', isPiece = mode === 'piece';
+        const value = parseFloat((isLength ? lengthInput : isPiece ? piecesInput : durationInput).value);
+        if (!value || value <= 0) { alert(isLength ? 'Моля въведете валидна дължина в мм.' : isPiece ? 'Моля въведете валиден брой.' : 'Моля въведете валидна продължителност в минути.'); return; }
 
         ndPendingOps.push({
             serviceId: serviceId,
             serviceName: serviceSelect.options[serviceSelect.selectedIndex].text,
             description: descriptionInput.value.trim(),
-            durationMinutes: isLength ? null : value,
+            durationMinutes: isLength || isPiece ? null : value,
             lengthMm: isLength ? value : null,
+            pieces: isPiece ? value : null,
         });
         descriptionInput.value = '';
         durationInput.value = '';
         lengthInput.value = '';
+        piecesInput.value = '';
         renderPendingDetailOperations();
         ndUpdateOpPreview();
     }
@@ -286,7 +299,7 @@
             body.innerHTML = '<tr id="ndPendingOpsEmptyRow"><td class="text-center no-data">Няма избрани допълнителни операции.</td></tr>';
         } else {
             ndPendingOps.forEach(function (op, idx) {
-                const cost = ndOpCost(op.serviceId, op.durationMinutes, op.lengthMm);
+                const cost = ndOpCost(op.serviceId, op.durationMinutes, op.lengthMm, op.pieces);
                 total += cost;
                 const tr = document.createElement('tr');
                 const removeBtn = document.createElement('button');
@@ -296,7 +309,7 @@
                 removeBtn.addEventListener('click', function () { removePendingDetailOperation(idx); });
                 const td = document.createElement('td');
                 td.textContent = op.serviceName + (op.description ? ' (' + op.description + ')' : '') +
-                    ' — ' + (op.lengthMm != null ? op.lengthMm + ' мм' : op.durationMinutes + ' мин') + ' — ' + cost.toFixed(2) + ' €';
+                    ' — ' + (op.lengthMm != null ? op.lengthMm + ' мм' : op.pieces != null ? op.pieces + ' бр.' : op.durationMinutes + ' мин') + ' — ' + cost.toFixed(2) + ' €';
                 td.appendChild(document.createElement('br'));
                 td.appendChild(removeBtn);
                 tr.appendChild(td);
@@ -312,7 +325,7 @@
         document.getElementById('ndOperationsJsonInput').value = JSON.stringify(
             ndPendingOps.map(function (op) {
                 return { service_id: op.serviceId, duration_minutes: op.durationMinutes, length_mm: op.lengthMm,
-                         description: op.description };
+                         pieces: op.pieces, description: op.description };
             })
         );
     });

@@ -157,7 +157,7 @@
             </table>
         </div>
 
-        <form method="POST" id="orderForm" style="margin-top: 24px;" data-once>
+        <form method="POST" id="orderForm" style="margin-top: 24px;" data-once enctype="multipart/form-data">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group" style="margin-bottom: 20px;{% if not client_section_on('machines') %} display: none;{% endif %}">
                 <label for="machine_id">{{ _('Назначи машина (по избор)') }}</label>
@@ -203,6 +203,12 @@
                     {% endfor %}
                 </select>
             </div>
+            {#- The client's request (order letter, PDF, scan, e-mail) - _set_order_request_file(). #}
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label for="request_file">{{ _('Файл с искане за поръчка (по избор)') }}</label>
+                <input type="file" id="request_file" name="request_file" accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.xls,.xlsx,.eml,.msg,.txt">
+                <small class="text-muted">{{ _('PDF, снимка, Word, Excel или имейл с искането на клиента.') }}</small>
+            </div>
             <input type="hidden" name="cart_json" id="cartJsonInput">
             <button type="submit" class="btn-submit" style="width: 100%; margin-top: 8px;" id="submitOrderBtn" disabled>{{ _('Изпрати Поръчка') }}</button>
         </form>
@@ -235,7 +241,7 @@
                 <select id="qd_service" data-create="{{ create_url('service') }}" name="service_id">
                     <option value="">-- Изберете услуга --</option>
                     {% for s in services %}
-                    <option value="{{ s.id }}">{{ s.name }} ({% if s.pricing_mode == 'length' %}{{ "%.2f"|format(s.price_per_meter_eur) }} €/м{% else %}{{ "%.2f"|format(s.price_per_hour_eur) }} €/час{% endif %})</option>
+                    <option value="{{ s.id }}">{{ s.name }} ({% if s.pricing_mode == 'length' %}{{ "%.2f"|format(s.price_per_meter_eur or 0) }} €/м{% elif s.pricing_mode == 'piece' %}{{ "%.2f"|format(s.price_per_piece_eur or 0) }} €/бр.{% else %}{{ "%.2f"|format(s.price_per_hour_eur) }} €/час{% endif %})</option>
                     {% endfor %}
                 </select>
             </div>
@@ -258,6 +264,10 @@
             <div class="form-group" style="margin-bottom: 20px;">
                 <label for="qd_code_number">КД № (за етикет, незадължително)</label>
                 <input type="text" id="qd_code_number" name="code_number">
+            </div>
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label for="qd_external_number">Външен ном. № (на клиента, незадължително)</label>
+                <input type="text" id="qd_external_number" name="external_number">
             </div>
             <button type="submit" class="btn-submit" style="width: 100%;">Добави детайл</button>
             <div id="qd_error" style="color: var(--danger-text); margin-top: 10px; font-size: 0.9rem; display: none;"></div>

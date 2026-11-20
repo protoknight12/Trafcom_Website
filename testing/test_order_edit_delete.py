@@ -418,3 +418,45 @@ def test_refresh_prices_after_a_catalog_change(c, ids):
     assert 'сега:' not in c.get(f'/admin/orders/{order_id}/edit').get_data(as_text=True)
     g.pop('_login_user', None)
     assert _login('qa_worker').post(f'/admin/orders/{order_id}/refresh-prices').status_code in (302, 403)
+
+
+def test_order_request_file_create_edit_delete(c, ids):
+    """The client's request file of an order (owner's decision 2026-11-20): attached on create, shown on the report
+    and served to staff / the order's own account, replaced or removed on edit (old file deleted), a disallowed
+    extension refused, removed with a hard-deleted order."""
+    import io
+    folder = flask_app.config['ORDER_ITEM_FILE_FOLDER']
+    g.pop('_login_user', None)
+    before = {o.id for o in _all(Order)}
+    c.post('/orders/new', data={'customer_name': 'QA', 'client_id': '',
+                                'cart_json': json.dumps([{'type': 'detail', 'id': ids['detail'], 'qty': 1}]),
+                                'request_file': (io.BytesIO(b'%PDF-1.4 req'), 'Искане 5.pdf')},
+           content_type='multipart/form-data')
+    (order_id,) = {o.id for o in _all(Order)} - before
+    order = _get(Order, order_id)
+    first = order.request_file
+    assert order.request_file_name == 'Искане 5.pdf' and os.path.exists(os.path.join(folder, first))
+    assert 'Искане от клиента: Искане 5.pdf' in c.get('/admin/production').get_data(as_text=True)
+    res = c.get(f'/orders/{order_id}/request-file')
+    assert res.status_code == 200 and res.data == b'%PDF-1.4 req'
+    res.close()
+    g.pop('_login_user', None)
+    assert _login('qa_customer').get(f'/orders/{order_id}/request-file').status_code == 404   # not his order
+
+    g.pop('_login_user', None)
+    form = {'customer_name': 'QA'}
+    c.post(f'/admin/orders/{order_id}/edit', data={**form, 'request_file': (io.BytesIO(b'x'), 'virus.exe')},
+           content_type='multipart/form-data')
+    assert _get(Order, order_id).request_file == first                                         # refused
+    c.post(f'/admin/orders/{order_id}/edit', data={**form, 'request_file': (io.BytesIO(b'new'), 'new.xlsx')},
+           content_type='multipart/form-data')
+    second = _get(Order, order_id).request_file
+    assert second != first and not os.path.exists(os.path.join(folder, first))
+    c.post(f'/admin/orders/{order_id}/edit', data={**form, 'request_file_remove': '1'})
+    assert _get(Order, order_id).request_file is None and not os.path.exists(os.path.join(folder, second))
+
+    c.post(f'/admin/orders/{order_id}/edit', data={**form, 'request_file': (io.BytesIO(b'3'), 'third.pdf')},
+           content_type='multipart/form-data')
+    third = _get(Order, order_id).request_file
+    _delete(c, order_id)
+    assert not os.path.exists(os.path.join(folder, third))

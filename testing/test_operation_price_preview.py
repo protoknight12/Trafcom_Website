@@ -70,3 +70,30 @@ def test_new_detail_dialog_stores_a_length_operation(ids):
     assert rows == sorted([(ids['laser'], 800, 0.0), (ids['bend'], None, 3.0)])
     costs = sorted(o.cost for o in Operation.query.filter_by(detail_id=detail.id))
     assert costs == [2.0, 3.0]                                           # 0.8 m x 2.50 / 3 min x 60 €/h
+
+
+def test_piece_priced_service_and_operation(ids):
+    """"По брой" (owner's decision 2026-11-20): a service with pricing_mode 'piece' and price_per_piece_eur; an
+    operation stores `pieces` and costs pieces x €/бр.; the pages list it with its €/бр. rate and the preview."""
+    c = _admin()
+    c.post('/admin/services/add', data={'name': 'Резба', 'price_per_hour_eur': '30', 'pricing_mode': 'piece',
+                                        'price_per_piece_eur': '0.45'})
+    thread = Service.query.filter_by(name='Резба').one()
+    assert (thread.pricing_mode, thread.price_per_piece_eur, thread.price_per_meter_eur) == ('piece', 0.45, None)
+    c.post('/admin/services/add', data={'name': 'Без цена', 'price_per_hour_eur': '30', 'pricing_mode': 'piece'})
+    assert Service.query.filter_by(name='Без цена').first() is None          # the €/бр. rate is required
+
+    c.post(f'/admin/details/{ids["detail"]}/operations/add',
+           data={'operations_json': json.dumps([{'service_id': thread.id, 'pieces': 4}])})
+    op = Operation.query.filter_by(detail_id=ids['detail'], service_id=thread.id).one()
+    assert (op.pieces, op.cost) == (4, 1.8)                                 # 4 x 0.45
+    page = c.get(f'/details/{ids["detail"]}/files').get_data(as_text=True)
+    assert 'id="op_pieces"' in page and '0.45 €/бр.' in page and '4 бр.' in page
+    assert '0.45 / бр.' in c.get('/admin/services').get_data(as_text=True)
+
+    # switching the service to length clears the per-piece rate
+    c.post(f'/admin/services/{thread.id}/update', data={'name': 'Резба', 'price_per_hour_eur': '30',
+                                                       'pricing_mode': 'length', 'price_per_meter_eur': '2'})
+    db.session.expire_all()
+    thread = db.session.get(Service, thread.id)
+    assert (thread.pricing_mode, thread.price_per_piece_eur, thread.price_per_meter_eur) == ('length', None, 2.0)

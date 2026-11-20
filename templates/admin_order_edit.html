@@ -27,7 +27,7 @@
         цените на съществуващите редове остават замразени; количество не може да падне под изработеното.</p>
 
     {#- One form: the order's own fields + every line's quantity (admin_order_edit()). #}
-    <form id="orderEditForm" method="POST" action="{{ url_for('admin_order_edit', order_id=order.id) }}" class="admin-form" style="display: block;" data-once>
+    <form id="orderEditForm" method="POST" action="{{ url_for('admin_order_edit', order_id=order.id) }}" class="admin-form" style="display: block;" data-once enctype="multipart/form-data">
         {% include 'partials/csrf_field.html' %}
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px;">
             <div class="form-group">
@@ -55,6 +55,17 @@
                     {% for m in machines %}<option value="{{ m.id }}" {% if m.id == order.machine_id %}selected{% endif %}>{{ m.name }}</option>{% endfor %}
                 </select>
             </div>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 16px;">
+            <label for="request_file">Файл с искане от клиента</label>
+            {% if order.request_file %}
+            <div class="text-small" style="margin-bottom: 6px;">Прикачен: <a href="{{ url_for('order_request_file', order_id=order.id) }}" target="_blank" rel="noopener">{{ order.request_file_name }}</a>
+                <label style="display: inline-flex; align-items: center; gap: 4px; margin-left: 10px; font-weight: normal; text-transform: none; letter-spacing: normal;">
+                    <input type="checkbox" name="request_file_remove" value="1"> Премахни</label></div>
+            {% endif %}
+            <input type="file" id="request_file" name="request_file" accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.xls,.xlsx,.eml,.msg,.txt">
+            <small class="text-muted">{% if order.request_file %}Нов файл заменя прикачения. {% endif %}PDF, снимка, Word, Excel или имейл.</small>
         </div>
 
         <div class="table-responsive">
