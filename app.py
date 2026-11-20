@@ -2163,6 +2163,9 @@ class Machine(db.Model):
     # shop-specific, open-ended set that admins type rather than pick from a
     # fixed enum. Nullable since existing machines predate this field.
     machine_type = db.Column(db.String(50), nullable=True)
+    # A laser-cutting machine (owner's decision 2026-11-20): only these are offered as a Detail's cutting machine,
+    # and only their dossier shows "Технологии на рязане" (MachineCutTechnology).
+    is_laser = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     # Which Room this machine physically stands in - see Room's docstring.
     # Nullable: a machine not yet placed anywhere just doesn't show on any
     # room's map until assigned (see edit_machine_window()).
@@ -10350,6 +10353,10 @@ def admin_hall_dossier(machine_id):
                            machine=m.machine, panels=ElectricalPanel.query.join(Room).order_by(Room.name, ElectricalPanel.name).all(),
                            shelly=ShellyDevice.query.order_by(ShellyDevice.name).all(), modbus=ModbusDevice.query.order_by(ModbusDevice.name).all(),
                            services=Service.query.order_by(Service.name).all(), known_machine_types=_known_machine_types(),
+                           grades=MaterialGrade.query.order_by(MaterialGrade.sort_order, MaterialGrade.name).all(),
+                           cut_techs=sorted(m.machine.cut_technologies,
+                                            key=lambda t: (t.grade.name if t.grade else '', t.thickness_mm))
+                           if m.machine else [],
                            free_machines=[x for x in Machine.query.order_by(Machine.name) if x.hall_record is None])
 
 
@@ -10403,6 +10410,7 @@ def admin_hall_dossier_system(machine_id):
         return _dossier_back(hm.id, 'Невалиден статус.', 'danger')
     mc.status = status
     mc.machine_type = (request.form.get('machine_type') or '').strip()[:50] or None
+    mc.is_laser = request.form.get('is_laser') == '1'
     maint = (request.form.get('last_maintenance') or '').strip()
     if maint:
         try:
@@ -10422,6 +10430,56 @@ def admin_hall_dossier_system(machine_id):
     db.session.commit()
     log_action(f'Хале 3D: досие на "{hm.name}" - система (статус, ел. връзки, услуги)')
     return _dossier_back(hm.id, 'Запазено.')
+
+
+@app.route('/admin/hall/<int:machine_id>/cut-tech', methods=['POST'])
+@role_required('admin')
+def admin_hall_cut_tech_save(machine_id):
+    """"Технологии на рязане" in a laser machine's dossier: add (no tech_id) or edit one MachineCutTechnology row -
+    Вид (grade_id, blank = без вид), thickness mm, speed mm/min, pierce time s. One row per (Вид, thickness)."""
+    hm = HallMachine.query.get_or_404(machine_id)
+    mc = hm.machine
+    if mc is None:
+        return _dossier_back(hm.id, 'Досието не е свързано с машина.', 'danger')
+    tech_id = request.form.get('tech_id', type=int)
+    tech = MachineCutTechnology.query.filter_by(id=tech_id, machine_id=mc.id).first_or_404() if tech_id else None
+    grade_raw = request.form.get('grade_id', '')
+    grade_id = int(grade_raw) if grade_raw.isdigit() and db.session.get(MaterialGrade, int(grade_raw)) else None
+    try:
+        thickness = round(float(request.form.get('thickness_mm', '').replace(',', '.')), 3)
+        values = []
+        for name in ('cutting_speed_mm_per_min', 'pierce_time_sec'):
+            raw = request.form.get(name, '').strip().replace(',', '.')
+            values.append(round(float(raw), 3) if raw else None)
+    except ValueError:
+        return _dossier_back(hm.id, 'Дебелината, скоростта и времето трябва да са числа.', 'danger')
+    if thickness <= 0 or any(v is not None and v <= 0 for v in values):
+        return _dossier_back(hm.id, 'Дебелината, скоростта и времето трябва да са положителни.', 'danger')
+    same = _cut_technology(mc.id, grade_id, thickness)
+    if same and same is not tech:
+        return _dossier_back(hm.id, 'Вече има технология за този вид и дебелина - редактирайте нея.', 'danger')
+    if tech is None:
+        tech = MachineCutTechnology(machine_id=mc.id)
+        db.session.add(tech)
+    tech.grade_id, tech.thickness_mm = grade_id, thickness
+    tech.cutting_speed_mm_per_min, tech.pierce_time_sec = values
+    db.session.commit()
+    grade = db.session.get(MaterialGrade, grade_id).name if grade_id else 'без вид'
+    log_action(f'Технология на "{mc.name}": {grade}, {thickness:g} мм - {values[0] or "-"} мм/мин, '
+               f'{values[1] or "-"} сек пробиване')
+    return _dossier_back(hm.id, 'Технологията е записана.')
+
+
+@app.route('/admin/hall/<int:machine_id>/cut-tech/<int:tech_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_hall_cut_tech_delete(machine_id, tech_id):
+    hm = HallMachine.query.get_or_404(machine_id)
+    tech = MachineCutTechnology.query.filter_by(id=tech_id, machine_id=hm.machine_id).first_or_404()
+    label = f'{tech.grade.name if tech.grade else "без вид"}, {tech.thickness_mm:g} мм'
+    db.session.delete(tech)
+    db.session.commit()
+    log_action(f'Изтрита технология на "{hm.name}": {label}')
+    return _dossier_back(hm.id, 'Технологията е изтрита.')
 
 
 @app.route('/admin/hall/<int:machine_id>/connections', methods=['POST'])
@@ -12555,8 +12613,8 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
     no components attached).
 
     Material price comes ONLY from here: admins can't type one on
-    admin_materials.html. A *new* material still needs cutting_speed_mm_per_min/
-    pierce_rate_per_min (returns None otherwise), but its price is this
+    admin_materials.html. A *new* material may carry cutting_speed_mm_per_min/
+    pierce_rate_per_min (optional - they live on the detail now), and its price is this
     line's unit_price, or 0 ("няма доставна цена") if none was entered. An
     existing never-priced (0) row just takes this line's price, no new lot.
     Matching an *existing* material at
@@ -12657,10 +12715,8 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
             cost_per_m2 = 0.0
         # Saw-cut types (MaterialType.has_cutting off) are never pierced or
         # DXF-cut - no cutting/drill speed required for them.
-        has_cutting = material_type_cfg(material_type).has_cutting
-        if has_cutting and (cutting_speed_mm_per_min is None or pierce_rate_per_min is None):
-            return None
-        if not has_cutting:
+        # Speeds are optional since they moved to the detail / machine (owner's decision 2026-11-20).
+        if not material_type_cfg(material_type).has_cutting:
             cutting_speed_mm_per_min = None
             pierce_rate_per_min = None
         # a new lot keeps the grade (Вид на материала) of the row it came from, else guessed from the name
@@ -14390,29 +14446,21 @@ def admin_update_material(key):
     # Price (cost_per_m2/price_per_unit) is NOT editable here - it only ever
     # comes from the intake price on a delivery note (see
     # _find_or_create_delivery_target).
+    # Cutting speed / pierce time are no longer edited here (owner's decision 2026-11-20): they belong to the
+    # detail and the machine (Detail.cutting_*, MachineCutTechnology); the material keeps whatever it had.
     try:
-        # Rods/profiles are cut to length on a saw, never pierced or DXF-cut
-        # - no cutting/drill speed for either.
-        skip_speed_fields = not material_type_cfg(material_type).has_cutting
-        cutting_speed_mm_per_min = None if skip_speed_fields else float(request.form.get('cutting_speed_mm_per_min', ''))
-        # Entered as seconds per pierce (shop-floor friendly), stored as the
-        # pierces/min rate the pricing formula (_service_time_cost) uses.
-        pierce_time_sec = None if skip_speed_fields else float(request.form.get('pierce_time_sec', ''))
         sheet_length_mm, sheet_width_mm, thickness_mm, height_mm = _parse_sheet_dimensions(request.form)
         weight_kg = _parse_optional_float(request.form, 'weight_kg')
         grade_id = _parse_material_grade(request.form)
         min_quantity = _parse_optional_float(request.form, 'min_quantity')
         erp_number = _parse_erp_number(request.form)
     except ValueError:
-        flash('Всички размери, скорости и ERP № трябва да бъдат валидни числа.', 'danger')
+        flash('Всички размери и ERP № трябва да бъдат валидни числа.', 'danger')
         return redirect(url_for('admin_materials'))
 
-    if (cutting_speed_mm_per_min is not None and cutting_speed_mm_per_min <= 0) \
-            or (pierce_time_sec is not None and pierce_time_sec <= 0) \
-            or (min_quantity is not None and min_quantity < 0):
-        flash('Скоростта на рязане/времето за пробождане трябва да бъдат положителни числа, а мин. количество - неотрицателно.', 'danger')
+    if min_quantity is not None and min_quantity < 0:
+        flash('Мин. количество трябва да бъде неотрицателно.', 'danger')
         return redirect(url_for('admin_materials'))
-    pierce_rate_per_min = 60.0 / pierce_time_sec if pierce_time_sec else None
 
     conflict = _erp_number_conflict(erp_number, exclude_type='material', exclude_id=material.id)
     if conflict:
@@ -14423,8 +14471,6 @@ def admin_update_material(key):
     if posted_name:
         material.display_name = posted_name
     material.calibrated, material.calibration = _parse_calibration(request.form)
-    material.cutting_speed_mm_per_min = round(cutting_speed_mm_per_min, 2) if cutting_speed_mm_per_min is not None else None
-    material.pierce_rate_per_min = round(pierce_rate_per_min, 2) if pierce_rate_per_min is not None else None
     material.sheet_length_mm = sheet_length_mm
     material.sheet_width_mm = sheet_width_mm
     material.thickness_mm = thickness_mm
@@ -14442,8 +14488,7 @@ def admin_update_material(key):
     if not posted_name:
         material.display_name = compose_material_name(material)
     log_action(describe_changes(f'материал "{material.display_name}"', material, {
-        'cutting_speed_mm_per_min': 'ск. рязане mm/min',
-        'pierce_rate_per_min': 'пробождания/min', 'sheet_length_mm': 'дължинаmm',
+        'sheet_length_mm': 'дължинаmm',
         'sheet_width_mm': 'ширина mm', 'thickness_mm': 'дебелина mm', 'height_mm': 'височина mm',
         'display_name': 'име', 'weight_kg': 'тегло кг', 'grade_id': 'вид', 'min_quantity': 'мин. количество', 'erp_number': 'ERP №',
         'code_number': 'КД №', 'type': 'тип', 'brand': 'марка', 'notes': 'забележка',
@@ -14467,33 +14512,25 @@ def admin_add_material():
     brand = request.form.get('brand', '').strip() or None
     calibrated, calibration = _parse_calibration(request.form)
 
-    # Rods/profiles are cut to length on a saw, never pierced or DXF-cut -
-    # no cutting/drill speed for either.
-    skip_speed_fields = not material_type_cfg(material_type).has_cutting
+    # No cutting speed / pierce time: they belong to the detail and the machine (owner's decision 2026-11-20).
+    cutting_speed_mm_per_min = pierce_rate_per_min = None
 
     # No price input: a new material starts at cost_per_m2 = 0 ("няма
     # доставна цена") until its first delivery note sets the real intake
     # price (see _find_or_create_delivery_target).
     try:
-        cutting_speed_mm_per_min = None if skip_speed_fields else float(request.form.get('cutting_speed_mm_per_min', ''))
-        # Entered as seconds per pierce (shop-floor friendly), stored as the
-        # pierces/min rate the pricing formula (_service_time_cost) uses.
-        pierce_time_sec = None if skip_speed_fields else float(request.form.get('pierce_time_sec', ''))
         sheet_length_mm, sheet_width_mm, thickness_mm, height_mm = _parse_sheet_dimensions(request.form)
         weight_kg = _parse_optional_float(request.form, 'weight_kg')
         grade_id = _parse_material_grade(request.form)
         min_quantity = _parse_optional_float(request.form, 'min_quantity')
         erp_number = _parse_erp_number(request.form)
     except ValueError:
-        flash('Всички размери, скорости и ERP № трябва да бъдат валидни числа.', 'danger')
+        flash('Всички размери и ERP № трябва да бъдат валидни числа.', 'danger')
         return redirect(url_for('admin_materials'))
 
-    if (cutting_speed_mm_per_min is not None and cutting_speed_mm_per_min <= 0) \
-            or (pierce_time_sec is not None and pierce_time_sec <= 0) \
-            or (min_quantity is not None and min_quantity < 0):
-        flash('Скоростта на рязане/времето за пробождане трябва да бъдат положителни числа, а мин. количество - неотрицателно.', 'danger')
+    if min_quantity is not None and min_quantity < 0:
+        flash('Мин. количество трябва да бъде неотрицателно.', 'danger')
         return redirect(url_for('admin_materials'))
-    pierce_rate_per_min = 60.0 / pierce_time_sec if pierce_time_sec else None
     notes = request.form.get('notes', '').strip() or None
     if not display_name:  # blank name -> composed from the fields (compose_material_name())
         display_name = compose_material_name(None, type=material_type, grade_id=grade_id, brand=brand, notes=notes,
@@ -14631,6 +14668,8 @@ def edit_machine_window(id):
             {'name': 'name', 'label': 'Име на машина', 'value': machine.name, 'type': 'text', 'required': True},
             {'name': 'machine_type', 'label': 'Тип машина (напр. laser, mill_3axis)',
              'value': machine.machine_type or '', 'type': 'datalist', 'options': _known_machine_types()},
+            {'name': 'is_laser', 'label': 'Машина за лазерно рязане (технологии, избор в детайла)',
+             'value': machine.is_laser, 'type': 'checkbox'},
             {'name': 'room_id', 'label': 'Помещение', 'value': machine.room_id or '', 'type': 'select', 'options': [
                 {'value': '', 'label': '-- няма --'}
             ] + [{'value': r.id, 'label': f'{r.building.name} / {r.name}'} for r in rooms]},
@@ -14656,6 +14695,7 @@ def rename_machine(id):
     machine = Machine.query.get_or_404(id)
     machine.name = name
     machine.machine_type = request.form.get('machine_type', '').strip() or None
+    machine.is_laser = request.form.get('is_laser') == '1'
     room_id_raw = request.form.get('room_id', '')
     panel_id_raw = request.form.get('panel_id', '')
     machine.room_id = int(room_id_raw) if room_id_raw.isdigit() else None
@@ -15095,7 +15135,9 @@ def detail_dxf_dashboard(detail_id):
     # "Технология на рязане": each machine's stored speeds for this detail's Вид + thickness (filled in on pick).
     machines, cut_tech = [], {}
     if current_user.is_admin:
-        machines = Machine.query.order_by(Machine.name).all()
+        # laser machines only (Machine.is_laser) - plus the detail's current one, so it never vanishes from the form
+        machines = Machine.query.filter(db.or_(Machine.is_laser.is_(True), Machine.id == detail.cutting_machine_id)) \
+            .order_by(Machine.name).all()
         grade_id = detail.material.grade_id if detail.material else None
         for m in machines:
             t = _cut_technology(m.id, grade_id, detail.cut_thickness)
@@ -19792,26 +19834,17 @@ def api_quick_create_material():
     notes = request.form.get('notes', '').strip() or None
     calibrated, calibration = _parse_calibration(request.form)
     grade_id = _parse_material_grade(request.form)
-    # Rods/profiles are cut to length on a saw, never pierced or DXF-cut -
-    # no cutting/drill speed for either.
-    skip_speed_fields = not material_type_cfg(material_type).has_cutting
+    # No cutting speed / pierce time: they belong to the detail and the machine (owner's decision 2026-11-20).
+    cutting_speed_mm_per_min = pierce_rate_per_min = None
 
     # No price input - same as admin_add_material(): 0 until the first delivery.
     try:
-        cutting_speed_mm_per_min = None if skip_speed_fields else float(request.form.get('cutting_speed_mm_per_min', ''))
-        # Entered as seconds per pierce (shop-floor friendly), stored as the
-        # pierces/min rate the pricing formula (_service_time_cost) uses.
-        pierce_time_sec = None if skip_speed_fields else float(request.form.get('pierce_time_sec', ''))
         sheet_length_mm, sheet_width_mm, thickness_mm, height_mm = _parse_sheet_dimensions(request.form)
         weight_kg = _parse_optional_float(request.form, 'weight_kg')
         erp_number = _parse_erp_number(request.form)
     except ValueError:
-        return jsonify({'status': 'error', 'message': 'Всички размери, скорости и ERP № трябва да бъдат валидни числа.'}), 400
+        return jsonify({'status': 'error', 'message': 'Всички размери и ERP № трябва да бъдат валидни числа.'}), 400
 
-    if (cutting_speed_mm_per_min is not None and cutting_speed_mm_per_min <= 0) \
-            or (pierce_time_sec is not None and pierce_time_sec <= 0):
-        return jsonify({'status': 'error', 'message': 'Скоростта на рязане/времето за пробождане трябва да бъдат положителни числа.'}), 400
-    pierce_rate_per_min = 60.0 / pierce_time_sec if pierce_time_sec else None
     if not display_name:  # blank name -> composed from the fields, same as admin_add_material()
         display_name = compose_material_name(None, type=material_type, grade_id=grade_id, brand=brand, notes=notes,
                                              calibrated=calibrated, calibration=calibration,

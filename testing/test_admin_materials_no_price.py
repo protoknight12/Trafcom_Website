@@ -70,5 +70,6 @@ def test_add_ignores_price_and_edit_keeps_it(admin_client):
     })
     db.session.refresh(m)
     assert m.display_name == 'QA Лист нов'
-    assert m.cutting_speed_mm_per_min == 1600
+    assert m.cutting_speed_mm_per_min is None, 'speeds are no longer set on the material (they live on the detail)'
+    assert 'name="cutting_speed_mm_per_min"' not in page
     assert m.cost_per_m2 == 12.5, 'edit must never touch the delivery-derived price'

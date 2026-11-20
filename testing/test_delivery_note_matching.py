@@ -121,16 +121,15 @@ with app.app_context():
     assert edited_variant.id not in (m1.id, new_lot.id), "an edited-dims restock line must create its own distinct row, not bump either lookalike"
     assert MaterialPrice.query.count() == 5
 
-    # -- Material: a brand-new material without full pricing must be refused
-    #    rather than silently created with cost_per_m2=0.0 etc. (would
-    #    silently produce €0.00 CNC prices everywhere it's later picked) ----
+    # -- Material: a brand-new material with no price and no cutting speeds is
+    #    created at 0 ("няма доставна цена"), like one from admin_materials.html -
+    #    speeds belong to the detail / machine now (owner's decision 2026-11-20) --
     no_price = _find_or_create_delivery_target('material', 'Титан Grade 5', None, None, None, None, None, None)
-    assert no_price is None, "a new material with no pricing must be refused, not created zero-priced"
-    assert MaterialPrice.query.filter_by(display_name='Титан Grade 5').first() is None
-    partial_price = _find_or_create_delivery_target(
-        'material', 'Титан Grade 5', None, None, None, None, None, None, cost_per_m2=100.0
-    )
-    assert partial_price is None, "all three of cost_per_m2/cutting_speed_mm_per_min/pierce_rate_per_min are required, not just one"
+    db.session.commit()
+    assert no_price is not None and no_price.cost_per_m2 == 0
+    assert no_price.cutting_speed_mm_per_min is None and no_price.pierce_rate_per_min is None
+    db.session.delete(no_price)
+    db.session.commit()
 
     # -- Detail: needs a material_key; price is part of the match, so a
     #    different unit_price must NOT bump the old row's stock -----------

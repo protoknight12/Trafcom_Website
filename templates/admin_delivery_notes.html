@@ -128,10 +128,6 @@
                             {% endfor %}
                         </select>
                     </div>
-                    <div id="dn_material_new_pricing" style="display: none; margin-top: 8px; gap: 8px; flex-wrap: wrap;">
-                        <input type="number" id="dn_material_cutting_speed_mm_per_min" step="0.01" min="0.01" placeholder="Скорост рязане (мм/мин) *" style="flex: 1; min-width: 120px;">
-                        <input type="number" id="dn_material_pierce_rate_per_min" step="0.01" min="0.01" placeholder="Скорост пробиване (проб./мин) *" style="flex: 1; min-width: 120px;">
-                    </div>
                 </div>
                 <div class="form-group" id="detail_selector" style="display: none;">
                     <label for="dn_detail_select">Детайл *</label>
@@ -375,14 +371,6 @@
                 <div class="form-group" style="margin-bottom: 15px;">
                     <label for="qm_calibration">Калибрация</label>
                     <input type="text" id="qm_calibration" name="calibration" maxlength="30" placeholder="напр. h9">
-                </div>
-                <div class="form-group" style="margin-bottom: 15px;" id="qm_cutting_speed_mm_per_min_group">
-                    <label for="qm_cutting_speed_mm_per_min">Скорост на рязане (мм/мин)</label>
-                    <input type="number" id="qm_cutting_speed_mm_per_min" step="0.01" min="0.01" name="cutting_speed_mm_per_min" required>
-                </div>
-                <div class="form-group" style="margin-bottom: 15px;" id="qm_pierce_time_sec_group">
-                    <label for="qm_pierce_time_sec">Време за пробождане (сек)</label>
-                    <input type="number" id="qm_pierce_time_sec" step="0.01" min="0.01" name="pierce_time_sec" required>
                 </div>
                 <div class="form-group" style="margin-bottom: 15px;" id="qm_sheet_length_mm_group">
                     <label for="qm_sheet_length_mm">Дължина на плочата (мм)</label>
@@ -643,21 +631,6 @@
             }
         });
 
-        // Saw-cut types (MaterialType.has_cutting off) are never pierced or DXF-cut - no
-        // cutting/drill speed for them.
-        const noCutting = !(MATERIAL_TYPES[typeSelect.value] || {}).cutting;
-        ['qm_cutting_speed_mm_per_min', 'qm_pierce_time_sec'].forEach(function (fieldId) {
-            const group = document.getElementById(fieldId + '_group');
-            const input = document.getElementById(fieldId);
-            if (noCutting) {
-                group.style.display = 'none';
-                input.required = false;
-                input.value = '';
-            } else {
-                group.style.display = '';
-                input.required = true;
-            }
-        });
     }
 
     document.getElementById('qm_type').addEventListener('change', applyQuickMaterialDimensionLabels);
@@ -685,8 +658,6 @@
         const heightLabel = document.querySelector('label[for=dn_height]');
         const thicknessGroup = document.getElementById('dn_thickness_group');
         const thicknessLabel = document.querySelector('label[for=dn_thickness]');
-        const pierceInput = document.getElementById('dn_material_pierce_rate_per_min');
-        const cuttingSpeedInput = document.getElementById('dn_material_cutting_speed_mm_per_min');
 
         let materialType = null;
         if (type === 'material' && isNew) {
@@ -712,22 +683,6 @@
             heightLabel.textContent = DN_DIMENSION_DEFAULT_LABELS.height;
             thicknessGroup.style.display = '';
             thicknessLabel.textContent = DN_DIMENSION_DEFAULT_LABELS.thickness;
-        }
-
-        // Saw-cut types (MaterialType.has_cutting off) are never pierced or DXF-cut - no
-        // cutting/drill speed inputs for them. Those inputs only exist for
-        // brand-new materials, so this only matters in the isNew branch.
-        if (type === 'material' && isNew) {
-            const noCutting = !(MATERIAL_TYPES[materialType] || {}).cutting;
-            pierceInput.style.display = noCutting ? 'none' : '';
-            cuttingSpeedInput.style.display = noCutting ? 'none' : '';
-            if (noCutting) {
-                pierceInput.value = '';
-                cuttingSpeedInput.value = '';
-            }
-        } else {
-            pierceInput.style.display = '';
-            cuttingSpeedInput.style.display = '';
         }
     }
 
@@ -818,15 +773,7 @@
         newNameInput.style.display = isNew ? 'block' : 'none';
         if (!isNew) newNameInput.value = '';
 
-        const materialPricing = document.getElementById('dn_material_new_pricing');
-        const showMaterialPricing = type === 'material' && isNew;
-        materialPricing.style.display = showMaterialPricing ? 'flex' : 'none';
-        document.getElementById('dn_material_type_group').style.display = showMaterialPricing ? 'block' : 'none';
-        if (!showMaterialPricing) {
-            ['dn_material_cutting_speed_mm_per_min', 'dn_material_pierce_rate_per_min'].forEach(function (id) {
-                document.getElementById(id).value = '';
-            });
-        }
+        document.getElementById('dn_material_type_group').style.display = type === 'material' && isNew ? 'block' : 'none';
         applyDnMaterialDimensionLabels();
 
         const showProductComponents = type === 'product' && isNew;
@@ -1066,16 +1013,8 @@
 
         let costPerM2 = null, cuttingSpeed = null, pierceRate = null, materialType = null;
         if (type === 'material' && isNewItem) {
+            // no cutting speed / pierce time: they belong to the detail and the machine now
             materialType = document.getElementById('dn_material_type').value;
-            // Saw-cut types (MaterialType.has_cutting off) are never pierced or DXF-cut - no
-            // cutting/drill speed required for them.
-            const noCutting = !(MATERIAL_TYPES[materialType] || {}).cutting;
-            cuttingSpeed = noCutting ? null : numOrNull('dn_material_cutting_speed_mm_per_min');
-            pierceRate = noCutting ? null : numOrNull('dn_material_pierce_rate_per_min');
-            if (!noCutting && (cuttingSpeed === null || pierceRate === null)) {
-                alert('Моля въведете скорост на рязане и скорост на пробиване за новия материал.');
-                return;
-            }
         } else if (type === 'material') {
             // Existing material - the backend matches the catalog row by
             // every field including type (_find_or_create_delivery_target),

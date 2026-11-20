@@ -108,14 +108,6 @@
                 <input type="text" id="new_calibration" name="calibration" maxlength="30" placeholder="напр. h9">
             </div>
             <p class="section-subtitle" style="flex-basis:100%;">Цената не се въвежда тук - формира се от доставната цена при заприхождаване (стокова разписка).</p>
-            <div class="form-group" id="new_cutting_speed_mm_per_min_group">
-                <label for="new_cutting_speed_mm_per_min">Скорост на рязане (мм/мин)</label>
-                <input type="number" id="new_cutting_speed_mm_per_min" step="0.01" min="0.01" name="cutting_speed_mm_per_min" placeholder="напр. 1500" required>
-            </div>
-            <div class="form-group" id="new_pierce_time_sec_group">
-                <label for="new_pierce_time_sec">Време за пробождане (сек)</label>
-                <input type="number" id="new_pierce_time_sec" step="0.01" min="0.01" name="pierce_time_sec" placeholder="напр. 1.5" required>
-            </div>
             <div class="form-group" id="new_sheet_length_mm_group">
                 <label for="new_sheet_length_mm">Дължина на плочата (мм)</label>
                 <input type="number" id="new_sheet_length_mm" step="0.001" min="0" name="sheet_length_mm" placeholder="напр. 3000">
@@ -241,8 +233,6 @@
                     <th>Вид</th>
                     <th>{{ material_price_m2_label(type_key) }} (доставна)</th>
                     <th>Цена за цяла бройка (€, доставна)</th>
-                    <th>Скорост на рязане (мм/мин)</th>
-                    <th>Време за пробождане (сек)</th>
                     <th>{{ dim_labels[0] or '—' }}</th>
                     <th>{{ dim_labels[1] or '—' }}</th>
                     <th>{{ dim_labels[2] or '—' }}</th>
@@ -265,7 +255,7 @@
                 {% if grade_rows %}
                 {% set grade_node = 'g-' ~ type_key ~ '-' ~ (gr.id if gr else 'none') %}
                 <tr class="tree-head tree-l1" data-node="{{ grade_node }}">
-                    <td colspan="21"><span class="tree-chevron">▶</span>{{ gr.name if gr else 'Без вид' }}<span class="tree-meta">(<span data-count></span> поз. &middot; <span data-sum="kg" data-dec="1" data-suffix=" кг"></span> &middot; <span data-sum="ovalue" data-dec="2" data-suffix=" €"></span>)</span></td>
+                    <td colspan="19"><span class="tree-chevron">▶</span>{{ gr.name if gr else 'Без вид' }}<span class="tree-meta">(<span data-count></span> поз. &middot; <span data-sum="kg" data-dec="1" data-suffix=" кг"></span> &middot; <span data-sum="ovalue" data-dec="2" data-suffix=" €"></span>)</span></td>
                 </tr>
                 {% for material in grade_rows %}
                 {% set avail = material_available_qty(material) or 0 %}
@@ -291,8 +281,6 @@
                     <td>{{ material.grade.name if material.grade else '—' }}</td>
                     <td>{% if material.cost_per_m2 %}{{ material.cost_per_m2|price3 }}{% elif material.owner_client_id %}—{% else %}<span style="color: var(--warning-text); white-space: nowrap;" title="Материалът още не е заприходен със стокова разписка">⚠ няма доставна цена</span>{% endif %}</td>
                     <td>{{ material.price_per_unit|price3 if material.price_per_unit is not none else '—' }}</td>
-                    <td>{{ material.cutting_speed_mm_per_min|num3 if material.cutting_speed_mm_per_min is not none else '—' }}</td>
-                    <td>{{ (60.0 / material.pierce_rate_per_min)|num3 if material.pierce_rate_per_min else '—' }}</td>
                     <td>{{ material.sheet_length_mm|num3 if material.sheet_length_mm is not none else '—' }}</td>
                     <td>{{ material.sheet_width_mm|num3 if material.sheet_width_mm is not none else '—' }}</td>
                     <td>{{ material.thickness_mm|num3 if material.thickness_mm is not none else '—' }}</td>
@@ -315,8 +303,7 @@
                                 data-material='{{ {
                                     "display_name": material.display_name, "display_name_en": material.display_name_en,
                                     "display_name_de": material.display_name_de, "type": material.type, "brand": material.brand,
-                                    "notes": material.notes, "cutting_speed_mm_per_min": material.cutting_speed_mm_per_min,
-                                    "pierce_time_sec": ((60.0 / material.pierce_rate_per_min)|round(3)) if material.pierce_rate_per_min else none,
+                                    "notes": material.notes,
                                     "sheet_length_mm": material.sheet_length_mm, "sheet_width_mm": material.sheet_width_mm,
                                     "thickness_mm": material.thickness_mm, "height_mm": material.height_mm,
                                     "weight_kg": material.weight_kg, "grade_id": material.grade_id,
@@ -500,7 +487,7 @@
             </div>
             {% endfor %}
             <div class="form-group">
-                <label><input type="checkbox" name="has_cutting" id="t_has_cutting" value="1" checked> Реже се по DXF (скорост на рязане и пробождане)</label>
+                <label><input type="checkbox" name="has_cutting" id="t_has_cutting" value="1" checked> Реже се по DXF</label>
             </div>
             <div class="form-group">
                 <label><input type="checkbox" name="is_round" id="t_is_round" value="1"> Кръгло сечение (показва ⌀)</label>
@@ -576,9 +563,6 @@
         const cfg = MATERIAL_TYPES[typeSelect.value] || MATERIAL_TYPES.sheets || Object.values(MATERIAL_TYPES)[0];
         DIMENSION_FIELD_IDS.forEach(function (fieldId, i) { toggleField(fieldId, cfg.dims[i]); });
         toggleField('new_height_mm', cfg.height);
-        // Saw-cut types (MaterialType.has_cutting off) have no cutting/pierce speed.
-        toggleField('new_cutting_speed_mm_per_min', cfg.cutting, true);
-        toggleField('new_pierce_time_sec', cfg.cutting, true);
     }
 
     document.getElementById('new_type').addEventListener('change', applyMaterialDimensionLabels);
@@ -589,7 +573,6 @@
     const FIELD_IDS = {
         display_name: 'new_display_name', display_name_en: 'new_display_name_en', display_name_de: 'new_display_name_de',
         type: 'new_type', brand: 'new_brand', notes: 'new_notes',
-        cutting_speed_mm_per_min: 'new_cutting_speed_mm_per_min', pierce_time_sec: 'new_pierce_time_sec',
         sheet_length_mm: 'new_sheet_length_mm', sheet_width_mm: 'new_sheet_width_mm', thickness_mm: 'new_thickness_mm',
         height_mm: 'new_height_mm', weight_kg: 'new_weight_kg', grade_id: 'new_grade_id', min_quantity: 'new_min_quantity',
         erp_number: 'new_material_erp_number', code_number: 'new_material_code_number', calibration: 'new_calibration',

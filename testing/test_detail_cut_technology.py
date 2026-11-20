@@ -25,7 +25,8 @@ def s():
         grade = MaterialGrade(name='Стомана QA', density_kg_dm3=7.85)
         db.session.add_all([User(username='ct_admin', password=pw, role='admin'),
                             User(username='ct_worker', password=pw, role='worker'), grade,
-                            Machine(name='Лазер 1'), Machine(name='Лазер 2')])
+                            Machine(name='Лазер 1', is_laser=True), Machine(name='Лазер 2', is_laser=True),
+                            Machine(name='Струг QA')])
         db.session.flush()
         db.session.add(MaterialPrice(key='ct_steel', display_name='Стомана 2', type='sheets', cost_per_m2=10,
                                      sheet_width_mm=1000, sheet_length_mm=2000, thickness_mm=2, grade_id=grade.id,
@@ -49,7 +50,7 @@ def test_detail_cut_technology(s):
     d = Detail.query.filter_by(name='Планка').one()
     assert (d.cutting_speed_mm_per_min, d.pierce_time_sec) == (1000, 1.0)        # copied from the material
 
-    m1, m2 = Machine.query.order_by(Machine.id).all()
+    m1, m2 = Machine.query.filter_by(is_laser=True).order_by(Machine.id).all()
     url = f'/admin/details/{d.id}/cut-technology'
     c.post(url, data={'machine_id': m1.id, 'cutting_speed_mm_per_min': '2500', 'pierce_time_sec': '0,5',
                       'save_to_machine': '1'})
@@ -73,6 +74,7 @@ def test_detail_cut_technology(s):
 
     page = c.get(f'/details/{d.id}/files').get_data(as_text=True)
     assert 'id="ct_machine"' in page and '"speed": 2600' in page.replace('2600.0', '2600')
+    assert 'Струг QA' not in page                                                    # only laser machines offered
     assert 'const OP_CUTTING_SPEED_MM_PER_MIN = 900' in page.replace('900.0', '900')
 
     c.post(url, data={'machine_id': m1.id, 'cutting_speed_mm_per_min': '-5'})       # refused
@@ -87,3 +89,40 @@ def test_detail_cut_technology(s):
     c.post(f'/machines/{m1.id}/delete')
     db.session.expire_all()
     assert MachineCutTechnology.query.count() == 0
+
+
+def test_dossier_cut_technologies(s):
+    """The laser flag in the dossier, and add / edit / duplicate / delete of a machine's technologies there."""
+    from app import HallMachine
+    c = _login('ct_admin')
+    m = Machine.query.filter_by(name='Струг QA').one()
+    hm = HallMachine(name=m.name, machine=m)
+    db.session.add(hm)
+    db.session.commit()
+    grade = MaterialGrade.query.filter_by(name='Стомана QA').one()
+    url = f'/admin/hall/{hm.id}/dossier'
+    assert 'Технологии на рязане' not in c.get(url).get_data(as_text=True)          # not a laser yet
+
+    c.post(f'{url}/system', data={'status': 'idle', 'is_laser': '1'})
+    db.session.expire_all()
+    assert db.session.get(Machine, m.id).is_laser
+    assert 'Технологии на рязане' in c.get(url).get_data(as_text=True)
+
+    base = f'/admin/hall/{hm.id}/cut-tech'
+    c.post(base, data={'grade_id': grade.id, 'thickness_mm': '3', 'cutting_speed_mm_per_min': '1800',
+                       'pierce_time_sec': '0.8'})
+    c.post(base, data={'grade_id': grade.id, 'thickness_mm': '3', 'cutting_speed_mm_per_min': '1'})   # duplicate
+    c.post(base, data={'grade_id': '', 'thickness_mm': '1', 'cutting_speed_mm_per_min': '5000'})      # без вид
+    db.session.expire_all()
+    rows = MachineCutTechnology.query.order_by(MachineCutTechnology.thickness_mm).all()
+    assert [(r.grade_id, r.thickness_mm, r.cutting_speed_mm_per_min) for r in rows] == \
+           [(None, 1, 5000), (grade.id, 3, 1800)]
+    t = rows[1]
+    c.post(base, data={'tech_id': t.id, 'grade_id': grade.id, 'thickness_mm': '4', 'cutting_speed_mm_per_min': '1500',
+                       'pierce_time_sec': ''})
+    db.session.expire_all()
+    t = db.session.get(MachineCutTechnology, t.id)
+    assert (t.thickness_mm, t.cutting_speed_mm_per_min, t.pierce_time_sec) == (4, 1500, None)
+    c.post(f'{base}/{t.id}/delete')
+    db.session.expire_all()
+    assert MachineCutTechnology.query.count() == 1

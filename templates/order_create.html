@@ -305,14 +305,6 @@
                 <label for="qm_calibration">Калибрация</label>
                 <input type="text" id="qm_calibration" name="calibration" maxlength="30" placeholder="напр. h9">
             </div>
-            <div class="form-group" style="margin-bottom: 15px;" id="qm_cutting_speed_mm_per_min_group">
-                <label for="qm_cutting_speed_mm_per_min">Скорост на рязане (мм/мин)</label>
-                <input type="number" id="qm_cutting_speed_mm_per_min" step="0.01" min="0.01" name="cutting_speed_mm_per_min" required>
-            </div>
-            <div class="form-group" style="margin-bottom: 15px;" id="qm_pierce_time_sec_group">
-                <label for="qm_pierce_time_sec">Време за пробождане (сек)</label>
-                <input type="number" id="qm_pierce_time_sec" step="0.01" min="0.01" name="pierce_time_sec" required>
-            </div>
             <div class="form-group" style="margin-bottom: 15px;" id="qm_sheet_length_mm_group">
                 <label for="qm_sheet_length_mm">Дължина на плочата (мм)</label>
                 <input type="number" id="qm_sheet_length_mm" step="1" min="0" name="sheet_length_mm">
@@ -1019,21 +1011,6 @@
             }
         });
 
-        // Saw-cut types (MaterialType.has_cutting off) are never pierced or DXF-cut - no
-        // cutting/drill speed for them.
-        const noCutting = !(MATERIAL_TYPES[typeSelect.value] || {}).cutting;
-        ['qm_cutting_speed_mm_per_min', 'qm_pierce_time_sec'].forEach(function (fieldId) {
-            const group = document.getElementById(fieldId + '_group');
-            const input = document.getElementById(fieldId);
-            if (noCutting) {
-                group.style.display = 'none';
-                input.required = false;
-                input.value = '';
-            } else {
-                group.style.display = '';
-                input.required = true;
-            }
-        });
     }
 
     document.getElementById('qm_type').addEventListener('change', applyQuickMaterialDimensionLabels);

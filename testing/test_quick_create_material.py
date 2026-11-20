@@ -79,16 +79,16 @@ def test_quick_create_material_full_fields(admin_client):
         assert m is not None
         # A posted price is ignored - material price only comes from a delivery note.
         assert m.cost_per_m2 == 0 and m.brand == 'QA-Brand' and m.sheet_length_mm == 2000
-        assert m.pierce_rate_per_min == 0.5  # 120 sec/pierce -> 60/120 pierces per minute
+        assert m.pierce_rate_per_min is None  # speeds are ignored - they live on the detail / machine now
         assert m.erp_number is not None  # auto-generated
 
 
-def test_quick_create_material_requires_prices(admin_client):
+def test_quick_create_material_needs_no_speeds(admin_client):
     res = admin_client.post('/api/quick-create-material', data={'display_name': 'QA No Price'})
-    assert res.status_code == 400
-    assert res.get_json()['status'] == 'error'
+    assert res.status_code == 200 and res.get_json()['status'] == 'success'
     with flask_app.app_context():
-        assert MaterialPrice.query.filter_by(display_name='QA No Price').first() is None
+        m = MaterialPrice.query.filter_by(display_name='QA No Price').one()
+        assert m.cost_per_m2 == 0 and m.cutting_speed_mm_per_min is None
 
 
 def test_quick_create_material_rejects_duplicate_name(admin_client):
