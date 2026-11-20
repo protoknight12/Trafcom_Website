@@ -889,8 +889,20 @@ class Detail(db.Model):
     # treated as 0 when unset - see effective_width/effective_height.
     extra_width_mm = db.Column(db.Float, nullable=True)
     extra_height_mm = db.Column(db.Float, nullable=True)
+    # Cutting technology of THIS detail (owner's decision 2026-11-20): speeds depend on the machine, not only on the
+    # material. A new detail copies its material's speed/pierce time (_detail_copy_material_speeds); picking a machine
+    # on the detail page fills them from MachineCutTechnology (machine + Вид + thickness), and they can be saved back.
+    cutting_machine_id = db.Column(db.Integer, db.ForeignKey('machine.id'), nullable=True, index=True)
+    cutting_speed_mm_per_min = db.Column(db.Float, nullable=True)
+    pierce_time_sec = db.Column(db.Float, nullable=True)
 
     material = db.relationship('MaterialPrice')
+    cutting_machine = db.relationship('Machine')
+
+    @property
+    def cut_thickness(self):
+        """Thickness the technology is looked up by: the detail's own override, else the material's."""
+        return self.thickness_mm or (self.material.thickness_mm if self.material else None)
 
     @property
     def effective_width(self):
@@ -2173,6 +2185,22 @@ class Machine(db.Model):
     panel = db.relationship('ElectricalPanel', foreign_keys=[panel_id], backref='wired_machines')
 
 
+class MachineCutTechnology(db.Model):
+    """A machine's cutting technology for one Вид на материала (MaterialGrade, NULL = material without a Вид) and
+    thickness: speed mm/min + pierce time in seconds. Written from the detail page ("Запиши като технология на
+    машината"), read there to fill a detail's speeds when its machine is picked. One row per (machine, grade,
+    thickness) - kept unique in code (_save_cut_technology), since NULL grades escape a DB unique constraint."""
+    id = db.Column(db.Integer, primary_key=True)
+    machine_id = db.Column(db.Integer, db.ForeignKey('machine.id'), nullable=False, index=True)
+    grade_id = db.Column(db.Integer, db.ForeignKey('material_grade.id'), nullable=True)
+    thickness_mm = db.Column(db.Float, nullable=False)
+    cutting_speed_mm_per_min = db.Column(db.Float, nullable=True)
+    pierce_time_sec = db.Column(db.Float, nullable=True)
+
+    machine = db.relationship('Machine', backref=db.backref('cut_technologies', cascade='all, delete-orphan'))
+    grade = db.relationship('MaterialGrade')
+
+
 class Service(db.Model):
     """
     A billable operation type (e.g. "Лазерно рязане", "Фрезоване - 3 оси")
@@ -3403,6 +3431,20 @@ def _hall_name_to_machine(target, value, oldvalue, initiator):
 @db.event.listens_for(Machine.name, 'set')
 def _machine_name_to_hall(target, value, oldvalue, initiator):
     _sync_name(target.__dict__.get('hall_record') if target.id is None else target.hall_record, value)
+
+
+@db.event.listens_for(Detail, 'before_insert')
+def _detail_copy_material_speeds(mapper, connection, target):
+    """A new Detail starts with its material's cutting speed / pierce time (every create path: dialog, quick
+    create, delivery note ...), so nothing changes until someone sets the detail's own technology."""
+    if target.cutting_speed_mm_per_min is not None or target.pierce_time_sec is not None or not target.material_key:
+        return
+    t = MaterialPrice.__table__
+    row = connection.execute(db.select(t.c.cutting_speed_mm_per_min, t.c.pierce_rate_per_min)
+                             .where(t.c.key == target.material_key)).first()
+    if row:
+        target.cutting_speed_mm_per_min = row[0]
+        target.pierce_time_sec = round(60.0 / row[1], 3) if row[1] else None
 
 
 def _next_hall_no():
@@ -15050,9 +15092,18 @@ def detail_dxf_dashboard(detail_id):
                       for s in services]
     # Other allowed materials with the list price of the detail in each (admin tab "Материал и размери").
     alt_materials = [(dm, _detail_total_price(detail, dm.material)) for dm in detail.alt_materials if dm.material]
+    # "Технология на рязане": each machine's stored speeds for this detail's Вид + thickness (filled in on pick).
+    machines, cut_tech = [], {}
+    if current_user.is_admin:
+        machines = Machine.query.order_by(Machine.name).all()
+        grade_id = detail.material.grade_id if detail.material else None
+        for m in machines:
+            t = _cut_technology(m.id, grade_id, detail.cut_thickness)
+            if t:
+                cut_tech[m.id] = {'speed': t.cutting_speed_mm_per_min, 'pierce': t.pierce_time_sec}
     return render_template('detail_dxf_dashboard.html', detail=detail, files=files, services=services,
                             materials=materials, services_data=services_data, alt_materials=alt_materials,
-                            active_page='admin_details')
+                            machines=machines, cut_tech=cut_tech, active_page='admin_details')
 
 
 @app.route('/details/<int:detail_id>/update-material', methods=['POST'])
@@ -15568,6 +15619,61 @@ def admin_update_detail_numbers(detail_id):
         'erp_number': 'наш ном. №', 'external_number': 'външен ном. №', 'code_number': 'КД №'}))
     db.session.commit()
     flash('Номерата на детайла са записани.', 'success')
+    return back
+
+
+def _cut_technology(machine_id, grade_id, thickness):
+    """The MachineCutTechnology row for (machine, Вид, thickness) or None - grade None matches rows without a Вид."""
+    if not machine_id or thickness is None:
+        return None
+    q = MachineCutTechnology.query.filter_by(machine_id=machine_id)
+    q = q.filter(MachineCutTechnology.grade_id.is_(None)) if grade_id is None else q.filter_by(grade_id=grade_id)
+    return q.filter(db.func.abs(MachineCutTechnology.thickness_mm - thickness) < 0.0005).first()
+
+
+@app.route('/admin/details/<int:detail_id>/cut-technology', methods=['POST'])
+@role_required('admin')
+def admin_update_detail_cut_technology(detail_id):
+    """"Технология на рязане" on the detail page: machine + cutting speed (mm/min) + pierce time (s) of this
+    detail; with `save_to_machine` also stored as the machine's technology for the detail's Вид + thickness."""
+    detail = Detail.query.get_or_404(detail_id)
+    back = redirect(url_for('detail_dxf_dashboard', detail_id=detail.id))
+    machine_id = request.form.get('machine_id', type=int)
+    machine = db.session.get(Machine, machine_id) if machine_id else None
+    try:
+        values = []
+        for name in ('cutting_speed_mm_per_min', 'pierce_time_sec'):
+            raw = request.form.get(name, '').strip().replace(',', '.')
+            v = round(float(raw), 3) if raw else None
+            if v is not None and v <= 0:
+                raise ValueError
+            values.append(v)
+    except ValueError:
+        flash('Скоростта и времето за пробиване трябва да са положителни числа.', 'danger')
+        return back
+    detail.cutting_machine_id = machine.id if machine else None
+    detail.cutting_speed_mm_per_min, detail.pierce_time_sec = values
+    log_action(describe_changes(f'детайл "{detail.name}"', detail, {
+        'cutting_machine_id': 'машина', 'cutting_speed_mm_per_min': 'скорост мм/мин',
+        'pierce_time_sec': 'пробиване сек'}))
+    if request.form.get('save_to_machine'):
+        thickness = detail.cut_thickness
+        grade_id = detail.material.grade_id if detail.material else None
+        if not machine or thickness is None:
+            db.session.commit()
+            flash('Технологията на детайла е записана, но не и към машината - изберете машина и задайте дебелина.',
+                  'warning')
+            return back
+        tech = _cut_technology(machine.id, grade_id, thickness)
+        if not tech:
+            tech = MachineCutTechnology(machine_id=machine.id, grade_id=grade_id, thickness_mm=thickness)
+            db.session.add(tech)
+        tech.cutting_speed_mm_per_min, tech.pierce_time_sec = values
+        grade = detail.material.grade.name if detail.material and detail.material.grade else 'без вид'
+        log_action(f'Технология на "{machine.name}": {grade}, {thickness:g} мм - '
+                   f'{values[0] or "-"} мм/мин, {values[1] or "-"} сек пробиване')
+    db.session.commit()
+    flash('Технологията на рязане е записана.', 'success')
     return back
 
 
@@ -19979,6 +20085,7 @@ def delete_machine(id):
         PanelComponent.query.filter_by(feeds_machine_id=machine.id).update({'feeds_machine_id': None})  # the symbol stays on the schematic
         Order.query.filter_by(machine_id=machine.id).update({'machine_id': None})
         DxfFile.query.filter_by(machine_id=machine.id).update({'machine_id': None})
+        Detail.query.filter_by(cutting_machine_id=machine.id).update({'cutting_machine_id': None})  # speeds stay
         db.session.execute(
             shelly_device_machines.delete().where(shelly_device_machines.c.machine_id == machine.id)
         )
