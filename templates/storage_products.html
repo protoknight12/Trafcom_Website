@@ -50,8 +50,8 @@
                 </thead>
                 <tbody id="productsTableBody">
                 {% for product in products %}
-                <tr data-search="{{ product.name | lower }}">
-                    <td>{{ elink('product', product.id, product.name) }}</td>
+                <tr data-search="{{ (product.name ~ ' ' ~ catalog_numbers(product)) | lower }}">
+                    <td>{{ elink('product', product.id, product.name) }}{% set _nums = catalog_numbers(product) %}{% if _nums %}<div class="text-small text-muted">{{ _nums }}</div>{% endif %}</td>
                     <td class="text-center">{{ product.stock_quantity|round(2) }}</td>
                 </tr>
                 {% else %}

@@ -295,7 +295,7 @@
                     <td>
                         {% for item in note.items %}
                         <div>
-                            {% if item.target_type in ('material','detail','product') %}{{ elink(item.target_type, item.target_id, item.description_snapshot) }}{% else %}{{ item.description_snapshot }}{% endif %} &times; {{ delivery_item_qty_text(item) }}
+                            {% if item.target_type in ('material','detail','product') %}{{ elink(item.target_type, item.target_id, item.description_snapshot) }}{% else %}{{ item.description_snapshot }}{% endif %}{% set _nums = catalog_numbers_for(item.target_type, item.target_id) %}{% if _nums %} <span class="text-muted text-small">({{ _nums }})</span>{% endif %} &times; {{ delivery_item_qty_text(item) }}
                             {%- if item.unit_price %} @ {{ "%.2f"|format(item.unit_price) }} €{% endif %}
                             {%- if item.remnant_qty %}, остатък {{ item.remnant_qty|num3 }}{% if item.remnant_width %} ({{ item.remnant_width|num3 }}×{{ item.remnant_height|num3 }}){% endif %}{% endif %}
                             {%- if item.notes %} - {{ item.notes }}{% endif %}

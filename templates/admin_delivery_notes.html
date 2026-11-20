@@ -435,7 +435,7 @@
                         {#- Format: (item) (brand) x (quantity) (parameters separated by ,) - see CLAUDE.md delivery-note history task #}
                         <div>
                             {%- if item.target_type == 'material' %}#{{ item.target_id }} {% endif -%}
-                            {% if item.target_type in ('material','detail','product') %}{{ elink(item.target_type, item.target_id, item.description_snapshot) }}{% else %}{{ item.description_snapshot }}{% endif %}{% if item.brand %} {{ item.brand }}{% endif %} &times; {{ delivery_item_qty_text(item) }}{% if item.weight_kg %} (реално {{ item.weight_kg|num3 }} кг){% endif %}
+                            {% if item.target_type in ('material','detail','product') %}{{ elink(item.target_type, item.target_id, item.description_snapshot) }}{% else %}{{ item.description_snapshot }}{% endif %}{% set _nums = catalog_numbers_for(item.target_type, item.target_id) %}{% if _nums %} <span class="text-muted text-small">({{ _nums }})</span>{% endif %}{% if item.brand %} {{ item.brand }}{% endif %} &times; {{ delivery_item_qty_text(item) }}{% if item.weight_kg %} (реално {{ item.weight_kg|num3 }} кг){% endif %}
                             {%- set params = [] %}
                             {%- if item.width %}{% set _ = params.append('Ш: ' ~ (item.width|num3)) %}{% endif %}
                             {%- if item.height %}{% set _ = params.append('Д: ' ~ (item.height|num3)) %}{% endif %}

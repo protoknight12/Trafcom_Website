@@ -69,3 +69,30 @@ def test_numbers_on_create_edit_and_list(s):
     assert res.status_code in (302, 403)
     db.session.expire_all()
     assert db.session.get(Detail, d.id).external_number == 'CLIENT-78'
+
+
+def test_numbers_shown_on_documents(s):
+    """catalog_numbers(): "Наш № · Вън. № · КД №" under the name in storage, delivery notes (list + print),
+    orders (production report) - '' when nothing is set."""
+    import json
+    from app import catalog_numbers, ClientDeliveryNote, Client
+    c = _login('dn_admin')
+    c.post('/admin/details/add', data={'name': 'Планка', 'material': 'dn_steel', 'manual_price': '1',
+                                      'erp_number': '901', 'code_number': 'КД-1', 'external_number': 'CL-77'})
+    d = Detail.query.filter_by(name='Планка').one()
+    assert catalog_numbers(d) == 'Наш № 901 · Вън. № CL-77 · КД № КД-1'
+    assert catalog_numbers(Detail(name='x')) == ''
+    text = 'Наш № 901 · Вън. № CL-77 · КД № КД-1'
+
+    assert text in c.get('/storage/details').get_data(as_text=True)
+    client = Client(name='Клиент')
+    db.session.add(client)
+    db.session.commit()
+    c.post('/admin/client-delivery-notes/create', data={
+        'client_id': str(client.id), 'items_json': json.dumps([{'type': 'detail', 'target_id': d.id, 'qty': 1}])})
+    note = ClientDeliveryNote.query.one()
+    assert text in c.get('/admin/client-delivery-notes').get_data(as_text=True)
+    assert text in c.get(f'/admin/client-delivery-notes/{note.id}/print').get_data(as_text=True)
+    c.post('/orders/new', data={'customer_name': 'QA', 'client_id': str(client.id),
+                                'cart_json': json.dumps([{'type': 'detail', 'id': d.id, 'qty': 1}])})
+    assert text in c.get('/admin/production').get_data(as_text=True)

@@ -72,6 +72,7 @@
                 <tr>
                     <td>
                         {{ elink('product', item.product_id, item.item_name) if item.product_id else elink('detail', item.detail_id, item.item_name) }}
+                        {% set _nums = catalog_numbers_for('product', item.product_id) if item.product_id else catalog_numbers_for('detail', item.detail_id) %}{% if _nums %}<div class="text-small text-muted">{{ _nums }}</div>{% endif %}
                         {% if item.product %}
                         <span class="badge badge-user">{{ _('Продукт') }}</span>
                         {% else %}

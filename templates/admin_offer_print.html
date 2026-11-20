@@ -75,7 +75,7 @@
                 {% endif %}
             </td>
             {% endif %}
-            <td>{{ item.name or '' }}</td>
+            <td>{{ item.name or '' }}{% set _nums = catalog_numbers_for('product', item.product_id) if item.product_id else (catalog_numbers_for('detail', item.detail_id) if item.detail_id else catalog_numbers_for('material', item.material_id)) %}{% if _nums %}<div class="muted" style="font-size: .85em;">{{ _nums }}</div>{% endif %}</td>
             <td class="item-desc">{{ item.description_html | safe if item.description_html else '' }}</td>
             <td>{{ item.dimensions or '' }}</td>
             <td class="num">{{ (item.quantity|num2) if item.quantity is not none else '' }}</td>

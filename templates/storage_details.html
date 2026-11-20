@@ -52,8 +52,8 @@
                 </thead>
                 <tbody id="detailsTableBody">
                 {% for detail in details %}
-                <tr data-search="{{ (detail.name ~ ' ' ~ (detail.material.display_name if detail.material else '')) | lower }}">
-                    <td>{{ elink('detail', detail.id, detail.name) }}</td>
+                <tr data-search="{{ (detail.name ~ ' ' ~ (detail.material.display_name if detail.material else '') ~ ' ' ~ catalog_numbers(detail)) | lower }}">
+                    <td>{{ elink('detail', detail.id, detail.name) }}{% set _nums = catalog_numbers(detail) %}{% if _nums %}<div class="text-small text-muted">{{ _nums }}</div>{% endif %}</td>
                     <td>{{ detail.material.display_name if detail.material else '-' }}</td>
                     <td>{{ format_cut_dimensions(detail.width, detail.height, detail.material.type if detail.material else 'sheets') }}</td>
                     <td class="text-center">{{ detail.stock_quantity|round(2) }}</td>

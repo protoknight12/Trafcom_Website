@@ -6755,6 +6755,31 @@ def material_cost_text(material):
     return f'{price3(material.cost_per_m2)} €/{material_unit_short(material.type)}'
 
 
+def catalog_numbers(row):
+    """The numbers of a Detail / Product / MaterialPrice as one line (owner's decision 2026-11-20, shown in offers,
+    orders, storage, delivery notes and declarations): "Наш № 123 · Вън. № AB-7 · КД № 01.02"; '' when none is set.
+    Only a Detail has the client's (external) number."""
+    if row is None:
+        return ''
+    parts = []
+    if getattr(row, 'erp_number', None):
+        parts.append(f'Наш № {row.erp_number}')
+    if getattr(row, 'external_number', None):
+        parts.append(f'Вън. № {row.external_number}')
+    if getattr(row, 'code_number', None):
+        parts.append(f'КД № {row.code_number}')
+    return ' · '.join(parts)
+
+
+_CATALOG_MODELS = {'detail': 'Detail', 'product': 'Product', 'material': 'MaterialPrice'}
+
+
+def catalog_numbers_for(target_type, target_id):
+    """catalog_numbers() of a document line's target ('detail' / 'product' / 'material' + id; identity map)."""
+    model = globals().get(_CATALOG_MODELS.get(target_type, ''))
+    return catalog_numbers(db.session.get(model, target_id)) if model and target_id else ''
+
+
 def _delivery_item_material(item):
     """The MaterialPrice of a delivery-note line, None for a detail/product line (identity map - no extra query when
     the page already loaded it)."""
@@ -6791,6 +6816,8 @@ def delivery_note_total(note):
 app.jinja_env.filters['kg'] = kg_text
 app.jinja_env.globals['material_qty_text'] = material_qty_text
 app.jinja_env.globals['material_cost_text'] = material_cost_text
+app.jinja_env.globals['catalog_numbers'] = catalog_numbers
+app.jinja_env.globals['catalog_numbers_for'] = catalog_numbers_for
 app.jinja_env.globals['delivery_item_qty_text'] = delivery_item_qty_text
 app.jinja_env.globals['delivery_item_line_total'] = delivery_item_line_total
 app.jinja_env.globals['delivery_note_total'] = delivery_note_total

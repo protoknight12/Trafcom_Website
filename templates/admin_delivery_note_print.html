@@ -73,7 +73,7 @@
         {% set mat = mats.get(item.target_id) if item.target_type == 'material' else none %}
         <tr>
             <td class="idx">{{ loop.index }}</td>
-            <td>{{ item.description_snapshot }}</td>
+            <td>{{ item.description_snapshot }}{% set _nums = catalog_numbers_for(item.target_type, item.target_id) %}{% if _nums %}<div class="muted" style="font-size: .85em;">{{ _nums }}</div>{% endif %}</td>
             <td>{{ item.brand or '' }}</td>
             <td>
                 {%- set dims = [] -%}

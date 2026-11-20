@@ -202,8 +202,10 @@
                     <td>
                         {% if item.product %}
                         <span style="color: #007bff; font-weight: 600;">[ПРОДУКТ]</span> {{ elink('product', item.product_id, item.product.name) if item.product else 'Изтрит продукт' }}
+                        {% set _nums = catalog_numbers(item.product) %}{% if _nums %}<div class="text-small text-muted">{{ _nums }}</div>{% endif %}
                         {% else %}
                         <span style="color: #a56cff; font-weight: 600;">[ДЕТАЙЛ]</span> {{ elink('detail', item.detail_id, item.detail.name) if item.detail else 'Изтрит детайл' }}
+                        {% set _nums = catalog_numbers(item.detail) %}{% if _nums %}<div class="text-small text-muted">{{ _nums }}</div>{% endif %}
                         {% if item.material_key and item.material %}<div class="text-small text-muted">Материал: {{ elink('material', item.material.id, format_material_option(item.material)) }}</div>{% endif %}
                         {% if current_user.is_admin and item.detail and item.detail.alt_materials and not item.quantity_produced
                               and not item.consumed_material_id and order.status not in ('completed', 'cancelled') %}
@@ -252,7 +254,7 @@
                 {% if item.product %}
                 {% for comp in item.components %}
                 <tr>
-                    <td style="padding-left: 30px; color: var(--text-muted);">↳ Компонент: {{ elink('detail', comp.detail_id, comp.detail_name_snapshot) }}</td>
+                    <td style="padding-left: 30px; color: var(--text-muted);">↳ Компонент: {{ elink('detail', comp.detail_id, comp.detail_name_snapshot) }}{% set _nums = catalog_numbers(comp.detail) %}{% if _nums %}<div class="text-small text-muted">{{ _nums }}</div>{% endif %}</td>
                     <td class="text-center">{{ comp.quantity_needed }} бр. <span class="text-muted text-small" id="component-remaining-{{ comp.id }}">(остават {{ comp.quantity_remaining }})</span></td>
                     <td class="text-center">
                         <div class="text-small text-muted" style="margin-bottom: 4px;">Общо изработени: <span id="component-total-{{ comp.id }}">{{ comp.quantity_produced }}</span> бр.</div>
