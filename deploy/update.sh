@@ -28,6 +28,12 @@ print(make_url(url).set(drivername='postgresql').render_as_string(hide_password=
     ls -1t backups/pre_update_*.dump | tail -n +11 | xargs -r rm --   # keep the last 10
 fi
 
+# Importing app creates its upload folders (os.makedirs at import). Here that runs as the deploying user, but the
+# service runs as www-data and cannot write into a folder it does not own (invoice_files, 2026-11-20: 500 on
+# upload). www-data cannot create folders in /opt/trafcom itself and chown needs a password, so a NEW folder is only
+# reported at the end, with the command to run. Remember the folders that exist now.
+dirs_before=$(find . -mindepth 1 -maxdepth 1 -type d | sort)
+
 venv/bin/python -c "from app import app, db; app.app_context().push(); db.create_all()"
 
 # no writers while migrations run (the poller threads would add rows in the old units mid-rescale)
@@ -40,6 +46,12 @@ trap 'echo "!! update failed - starting the site again, check the error above"; 
 venv/bin/python -m migration.run_once
 
 trap - ERR
+# new folders made by the imports above belong to the deploying user - www-data must own them (see above)
+new_dirs=$(comm -13 <(echo "$dirs_before") <(find . -mindepth 1 -maxdepth 1 -type d | sort) | sed 's|^\./|/opt/trafcom/|' | tr '\n' ' ')
+if [ -n "${new_dirs// /}" ]; then
+    echo "!! NEW FOLDER(S) the site must write into - run once (asks for the password):"
+    echo "!!   sudo chown www-data:www-data $new_dirs"
+fi
 sudo systemctl restart trafcom
 sudo systemctl status trafcom --no-pager
 # /health answers 200 once the app is up and the database responds (503 if it does not); -f turns anything else into a
