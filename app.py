@@ -1666,6 +1666,12 @@ class ClientDeliveryNote(db.Model):
     # Names printed under Предал/Приел; NULL = the default (_note_signatures()).
     handed_by = db.Column(db.String(150), nullable=True)
     received_by = db.Column(db.String(150), nullable=True)
+    # Invoicing (owner's decision 2026-11-20): "Фактурирано" + the invoice's number and date, and "Платено" -
+    # bookkeeping only, set in the note dialog or the list's "Фактура" (_set_client_note_invoice()); no stock effect.
+    invoiced = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    invoice_number = db.Column(db.String(100), nullable=True)
+    invoice_date = db.Column(db.Date, nullable=True)
+    paid = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
 
     client = db.relationship('Client')
     created_by = db.relationship('User')
@@ -13123,10 +13129,12 @@ def create_client_delivery_note():
     if note.kind == 'consume':
         _lock_numbering('erp')  # a sheet remnant may become a new lot (ERP №) - before any stock row, see create_delivery_note()
     _set_delivery_note_header(note, 'client_id')
+    invoice_error = _set_client_note_invoice(note)
     db.session.add(note)
     db.session.flush()
 
     added_any, log_parts, log_detail_lines, errors = _apply_client_delivery_note_items(note, items)
+    errors = errors + ([invoice_error] if invoice_error else [])
     refusal = _client_note_refusal(note, added_any, errors, 'Няма валидни артикули за добавяне.', set())
     if refusal:
         return refusal
@@ -13157,7 +13165,9 @@ def edit_client_delivery_note(note_id):
     touched = _note_targets(note.items)
     old_lines = _reverse_note_items(note.items, sign=-1)
     _set_delivery_note_header(note, 'client_id', lock_party=True)
+    invoice_error = _set_client_note_invoice(note)
     added_any, log_parts, log_detail_lines, errors = _apply_client_delivery_note_items(note, items)
+    errors = errors + ([invoice_error] if invoice_error else [])
     refusal = _client_note_refusal(note, added_any, errors, 'Няма валидни артикули - разписката не е променена.', touched)
     if refusal:
         return refusal
@@ -13167,6 +13177,42 @@ def edit_client_delivery_note(note_id):
     log_action(f'{edited} №{note.id}: ' + ', '.join(log_parts),
                details=_client_note_header_text(note) + '\nПреди:\n' + '\n'.join(old_lines) + '\nСлед:\n' + '\n'.join(log_detail_lines))
     flash('Стоковата разписка беше редактирана и наличностите бяха преизчислени.', 'success')
+    return redirect(url_for('admin_client_delivery_notes'))
+
+
+def _set_client_note_invoice(note):
+    """The invoicing checkboxes of a client note from the posted form: "Фактурирано" (`invoiced`) opens the
+    invoice № and date (cleared when it is unticked); "Платено" (`paid`) is independent. Returns an error message
+    for a bad date, else None."""
+    note.invoiced = request.form.get('invoiced') == '1'
+    note.paid = request.form.get('paid') == '1'
+    number = request.form.get('invoice_number', '').strip()[:100] or None
+    raw = request.form.get('invoice_date', '').strip()
+    try:
+        date = datetime.strptime(raw, '%Y-%m-%d').date() if raw else None
+    except ValueError:
+        return 'Невалидна дата на фактурата.'
+    note.invoice_number, note.invoice_date = (number, date) if note.invoiced else (None, None)
+    return None
+
+
+@app.route('/admin/client-delivery-notes/<int:note_id>/invoice', methods=['POST'])
+@role_required('admin')
+def client_delivery_note_invoice(note_id):
+    """"Фактура" on the client notes list: only the invoicing fields - unlike the full edit, which rewrites the
+    lines and so moves stock back and forth."""
+    note = _lock_or_404(ClientDeliveryNote, note_id)
+    error = _set_client_note_invoice(note)
+    if error:
+        db.session.rollback()
+        flash(error, 'danger')
+        return redirect(url_for('admin_client_delivery_notes'))
+    changes = describe_changes(f'Фактуриране на стокова разписка №{note.number}', note,
+                               {'invoiced': 'фактурирано', 'invoice_number': 'фактура №',
+                                'invoice_date': 'дата на фактурата', 'paid': 'платено'})
+    db.session.commit()
+    log_action(changes)
+    flash(f'Данните за фактурата на разписка №{note.number} са записани.', 'success')
     return redirect(url_for('admin_client_delivery_notes'))
 
 

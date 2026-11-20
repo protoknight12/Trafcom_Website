@@ -42,6 +42,7 @@
             <tr><td>Номер</td><td>{{ note.number }}</td></tr>
             {% if doc_date %}<tr><td>Дата</td><td>{{ doc_date.strftime('%d.%m.%Y') }}</td></tr>{% endif %}
             {% if note.note_number %}<tr><td>Реф. №</td><td>{{ note.note_number }}</td></tr>{% endif %}
+            {% if note.invoiced and (note.invoice_number or note.invoice_date) %}<tr><td>Фактура №</td><td>{{ note.invoice_number or '' }}{% if note.invoice_date %} / {{ note.invoice_date.strftime('%d.%m.%Y') }}{% endif %}</td></tr>{% endif %}
         </table>
     </div>
 

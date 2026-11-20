@@ -60,7 +60,7 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <label for="note_number">Фактура № / Наша реф.</label>
+                    <label for="note_number">Реф. №</label>
                     <input type="text" id="note_number" name="note_number" placeholder="напр. 0000070244">
                 </div>
                 <div class="form-group">
@@ -68,6 +68,7 @@
                     <input type="date" id="note_date" name="note_date">
                 </div>
             </div>
+            {% set invoice_prefix = 'cdn' %}{% include 'partials/client_note_invoice_fields.html' %}
 
             <div class="form-group">
                 <label>Тип артикул</label>
@@ -246,6 +247,13 @@
                 <option value="">Всички видове</option>
                 {% for k, label in kinds.items() %}<option value="{{ k }}">{{ label }}</option>{% endfor %}
             </select>
+            <select id="filterInvoice" style="flex: 1 1 150px;">
+                <option value="">Фактура: всички</option>
+                <option value="none">Не е фактурирано</option>
+                <option value="invoiced">Фактурирано, неплатено</option>
+                <option value="paid">Фактурирано и платено</option>
+                <option value="paid_only">Платено без фактура</option>
+            </select>
             <label style="display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;">от
                 <input type="date" id="filterFrom" data-remember style="width: auto;"></label>
             <label style="display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;">до
@@ -260,7 +268,8 @@
                     <th>№</th>
                     <th>Дата</th>
                     <th>Клиент</th>
-                    <th>Фактура №</th>
+                    <th>Реф. №</th>
+                    <th>Фактура</th>
                     <th>Артикули</th>
                     <th></th>
                 </tr>
@@ -269,12 +278,19 @@
                 {% for note in notes %}
                 {% set day = note.note_date or (note.created_at|local).date() %}
                 <tr data-search="{{ ([note.number, note.note_number, note.client.name if note.client else '', kinds[note.kind]] + note.items|map(attribute='description_snapshot')|list)|select|join(' ')|lower }}"
-                    data-client="{{ note.client_id or 'none' }}" data-kind="{{ note.kind }}" data-date="{{ day.isoformat() }}">
+                    data-client="{{ note.client_id or 'none' }}" data-kind="{{ note.kind }}" data-date="{{ day.isoformat() }}"
+                    data-invoice="{{ ('paid' if note.paid else 'invoiced') if note.invoiced else ('paid_only' if note.paid else 'none') }}">
                     <td><strong>{{ note.number }}</strong></td>
                     <td>{{ day.strftime('%d.%m.%Y') }}<div class="text-muted text-small">записан {{ (note.created_at|local).strftime('%d.%m.%Y %H:%M') }}</div></td>
                     <td>{{ note.client.name if note.client else '-' }}
                         {%- if note.kind != 'issue' %}<div style="font-size: 0.8rem; color: var(--text-muted);">{{ kinds[note.kind] }}</div>{% endif %}</td>
                     <td>{{ note.note_number or '-' }}</td>
+                    <td>
+                        {%- if note.invoiced %}<strong>Фактурирано</strong>
+                        {%- if note.invoice_number or note.invoice_date %}<div class="text-small">№ {{ note.invoice_number or '-' }}{% if note.invoice_date %} / {{ note.invoice_date.strftime('%d.%m.%Y') }}{% endif %}</div>{% endif %}
+                        {%- else %}<span class="text-muted">Не е фактурирано</span>{% endif %}
+                        <div class="text-small">{% if note.paid %}<strong>Платено</strong>{% else %}<span class="text-muted">Неплатено</span>{% endif %}</div>
+                    </td>
                     <td>
                         {% for item in note.items %}
                         <div>
@@ -291,7 +307,11 @@
                                 data-dialog="clientDeliveryNoteSection-dialog" data-note-id="{{ note.id }}"
                                 data-action="{{ url_for('edit_client_delivery_note', note_id=note.id) }}"
                                 data-title="Редакция на стокова разписка №{{ note.number }}"
-                                data-values='{{ {"client_id": note.client_id or "", "kind": note.kind, "note_number": note.note_number or "", "note_date": note.note_date.isoformat() if note.note_date else ""}|tojson|forceescape }}'>Редактирай</button>
+                                data-values='{{ {"client_id": note.client_id or "", "kind": note.kind, "note_number": note.note_number or "", "note_date": note.note_date.isoformat() if note.note_date else "", "invoiced": "1" if note.invoiced else "", "invoice_number": note.invoice_number or "", "invoice_date": note.invoice_date.isoformat() if note.invoice_date else "", "paid": "1" if note.paid else ""}|tojson|forceescape }}'>Редактирай</button>
+                        <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;"
+                                data-dialog="invoiceDialog" data-action="{{ url_for('client_delivery_note_invoice', note_id=note.id) }}"
+                                data-title="Фактура към разписка №{{ note.number }}"
+                                data-values='{{ {"invoiced": "1" if note.invoiced else "", "invoice_number": note.invoice_number or "", "invoice_date": note.invoice_date.isoformat() if note.invoice_date else "", "paid": "1" if note.paid else ""}|tojson|forceescape }}'>Фактура</button>
                         {% endif %}
                         <a href="{{ url_for('admin_client_delivery_note_print', note_id=note.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Печат</a>
                         {% if current_user.is_admin %}
@@ -305,16 +325,31 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="6" class="text-center no-data">Няма записани разписки.</td>
+                    <td colspan="7" class="text-center no-data">Няма записани разписки.</td>
                 </tr>
                 {% endfor %}
                 {% if notes %}
-                <tr class="search-empty-row" hidden><td colspan="6" class="text-center no-data">Няма съвпадения.</td></tr>
+                <tr class="search-empty-row" hidden><td colspan="7" class="text-center no-data">Няма съвпадения.</td></tr>
                 {% endif %}
                 </tbody>
             </table>
         </div>
     </section>
+
+    {% if current_user.is_admin %}
+    {#- "Фактура" on a row: only the invoicing fields (client_delivery_note_invoice) - no stock movement. #}
+    <dialog id="invoiceDialog" class="form-dialog">
+        <form method="POST" action="">
+            {% include 'partials/csrf_field.html' %}
+            <h3 data-dialog-heading>Фактура</h3>
+            {% set invoice_prefix = 'inv' %}{% include 'partials/client_note_invoice_fields.html' %}
+            <div style="display: flex; gap: 10px; margin-top: 12px;">
+                <button type="submit" class="btn-submit">Запази</button>
+                <button type="button" class="btn-secondary" onclick="this.closest('dialog').close()">Отказ</button>
+            </div>
+        </form>
+    </dialog>
+    {% endif %}
 
 </main>
 
@@ -325,6 +360,7 @@
     (function () {
         const q = document.getElementById('cdnHistorySearchInput');
         const fClient = document.getElementById('filterClient'), fKind = document.getElementById('filterKind');
+        const fInvoice = document.getElementById('filterInvoice');
         const fFrom = document.getElementById('filterFrom'), fTo = document.getElementById('filterTo');
         const body = document.getElementById('cdnHistoryBody');
         const rows = Array.from(body.querySelectorAll('tr[data-search]'));
@@ -337,13 +373,15 @@
         const updateOptions = cascadeFilters(rows, [
             { el: fClient, test: (r, v) => r.dataset.client === v },
             { el: fKind, test: (r, v) => r.dataset.kind === v },
+            { el: fInvoice, test: (r, v) => r.dataset.invoice === v },
         ], base);
         function apply() {
             updateOptions();
             let shown = 0;
             rows.forEach(function (r) {
                 const ok = base(r) && (!fClient.value || r.dataset.client === fClient.value)
-                    && (!fKind.value || r.dataset.kind === fKind.value);
+                    && (!fKind.value || r.dataset.kind === fKind.value)
+                    && (!fInvoice.value || r.dataset.invoice === fInvoice.value);
                 r.hidden = !ok;
                 if (ok) shown++;
             });
@@ -351,9 +389,9 @@
         }
         let timer = null;
         q.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(apply, 120); });
-        [fClient, fKind, fFrom, fTo].forEach(function (el) { el.addEventListener('change', apply); el.addEventListener('input', apply); });
+        [fClient, fKind, fInvoice, fFrom, fTo].forEach(function (el) { el.addEventListener('change', apply); el.addEventListener('input', apply); });
         document.getElementById('cdnFilterReset').addEventListener('click', function () {
-            q.value = ''; fClient.value = ''; fKind.value = ''; fFrom.value = ''; fTo.value = '';
+            q.value = ''; fClient.value = ''; fKind.value = ''; fInvoice.value = ''; fFrom.value = ''; fTo.value = '';
             apply();
         });
         apply();
