@@ -122,7 +122,7 @@
                     <input type="number" id="cdn_qty" value="1" min="0.001" step="0.001">
                 </div>
                 <div class="form-group qty-field" style="display: none;">
-                    <label for="cdn_bars">Брой пръти</label>
+                    <label for="cdn_bars">Брой (бр.)</label>
                     <input type="number" id="cdn_bars" min="0" step="any" title="Попълва количеството в метри: брой x дължината">
                 </div>
                 <div class="form-group qty-field" id="cdn_kg_group">
@@ -427,11 +427,19 @@
         return type === 'material' ? 'cdn_material_select' : (type === 'detail' ? 'cdn_detail_select' : 'cdn_product_select');
     }
 
+    // Our material: the sale price of one stock unit (sheet / metre / piece) for the chosen client - delivery cost +
+    // the standard markup or his own Материали terms, computed by the server (material_prices); a client's lot: none.
+    const MATERIAL_PRICES = {{ material_prices|tojson }};
     function fillPriceFromSelection() {
         const type = document.querySelector('input[name="cdn_item_type"]:checked').value;
         const sel = document.getElementById(currentSelectField(type));
         const opt = sel.options[sel.selectedIndex];
-        const price = opt ? opt.dataset.price : '';
+        let price = opt ? opt.dataset.price : '';
+        if (type === 'material') {
+            const p = opt && MATERIAL_PRICES[opt.value];
+            const client = document.getElementById('client_id').value;
+            price = p ? (client in p ? p[client] : p['']) : '';
+        }
         document.getElementById('cdn_price').value = price || '';
     }
 
@@ -503,6 +511,7 @@
         cdnParty.kind = kindNow;
         cdnParty.client = clientNow;
         applyOwnerFilter();
+        if (e.target.id === 'client_id') fillPriceFromSelection();   // the price follows the client's terms
     }
     document.getElementById('kind').addEventListener('change', onPartyChange);
     document.getElementById('client_id').addEventListener('change', onPartyChange);

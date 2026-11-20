@@ -13067,6 +13067,13 @@ def admin_client_delivery_notes():
                      'owner': d.owner_client_id} for d in details]
     products_data = [{'id': p.id, 'name': p.name, 'price': None, 'stock': p.stock_quantity,
                       'owner': p.owner_client_id} for p in products]
+    # Sale price of one STOCK unit of our lots (delivery cost + the standard markup, or the client's own Материали
+    # terms - material_stock_unit_price()): {material id: {'': no client / client without terms, client id: price}}.
+    # A client's own lot has none (his material). The page fills "Ед. цена" from it for the chosen client.
+    term_clients = [c for c in clients if c.material_adjustment_type]
+    material_prices = {m.id: {'': material_stock_unit_price(m),
+                              **{str(c.id): material_stock_unit_price(m, c) for c in term_clients}}
+                       for m in materials if not m.owner_client_id and m.cost_per_m2}
     # for each note's "Редактирай" (edit_client_delivery_note)
     note_rows = {note.id: [{'type': it.target_type, 'target_id': it.target_id, 'name': it.description_snapshot,
                             'qty': it.quantity, 'unit_price': it.unit_price, 'notes': it.notes,
@@ -13076,7 +13083,7 @@ def admin_client_delivery_notes():
     return render_template(
         'admin_client_delivery_notes.html', clients=clients, notes=notes, note_rows=note_rows, materials=materials,
         materials_data=materials_data, details_data=details_data, products_data=products_data,
-        kinds=CLIENT_NOTE_KINDS, active_page='admin_client_delivery_notes'
+        material_prices=material_prices, kinds=CLIENT_NOTE_KINDS, active_page='admin_client_delivery_notes'
     )
 
 

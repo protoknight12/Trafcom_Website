@@ -174,3 +174,18 @@ def test_data_step_idempotent(s):
         runpy.run_module('migration.data_apply_standard_material_markup', run_name='__main__')
         db.session.expire_all()
         assert db.session.get(Detail, d.id).calculated_price == 120
+
+
+def test_client_delivery_note_material_prices(s):
+    """The client delivery-note page gets each of OUR lots' sale price per stock unit (sheet without a size: m²):
+    the standard markup by default, a client's own terms for him; a client's own lot gets none."""
+    import json, re
+    html = _admin().get('/admin/client-delivery-notes').get_data(as_text=True)
+    prices = json.loads(re.search(r'const MATERIAL_PRICES = (\{.*?\});\n', html).group(1))
+    steel = MaterialPrice.query.filter_by(key='steel').one()
+    own = MaterialPrice.query.filter_by(key='own_steel').one()
+    p = prices[str(steel.id)]
+    assert p[''] == 120                                   # no client / client without terms: +20 %
+    assert p[str(s['markup'].id)] == 110 and p[str(s['discount'].id)] == 90 and p[str(s['zero'].id)] == 100
+    assert str(s['plain'].id) not in p                    # falls back to ''
+    assert str(own.id) not in prices
