@@ -86,13 +86,13 @@
                         {% for type_key, group in materials|groupby('type') %}
                         <optgroup label="{{ material_type_label(type_key) }}">
                             {% for m in group %}
-                            <option value="{{ m.id }}" data-price="" data-stock="{{ m.stock_quantity or 0 }}"
+                            <option value="{{ m.id }}" data-price="" data-stock="{{ m.stock_quantity or 0 }}" data-stock-text="{{ material_qty_text(m) }}"
                                     data-name="{{ m.display_name }}" data-w="{{ m.sheet_width_mm if m.sheet_width_mm is not none else '' }}"
                                     data-h="{{ m.sheet_length_mm if m.sheet_length_mm is not none else '' }}" data-t="{{ m.thickness_mm if m.thickness_mm is not none else '' }}"
                                     data-type="{{ m.type }}" data-id="{{ m.id }}" data-brand="{{ m.brand or '' }}"
                                     data-density="{{ material_density(m) or '' }}" data-weight="{{ m.weight_kg or '' }}" data-hm="{{ m.height_mm or '' }}"
                                     data-owner="{{ m.owner_client_id or '' }}" data-unit="{{ material_price_unit(m.type) }}"
-                                    data-grade="{{ m.grade.name if m.grade else 'Без вид' }}" data-owner-name="{{ m.owner_client.name if m.owner_client else 'Трафком' }}" data-stock-kg="{{ material_stock_kg(m)|num3 }}">{{ format_material_option(m) }} (наличност: {{ (m.stock_quantity or 0)|num3 }})</option>
+                                    data-grade="{{ m.grade.name if m.grade else 'Без вид' }}" data-owner-name="{{ m.owner_client.name if m.owner_client else 'Трафком' }}" data-stock-kg="{{ material_stock_kg(m)|num3 }}">{{ format_material_option(m) }} (наличност: {{ material_qty_text(m) }})</option>
                             {% endfor %}
                         </optgroup>
                         {% endfor %}

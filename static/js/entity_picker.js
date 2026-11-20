@@ -21,7 +21,7 @@
     }
     function stockText(d) {
         if (d.stock === undefined || d.stock === '') return '';
-        return num(d.stock) + (parseFloat(d.stockKg) ? ' (≈ ' + num(d.stockKg) + ' кг)' : '');
+        return (d.stockText || num(d.stock)) + (parseFloat(d.stockKg) ? ' (≈ ' + num(d.stockKg) + ' кг)' : '');
     }
     function ownerText(d) { return d.ownerName || ''; }
 

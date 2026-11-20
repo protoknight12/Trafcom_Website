@@ -6681,9 +6681,18 @@ def kg_text(value, places=3):
     return f' (≈ {num3(value, places)} кг)'
 
 
+def material_qty_text(material, qty=None):
+    """A quantity of a lot in its STOCK unit as text (default its stock): linear stock is kept in metres, shown as
+    "3 бр. = 18 м" when the bar length is known (the length is in the name), else "18 м"; other types the bare number."""
+    q = (material.stock_quantity or 0) if qty is None else qty
+    if material_price_unit(material.type) != 'm':
+        return num3(q)
+    bars = f'{num3(q * 1000 / material.sheet_length_mm)} бр. = ' if material.sheet_length_mm else ''
+    return f'{bars}{num3(q)} м'
 
 
 app.jinja_env.filters['kg'] = kg_text
+app.jinja_env.globals['material_qty_text'] = material_qty_text
 app.jinja_env.filters['num3'] = num3
 app.jinja_env.filters['num2'] = num2
 app.jinja_env.filters['price3'] = price3

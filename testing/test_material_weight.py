@@ -5,7 +5,7 @@ else density (own or guessed from the name) x geometry per type. Run: python -m 
 import math
 
 from app import (MaterialPrice, MaterialGrade, material_kg_per_unit, material_stock_kg, material_kg_per_stock_unit,
-                 material_density, material_computed_kg_per_stock_unit)
+                 material_density, material_computed_kg_per_stock_unit, material_qty_text)
 
 
 def mat(**kw):
@@ -36,6 +36,9 @@ def main():
     assert math.isclose(material_kg_per_unit(tube), 7.85 * (800 - 36 * 16) / 1000)
     assert material_kg_per_unit(mat(type='rods', sheet_width_mm=20, weight_kg=2.5)) == 2.5
     assert material_kg_per_unit(mat(type='other')) is None                  # no thickness
+    assert material_qty_text(mat(type='rods', sheet_width_mm=20, sheet_length_mm=3000, stock_quantity=9)) == '3 бр. = 9 м'
+    assert material_qty_text(mat(type='rods', sheet_width_mm=20), 2.5) == '2.5 м'     # no bar length
+    assert material_qty_text(sheet) == '3'
     print('test_material_weight OK')
 
 

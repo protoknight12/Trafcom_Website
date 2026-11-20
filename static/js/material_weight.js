@@ -121,7 +121,7 @@
             qtyLabel.textContent = baseText + ' (' + (u === null || u === 'pcs' ? 'бр.' : u === 'm' ? 'м'
                 : sheetArea(p) ? 'листа' : 'м²') + ')';
             group.style.display = l ? '' : 'none';
-            label.textContent = l ? 'Брой пръти по ' + l + ' мм' : 'Брой пръти';
+            label.textContent = 'Брой пръти (бр.)';
             var q = parseFloat(qtyEl.value);
             if (document.activeElement !== barsEl) barsEl.value = l && q > 0 ? round(q * 1000 / l, 3) : '';
         }

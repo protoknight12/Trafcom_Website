@@ -303,7 +303,7 @@
                         {%- elif computed_kg %}<span title="Изчислено - няма въведено реално тегло">{{ computed_kg|num3 }} <span class="text-muted text-small">изч.</span></span>
                         {%- else %}—{% endif -%}
                         {%- set kg_m = material.weight_kg or computed_kg %}
-                        {%- if kg_m and material_unit_short(material.type) == 'м' %}<div class="text-muted text-small">/ м{% if material.sheet_length_mm %}; 1 бр. ({{ material.sheet_length_mm|num3 }} мм): <strong>{{ (kg_m * material.sheet_length_mm / 1000)|num3 }}</strong>{% endif %}</div>{% endif %}
+                        {%- if kg_m and material_unit_short(material.type) == 'м' %}<div class="text-muted text-small">/ м{% if material.sheet_length_mm %}; 1 бр.: <strong>{{ (kg_m * material.sheet_length_mm / 1000)|num3 }}</strong>{% endif %}</div>{% endif %}
                     </td>
                     <td>{{ material.min_quantity|num3 if material.min_quantity is not none else '—' }}</td>
                     <td>{{ material.stock_quantity|num3 }}{{ material_stock_kg(material)|kg }}</td>
