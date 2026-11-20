@@ -441,6 +441,8 @@
                             {%- if item.notes %} - {{ item.notes }}{% endif %}
                         </div>
                         {% endfor %}
+                        {%- set note_total = delivery_note_total(note) %}
+                        {%- if note_total %}<div style="margin-top: 4px;"><strong>Общо: {{ note_total|money }} €</strong> <span class="text-muted text-small">без ДДС</span></div>{% endif %}
                     </td>
                     <td style="white-space: nowrap;">
                         {% if current_user.is_admin %}
@@ -1181,6 +1183,13 @@
 
     // "3 бр. = 9 м" for a linear material line (stock in metres, bars of the line's length), else the number -
     // same text as delivery_item_qty_text() in app.py.
+    // Value of a dialog line: a linear material line's unit_price is per BAR of its length (qty in metres) -
+    // same as delivery_item_line_total() in app.py.
+    function dnLineTotal(item) {
+        if (item.unit_price == null) return 0;
+        const linear = item.type === 'material' && (MATERIAL_TYPES[item.material_type] || {}).unit === 'm' && item.height;
+        return (linear ? item.qty * 1000 / item.height : item.qty) * item.unit_price;
+    }
     function dnQtyText(item) {
         const unit = item.type === 'material' ? (MATERIAL_TYPES[item.material_type] || {}).unit : null;
         if (unit !== 'm') return String(item.qty);
@@ -1231,6 +1240,18 @@
 
                 body.appendChild(tr);
             });
+            // "Общо" of the note without VAT - same rule as delivery_note_total() in app.py.
+            const total = Math.round(dnItems.reduce(function (sum, item) { return sum + dnLineTotal(item); }, 0) * 100) / 100;
+            if (total) {
+                const tr = document.createElement('tr');
+                const td = document.createElement('td');
+                td.colSpan = 7;
+                td.className = 'text-right';
+                td.innerHTML = '<strong></strong> <span class="text-muted text-small">без ДДС</span>';
+                td.firstChild.textContent = 'Общо: ' + total.toFixed(2) + ' €';
+                tr.appendChild(td);
+                body.appendChild(tr);
+            }
         }
 
         document.getElementById('submitNoteBtn').disabled = dnItems.length === 0;

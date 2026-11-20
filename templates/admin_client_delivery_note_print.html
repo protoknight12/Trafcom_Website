@@ -20,6 +20,7 @@
     <a href="{{ url_for('admin_client_delivery_notes') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">← Обратно</a>
     {% if note.items|selectattr('unit_price')|list %}<label style="display: inline-flex; align-items: center; gap: 8px; color: var(--text-main); white-space: nowrap; cursor: pointer;"><input type="checkbox" data-print-prices="client-delivery-note" checked> Показвай цените</label>{% endif %}
     {% if not consume %}<a href="{{ url_for('admin_client_delivery_note_breakdown', note_id=note.id) }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Материали и операции</a>{% endif %}
+    {% if has_declarations and not consume %}<a href="{{ url_for('admin_client_delivery_note_declarations', note_id=note.id) }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">Декларации за съответствие</a>{% endif %}
     <button class="btn-submit" style="padding: 12px 24px;" onclick="window.print()">Печат / PDF</button>
 </div>
 

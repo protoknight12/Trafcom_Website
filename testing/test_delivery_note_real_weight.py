@@ -209,6 +209,7 @@ def test_linear_line_shows_bars_and_prices_per_bar(admin_client):
     html = admin_client.get(f'/admin/delivery-notes/{note.id}/print').get_data(as_text=True)
     assert '2 бр. = 12 м' in html
     assert '40.00' in html and '240.00' not in html
-    assert '2 бр. = 12 м' in admin_client.get('/admin/delivery-notes').get_data(as_text=True)
+    listing = admin_client.get('/admin/delivery-notes').get_data(as_text=True)
+    assert '2 бр. = 12 м' in listing and 'Общо: 40.00 €' in listing
     lot = _lot('rod')
     assert '2 бр. = 12 м' in admin_client.get(f'/admin/materials/{lot.id}/history').get_data(as_text=True)

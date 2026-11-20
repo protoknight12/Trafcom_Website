@@ -6729,9 +6729,16 @@ def delivery_item_line_total(item):
         return 0
     m = _delivery_item_material(item)
     units = item.quantity
-    if m and material_price_unit(m.type) == 'm' and item.height:
-        units = item.quantity * 1000 / item.height
+    height = getattr(item, 'height', None)   # a client note line has no own length: priced per stock unit
+    if m and material_price_unit(m.type) == 'm' and height:
+        units = item.quantity * 1000 / height
     return units * item.unit_price
+
+
+def delivery_note_total(note):
+    """Total of a supplier or client delivery note without VAT (lines without a price count 0), rounded to the cent -
+    shown in both notes lists; the print pages add their lines the same way."""
+    return round(sum(delivery_item_line_total(it) for it in note.items), 2)
 
 
 app.jinja_env.filters['kg'] = kg_text
@@ -6739,6 +6746,7 @@ app.jinja_env.globals['material_qty_text'] = material_qty_text
 app.jinja_env.globals['material_cost_text'] = material_cost_text
 app.jinja_env.globals['delivery_item_qty_text'] = delivery_item_qty_text
 app.jinja_env.globals['delivery_item_line_total'] = delivery_item_line_total
+app.jinja_env.globals['delivery_note_total'] = delivery_note_total
 app.jinja_env.filters['num3'] = num3
 app.jinja_env.filters['num2'] = num2
 app.jinja_env.filters['price3'] = price3
@@ -13373,7 +13381,36 @@ def _apply_client_delivery_note_items(note, items):
 def admin_client_delivery_note_print(note_id):
     """Browser-print view of a ClientDeliveryNote - mirrors admin_delivery_note_print()."""
     note = ClientDeliveryNote.query.get_or_404(note_id)
-    return render_template('admin_client_delivery_note_print.html', note=note, mats=_note_materials(note))
+    return render_template('admin_client_delivery_note_print.html', note=note, mats=_note_materials(note),
+                           has_declarations=any(it.target_type in ('detail', 'product') for it in note.items))
+
+
+@app.route('/admin/client-delivery-notes/<int:note_id>/declarations')
+@role_required(['admin', 'worker'])
+def admin_client_delivery_note_declarations(note_id):
+    """"Декларации за съответствие" of a client note (owner's decision 2026-11-20): one declaration per detail /
+    product line, one A4 page each, pre-filled from the line (name, КД №, quantity, material) and the note (client,
+    note №, the order it was issued from). Number/date/inspector are typed in the toolbar (numbers count up per
+    page); batch, drawing and protocol are editable on the page. Browser print, like certificate.html."""
+    note = ClientDeliveryNote.query.get_or_404(note_id)
+    order = Order.query.filter_by(issued_note_id=note.id).first()
+    lines = []
+    for it in note.items:
+        if it.target_type == 'detail':
+            row = db.session.get(Detail, it.target_id)
+            material = row.material.display_name if row and row.material else ''
+        elif it.target_type == 'product':
+            row = db.session.get(Product, it.target_id)
+            material = ''
+        else:
+            continue
+        lines.append({'name': it.description_snapshot, 'code': (row.code_number or '') if row else '',
+                      'erp': (row.erp_number or '') if row else '', 'qty': it.quantity, 'material': material,
+                      'kind': 'Продукт' if it.target_type == 'product' else 'Детайл', 'notes': it.notes or ''})
+    if not lines:
+        flash('В разписката няма детайли или продукти за декларация.', 'warning')
+        return redirect(url_for('admin_client_delivery_note_print', note_id=note.id))
+    return render_template('admin_client_note_declarations.html', note=note, order=order, lines=lines)
 
 
 _BREAKDOWN_UNITS = {'m2': 'м²', 'm': 'м', 'pcs': 'бр.'}

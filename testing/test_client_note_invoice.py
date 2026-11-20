@@ -95,3 +95,31 @@ def test_bad_date_refused_and_worker_cannot_set(s):
     res = _login('inv_worker').post(f'/admin/client-delivery-notes/{note.id}/invoice', data={'invoiced': '1'})
     assert res.status_code in (302, 403)
     assert _note().invoiced is False
+
+
+def test_list_total_and_declarations_per_detail(s):
+    """The list shows the note's total without VAT; "Декларации за съответствие" prints one page per detail line
+    (pre-filled name / КД № / quantity / client), none for a material line; a note without details redirects."""
+    from app import Detail
+    d = Detail(name='Скоба', code_number='КД-77', material_key='inv_steel', width=100, height=50, total_length=1,
+               pierce_count=1, calculated_price=3.0, stock_quantity=5)
+    db.session.add(d)
+    db.session.commit()
+    c = _login('inv_admin')
+    lines = json.dumps([{'type': 'material', 'target_id': s['lot'], 'qty': 2, 'unit_price': 12},
+                        {'type': 'detail', 'target_id': d.id, 'qty': 3, 'unit_price': 5}])
+    c.post('/admin/client-delivery-notes/create', data={'client_id': str(s['client']), 'items_json': lines})
+    note = _note()
+    assert 'Общо: 39.00 €' in c.get('/admin/client-delivery-notes').get_data(as_text=True)
+    assert 'Декларации за съответствие' in c.get(f'/admin/client-delivery-notes/{note.id}/print').get_data(as_text=True)
+    page = _login('inv_worker').get(f'/admin/client-delivery-notes/{note.id}/declarations').get_data(as_text=True)
+    assert page.count('class="doc-sheet"') == 1                 # the detail only
+    assert 'Скоба' in page and 'КД-77' in page and '3 бр.' in page and 'Клиент Фактура' in page
+
+    only_material = json.dumps([{'type': 'material', 'target_id': s['lot'], 'qty': 1}])
+    c = _login('inv_admin')
+    c.post('/admin/client-delivery-notes/create', data={'client_id': str(s['client']), 'items_json': only_material})
+    db.session.expire_all()
+    other = ClientDeliveryNote.query.order_by(ClientDeliveryNote.id.desc()).first()
+    res = c.get(f'/admin/client-delivery-notes/{other.id}/declarations')
+    assert res.status_code == 302 and res.headers['Location'].endswith(f'/admin/client-delivery-notes/{other.id}/print')

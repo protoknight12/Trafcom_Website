@@ -300,6 +300,8 @@
                             {%- if item.notes %} - {{ item.notes }}{% endif %}
                         </div>
                         {% endfor %}
+                        {%- set note_total = delivery_note_total(note) %}
+                        {%- if note_total %}<div style="margin-top: 4px;"><strong>Общо: {{ note_total|money }} €</strong> <span class="text-muted text-small">без ДДС</span></div>{% endif %}
                     </td>
                     <td style="white-space: nowrap;">
                         {% if current_user.is_admin %}
@@ -314,6 +316,7 @@
                                 data-values='{{ {"invoiced": "1" if note.invoiced else "", "invoice_number": note.invoice_number or "", "invoice_date": note.invoice_date.isoformat() if note.invoice_date else "", "paid": "1" if note.paid else ""}|tojson|forceescape }}'>Фактура</button>
                         {% endif %}
                         <a href="{{ url_for('admin_client_delivery_note_print', note_id=note.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Печат</a>
+                        {% if note.kind != 'consume' and note.items|selectattr('target_type', 'in', ['detail', 'product'])|list %}<a href="{{ url_for('admin_client_delivery_note_declarations', note_id=note.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;" title="Декларация за съответствие за всеки детайл">Декларации</a>{% endif %}
                         {% if current_user.is_admin %}
                         <form action="{{ url_for('delete_client_delivery_note', note_id=note.id) }}" method="POST" style="display: inline;"
                               onsubmit="return confirm('Да се изтрие ли стокова разписка №{{ note.number }}? Изписаните количества ще бъдат върнати в наличностите.');">
@@ -613,6 +616,7 @@
         document.getElementById('cdnAddRowBtn').textContent = '+ Добави';
     }
     // "3 бр. = 18 м" for a linear material line (the lot's bar length), else the number - delivery_item_qty_text().
+    function cdnLineTotal(item) { return item.unit_price != null ? item.qty * item.unit_price : 0; }
     function cdnQtyText(item) {
         if (item.type !== 'material') return String(item.qty);
         const opt = document.querySelector('#cdn_material_select option[value="' + item.target_id + '"]');
@@ -703,6 +707,18 @@
 
                 body.appendChild(tr);
             });
+            // "Общо" of the note without VAT - same rule as delivery_note_total() in app.py.
+            const total = Math.round(cdnItems.reduce(function (sum, item) { return sum + cdnLineTotal(item); }, 0) * 100) / 100;
+            if (total) {
+                const tr = document.createElement('tr');
+                const td = document.createElement('td');
+                td.colSpan = 7;
+                td.className = 'text-right';
+                td.innerHTML = '<strong></strong> <span class="text-muted text-small">без ДДС</span>';
+                td.firstChild.textContent = 'Общо: ' + total.toFixed(2) + ' €';
+                tr.appendChild(td);
+                body.appendChild(tr);
+            }
         }
 
         document.getElementById('submitNoteBtn').disabled = cdnItems.length === 0;

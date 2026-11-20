@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Декларации за съответствие - разписка № {{ note.number }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    {% include 'partials/print_doc.html' %}
+    {% from 'partials/company.html' import client_party %}
+    <style>
+        {#- one declaration per A4 page (admin_client_delivery_note_declarations()) #}
+        .doc-sheet + .doc-sheet { break-before: page; page-break-before: always; }
+        .doc-form { max-width: 210mm; margin: 16px auto 0; padding: 18px; background: var(--bg-card);
+                    border: 1px solid var(--border-color); border-radius: var(--border-radius-md);
+                    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+        .doc-form .form-group { margin-bottom: 0; }
+        .doc-form label { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 4px; display: block; font-weight: 600; }
+        .doc-form input { background-color: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-main);
+                          padding: 8px 12px; border-radius: var(--border-radius-sm); font-size: 0.88rem; width: 100%; box-sizing: border-box; }
+        table.doc-kv td.kv-label { width: 34%; font-size: 7.5pt; font-weight: 700; letter-spacing: .6px;
+                                   text-transform: uppercase; color: #6b6b6b; padding-top: 7px; }
+        table.doc-kv tbody tr:first-child td { border-top: 1.5px solid #1a1a1a; }
+        @media screen { [contenteditable] { outline: 1px dashed #bbb; min-height: 1.2em; } }
+    </style>
+</head>
+<body class="doc-page">
+{% include 'partials/navbar.html' %}
+
+{% set doc_date = note.note_date or (note.created_at|local).date() %}
+<div class="doc-toolbar no-print">
+    <a href="{{ url_for('admin_client_delivery_note_print', note_id=note.id) }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">← Разписката</a>
+    <button class="btn-submit" style="padding: 12px 24px;" onclick="window.print()">Печат / PDF ({{ lines|length }} стр.)</button>
+</div>
+
+<div class="doc-form no-print">
+    <div class="form-group">
+        <label for="inCertNum">Първа декларация №</label>
+        <input type="number" id="inCertNum" min="1" placeholder="напр. 142" data-remember="off">
+    </div>
+    <div class="form-group">
+        <label for="inCertDate">Дата на декларациите</label>
+        <input type="date" id="inCertDate" value="{{ doc_date.isoformat() }}" data-remember="off">
+    </div>
+    <div class="form-group">
+        <label for="inInspector">Отговорник по качеството</label>
+        <input type="text" id="inInspector" value="инж. Ц. Цветанов">
+    </div>
+    <p class="text-small text-muted" style="grid-column: 1 / -1; margin: 0;">Номерата растат с 1 за всяка следваща декларация. Партида, чертеж и протокол се попълват направо в листа (пунктираните полета).</p>
+</div>
+
+{% for line in lines %}
+<div class="doc-sheet">
+<table class="doc-frame">
+    <thead><tr><td>{% include 'partials/doc_header.html' %}</td></tr></thead>
+    <tbody><tr><td class="doc-body">
+
+    <div class="doc-titlebar">
+        <div>
+            <div class="doc-title">Декларация за съответствие</div>
+            <div class="doc-subtitle">{{ line.name }}</div>
+        </div>
+        <table class="doc-meta">
+            <tr><td>Номер</td><td data-cert-num="{{ loop.index0 }}">........</td></tr>
+            <tr><td>Дата</td><td data-cert-date>{{ doc_date.strftime('%d.%m.%Y') }}</td></tr>
+        </table>
+    </div>
+
+    <table class="doc-table doc-kv">
+        <tbody>
+        <tr><td class="kv-label">{{ line.kind }}</td><td style="font-weight: 700;">{{ line.name }}{% if line.code %} (КД № {{ line.code }}){% endif %}</td></tr>
+        <tr><td class="kv-label">Количество</td><td style="font-weight: 700;">{{ line.qty|num2 }} бр.</td></tr>
+        <tr><td class="kv-label">Партида</td><td contenteditable="true"></td></tr>
+        <tr><td class="kv-label">Чертеж</td><td contenteditable="true">{{ line.code }}</td></tr>
+        <tr><td class="kv-label">Материал</td><td contenteditable="true">{{ line.material }}</td></tr>
+        <tr><td class="kv-label">Поръчка №</td><td contenteditable="true">{{ order.order_number if order else '' }}</td></tr>
+        <tr><td class="kv-label">Стокова разписка №</td><td>{{ note.number }}{% if note.note_number %} (реф. {{ note.note_number }}){% endif %} / {{ doc_date.strftime('%d.%m.%Y') }}</td></tr>
+        <tr><td class="kv-label">Измервателен протокол №</td><td contenteditable="true"></td></tr>
+        <tr><td class="kv-label">Забележка</td><td contenteditable="true">{{ line.notes }}</td></tr>
+        </tbody>
+    </table>
+
+    <div class="doc-parties" style="margin-top: 6mm;">
+        {{ client_party('За клиент', note.client) }}
+    </div>
+
+    <div class="doc-signatures">
+        <div class="doc-sign-row">
+            <div class="doc-sign">
+                <span class="doc-label">Дата</span>
+                <div class="doc-sign-name" data-cert-date>{{ doc_date.strftime('%d.%m.%Y') }}</div>
+            </div>
+            <div class="doc-sign">
+                <span class="doc-label">Отговорник по качеството</span>
+                <div class="doc-sign-name" data-inspector>инж. Ц. Цветанов</div>
+                <div class="doc-sign-line">подпис</div>
+            </div>
+        </div>
+    </div>
+
+    </td></tr></tbody>
+</table>
+</div>
+{% endfor %}
+
+<script>
+    (function () {
+        const num = document.getElementById('inCertNum'), date = document.getElementById('inCertDate'),
+              insp = document.getElementById('inInspector');
+        function fmt(iso) { const p = (iso || '').split('-'); return p.length === 3 ? p[2] + '.' + p[1] + '.' + p[0] : '................'; }
+        function sync() {
+            const first = parseInt(num.value, 10);
+            document.querySelectorAll('[data-cert-num]').forEach(function (td) {
+                td.textContent = first > 0 ? String(first + parseInt(td.dataset.certNum, 10)) : '........';
+            });
+            document.querySelectorAll('[data-cert-date]').forEach(function (el) { el.textContent = fmt(date.value); });
+            document.querySelectorAll('[data-inspector]').forEach(function (el) { el.textContent = insp.value.trim() || '................'; });
+        }
+        [num, date, insp].forEach(function (el) { el.addEventListener('input', sync); });
+        sync();
+    })();
+</script>
+</body>
+</html>
