@@ -35,10 +35,6 @@
 
 <div class="doc-form no-print">
     <div class="form-group">
-        <label for="inCertNum">Първа декларация №</label>
-        <input type="number" id="inCertNum" min="1" placeholder="напр. 142" data-remember="off">
-    </div>
-    <div class="form-group">
         <label for="inCertDate">Дата на декларациите</label>
         <input type="date" id="inCertDate" value="{{ doc_date.isoformat() }}" data-remember="off">
     </div>
@@ -46,7 +42,7 @@
         <label for="inInspector">Отговорник по качеството</label>
         <input type="text" id="inInspector" value="инж. Ц. Цветанов">
     </div>
-    <p class="text-small text-muted" style="grid-column: 1 / -1; margin: 0;">Номерата растат с 1 за всяка следваща декларация. Партида, чертеж и протокол се попълват направо в листа (пунктираните полета).</p>
+    <p class="text-small text-muted" style="grid-column: 1 / -1; margin: 0;">Номерата са от общата номерация на декларациите (2xxxxxxx) - дават се автоматично и остават същите при повторен печат. Партида, чертеж и протокол се попълват направо в листа (пунктираните полета).</p>
 </div>
 
 {% for line in lines %}
@@ -61,7 +57,7 @@
             <div class="doc-subtitle">{{ line.name }}</div>
         </div>
         <table class="doc-meta">
-            <tr><td>Номер</td><td data-cert-num="{{ loop.index0 }}">........</td></tr>
+            <tr><td>Номер</td><td>{{ line.number }}</td></tr>
             <tr><td>Дата</td><td data-cert-date>{{ doc_date.strftime('%d.%m.%Y') }}</td></tr>
         </table>
     </div>
@@ -105,18 +101,13 @@
 
 <script>
     (function () {
-        const num = document.getElementById('inCertNum'), date = document.getElementById('inCertDate'),
-              insp = document.getElementById('inInspector');
+        const date = document.getElementById('inCertDate'), insp = document.getElementById('inInspector');
         function fmt(iso) { const p = (iso || '').split('-'); return p.length === 3 ? p[2] + '.' + p[1] + '.' + p[0] : '................'; }
         function sync() {
-            const first = parseInt(num.value, 10);
-            document.querySelectorAll('[data-cert-num]').forEach(function (td) {
-                td.textContent = first > 0 ? String(first + parseInt(td.dataset.certNum, 10)) : '........';
-            });
             document.querySelectorAll('[data-cert-date]').forEach(function (el) { el.textContent = fmt(date.value); });
             document.querySelectorAll('[data-inspector]').forEach(function (el) { el.textContent = insp.value.trim() || '................'; });
         }
-        [num, date, insp].forEach(function (el) { el.addEventListener('input', sync); });
+        [date, insp].forEach(function (el) { el.addEventListener('input', sync); });
         sync();
     })();
 </script>

@@ -1,6 +1,8 @@
 {#- Invoicing of a client delivery note (owner's decision 2026-11-20) - used by the note dialog and the list's
     "Фактура" dialog of admin_client_delivery_notes.html; the server side is _set_client_note_invoice().
-    "Фактурирано" opens the invoice № and date; "Платено" is independent. `invoice_prefix` keeps the ids unique. #}
+    "Фактурирано" opens the invoice №, date and PDF; "Платено" is independent. `invoice_prefix` keeps the ids unique.
+    The form needs enctype="multipart/form-data". The hidden invoice_file_name / invoice_file_url come from the row's
+    data-values (form_dialog.js) and show the attached PDF with "Премахни". #}
 <div class="form-row" data-invoice-box style="align-items: flex-end; flex-wrap: wrap;">
     <div class="form-group" style="flex: 0 0 auto;">
         <label style="display: inline-flex; align-items: center; gap: 6px; text-transform: none; letter-spacing: normal;">
@@ -14,6 +16,18 @@
         <label for="{{ invoice_prefix }}_invoice_date">Дата на фактурата</label>
         <input type="date" id="{{ invoice_prefix }}_invoice_date" name="invoice_date">
     </div>
+    <div class="form-group" data-invoice-fields>
+        <label for="{{ invoice_prefix }}_invoice_pdf">Фактура (PDF)</label>
+        <input type="file" id="{{ invoice_prefix }}_invoice_pdf" name="invoice_pdf" accept="application/pdf,.pdf">
+        <input type="hidden" name="invoice_file_name" data-invoice-current-name>
+        <input type="hidden" name="invoice_file_url" data-invoice-current-url>
+        <div class="text-small" data-invoice-current style="display: none; margin-top: 4px;">
+            Прикачена: <a href="#" target="_blank" rel="noopener" data-invoice-current-link></a>
+            <label style="display: inline-flex; align-items: center; gap: 4px; text-transform: none; letter-spacing: normal; font-weight: normal; margin-left: 8px;">
+                <input type="checkbox" name="invoice_file_remove" value="1"> Премахни</label>
+            <div class="text-muted">Нов файл заменя прикачения.</div>
+        </div>
+    </div>
     <div class="form-group" style="flex: 0 0 auto;">
         <label style="display: inline-flex; align-items: center; gap: 6px; text-transform: none; letter-spacing: normal;">
             <input type="checkbox" name="paid" value="1" id="{{ invoice_prefix }}_paid"> Платено</label>
@@ -22,11 +36,17 @@
 <script>
     (function (box) {
         const toggle = box.querySelector('[data-invoice-toggle]');
+        const name = box.querySelector('[data-invoice-current-name]'), url = box.querySelector('[data-invoice-current-url]');
         function sync() {
             box.querySelectorAll('[data-invoice-fields]').forEach(function (f) { f.style.display = toggle.checked ? '' : 'none'; });
+            const link = box.querySelector('[data-invoice-current-link]');
+            link.textContent = name.value;
+            link.href = url.value || '#';
+            box.querySelector('[data-invoice-current]').style.display = url.value ? '' : 'none';
         }
         toggle.addEventListener('change', sync);   // form_dialog.js fires 'change' after filling / resetting
         if (toggle.form) toggle.form.addEventListener('reset', function () { setTimeout(sync, 0); });
+        document.addEventListener('dialog-open', function () { setTimeout(sync, 0); });
         sync();
     })(document.currentScript.previousElementSibling);
 </script>

@@ -36,7 +36,7 @@
         <h3 data-dialog-title>Нова стокова разписка към клиент</h3>
         <p class="section-subtitle">Изберете клиента и артикулите, които напускат склада - всеки ред намалява наличността на съответния материал, детайл или продукт. Могат да се избират само артикули, които вече са в каталога. При вид „Изписване за производство“ се предлагат само партидите на избрания клиент; върнатият остатък от лист става нова партида на клиента, без остатък редът е отпадък.</p>
 
-        <form action="{{ url_for('create_client_delivery_note') }}" method="POST" id="clientDeliveryNoteForm" data-once>
+        <form action="{{ url_for('create_client_delivery_note') }}" method="POST" id="clientDeliveryNoteForm" data-once enctype="multipart/form-data">
             {% include 'partials/csrf_field.html' %}
             <div class="add-item-row" style="margin-bottom: 16px;">
                 <div class="form-group">
@@ -288,6 +288,7 @@
                     <td>
                         {%- if note.invoiced %}<strong>Фактурирано</strong>
                         {%- if note.invoice_number or note.invoice_date %}<div class="text-small">№ {{ note.invoice_number or '-' }}{% if note.invoice_date %} / {{ note.invoice_date.strftime('%d.%m.%Y') }}{% endif %}</div>{% endif %}
+                        {%- if note.invoice_file %}<div class="text-small"><a href="{{ url_for('client_delivery_note_invoice_file', note_id=note.id) }}" target="_blank" rel="noopener">Фактура (PDF)</a></div>{% endif %}
                         {%- else %}<span class="text-muted">Не е фактурирано</span>{% endif %}
                         <div class="text-small">{% if note.paid %}<strong>Платено</strong>{% else %}<span class="text-muted">Неплатено</span>{% endif %}</div>
                     </td>
@@ -309,11 +310,11 @@
                                 data-dialog="clientDeliveryNoteSection-dialog" data-note-id="{{ note.id }}"
                                 data-action="{{ url_for('edit_client_delivery_note', note_id=note.id) }}"
                                 data-title="Редакция на стокова разписка №{{ note.number }}"
-                                data-values='{{ {"client_id": note.client_id or "", "kind": note.kind, "note_number": note.note_number or "", "note_date": note.note_date.isoformat() if note.note_date else "", "invoiced": "1" if note.invoiced else "", "invoice_number": note.invoice_number or "", "invoice_date": note.invoice_date.isoformat() if note.invoice_date else "", "paid": "1" if note.paid else ""}|tojson|forceescape }}'>Редактирай</button>
+                                data-values='{{ {"client_id": note.client_id or "", "kind": note.kind, "note_number": note.note_number or "", "note_date": note.note_date.isoformat() if note.note_date else "", "invoiced": "1" if note.invoiced else "", "invoice_number": note.invoice_number or "", "invoice_date": note.invoice_date.isoformat() if note.invoice_date else "", "paid": "1" if note.paid else "", "invoice_file_name": note.invoice_file_name or "", "invoice_file_url": url_for('client_delivery_note_invoice_file', note_id=note.id) if note.invoice_file else ""}|tojson|forceescape }}'>Редактирай</button>
                         <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;"
                                 data-dialog="invoiceDialog" data-action="{{ url_for('client_delivery_note_invoice', note_id=note.id) }}"
                                 data-title="Фактура към разписка №{{ note.number }}"
-                                data-values='{{ {"invoiced": "1" if note.invoiced else "", "invoice_number": note.invoice_number or "", "invoice_date": note.invoice_date.isoformat() if note.invoice_date else "", "paid": "1" if note.paid else ""}|tojson|forceescape }}'>Фактура</button>
+                                data-values='{{ {"invoiced": "1" if note.invoiced else "", "invoice_number": note.invoice_number or "", "invoice_date": note.invoice_date.isoformat() if note.invoice_date else "", "paid": "1" if note.paid else "", "invoice_file_name": note.invoice_file_name or "", "invoice_file_url": url_for('client_delivery_note_invoice_file', note_id=note.id) if note.invoice_file else ""}|tojson|forceescape }}'>Фактура</button>
                         {% endif %}
                         <a href="{{ url_for('admin_client_delivery_note_print', note_id=note.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">Печат</a>
                         {% if note.kind != 'consume' and note.items|selectattr('target_type', 'in', ['detail', 'product'])|list %}<a href="{{ url_for('admin_client_delivery_note_declarations', note_id=note.id) }}" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;" title="Декларация за съответствие за всеки детайл">Декларации</a>{% endif %}
@@ -342,7 +343,7 @@
     {% if current_user.is_admin %}
     {#- "Фактура" on a row: only the invoicing fields (client_delivery_note_invoice) - no stock movement. #}
     <dialog id="invoiceDialog" class="form-dialog">
-        <form method="POST" action="">
+        <form method="POST" action="" enctype="multipart/form-data">
             {% include 'partials/csrf_field.html' %}
             <h3 data-dialog-heading>Фактура</h3>
             {% set invoice_prefix = 'inv' %}{% include 'partials/client_note_invoice_fields.html' %}

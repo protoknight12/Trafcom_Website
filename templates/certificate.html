@@ -43,7 +43,11 @@
     </div>
     <div class="form-group">
         <label for="inCertNum">Декларация №</label>
-        <input type="text" id="inCertNum" placeholder="напр. 142">
+        <div style="display: flex; gap: 6px;">
+            <input type="text" id="inCertNum" placeholder="2xxxxxxx" readonly>
+            <button type="button" id="btnNewCertNum" class="btn-secondary" style="white-space: nowrap; padding: 6px 10px;"
+                    title="Следващ номер от общата номерация на декларациите">Нов номер</button>
+        </div>
     </div>
     <div class="form-group">
         <label for="inCertDate">Дата на декларация</label>
@@ -170,6 +174,24 @@
 
 <script>
     document.getElementById('lblFooterDate').textContent = new Date().toLocaleDateString('bg-BG');
+
+    // The common declaration numbering (2xxxxxxx) - api_new_conformity_declaration() records it.
+    document.getElementById('btnNewCertNum').addEventListener('click', function () {
+        const btn = this, name = document.getElementById('inDetailNum').value.trim();
+        if (!name) { alert('Първо изберете детайл.'); return; }
+        btn.disabled = true;
+        fetch('{{ url_for('api_new_conformity_declaration') }}', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}'},
+            body: JSON.stringify({product_id: {{ product.id }}, name: name,
+                                  quantity: parseFloat(document.getElementById('inQuantity').value) || null})
+        }).then(function (r) { return r.json(); }).then(function (d) {
+            if (!d.number) { alert(d.error || 'Грешка'); return; }
+            const el = document.getElementById('inCertNum');
+            el.value = d.number;
+            el.dispatchEvent(new Event('input'));
+        }).finally(function () { btn.disabled = false; });
+    });
 
     const selectEl = document.getElementById('selectDetail');
     selectEl.addEventListener('change', function() {

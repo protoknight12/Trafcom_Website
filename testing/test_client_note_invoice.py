@@ -123,3 +123,74 @@ def test_list_total_and_declarations_per_detail(s):
     other = ClientDeliveryNote.query.order_by(ClientDeliveryNote.id.desc()).first()
     res = c.get(f'/admin/client-delivery-notes/{other.id}/declarations')
     assert res.status_code == 302 and res.headers['Location'].endswith(f'/admin/client-delivery-notes/{other.id}/print')
+
+
+def test_declaration_numbers_are_common_and_stable(s):
+    """One numbering "2" + 7 digits for every declaration: a note's detail line gets its number on the first open and
+    keeps it on a reprint; the product certificate's "Нов номер" continues the same sequence."""
+    import re
+    from app import Detail, Product, ConformityDeclaration
+    d = Detail(name='Скоба', material_key='inv_steel', width=100, height=50, total_length=1, pierce_count=1,
+               calculated_price=3.0, stock_quantity=5)
+    p = Product(name='Изделие', markup_percent=0)
+    db.session.add_all([d, p])
+    db.session.commit()
+    c = _login('inv_admin')
+    lines = json.dumps([{'type': 'detail', 'target_id': d.id, 'qty': 1}, {'type': 'detail', 'target_id': d.id, 'qty': 2}])
+    c.post('/admin/client-delivery-notes/create', data={'client_id': str(s['client']), 'items_json': lines})
+    note = _note()
+    url = f'/admin/client-delivery-notes/{note.id}/declarations'
+    first = c.get(url).get_data(as_text=True)
+    assert first.count('class="doc-sheet"') == 1 and '3 бр.' in first      # two lines of one detail = one declaration
+    assert re.findall(r'\b2\d{7}\b', first) == ['20000001']
+    assert re.findall(r'\b2\d{7}\b', c.get(url).get_data(as_text=True)) == ['20000001']   # reprint: same number
+    res = c.post('/admin/declarations/new', json={'product_id': p.id, 'name': 'Скоба 2', 'quantity': 4})
+    assert res.get_json() == {'number': '20000002'}
+    assert ConformityDeclaration.query.count() == 2
+    assert c.post('/admin/declarations/new', json={}).status_code == 400
+    assert 'btnNewCertNum' in c.get(f'/admin/products/{p.id}/certificates').get_data(as_text=True)
+
+
+def test_invoice_pdf_attach_replace_remove(s):
+    """"Фактурирано" + a PDF: stored under INVOICE_FILE_FOLDER and served to staff; a non-PDF is refused; a new PDF
+    replaces the old (old file removed); "Премахни" / unticking "Фактурирано" drops it; deleting the note removes it."""
+    import io, os
+    folder = flask_app.config['INVOICE_FILE_FOLDER']
+    c = _login('inv_admin')
+    lines = json.dumps([{'type': 'material', 'target_id': s['lot'], 'qty': 1}])
+    c.post('/admin/client-delivery-notes/create', data={'client_id': str(s['client']), 'items_json': lines})
+    note = _note()
+    url = f'/admin/client-delivery-notes/{note.id}/invoice'
+
+    c.post(url, data={'invoiced': '1', 'invoice_pdf': (io.BytesIO(b'hello'), 'f.pdf')}, content_type='multipart/form-data')
+    assert _note().invoice_file is None                                   # not a PDF
+
+    c.post(url, data={'invoiced': '1', 'invoice_pdf': (io.BytesIO(b'%PDF-1.4 one'), 'Фактура 1.pdf')},
+           content_type='multipart/form-data')
+    first = _note().invoice_file
+    assert first and _note().invoice_file_name == 'Фактура 1.pdf' and os.path.exists(os.path.join(folder, first))
+    res = c.get(f'/admin/client-delivery-notes/{note.id}/invoice.pdf')
+    assert res.status_code == 200 and res.data.startswith(b'%PDF-1.4 one')
+    res.close()
+    assert 'Фактура (PDF)</a>' in c.get('/admin/client-delivery-notes').get_data(as_text=True)
+
+    c.post(url, data={'invoiced': '1', 'invoice_pdf': (io.BytesIO(b'%PDF-1.4 two'), 'two.pdf')},
+           content_type='multipart/form-data')
+    second = _note().invoice_file
+    assert second != first and not os.path.exists(os.path.join(folder, first))
+
+    c.post(url, data={'invoiced': '1', 'invoice_file_remove': '1'})
+    assert _note().invoice_file is None and not os.path.exists(os.path.join(folder, second))
+    assert c.get(f'/admin/client-delivery-notes/{note.id}/invoice.pdf').status_code == 404
+
+    c.post(url, data={'invoiced': '1', 'invoice_pdf': (io.BytesIO(b'%PDF-1.4 three'), 'three.pdf')},
+           content_type='multipart/form-data')
+    third = _note().invoice_file
+    c.post(url, data={})                                                    # unticked: drops the PDF too
+    assert _note().invoice_file is None and not os.path.exists(os.path.join(folder, third))
+
+    c.post(url, data={'invoiced': '1', 'invoice_pdf': (io.BytesIO(b'%PDF-1.4 four'), 'four.pdf')},
+           content_type='multipart/form-data')
+    fourth = _note().invoice_file
+    c.post(f'/admin/client-delivery-notes/{note.id}/delete')
+    assert not os.path.exists(os.path.join(folder, fourth))

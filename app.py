@@ -258,6 +258,10 @@ MACHINE_FILE_MAX_BYTES = 1024 * 1024 * 1024
 # from it.
 app.config['ORDER_ITEM_FILE_FOLDER'] = os.path.join(os.getcwd(), 'order_item_files')
 os.makedirs(app.config['ORDER_ITEM_FILE_FOLDER'], exist_ok=True)
+# Invoice PDFs attached to client delivery notes (ClientDeliveryNote.invoice_file) - private, gitignored, only
+# client_delivery_note_invoice_file() (staff) reads from it.
+app.config['INVOICE_FILE_FOLDER'] = os.path.join(os.getcwd(), 'invoice_files')
+os.makedirs(app.config['INVOICE_FILE_FOLDER'], exist_ok=True)
 # ISO 9001 controlled documents (quality manual/procedures/work instructions/
 # forms/records) and their revision history - see ControlledDocument/
 # ControlledDocumentRevision. Same private/permanent storage convention as
@@ -1672,6 +1676,9 @@ class ClientDeliveryNote(db.Model):
     invoice_number = db.Column(db.String(100), nullable=True)
     invoice_date = db.Column(db.Date, nullable=True)
     paid = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    # The invoice as a PDF (stored name in INVOICE_FILE_FOLDER + the uploaded name); only while invoiced.
+    invoice_file = db.Column(db.String(255), nullable=True)
+    invoice_file_name = db.Column(db.String(255), nullable=True)
 
     client = db.relationship('Client')
     created_by = db.relationship('User')
@@ -1681,6 +1688,32 @@ class ClientDeliveryNote(db.Model):
     def number(self):
         """Printed number (изход): the id in 8 digits (00000009) - receipts from a client start with 1 (DeliveryNote.number)."""
         return f'{self.id:08d}'
+
+
+class ConformityDeclaration(db.Model):
+    """
+    One issued "Декларация за съответствие" (owner's decision 2026-11-20): ONE numbering for every declaration in
+    the app - the number is "2" + the id in 7 digits (20000001, 20000002 ...), from the id sequence, never reused.
+    A client delivery note's detail/product line gets one automatically (admin_client_delivery_note_declarations(),
+    unique per note + line target, so a reprint keeps its number); the product certificate page takes a new one on
+    request (api_new_conformity_declaration()). client_note_id / target_* are plain columns, no foreign keys: a note
+    edit rewrites its lines and a note may be deleted - the issued number stays on record.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    client_note_id = db.Column(db.Integer, nullable=True, index=True)
+    target_type = db.Column(db.String(10), nullable=True)   # 'detail' / 'product'
+    target_id = db.Column(db.Integer, nullable=True)
+    name = db.Column(db.String(255), nullable=False)
+    quantity = db.Column(db.Float, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+
+    __table_args__ = (db.UniqueConstraint('client_note_id', 'target_type', 'target_id', name='uq_declaration_note_line'),)
+
+    @property
+    def number(self):
+        """The printed number: '2' + the id in 7 digits (20000009)."""
+        return f'2{self.id:07d}'
 
 
 class ClientDeliveryNoteItem(db.Model):
@@ -12829,8 +12862,11 @@ def _delete_note(note, sign, label, endpoint):
     refusal = _negative_client_lots_refusal(touched, endpoint, details=stored_parts)
     if refusal:
         return refusal
+    invoice_file = getattr(note, 'invoice_file', None)
     db.session.delete(note)
     db.session.commit()
+    if invoice_file:
+        _remove_files([os.path.join(app.config['INVOICE_FILE_FOLDER'], invoice_file)])
     log_action(f'Изтрита {label[0].lower() + label[1:]} №{note.id} (наличностите са върнати)',
                details=header + '\n' + '\n'.join(lines))
     flash(f'{label} №{note.id} беше изтрита и наличностите бяха върнати.', 'success')
@@ -13148,6 +13184,7 @@ def create_client_delivery_note():
         return refusal
 
     db.session.commit()
+    _invoice_file_cleanup()
     log_action(f'{_client_note_kind_label(note)} №{note.id}: ' + ', '.join(log_parts),
                details=_client_note_header_text(note) + '\n' + '\n'.join(log_detail_lines))
     flash('Изписването беше записано и наличностите бяха обновени.' if note.kind == 'consume'
@@ -13181,6 +13218,7 @@ def edit_client_delivery_note(note_id):
         return refusal
 
     db.session.commit()
+    _invoice_file_cleanup()
     edited = 'Редактирано изписване за производство' if note.kind == 'consume' else 'Редактирана издадена стокова разписка'
     log_action(f'{edited} №{note.id}: ' + ', '.join(log_parts),
                details=_client_note_header_text(note) + '\nПреди:\n' + '\n'.join(old_lines) + '\nСлед:\n' + '\n'.join(log_detail_lines))
@@ -13201,7 +13239,38 @@ def _set_client_note_invoice(note):
     except ValueError:
         return 'Невалидна дата на фактурата.'
     note.invoice_number, note.invoice_date = (number, date) if note.invoiced else (None, None)
+    # The invoice PDF (`invoice_pdf`): a new one replaces the old; unticking "Фактурирано" or "Премахни"
+    # (`invoice_file_remove`) drops it. The replaced file is removed by the caller AFTER the commit
+    # (_invoice_file_cleanup()). ponytail: a file saved for a note the request then refuses stays behind unused.
+    upload = request.files.get('invoice_pdf')
+    old = note.invoice_file
+    if not note.invoiced or request.form.get('invoice_file_remove') == '1':
+        note.invoice_file = note.invoice_file_name = None
+    if note.invoiced and upload and upload.filename:
+        if not upload.filename.lower().endswith('.pdf') or upload.stream.read(5) != b'%PDF-':
+            return 'Фактурата трябва да е PDF файл.'
+        upload.stream.seek(0)
+        note.invoice_file = _save_upload(upload, app.config['INVOICE_FILE_FOLDER'], {'pdf'})
+        note.invoice_file_name = upload.filename[:255]
+    if old and old != note.invoice_file:
+        g.setdefault('invoice_files_to_remove', []).append(old)
     return None
+
+
+def _invoice_file_cleanup():
+    """Removes the invoice PDFs replaced/dropped in this request - call it after the commit."""
+    _remove_files([os.path.join(app.config['INVOICE_FILE_FOLDER'], f) for f in g.pop('invoice_files_to_remove', [])])
+
+
+@app.route('/admin/client-delivery-notes/<int:note_id>/invoice.pdf')
+@role_required(['admin', 'worker'])
+def client_delivery_note_invoice_file(note_id):
+    """The invoice PDF attached to a client note - staff only, opened in the browser."""
+    note = ClientDeliveryNote.query.get_or_404(note_id)
+    if not note.invoice_file:
+        abort(404)
+    return send_from_directory(app.config['INVOICE_FILE_FOLDER'], note.invoice_file, mimetype='application/pdf',
+                               download_name=note.invoice_file_name or f'faktura_{note.number}.pdf')
 
 
 @app.route('/admin/client-delivery-notes/<int:note_id>/invoice', methods=['POST'])
@@ -13217,8 +13286,10 @@ def client_delivery_note_invoice(note_id):
         return redirect(url_for('admin_client_delivery_notes'))
     changes = describe_changes(f'Фактуриране на стокова разписка №{note.number}', note,
                                {'invoiced': 'фактурирано', 'invoice_number': 'фактура №',
-                                'invoice_date': 'дата на фактурата', 'paid': 'платено'})
+                                'invoice_date': 'дата на фактурата', 'paid': 'платено',
+                                'invoice_file_name': 'PDF на фактурата'})
     db.session.commit()
+    _invoice_file_cleanup()
     log_action(changes)
     flash(f'Данните за фактурата на разписка №{note.number} са записани.', 'success')
     return redirect(url_for('admin_client_delivery_notes'))
@@ -13394,7 +13465,7 @@ def admin_client_delivery_note_declarations(note_id):
     page); batch, drawing and protocol are editable on the page. Browser print, like certificate.html."""
     note = ClientDeliveryNote.query.get_or_404(note_id)
     order = Order.query.filter_by(issued_note_id=note.id).first()
-    lines = []
+    lines = {}   # one declaration per detail / product of the note (two lines of the same one add up)
     for it in note.items:
         if it.target_type == 'detail':
             row = db.session.get(Detail, it.target_id)
@@ -13404,13 +13475,59 @@ def admin_client_delivery_note_declarations(note_id):
             material = ''
         else:
             continue
-        lines.append({'name': it.description_snapshot, 'code': (row.code_number or '') if row else '',
-                      'erp': (row.erp_number or '') if row else '', 'qty': it.quantity, 'material': material,
-                      'kind': 'Продукт' if it.target_type == 'product' else 'Детайл', 'notes': it.notes or ''})
+        key = (it.target_type, it.target_id)
+        if key in lines:
+            lines[key]['qty'] += it.quantity
+            continue
+        lines[key] = {'name': it.description_snapshot, 'code': (row.code_number or '') if row else '',
+                      'qty': it.quantity, 'material': material,
+                      'kind': 'Продукт' if it.target_type == 'product' else 'Детайл', 'notes': it.notes or ''}
     if not lines:
         flash('В разписката няма детайли или продукти за декларация.', 'warning')
         return redirect(url_for('admin_client_delivery_note_print', note_id=note.id))
-    return render_template('admin_client_note_declarations.html', note=note, order=order, lines=lines)
+    # The common numbering (ConformityDeclaration): taken once per note line, kept on every reprint.
+    issued = {(d.target_type, d.target_id): d
+              for d in ConformityDeclaration.query.filter_by(client_note_id=note.id)}
+    missing = [key for key in lines if key not in issued]
+    if missing:
+        for key in missing:
+            issued[key] = ConformityDeclaration(client_note_id=note.id, target_type=key[0], target_id=key[1],
+                                                name=lines[key]['name'][:255], quantity=lines[key]['qty'],
+                                                created_by_id=current_user.id)
+            db.session.add(issued[key])
+        try:
+            db.session.commit()
+        except IntegrityError:   # a second tab took them at the same moment - use those
+            db.session.rollback()
+            return redirect(url_for('admin_client_delivery_note_declarations', note_id=note.id))
+        log_action(f'Декларации за съответствие към разписка №{note.number}: '
+                   + ', '.join(issued[k].number for k in missing))
+    for key, line in lines.items():
+        line['number'] = issued[key].number
+    return render_template('admin_client_note_declarations.html', note=note, order=order, lines=list(lines.values()))
+
+
+@app.route('/admin/declarations/new', methods=['POST'])
+@role_required('admin')
+def api_new_conformity_declaration():
+    """A new number of the common declaration numbering for the product certificate page (certificate.html):
+    {product_id, name, quantity} -> {"number": "20000012"}."""
+    data = request.get_json(silent=True) or {}
+    product = db.session.get(Product, data.get('product_id')) if str(data.get('product_id', '')).isdigit() else None
+    name = (str(data.get('name') or '').strip() or (product.name if product else ''))[:255]
+    if not name:
+        return jsonify({'error': 'Изберете детайл.'}), 400
+    try:
+        quantity = float(data.get('quantity')) if data.get('quantity') not in (None, '') else None
+    except (TypeError, ValueError):
+        quantity = None
+    declaration = ConformityDeclaration(target_type='product' if product else None,
+                                        target_id=product.id if product else None, name=name,
+                                        quantity=quantity, created_by_id=current_user.id)
+    db.session.add(declaration)
+    db.session.commit()
+    log_action(f'Декларация за съответствие №{declaration.number}: {name}')
+    return jsonify({'number': declaration.number})
 
 
 _BREAKDOWN_UNITS = {'m2': 'м²', 'm': 'м', 'pcs': 'бр.'}
