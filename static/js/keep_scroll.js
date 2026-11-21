@@ -4,7 +4,7 @@
 // nearest section/row with an id at the top of the screen (an order card), plus its offset; scrollY as fallback.
 // Restored only when the new page is the same path and we came from it (reload, or referrer = this page).
 (function () {
-    if (document.documentElement.classList.contains('embedded') || window.location.hash) return;
+    if (window.location.hash) return;     // works inside a frame dialog too (dossier, edit pages)
     var KEY = 'keep-scroll:' + window.location.pathname + window.location.search;
     var ANCHORS = 'section[id], article[id], tr[id], li[id], .admin-card[id], [data-keep-scroll][id]';
 
