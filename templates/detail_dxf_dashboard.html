@@ -372,27 +372,28 @@
         </form>
     </section>
 
+    {#- the calculator (narrow) and the drawing side by side; they wrap on a narrow screen #}
+    <div style="display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start;">
     {% if ppu %}
     {% set ppu_word = {'m2': 'лист', 'm': 'прът'}.get(ppu.unit, 'брой') %}
-    <section class="admin-card">
-        <h3>Детайли от една единица</h3>
-        <p class="section-subtitle">
-            Колко детайла излизат от един {{ ppu_word }} от материала. Тогава един детайл взема 1/N от него
-            вместо габарита си - за цената, заделянето и изписването. Размерите на детайла не се променят.
-            {% if not ppu.whole %}<strong>Материалът няма размер на лист / дължина на прът - изчислява се по габарита.</strong>{% endif %}
+    <section class="admin-card" style="flex: 0 1 320px; min-width: 260px;">
+        <h3>Детайли от един {{ ppu_word }}</h3>
+        <p class="text-small text-muted" style="margin: 0 0 8px;">
+            Един детайл взема 1/N от единицата вместо габарита си (цена, заделяне, изписване). Размерите не се променят.
+            {% if not ppu.whole %}<strong>Материалът няма размер - смята се по габарита.</strong>{% endif %}
         </p>
-        <form action="{{ url_for('admin_update_detail_pieces_per_unit', detail_id=detail.id) }}" method="POST" class="admin-form">
+        <form action="{{ url_for('admin_update_detail_pieces_per_unit', detail_id=detail.id) }}" method="POST">
             {% include 'partials/csrf_field.html' %}
-            <div class="form-group">
-                <label for="pieces_per_unit">Детайли от един {{ ppu_word }}</label>
+            <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
                 <input type="number" id="pieces_per_unit" name="pieces_per_unit" min="1" max="10000" step="1" required
-                       value="{{ detail.pieces_per_unit or '' }}">
-                <p class="text-small text-muted" id="ppu_hint" style="margin-top: 4px;"></p>
+                       value="{{ detail.pieces_per_unit or '' }}" aria-label="Детайли от един {{ ppu_word }}"
+                       placeholder="N" style="width: 90px;">
+                <button type="submit" class="btn-submit btn-inline">Запиши</button>
+                {% if detail.pieces_per_unit %}
+                <button type="submit" name="clear" value="1" class="btn-secondary" formnovalidate>Изчисти</button>
+                {% endif %}
             </div>
-            <button type="submit" class="btn-submit">Запиши</button>
-            {% if detail.pieces_per_unit %}
-            <button type="submit" name="clear" value="1" class="btn-secondary" formnovalidate>Изчисти</button>
-            {% endif %}
+            <p class="text-small text-muted" id="ppu_hint" style="margin: 6px 0 0;"></p>
         </form>
     </section>
     <script>
@@ -419,7 +420,7 @@
     {% endif %}
 
     {% if has_geometry %}
-    <section class="admin-card">
+    <section class="admin-card" style="flex: 1 1 420px; min-width: 0;">
         <h3>Чертеж</h3>
         <div style="display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start;">
             <div id="detail_dxf_view" style="flex: 1 1 360px; height: 340px; background-color: var(--bg-input);
@@ -456,6 +457,7 @@
         })();
     </script>
     {% endif %}
+    </div>
 
     <section class="admin-card">
         <h3>Други разрешени материали</h3>
@@ -641,6 +643,11 @@
                     <input type="number" id="op_duration_minutes" step="0.01" min="0.01" placeholder="напр. 12" style="flex: 1;">
                     <button type="button" class="btn-secondary" onclick="calcOpDurationFromDxf()" title="Изчисли от дължината на рязане и броя пробождания на DXF файла, по скоростта на текущия материал">⏱ От DXF</button>
                 </div>
+                {% if detail.total_length or detail.pierce_count %}
+                <div class="text-small text-muted" id="op_dxf_basis" style="margin-top: 4px;">
+                    Дължина на рязане: {{ detail.total_length|num3 }} мм ({{ (detail.total_length / 1000)|num3 }} м) · Пробивания: {{ detail.pierce_count or 0 }}
+                </div>
+                {% endif %}
             </div>
             <div class="form-group" id="op_pieces_group" style="display: none;">
                 <label for="op_pieces">Брой (на детайл)</label>
@@ -779,6 +786,7 @@
         const OP_CUTTING_SPEED_MM_PER_MIN = {{ detail.cutting_speed_mm_per_min or 'null' }};
         const OP_PIERCE_RATE_PER_MIN = {{ (60 / detail.pierce_time_sec) if detail.pierce_time_sec else 'null' }};
         let pendingOps = [];
+        let lastDxfMinutes = null;   // the value "⏱ От DXF" last put in the time field
 
         // Cutting time from total cut length / material cutting speed
         // (matches _service_time_cost() in app.py), plus pierce time as
@@ -791,7 +799,15 @@
             const cuttingTime = OP_CUTTING_SPEED_MM_PER_MIN ? (OP_DEFAULT_LENGTH_MM || 0) / OP_CUTTING_SPEED_MM_PER_MIN : 0;
             const timePerPierceMin = OP_PIERCE_RATE_PER_MIN ? 1 / OP_PIERCE_RATE_PER_MIN : 0;
             const pierceTime = OP_PIERCE_COUNT * timePerPierceMin;
-            document.getElementById('op_duration_minutes').value = (cuttingTime + pierceTime).toFixed(2);
+            document.getElementById('op_duration_minutes').value = lastDxfMinutes = (cuttingTime + pierceTime).toFixed(2);
+            const basis = document.getElementById('op_dxf_basis');   // how the time was made: length and pierces
+            if (basis) {
+                const len = OP_DEFAULT_LENGTH_MM || 0;
+                basis.textContent = 'Дължина на рязане: ' + +len.toFixed(3) + ' мм'
+                    + (OP_CUTTING_SPEED_MM_PER_MIN ? ' ÷ ' + OP_CUTTING_SPEED_MM_PER_MIN + ' мм/мин = ' + cuttingTime.toFixed(2) + ' мин' : '')
+                    + ' · Пробивания: ' + OP_PIERCE_COUNT
+                    + (timePerPierceMin ? ' × ' + +(timePerPierceMin * 60).toFixed(3) + ' сек = ' + pierceTime.toFixed(2) + ' мин' : '');
+            }
             updateOpPricePreview();
         }
 
@@ -874,7 +890,11 @@
                 durationMinutes: duration,
                 lengthMm: length,
                 pieces: pieces,
+                // the time came from "⏱ От DXF" (and was not retyped): the list shows its length and pierces
+                dxfBasis: duration !== null && durationInput.value === lastDxfMinutes
+                    ? +(OP_DEFAULT_LENGTH_MM || 0).toFixed(3) + ' мм, ' + OP_PIERCE_COUNT + ' пробива' : '',
             });
+            lastDxfMinutes = null;
             descriptionInput.value = '';
             durationInput.value = '';
             piecesInput.value = '';
@@ -905,7 +925,8 @@
                     tr.children[0].textContent = op.serviceName;
                     tr.children[1].textContent = op.description || '-';
                     tr.children[2].textContent = op.lengthMm != null ? (op.lengthMm + ' мм')
-                        : op.pieces != null ? (op.pieces + ' бр.') : (op.durationMinutes + ' мин');
+                        : op.pieces != null ? (op.pieces + ' бр.')
+                        : (op.durationMinutes + ' мин' + (op.dxfBasis ? ' (' + op.dxfBasis + ')' : ''));
                     tr.children[3].textContent = cost.toFixed(2) + ' €';
                     const removeBtn = document.createElement('button');
                     removeBtn.type = 'button';
