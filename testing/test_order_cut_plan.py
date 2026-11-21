@@ -221,7 +221,7 @@ def test_remnant_is_decided_per_sheet(c, ids):
     assert item_a.material_consumed + item_b.material_consumed == pytest.approx(2)
     history = c.get(f'/admin/materials/{ids["ours"]}/history').get_data(as_text=True)
     # screens show quantities to the 3rd decimal (|num3)
-    assert f'-{num3(item_a.material_consumed)}<' in history and f'-{num3(item_b.material_consumed)}<' in history
+    assert f'-{num3(item_a.material_consumed)} лист' in history and f'-{num3(item_b.material_consumed)} лист' in history
 
 
 def test_component_line_on_a_sheet(c, ids):

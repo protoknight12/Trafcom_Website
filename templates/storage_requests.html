@@ -109,7 +109,7 @@
                 {% for req in requests %}
                 <tr>
                     <td>{{ elink('material', req.material_id, format_material_option(req.material)) if req.material else 'Изтрит материал' }}{% if req.note %}<div class="text-muted text-small">{{ req.note }}</div>{% endif %}</td>
-                    <td class="text-center">{{ req.quantity|num3 }}{% if req.material %}{{ material_stock_kg(req.material, req.quantity)|kg }}{% endif %}</td>
+                    <td class="text-center">{{ material_qty_text(req.material, req.quantity) if req.material else req.quantity|num3 }}{% if req.material %}{{ material_stock_kg(req.material, req.quantity)|kg }}{% endif %}</td>
                     <td>{{ (req.created_at|local).strftime('%d.%m.%Y %H:%M') if req.created_at else '-' }} {% if req.created_by %}<div class="text-muted text-small">{{ req.created_by.full_name }}</div>{% endif %}</td>
                     <td class="text-center"><span class="status-badge status-{{ req.status }}">{{ req.status_label }}</span></td>
                     <td>{{ req.supplier.name if req.supplier else '-' }}</td>
@@ -208,7 +208,8 @@
                 tr.appendChild(nameTd);
                 const qtyTd = document.createElement('td');
                 qtyTd.className = 'text-center';
-                qtyTd.textContent = item.quantity;
+                const opt = reqSel.querySelector('option[value="' + item.materialId + '"]');
+                qtyTd.textContent = opt ? MaterialKg.qtyText(item.quantity, MaterialKg.optionParams(opt, REQ_TYPES)) : item.quantity;
                 tr.appendChild(qtyTd);
                 const actionTd = document.createElement('td');
                 actionTd.className = 'text-right';

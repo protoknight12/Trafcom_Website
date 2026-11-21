@@ -90,7 +90,7 @@
                 {% set short = lots|selectattr('missing')|list %}
                 {% if short %}
                 {% for s in short %}
-                <span class="status-badge status-new" style="margin-top: 4px;">Чака материал: {{ elink('material', s.material.id, format_material_option(s.material)) }} (липсват {{ s.missing|round(3) }})</span>
+                <span class="status-badge status-new" style="margin-top: 4px;">Чака материал: {{ elink('material', s.material.id, format_material_option(s.material)) }} (липсват {{ material_qty_text(s.material, s.missing) }})</span>
                 {% endfor %}
                 {% elif lots %}
                 <span class="status-badge status-completed" style="margin-top: 4px;">Материал заделен</span>

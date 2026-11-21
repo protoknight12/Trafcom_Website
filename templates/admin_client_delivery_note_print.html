@@ -90,7 +90,7 @@
             <td class="num">{{ delivery_item_qty_text(item, 2) }}{% if mat %}{% set kgt = material_stock_kg(mat, item.quantity)|kg(2)|trim %}{% if kgt %}<div class="muted" style="font-size: .85em;">{{ kgt }}</div>{% endif %}{% endif %}</td>
             <td>
                 {%- if item.remnant_qty -%}
-                {% if item.remnant_width %}{{ (item.remnant_width|num2) }} × {{ (item.remnant_height|num2) }} мм, {% endif %}{{ (item.remnant_qty|num2) }}
+                {{ delivery_item_remnant_text(item, 2) }}
                 {%- else %}—{% endif -%}
             </td>
             <td class="ctr">{{ 'не' if item.remnant_qty else 'да' }}</td>

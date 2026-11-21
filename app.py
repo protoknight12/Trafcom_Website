@@ -6794,10 +6794,17 @@ def kg_text(value, places=3):
 def material_qty_text(material, qty=None, length=None, places=3):
     """A quantity of a lot in its STOCK unit as text (default its stock): linear stock is kept in metres, shown as
     "3 бр. = 18 м" when the bar length is known (`length` = a delivery line's own, else the lot's; the length is in
-    the name), else "18 м"; other types the bare number. places=2 on printed documents."""
+    the name), else "18 м"; a sheet lot with a size "3 листа = 6 м²" (stock counts sheets), without one "6 м²"; a
+    per-piece lot "5 бр.". places=2 on printed documents. Always with the unit (owner's decision 2026-11-21)."""
     q = (material.stock_quantity or 0) if qty is None else qty
-    if material_price_unit(material.type) != 'm':
-        return num3(q, places)
+    unit = material_price_unit(material.type)
+    if unit == 'm2':
+        area = _material_sheet_area_m2(material)
+        if area:
+            return f'{num3(q, places)} {"лист" if q == 1 else "листа"} = {num3(q * area, places)} м²'
+        return f'{num3(q, places)} м²'
+    if unit != 'm':
+        return f'{num3(q, places)} бр.'
     length = length or material.sheet_length_mm
     bars = f'{num3(q * 1000 / length, places)} бр. = ' if length else ''
     return f'{bars}{num3(q, places)} м'
@@ -6847,7 +6854,19 @@ def delivery_item_qty_text(item, places=3):
     """A supplier or client delivery-note line's quantity as text - "3 бр. = 9 м" for a linear material line (see
     material_qty_text), else the number."""
     m = _delivery_item_material(item)
-    return material_qty_text(m, item.quantity, getattr(item, 'height', None), places) if m else num3(item.quantity, places)
+    return material_qty_text(m, item.quantity, getattr(item, 'height', None), places) if m \
+        else f'{num3(item.quantity, places)} бр.'
+
+
+def delivery_item_remnant_text(item, places=3):
+    """A consume line's remnant with its unit: a sheet remnant "2 бр. 600×400 мм", else in the lot's stock unit."""
+    if not item.remnant_qty:
+        return ''
+    if item.remnant_width:
+        return (f'{num3(item.remnant_qty, places)} бр. {num3(item.remnant_width, places)}×'
+                f'{num3(item.remnant_height, places)} мм')
+    m = _delivery_item_material(item)
+    return material_qty_text(m, item.remnant_qty, places=places) if m else num3(item.remnant_qty, places)
 
 
 def delivery_item_line_total(item):
@@ -6876,6 +6895,7 @@ app.jinja_env.globals['material_cost_text'] = material_cost_text
 app.jinja_env.globals['catalog_numbers'] = catalog_numbers
 app.jinja_env.globals['catalog_numbers_for'] = catalog_numbers_for
 app.jinja_env.globals['delivery_item_qty_text'] = delivery_item_qty_text
+app.jinja_env.globals['delivery_item_remnant_text'] = delivery_item_remnant_text
 app.jinja_env.globals['delivery_item_line_total'] = delivery_item_line_total
 app.jinja_env.globals['delivery_note_total'] = delivery_note_total
 app.jinja_env.filters['num3'] = num3

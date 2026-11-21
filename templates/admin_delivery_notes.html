@@ -1134,10 +1134,9 @@
         return (linear ? item.qty * 1000 / item.height : item.qty) * item.unit_price;
     }
     function dnQtyText(item) {
-        const unit = item.type === 'material' ? (MATERIAL_TYPES[item.material_type] || {}).unit : null;
-        if (unit !== 'm') return String(item.qty);
-        const r = function (x) { return String(Math.round(x * 1000) / 1000); };
-        return (item.height ? r(item.qty * 1000 / item.height) + ' бр. = ' : '') + r(item.qty) + ' м';
+        if (item.type !== 'material') return MaterialKg.qtyText(item.qty, null);
+        const unit = (MATERIAL_TYPES[item.material_type] || {}).unit || 'm2';
+        return MaterialKg.qtyText(item.qty, { unit: unit, width: item.width, length: item.height });
     }
     function renderDnTable() {
         const body = document.getElementById('dnTableBody');

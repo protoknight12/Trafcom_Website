@@ -166,12 +166,12 @@ def test_material_history_shows_the_frozen_figure(c, ids):
         assert db.session.get(OrderItemComponent, ids['component']).material_consumed == pytest.approx(0.2)
     html = _history(c, ids['ours'])
     assert html.count('Производство по поръчка</span>') == 2
-    assert 'ORD-M-1' in html and '5 бр. &#34;Планка&#34;' in html and '-0.5<' in html and '-0.2<' in html
+    assert 'ORD-M-1' in html and '5 бр. &#34;Планка&#34;' in html and '-0.5 лист' in html and '-0.2 лист' in html
 
     with flask_app.app_context():  # resizing the detail afterwards rewrites nothing
         db.session.get(Detail, ids['detail']).width = 1000
         db.session.commit()
-    assert '-0.5<' in _history(c, ids['ours']) and '-0.2<' in _history(c, ids['ours'])
+    assert '-0.5 лист' in _history(c, ids['ours']) and '-0.2 лист' in _history(c, ids['ours'])
     assert 'Производство по поръчка' not in _history(c, ids['lot'])
 
 

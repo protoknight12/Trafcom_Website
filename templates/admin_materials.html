@@ -294,7 +294,7 @@
                         {%- if kg_m and material_unit_short(material.type) == 'м' %}<div class="text-muted text-small">/ м{% if material.sheet_length_mm %}; 1 бр.: <strong>{{ (kg_m * material.sheet_length_mm / 1000)|num3 }}</strong>{% endif %}</div>{% endif %}
                     </td>
                     <td>{{ material.min_quantity|num3 if material.min_quantity is not none else '—' }}</td>
-                    <td>{{ material.stock_quantity|num3 }}{{ material_stock_kg(material)|kg }}</td>
+                    <td>{{ material_qty_text(material) }}{{ material_stock_kg(material)|kg }}</td>
                     <td>{{ material.erp_number or '—' }}</td>
                     <td>{{ material.code_number or '—' }}</td>
                     <td class="text-right">

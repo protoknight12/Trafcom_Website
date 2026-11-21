@@ -139,7 +139,7 @@
                     <input type="text" id="cdn_notes" placeholder="напр. партида, забележка">
                 </div>
                 <div class="form-group qty-field" id="cdn_remnant_box" style="display: none;">
-                    <label for="cdn_remnant_qty">Остатък (кол.)</label>
+                    <label for="cdn_remnant_qty">Остатък (бр. листа; прът/профил - м)</label>
                     <input type="number" id="cdn_remnant_qty" min="0" step="0.001" placeholder="няма = отпадък">
                     <label for="cdn_remnant_kg" style="margin-top: 6px;">Остатък в кг (по избор)</label>
                     <input type="number" id="cdn_remnant_kg" min="0" step="any">
@@ -297,7 +297,7 @@
                         <div>
                             {% if item.target_type in ('material','detail','product') %}{{ elink(item.target_type, item.target_id, item.description_snapshot) }}{% else %}{{ item.description_snapshot }}{% endif %}{% set _nums = catalog_numbers_for(item.target_type, item.target_id) %}{% if _nums %} <span class="text-muted text-small">({{ _nums }})</span>{% endif %} &times; {{ delivery_item_qty_text(item) }}
                             {%- if item.unit_price %} @ {{ "%.2f"|format(item.unit_price) }} €{% endif %}
-                            {%- if item.remnant_qty %}, остатък {{ item.remnant_qty|num3 }}{% if item.remnant_width %} ({{ item.remnant_width|num3 }}×{{ item.remnant_height|num3 }}){% endif %}{% endif %}
+                            {%- if item.remnant_qty %}, остатък {{ delivery_item_remnant_text(item) }}{% endif %}
                             {%- if item.notes %} - {{ item.notes }}{% endif %}
                         </div>
                         {% endfor %}
@@ -619,12 +619,9 @@
     // "3 бр. = 18 м" for a linear material line (the lot's bar length), else the number - delivery_item_qty_text().
     function cdnLineTotal(item) { return item.unit_price != null ? item.qty * item.unit_price : 0; }
     function cdnQtyText(item) {
-        if (item.type !== 'material') return String(item.qty);
+        if (item.type !== 'material') return MaterialKg.qtyText(item.qty, null);
         const opt = document.querySelector('#cdn_material_select option[value="' + item.target_id + '"]');
-        const unit = opt ? opt.dataset.unit : null;
-        if (unit !== 'm') return String(item.qty);
-        const len = parseFloat(opt.dataset.h), r = function (x) { return String(Math.round(x * 1000) / 1000); };
-        return (len ? r(item.qty * 1000 / len) + ' бр. = ' : '') + r(item.qty) + ' м';
+        return opt ? MaterialKg.qtyText(item.qty, MaterialKg.optionParams(opt, CDN_TYPES)) : String(item.qty);
     }
     function editCdnRow(index) {
         const item = cdnItems[index];
@@ -667,7 +664,9 @@
 
     function remnantText(item) {
         if (!item.remnant_qty) return '-';
-        return item.remnant_width ? item.remnant_qty + ' бр. ' + item.remnant_width + '×' + item.remnant_height : String(item.remnant_qty);
+        if (item.remnant_width) return item.remnant_qty + ' бр. ' + item.remnant_width + '×' + item.remnant_height;
+        const opt = document.querySelector('#cdn_material_select option[value="' + item.target_id + '"]');
+        return opt ? MaterialKg.qtyText(item.remnant_qty, MaterialKg.optionParams(opt, CDN_TYPES)) : String(item.remnant_qty);
     }
 
     const TYPE_LABELS = { material: 'Материал', detail: 'Детайл', product: 'Продукт' };

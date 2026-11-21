@@ -147,7 +147,7 @@ def test_one_sheet_scrapped_takes_the_whole_sheet(c, ids):
     assert again.status_code == 400 and again.get_json()['status'] == 'error'
     assert _stock(ids['ours']) == pytest.approx(9)
     history = c.get(f'/admin/materials/{ids["ours"]}/history').get_data(as_text=True)
-    assert 'Брак - остатък от лист' in history and '-0.4<' in history
+    assert 'Брак - остатък от лист' in history and '-0.4 лист' in history
 
 
 def test_mixed_scrap_and_return_creates_a_remnant_lot(c, ids):
@@ -162,10 +162,10 @@ def test_mixed_scrap_and_return_creates_a_remnant_lot(c, ids):
     [(lot_id, name, w, h, stock, cost, owner, speed)] = _remnant_lots()
     assert (name, w, h, stock, cost, owner, speed) == ('Стомана 2мм - остатък', 600, 400, 1, 10, None, 1000)
     history = c.get(f'/admin/materials/{ids["ours"]}/history').get_data(as_text=True)
-    assert 'Брак - остатък от лист' in history and '-0.5<' in history
+    assert 'Брак - остатък от лист' in history and '-0.5 лист' in history
     remnant_history = c.get(f'/admin/materials/{lot_id}/history').get_data(as_text=True)
     assert 'Остатък от лист - върнат в склада' in remnant_history and '600x400 mm' in remnant_history
-    assert 'ORD-R-2' in remnant_history and '+1<' in remnant_history
+    assert 'ORD-R-2' in remnant_history and '+1 лист' in remnant_history
 
     # a lot a decision refers to cannot be deleted (no ON DELETE on the reference)
     with flask_app.app_context():

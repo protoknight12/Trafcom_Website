@@ -160,8 +160,18 @@
         return p;
     }
 
+    // A quantity in a line's STOCK unit as text, with the unit - mirrors material_qty_text() in app.py:
+    // "3 бр. = 18 м" (linear, bar length known) / "18 м", "3 листа = 6 м²" / "6 м²", "5 бр."; p null = detail/product.
+    function qtyText(q, p) {
+        var r = function (x) { return String(round(x, 3)); };
+        if (!p || p.unit === 'pcs') return r(q) + ' бр.';
+        if (p.unit === 'm') return (p.length ? r(q * 1000 / p.length) + ' бр. = ' : '') + r(q) + ' м';
+        var a = sheetArea(p);
+        return a ? r(q) + (q === 1 ? ' лист' : ' листа') + ' = ' + r(q * a) + ' м²' : r(q) + ' м²';
+    }
+
     var api = {guessDensity: guessDensity, kgPerUnit: kgPerUnit, kgPerStockUnit: kgPerStockUnit, bind: bind, bindBars: bindBars,
-               optionParams: optionParams, sheetArea: sheetArea, num: num};
+               optionParams: optionParams, sheetArea: sheetArea, num: num, qtyText: qtyText};
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.MaterialKg = api;
 })(typeof window !== 'undefined' ? window : this);
