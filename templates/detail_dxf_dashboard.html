@@ -124,20 +124,30 @@
             <button type="submit" class="btn-secondary" style="padding: 10px 16px;">Запази номерата</button>
         </form>
     </section>
-    {#- Cutting technology of this detail (admin_update_detail_cut_technology): picking a machine fills the speeds
-        from its stored technology for this Вид + thickness (cut_tech), saving can store them back. #}
+    {#- Cutting technology of this detail (admin_update_detail_cut_technology). Sheet (detail.laser_cut): laser
+        machines, speed / pierce time / gas filled from the machine's stored technology for this Вид + thickness + gas
+        (cut_tech, keyed "machine_id|gas"), saving can store them back. Any other material: just the machine. #}
     {% set _grade = detail.material.grade.name if detail.material and detail.material.grade else 'без вид' %}
+    {% set _laser = detail.laser_cut %}
     <section class="admin-card" style="padding-top: 12px; padding-bottom: 12px;">
         <form action="{{ url_for('admin_update_detail_cut_technology', detail_id=detail.id) }}" method="POST" class="admin-form"
               style="display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin: 0;">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group" style="margin: 0; flex: 1 1 200px;">
-                <label for="ct_machine">Машина за рязане</label>
+                <label for="ct_machine">{{ 'Машина за рязане' if _laser else 'Машина' }}</label>
                 <select id="ct_machine" name="machine_id" data-picker="off">
                     <option value="">— без машина —</option>
                     {% for m in machines %}
-                    <option value="{{ m.id }}" {{ 'selected' if m.id == detail.cutting_machine_id }}>{{ m.name }}{{ ' ✓' if m.id in cut_tech }}</option>
+                    <option value="{{ m.id }}" {{ 'selected' if m.id == detail.cutting_machine_id }}>{{ m.name }}</option>
                     {% endfor %}
+                </select>
+            </div>
+            {% if _laser %}
+            <div class="form-group" style="margin: 0; flex: 1 1 140px;">
+                <label for="ct_gas">Газ</label>
+                <select id="ct_gas" name="gas" data-picker="off">
+                    <option value="">— без газ —</option>
+                    {% for k, v in cut_gases.items() %}<option value="{{ k }}" {{ 'selected' if detail.cutting_gas == k }}>{{ v }}</option>{% endfor %}
                 </select>
             </div>
             <div class="form-group" style="margin: 0; flex: 1 1 150px;">
@@ -150,28 +160,43 @@
             </div>
             <label style="display: inline-flex; gap: 6px; align-items: center; margin: 0 0 10px; cursor: pointer;">
                 <input type="checkbox" name="save_to_machine" value="1">
-                Запиши като технология на машината ({{ _grade }}{% if detail.cut_thickness %}, {{ detail.cut_thickness|num3 }} мм{% endif %})
+                Запиши като технология на машината ({{ _grade }}{% if detail.cut_thickness %}, {{ detail.cut_thickness|num3 }} мм{% endif %}, избрания газ)
             </label>
-            <button type="submit" class="btn-secondary" style="padding: 10px 16px;">Запази технологията</button>
+            {% endif %}
+            <button type="submit" class="btn-secondary" style="padding: 10px 16px;">{{ 'Запази технологията' if _laser else 'Запази машината' }}</button>
             <div id="ct_hint" class="text-small text-muted" style="flex-basis: 100%;"></div>
         </form>
     </section>
+    {% if _laser %}
     <script>
         (function () {
             const TECH = {{ cut_tech|tojson }};
-            const sel = document.getElementById('ct_machine'), hint = document.getElementById('ct_hint');
-            sel.addEventListener('change', function () {
-                const t = TECH[sel.value];
+            const sel = document.getElementById('ct_machine'), gas = document.getElementById('ct_gas');
+            const hint = document.getElementById('ct_hint');
+            // which gases this machine has a technology for (this Вид + thickness), as a hint under the form
+            function gasesOf(machineId) {
+                return Object.keys(TECH).filter(function (k) { return k.split('|')[0] === machineId; })
+                    .map(function (k) { const g = k.split('|')[1]; return g ? gas.querySelector('option[value="' + g + '"]').textContent : 'без газ'; });
+            }
+            function fill() {
+                const t = TECH[sel.value + '|' + gas.value];
+                if (!sel.value) { hint.textContent = ''; return; }
                 if (t) {
                     if (t.speed) document.getElementById('ct_speed').value = t.speed;
                     if (t.pierce) document.getElementById('ct_pierce').value = t.pierce;
                     hint.textContent = 'Попълнено от технологията на машината. Натиснете „Запази технологията“.';
                 } else {
-                    hint.textContent = sel.value ? 'Машината няма записана технология за този вид и дебелина - въведете я и отметнете „Запиши като технология на машината“.' : '';
+                    const known = gasesOf(sel.value);
+                    hint.textContent = 'Машината няма записана технология за този вид, дебелина и газ'
+                        + (known.length ? ' (има за: ' + known.join(', ') + ')' : '')
+                        + ' - въведете я и отметнете „Запиши като технология на машината“.';
                 }
-            });
+            }
+            sel.addEventListener('change', fill);
+            gas.addEventListener('change', fill);
         })();
     </script>
+    {% endif %}
     <div class="tabs-nav">
         <button type="button" class="btn-secondary tab-btn active" data-tab="files">Файлове</button>
         <button type="button" class="btn-secondary tab-btn" data-tab="material">Материал и размери</button>

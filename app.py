@@ -895,9 +895,17 @@ class Detail(db.Model):
     cutting_machine_id = db.Column(db.Integer, db.ForeignKey('machine.id'), nullable=True, index=True)
     cutting_speed_mm_per_min = db.Column(db.Float, nullable=True)
     pierce_time_sec = db.Column(db.Float, nullable=True)
+    cutting_gas = db.Column(db.String(10), nullable=True)      # key of CUT_GASES, NULL = not set
 
     material = db.relationship('MaterialPrice')
     cutting_machine = db.relationship('Machine')
+
+    @property
+    def laser_cut(self):
+        """Cut from sheet (a DXF-cut type priced per m²): only then a laser machine, speeds, gas and the machine's
+        technology apply; any other detail just names the machine it is made on."""
+        m = self.material
+        return bool(m and material_type_cfg(m.type).has_cutting and material_price_unit(m.type) == 'm2')
 
     @property
     def cut_thickness(self):
@@ -2188,15 +2196,19 @@ class Machine(db.Model):
     panel = db.relationship('ElectricalPanel', foreign_keys=[panel_id], backref='wired_machines')
 
 
+CUT_GASES = {'oxygen': 'Кислород', 'nitrogen': 'Азот', 'air': 'Сгъстен въздух'}   # laser assist gas
+
+
 class MachineCutTechnology(db.Model):
-    """A machine's cutting technology for one Вид на материала (MaterialGrade, NULL = material without a Вид) and
-    thickness: speed mm/min + pierce time in seconds. Written from the detail page ("Запиши като технология на
+    """A machine's cutting technology for one Вид на материала (MaterialGrade, NULL = material without a Вид),
+    thickness and assist gas (CUT_GASES key, NULL = not set): speed mm/min + pierce time in seconds. Written from the detail page ("Запиши като технология на
     машината"), read there to fill a detail's speeds when its machine is picked. One row per (machine, grade,
     thickness) - kept unique in code (_save_cut_technology), since NULL grades escape a DB unique constraint."""
     id = db.Column(db.Integer, primary_key=True)
     machine_id = db.Column(db.Integer, db.ForeignKey('machine.id'), nullable=False, index=True)
     grade_id = db.Column(db.Integer, db.ForeignKey('material_grade.id'), nullable=True)
     thickness_mm = db.Column(db.Float, nullable=False)
+    gas = db.Column(db.String(10), nullable=True)
     cutting_speed_mm_per_min = db.Column(db.Float, nullable=True)
     pierce_time_sec = db.Column(db.Float, nullable=True)
 
@@ -10355,8 +10367,8 @@ def admin_hall_dossier(machine_id):
                            services=Service.query.order_by(Service.name).all(), known_machine_types=_known_machine_types(),
                            grades=MaterialGrade.query.order_by(MaterialGrade.sort_order, MaterialGrade.name).all(),
                            cut_techs=sorted(m.machine.cut_technologies,
-                                            key=lambda t: (t.grade.name if t.grade else '', t.thickness_mm))
-                           if m.machine else [],
+                                            key=lambda t: (t.grade.name if t.grade else '', t.thickness_mm, t.gas or ''))
+                           if m.machine else [], cut_gases=CUT_GASES,
                            free_machines=[x for x in Machine.query.order_by(Machine.name) if x.hall_record is None])
 
 
@@ -10445,6 +10457,7 @@ def admin_hall_cut_tech_save(machine_id):
     tech = MachineCutTechnology.query.filter_by(id=tech_id, machine_id=mc.id).first_or_404() if tech_id else None
     grade_raw = request.form.get('grade_id', '')
     grade_id = int(grade_raw) if grade_raw.isdigit() and db.session.get(MaterialGrade, int(grade_raw)) else None
+    gas = _parse_cut_gas(request.form)
     try:
         thickness = round(float(request.form.get('thickness_mm', '').replace(',', '.')), 3)
         values = []
@@ -10455,17 +10468,18 @@ def admin_hall_cut_tech_save(machine_id):
         return _dossier_back(hm.id, 'Дебелината, скоростта и времето трябва да са числа.', 'danger')
     if thickness <= 0 or any(v is not None and v <= 0 for v in values):
         return _dossier_back(hm.id, 'Дебелината, скоростта и времето трябва да са положителни.', 'danger')
-    same = _cut_technology(mc.id, grade_id, thickness)
+    same = _cut_technology(mc.id, grade_id, thickness, gas)
     if same and same is not tech:
-        return _dossier_back(hm.id, 'Вече има технология за този вид и дебелина - редактирайте нея.', 'danger')
+        return _dossier_back(hm.id, 'Вече има технология за този вид, дебелина и газ - редактирайте нея.', 'danger')
     if tech is None:
         tech = MachineCutTechnology(machine_id=mc.id)
         db.session.add(tech)
-    tech.grade_id, tech.thickness_mm = grade_id, thickness
+    tech.grade_id, tech.thickness_mm, tech.gas = grade_id, thickness, gas
     tech.cutting_speed_mm_per_min, tech.pierce_time_sec = values
     db.session.commit()
     grade = db.session.get(MaterialGrade, grade_id).name if grade_id else 'без вид'
-    log_action(f'Технология на "{mc.name}": {grade}, {thickness:g} мм - {values[0] or "-"} мм/мин, '
+    log_action(f'Технология на "{mc.name}": {grade}, {thickness:g} мм, {CUT_GASES.get(gas, "без газ")} - '
+               f'{values[0] or "-"} мм/мин, '
                f'{values[1] or "-"} сек пробиване')
     return _dossier_back(hm.id, 'Технологията е записана.')
 
@@ -10475,7 +10489,7 @@ def admin_hall_cut_tech_save(machine_id):
 def admin_hall_cut_tech_delete(machine_id, tech_id):
     hm = HallMachine.query.get_or_404(machine_id)
     tech = MachineCutTechnology.query.filter_by(id=tech_id, machine_id=hm.machine_id).first_or_404()
-    label = f'{tech.grade.name if tech.grade else "без вид"}, {tech.thickness_mm:g} мм'
+    label = f'{tech.grade.name if tech.grade else "без вид"}, {tech.thickness_mm:g} мм, {CUT_GASES.get(tech.gas, "без газ")}'
     db.session.delete(tech)
     db.session.commit()
     log_action(f'Изтрита технология на "{hm.name}": {label}')
@@ -12544,8 +12558,10 @@ def _lock_or_404(model, row_id):
     'done', the new quantity_produced, the rewritten lines, or no row at all.
     populate_existing: a copy already in the session would otherwise keep its
     old values and the lock would protect nothing. SQLite (the tests) has no
-    FOR UPDATE and simply ignores it."""
-    row = None if row_id is None else db.session.get(model, row_id, populate_existing=True, with_for_update=True)
+    FOR UPDATE and simply ignores it. OF <the model's table>: a lazy='joined' relationship (MaterialPrice.grade)
+    adds a LEFT OUTER JOIN, and PostgreSQL refuses a plain FOR UPDATE on the nullable side of an outer join."""
+    row = None if row_id is None else db.session.get(model, row_id, populate_existing=True,
+                                                     with_for_update={'of': model})
     if row is None:
         abort(404)
     return row
@@ -15135,17 +15151,25 @@ def detail_dxf_dashboard(detail_id):
     # "Технология на рязане": each machine's stored speeds for this detail's Вид + thickness (filled in on pick).
     machines, cut_tech = [], {}
     if current_user.is_admin:
-        # laser machines only (Machine.is_laser) - plus the detail's current one, so it never vanishes from the form
-        machines = Machine.query.filter(db.or_(Machine.is_laser.is_(True), Machine.id == detail.cutting_machine_id)) \
-            .order_by(Machine.name).all()
-        grade_id = detail.material.grade_id if detail.material else None
-        for m in machines:
-            t = _cut_technology(m.id, grade_id, detail.cut_thickness)
-            if t:
-                cut_tech[m.id] = {'speed': t.cutting_speed_mm_per_min, 'pierce': t.pierce_time_sec}
+        if detail.laser_cut:
+            # sheet: laser machines only (Machine.is_laser) - plus the detail's current one, so it never vanishes
+            machines = Machine.query.filter(db.or_(Machine.is_laser.is_(True), Machine.id == detail.cutting_machine_id)) \
+                .order_by(Machine.name).all()
+            grade_id = detail.material.grade_id if detail.material else None
+            # every stored technology for this Вид + thickness, keyed "machine_id|gas" ('' = no gas)
+            if detail.cut_thickness is not None and machines:
+                q = MachineCutTechnology.query.filter(
+                    MachineCutTechnology.machine_id.in_([m.id for m in machines]),
+                    db.func.abs(MachineCutTechnology.thickness_mm - detail.cut_thickness) < 0.0005,
+                    MachineCutTechnology.grade_id.is_(None) if grade_id is None
+                    else MachineCutTechnology.grade_id == grade_id)
+                cut_tech = {f'{t.machine_id}|{t.gas or ""}': {'speed': t.cutting_speed_mm_per_min,
+                                                               'pierce': t.pierce_time_sec} for t in q}
+        else:
+            machines = Machine.query.order_by(Machine.name).all()      # not sheet: any machine, no speeds
     return render_template('detail_dxf_dashboard.html', detail=detail, files=files, services=services,
                             materials=materials, services_data=services_data, alt_materials=alt_materials,
-                            machines=machines, cut_tech=cut_tech, active_page='admin_details')
+                            machines=machines, cut_tech=cut_tech, cut_gases=CUT_GASES, active_page='admin_details')
 
 
 @app.route('/details/<int:detail_id>/update-material', methods=['POST'])
@@ -15664,24 +15688,43 @@ def admin_update_detail_numbers(detail_id):
     return back
 
 
-def _cut_technology(machine_id, grade_id, thickness):
-    """The MachineCutTechnology row for (machine, Вид, thickness) or None - grade None matches rows without a Вид."""
+def _cut_technology(machine_id, grade_id, thickness, gas):
+    """The MachineCutTechnology row for (machine, Вид, thickness, gas) or None - a None grade / gas matches rows
+    without one."""
     if not machine_id or thickness is None:
         return None
-    q = MachineCutTechnology.query.filter_by(machine_id=machine_id)
-    q = q.filter(MachineCutTechnology.grade_id.is_(None)) if grade_id is None else q.filter_by(grade_id=grade_id)
-    return q.filter(db.func.abs(MachineCutTechnology.thickness_mm - thickness) < 0.0005).first()
+    t = MachineCutTechnology
+    q = t.query.filter_by(machine_id=machine_id)
+    q = q.filter(t.grade_id.is_(None)) if grade_id is None else q.filter_by(grade_id=grade_id)
+    q = q.filter(t.gas.is_(None)) if gas is None else q.filter_by(gas=gas)
+    return q.filter(db.func.abs(t.thickness_mm - thickness) < 0.0005).first()
+
+
+def _parse_cut_gas(form):
+    gas = form.get('gas', '')
+    return gas if gas in CUT_GASES else None
 
 
 @app.route('/admin/details/<int:detail_id>/cut-technology', methods=['POST'])
 @role_required('admin')
 def admin_update_detail_cut_technology(detail_id):
-    """"Технология на рязане" on the detail page: machine + cutting speed (mm/min) + pierce time (s) of this
-    detail; with `save_to_machine` also stored as the machine's technology for the detail's Вид + thickness."""
+    """"Технология на рязане" on the detail page: machine + cutting speed (mm/min) + pierce time (s) + gas of this
+    detail; with `save_to_machine` also stored as the machine's technology for the detail's Вид + thickness + gas.
+    A detail not cut from sheet (Detail.laser_cut false) only records its machine (any machine)."""
     detail = Detail.query.get_or_404(detail_id)
     back = redirect(url_for('detail_dxf_dashboard', detail_id=detail.id))
     machine_id = request.form.get('machine_id', type=int)
     machine = db.session.get(Machine, machine_id) if machine_id else None
+    if not detail.laser_cut:
+        detail.cutting_machine_id = machine.id if machine else None
+        log_action(describe_changes(f'детайл "{detail.name}"', detail, {'cutting_machine_id': 'машина'}))
+        db.session.commit()
+        flash('Машината на детайла е записана.', 'success')
+        return back
+    if machine and not machine.is_laser and machine.id != detail.cutting_machine_id:
+        flash('За листов материал изберете машина за лазерно рязане.', 'danger')
+        return back
+    gas = _parse_cut_gas(request.form)
     try:
         values = []
         for name in ('cutting_speed_mm_per_min', 'pierce_time_sec'):
@@ -15695,9 +15738,10 @@ def admin_update_detail_cut_technology(detail_id):
         return back
     detail.cutting_machine_id = machine.id if machine else None
     detail.cutting_speed_mm_per_min, detail.pierce_time_sec = values
+    detail.cutting_gas = gas
     log_action(describe_changes(f'детайл "{detail.name}"', detail, {
         'cutting_machine_id': 'машина', 'cutting_speed_mm_per_min': 'скорост мм/мин',
-        'pierce_time_sec': 'пробиване сек'}))
+        'pierce_time_sec': 'пробиване сек', 'cutting_gas': 'газ'}))
     if request.form.get('save_to_machine'):
         thickness = detail.cut_thickness
         grade_id = detail.material.grade_id if detail.material else None
@@ -15706,13 +15750,13 @@ def admin_update_detail_cut_technology(detail_id):
             flash('Технологията на детайла е записана, но не и към машината - изберете машина и задайте дебелина.',
                   'warning')
             return back
-        tech = _cut_technology(machine.id, grade_id, thickness)
+        tech = _cut_technology(machine.id, grade_id, thickness, gas)
         if not tech:
-            tech = MachineCutTechnology(machine_id=machine.id, grade_id=grade_id, thickness_mm=thickness)
+            tech = MachineCutTechnology(machine_id=machine.id, grade_id=grade_id, thickness_mm=thickness, gas=gas)
             db.session.add(tech)
         tech.cutting_speed_mm_per_min, tech.pierce_time_sec = values
         grade = detail.material.grade.name if detail.material and detail.material.grade else 'без вид'
-        log_action(f'Технология на "{machine.name}": {grade}, {thickness:g} мм - '
+        log_action(f'Технология на "{machine.name}": {grade}, {thickness:g} мм, {CUT_GASES.get(gas, "без газ")} - '
                    f'{values[0] or "-"} мм/мин, {values[1] or "-"} сек пробиване')
     db.session.commit()
     flash('Технологията на рязане е записана.', 'success')

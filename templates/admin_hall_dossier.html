@@ -141,7 +141,7 @@
         offers for this machine by Вид + thickness. Each row is its own small form. #}
     <div class="dz-panel">
         <h2>Технологии на рязане ({{ cut_techs|length }})</h2>
-        <p class="dz-muted" style="margin-top:0">Скорост на рязане и време за пробиване по вид материал и дебелина. Попълват детайла при избор на тази машина; записват се и от детайла с „Запиши като технология на машината“.</p>
+        <p class="dz-muted" style="margin-top:0">Скорост на рязане и време за пробиване по вид материал, дебелина и газ. Попълват детайла при избор на тази машина; записват се и от детайла с „Запиши като технология на машината“.</p>
         {% macro tech_form(t=none) %}
         <form method="post" action="{{ url_for('admin_hall_cut_tech_save', machine_id=m.id) }}" style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; margin:0 0 8px;">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -149,6 +149,9 @@
             <div><label>Вид материал</label>
                 <select name="grade_id"><option value="">- без вид -</option>
                     {% for gr in grades %}<option value="{{ gr.id }}" {{ 'selected' if t and t.grade_id == gr.id }}>{{ gr.name }}</option>{% endfor %}</select></div>
+            <div><label>Газ</label>
+                <select name="gas"><option value="">- без газ -</option>
+                    {% for k, v in cut_gases.items() %}<option value="{{ k }}" {{ 'selected' if t and t.gas == k }}>{{ v }}</option>{% endfor %}</select></div>
             <div><label>Дебелина (мм)</label><input type="number" name="thickness_mm" step="0.001" min="0.001" required value="{{ t.thickness_mm|num3 if t else '' }}" style="width:110px"></div>
             <div><label>Скорост (мм/мин)</label><input type="number" name="cutting_speed_mm_per_min" step="0.001" min="0.001" value="{{ t.cutting_speed_mm_per_min|num3 if t and t.cutting_speed_mm_per_min else '' }}" style="width:130px"></div>
             <div><label>Пробиване (сек)</label><input type="number" name="pierce_time_sec" step="0.001" min="0.001" value="{{ t.pierce_time_sec|num3 if t and t.pierce_time_sec else '' }}" style="width:110px"></div>
@@ -159,7 +162,7 @@
         <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
             {{ tech_form(t) }}
             <form method="post" action="{{ url_for('admin_hall_cut_tech_delete', machine_id=m.id, tech_id=t.id) }}" style="margin:0 0 8px;"
-                  data-confirm="Изтриване на технологията {{ t.grade.name if t.grade else 'без вид' }}, {{ t.thickness_mm|num3 }} мм?">
+                  data-confirm="Изтриване на технологията {{ t.grade.name if t.grade else 'без вид' }}, {{ t.thickness_mm|num3 }} мм, {{ cut_gases.get(t.gas, 'без газ') }}?">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="btn" type="submit">Изтрий</button>
             </form>

@@ -67,6 +67,17 @@ def test_detail_cut_technology(s):
     db.session.expire_all()
     assert MachineCutTechnology.query.count() == 1 and MachineCutTechnology.query.one().cutting_speed_mm_per_min == 2600
 
+    c.post(url, data={'machine_id': m1.id, 'gas': 'nitrogen', 'cutting_speed_mm_per_min': '3100',
+                      'save_to_machine': '1'})                                       # another gas = another row
+    db.session.expire_all()
+    assert db.session.get(Detail, d.id).cutting_gas == 'nitrogen'
+    assert sorted((t.gas or '', t.cutting_speed_mm_per_min) for t in MachineCutTechnology.query) == \
+           [('', 2600), ('nitrogen', 3100)]
+    page = c.get(f'/details/{d.id}/files').get_data(as_text=True)
+    assert f'"{m1.id}|nitrogen"' in page and 'id="ct_gas"' in page
+    MachineCutTechnology.query.filter_by(gas='nitrogen').delete()
+    db.session.commit()
+
     c.post(url, data={'machine_id': m2.id, 'cutting_speed_mm_per_min': '900', 'pierce_time_sec': ''})
     db.session.expire_all()
     assert MachineCutTechnology.query.count() == 1                                   # not asked to save
@@ -91,6 +102,35 @@ def test_detail_cut_technology(s):
     assert MachineCutTechnology.query.count() == 0
 
 
+def test_non_sheet_detail_only_picks_a_machine(s):
+    """A detail not cut from sheet: every machine is offered, no speeds / gas / technology, saving keeps only the
+    machine; a sheet detail refuses a non-laser machine."""
+    c = _login('ct_admin')
+    db.session.add(MaterialPrice(key='ct_rod', display_name='Прът 20', type='rods', cost_per_m2=5,
+                                 sheet_width_mm=20, sheet_length_mm=6000))
+    db.session.commit()
+    c.post('/admin/details/add', data={'name': 'Ос', 'material': 'ct_rod', 'manual_price': '1'})
+    d = Detail.query.filter_by(name='Ос').one()
+    assert not d.laser_cut
+    lathe = Machine.query.filter_by(name='Струг QA').one()
+    page = c.get(f'/details/{d.id}/files').get_data(as_text=True)
+    assert 'Струг QA' in page and 'id="ct_speed"' not in page and 'id="ct_gas"' not in page
+    c.post(f'/admin/details/{d.id}/cut-technology', data={'machine_id': lathe.id, 'cutting_speed_mm_per_min': '99',
+                                                          'save_to_machine': '1'})
+    db.session.expire_all()
+    d = db.session.get(Detail, d.id)
+    assert d.cutting_machine_id == lathe.id and d.cutting_speed_mm_per_min != 99
+    assert MachineCutTechnology.query.count() == 0
+
+    c.post('/admin/details/add', data={'name': 'Лист', 'material': 'ct_steel', 'manual_price': '1'})
+    sheet = Detail.query.filter_by(name='Лист').one()
+    assert sheet.laser_cut
+    assert 'Струг QA' not in c.get(f'/details/{sheet.id}/files').get_data(as_text=True)
+    c.post(f'/admin/details/{sheet.id}/cut-technology', data={'machine_id': lathe.id})
+    db.session.expire_all()
+    assert db.session.get(Detail, sheet.id).cutting_machine_id is None
+
+
 def test_dossier_cut_technologies(s):
     """The laser flag in the dossier, and add / edit / duplicate / delete of a machine's technologies there."""
     from app import HallMachine
@@ -113,6 +153,12 @@ def test_dossier_cut_technologies(s):
                        'pierce_time_sec': '0.8'})
     c.post(base, data={'grade_id': grade.id, 'thickness_mm': '3', 'cutting_speed_mm_per_min': '1'})   # duplicate
     c.post(base, data={'grade_id': '', 'thickness_mm': '1', 'cutting_speed_mm_per_min': '5000'})      # без вид
+    c.post(base, data={'grade_id': grade.id, 'thickness_mm': '3', 'gas': 'oxygen',
+                       'cutting_speed_mm_per_min': '1200'})                          # same Вид/thickness, other gas
+    db.session.expire_all()
+    ox = MachineCutTechnology.query.filter_by(gas='oxygen').one()
+    assert ox.cutting_speed_mm_per_min == 1200
+    c.post(f'{base}/{ox.id}/delete')
     db.session.expire_all()
     rows = MachineCutTechnology.query.order_by(MachineCutTechnology.thickness_mm).all()
     assert [(r.grade_id, r.thickness_mm, r.cutting_speed_mm_per_min) for r in rows] == \

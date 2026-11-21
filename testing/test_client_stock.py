@@ -139,7 +139,8 @@ def test_client_receipt_detail_line(admin_client):
 
 def test_client_receipt_rejected_line_reported(admin_client):
     c = _client()
-    bad = {'type': 'material', 'name': 'Нещо ново', 'material_key': None, 'qty': 1, 'material_type': 'sheets'}
+    # a detail on an unknown material is refused (a new material needs no cutting speeds since 2026-11-20)
+    bad = {'type': 'detail', 'name': 'Нещо ново', 'material_key': 'no-such-material', 'qty': 1}
     r = _receipt(admin_client, c.id, [bad, _line(2)])
     html = r.get_data(as_text=True)
     assert 'Нещо ново' in html and 'не беше записан (липсват данни' in html   # Jinja escapes the quotes

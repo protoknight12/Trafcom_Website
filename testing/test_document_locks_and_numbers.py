@@ -146,6 +146,26 @@ def test_lock_or_404_refreshes_a_loaded_row_and_asks_for_update(admin_client):
     assert 'FOR UPDATE' in str(seen[0].compile(dialect=postgresql.dialect()))
 
 
+def test_lock_or_404_locks_only_its_own_table(admin_client):
+    """MaterialPrice.grade is lazy='joined' (LEFT OUTER JOIN material_grade): PostgreSQL refuses a plain FOR UPDATE
+    on the nullable side of an outer join (it broke the production report / cut plan live), so the lock is
+    FOR UPDATE OF material_price."""
+    m = MaterialPrice(key='lock_m', display_name='Lock', type='sheets', cost_per_m2=1)
+    db.session.add(m)
+    db.session.commit()
+    seen = []
+    session = db.session()
+    listener = lambda state: seen.append(state.statement)
+    event.listen(session, 'do_orm_execute', listener)
+    try:
+        _lock_or_404(MaterialPrice, m.id)
+    finally:
+        event.remove(session, 'do_orm_execute', listener)
+    sqls = [str(st.compile(dialect=postgresql.dialect())) for st in seen]
+    assert any('LEFT OUTER JOIN material_grade' in sql and sql.rstrip().endswith('FOR UPDATE OF material_price')
+               for sql in sqls), sqls
+
+
 def test_lock_or_404_is_a_404_for_a_missing_row(admin_client):
     assert admin_client.post('/admin/production-orders/424242/complete',
                              data={'actual_material_qty': '1'}).status_code == 404
