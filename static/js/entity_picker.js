@@ -123,6 +123,30 @@
             facets.push({ el: s, test: function (row, v) { return row.dataset.stockState === v; } });
             bar.appendChild(s);
         }
+        // The search and filters are remembered per page + kind (owner's request 2026-11-21: picking material after
+        // material on a delivery note keeps the same filters); a saved value no longer offered is ignored.
+        const memoryKey = 'picker:' + kind + ':' + location.pathname;
+        let saved = {};
+        try { saved = JSON.parse(localStorage.getItem(memoryKey) || '{}') || {}; } catch (e) { saved = {}; }
+        search.value = typeof saved.q === 'string' ? saved.q : '';
+        facets.forEach(function (f) {
+            const v = (saved.f || {})[f.el.getAttribute('aria-label')];
+            if (v && Array.prototype.some.call(f.el.options, function (o) { return o.value === v; })) f.el.value = v;
+        });
+        const remember = function () {
+            const f = {};
+            facets.forEach(function (x) { if (x.el.value) f[x.el.getAttribute('aria-label')] = x.el.value; });
+            try { localStorage.setItem(memoryKey, JSON.stringify({ q: search.value, f: f })); } catch (e) { /* private mode */ }
+        };
+        const clear = el('button', 'btn-secondary ep-action', 'Изчисти');
+        clear.type = 'button';
+        clear.addEventListener('click', function () {
+            search.value = '';
+            facets.forEach(function (f) { f.el.value = ''; });
+            apply();
+            search.focus();
+        });
+        bar.appendChild(clear);
         dlg.appendChild(bar);
 
         actions.concat(none ? [none] : []).forEach(function (o) {
@@ -198,6 +222,7 @@
             const vis = visible();
             empty.hidden = vis.length > 0;
             if (active && active.hidden) setActive(null);
+            remember();
         };
         search.addEventListener('input', apply);
         facets.forEach(function (f) { f.el.addEventListener('change', apply); });
@@ -221,8 +246,9 @@
         apply();
         document.body.appendChild(dlg);
         dlg.showModal();
-        if (current) { setActive(current); }
+        if (current && !current.hidden) { setActive(current); }
         search.focus();
+        search.select();   // a remembered search is replaced by typing
     }
 
     // Delegated, so selects added later (dialogs, JS-built rows) work without an init step.
