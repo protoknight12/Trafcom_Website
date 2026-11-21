@@ -85,7 +85,7 @@
         {% set mat = mats.get(item.target_id) if item.target_type == 'material' else none %}
         <tr>
             <td class="idx">{{ loop.index }}</td>
-            <td>{{ item.description_snapshot }}{% set _nums = catalog_numbers_for(item.target_type, item.target_id) %}{% if _nums %}<div class="muted" style="font-size: .85em;">{{ _nums }}</div>{% endif %}</td>
+            <td>{{ item.description_snapshot }}{% if (item.target_type, item.target_id) in client_made and 'материал на клиента' not in item.description_snapshot %} (с материал на клиента){% endif %}{% set _nums = catalog_numbers_for(item.target_type, item.target_id) %}{% if _nums %}<div class="muted" style="font-size: .85em;">{{ _nums }}</div>{% endif %}</td>
             {% if consume %}
             <td class="num">{{ delivery_item_qty_text(item, 2) }}{% if mat %}{% set kgt = material_stock_kg(mat, item.quantity)|kg(2)|trim %}{% if kgt %}<div class="muted" style="font-size: .85em;">{{ kgt }}</div>{% endif %}{% endif %}</td>
             <td>

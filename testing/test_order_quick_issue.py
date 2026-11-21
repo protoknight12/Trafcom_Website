@@ -255,3 +255,18 @@ def test_report_shows_button_then_link(ids):
     assert 'Изписана с разписка №ORD-1' in page and f'/admin/orders/{order_id}/issue' not in page
     other = _full_order(ids, status='in_production', number='ORD-3')
     assert f'/admin/orders/{other}/issue' not in c.get('/admin/production').get_data(as_text=True)
+
+
+def test_print_marks_lines_made_from_the_clients_material(ids):
+    """The protocol prints "(с материал на клиента)" after a line made from the client's material (an order line
+    ordered as own material) and nothing after one made from ours (owner's decision 2026-11-21)."""
+    order_id = _order(ids, [('detail', ids['plain'], 2, 2, 4.5), ('detail', ids['part'], 1, 1, 2.0)])
+    with flask_app.app_context():
+        item = OrderItem.query.filter_by(order_id=order_id, detail_id=ids['part']).one()
+        item.own_material = True
+        db.session.commit()
+    c = _login('qa_admin')
+    _issue(c, order_id)
+    page = c.get(f'/admin/client-delivery-notes/{_issued_note_id(order_id)}/print').get_data(as_text=True)
+    assert 'Ъгълник (с материал на клиента)' in page
+    assert 'Планка (с материал на клиента)' not in page and 'Планка' in page

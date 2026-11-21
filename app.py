@@ -13737,7 +13737,36 @@ def admin_client_delivery_note_print(note_id):
     """Browser-print view of a ClientDeliveryNote - mirrors admin_delivery_note_print()."""
     note = ClientDeliveryNote.query.get_or_404(note_id)
     return render_template('admin_client_delivery_note_print.html', note=note, mats=_note_materials(note),
+                           client_made=_note_client_material_targets(note),
                            has_declarations=any(it.target_type in ('detail', 'product') for it in note.items))
+
+
+def _note_client_material_targets(note):
+    """{(target_type, id)} of a client note's detail / product lines made from the CLIENT's material - printed
+    "(с материал на клиента)" on the protocol (owner's decision 2026-11-21; our material: nothing printed). A detail
+    cut from its owner's stored lot (Detail.client_material) always; for a note issued from an order also a line
+    ordered as "материал на клиента" (own_material) or cut from a client's lot (frozen consumed lot, else the line's
+    material), per order line / component."""
+    found = set()
+    for it in note.items:
+        if it.target_type == 'detail':
+            detail = db.session.get(Detail, it.target_id)
+            if detail and detail.client_material:
+                found.add(('detail', detail.id))
+    order = Order.query.filter_by(issued_note_id=note.id).first()
+    for item in (order.items if order else []):
+        if item.components:
+            for c in item.components:
+                lot = db.session.get(MaterialPrice, c.consumed_material_id) if c.consumed_material_id else (
+                    c.detail.material if c.detail else None)
+                if c.detail_id and (item.own_material or (lot and lot.owner_client_id)):
+                    found.add(('detail', c.detail_id))
+            continue
+        lot = db.session.get(MaterialPrice, item.consumed_material_id) if item.consumed_material_id else (
+            _line_material(item, item.detail) if item.detail else None)
+        if item.own_material or (lot and lot.owner_client_id):
+            found.add(('detail', item.detail_id) if item.detail_id else ('product', item.product_id))
+    return found
 
 
 @app.route('/admin/client-delivery-notes/<int:note_id>/declarations')
