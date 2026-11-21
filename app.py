@@ -1786,6 +1786,50 @@ CLIENT_NOTE_KINDS = {
     'consume': 'Изписване за производство',
 }
 
+
+class MaterialTransfer(db.Model):
+    """
+    "Протокол за прехвърляне на материал" (owner's decision 2026-11-21): stored material changes owner in the
+    warehouse - ours (NULL) -> a client, a client -> us, a client -> another client. Each line takes the quantity out
+    of the source lot and puts it into a lot of the new owner at price 0 (_transfer_target_lot()); see
+    create_material_transfer(). No editing: delete (= reverse, delete_material_transfer()) and record anew.
+    `number` is sequential (_lock_numbering('transfer')), printed as doc_number.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    number = db.Column(db.Integer, unique=True, nullable=False)
+    transfer_date = db.Column(db.Date, nullable=True)
+    from_client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True, index=True)   # NULL = us
+    to_client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True, index=True)     # NULL = us
+    notes = db.Column(db.String(255), nullable=True)
+    handed_by = db.Column(db.String(150), nullable=True)    # NULL = the default (_note_signatures())
+    received_by = db.Column(db.String(150), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+
+    from_client = db.relationship('Client', foreign_keys=[from_client_id])
+    to_client = db.relationship('Client', foreign_keys=[to_client_id])
+    created_by = db.relationship('User')
+    items = db.relationship('MaterialTransferItem', backref='transfer', cascade='all, delete-orphan', lazy=True)
+
+    @property
+    def doc_number(self):
+        """Printed number: '3' + the number in 7 digits (30000001) - 1... receipts, 2... declarations."""
+        return f'3{self.number:07d}'
+
+
+class MaterialTransferItem(db.Model):
+    """One line of a MaterialTransfer: `quantity` (the lot's STOCK unit) left source_material and went into
+    target_material (the new owner's lot). description_snapshot freezes the name, like DeliveryNoteItem."""
+    id = db.Column(db.Integer, primary_key=True)
+    transfer_id = db.Column(db.Integer, db.ForeignKey('material_transfer.id'), nullable=False, index=True)
+    source_material_id = db.Column(db.Integer, db.ForeignKey('material_price.id'), nullable=False, index=True)
+    target_material_id = db.Column(db.Integer, db.ForeignKey('material_price.id'), nullable=False, index=True)
+    quantity = db.Column(db.Float, nullable=False)
+    description_snapshot = db.Column(db.String(255), nullable=False)
+
+    source_material = db.relationship('MaterialPrice', foreign_keys=[source_material_id])
+    target_material = db.relationship('MaterialPrice', foreign_keys=[target_material_id])
+
 # Request status slugs, same ASCII-slug-as-CSS-class convention as
 # STATUS_LABELS (Order.status) above.
 REQUEST_STATUS_LABELS = {
@@ -11923,6 +11967,22 @@ def admin_material_history(material_id):
             'party': r.order.customer_name, 'note_number': r.order.order_number, 'unit_price': None,
             'notes': f'остатък {", ".join(sizes)} от "{r.material.display_name}"',
         })
+    # Transfer protocols (MaterialTransfer): out of the source lot, into the new owner's lot.
+    for item in (MaterialTransferItem.query.join(MaterialTransfer)
+                 .filter(db.or_(MaterialTransferItem.source_material_id == material_id,
+                                MaterialTransferItem.target_material_id == material_id))
+                 .options(db.contains_eager(MaterialTransferItem.transfer).joinedload(MaterialTransfer.from_client),
+                          db.contains_eager(MaterialTransferItem.transfer).joinedload(MaterialTransfer.to_client))):
+        t = item.transfer
+        out = item.source_material_id == material_id
+        movements.append({
+            'date': t.transfer_date or to_local(t.created_at).date(), 'created_at': t.created_at,
+            'kind': 'transfer_out' if out else 'transfer_in', 'direction': 'out' if out else 'in',
+            'quantity': item.quantity, 'party': _owner_label(t.to_client if out else t.from_client),
+            'note_number': t.doc_number, 'unit_price': None,
+            'notes': (f'Прехвърлен към {_owner_label(t.to_client)}' if out
+                      else f'Прехвърлен от {_owner_label(t.from_client)}'),
+        })
     movements.sort(key=lambda m: m['created_at'], reverse=True)
 
     return render_template('admin_material_history.html', material=material, movements=movements,
@@ -12271,7 +12331,10 @@ def admin_delete_client(client_id):
         (Detail, Detail.owner_client_id, 'собствени детайли'), (Product, Product.owner_client_id, 'собствени продукти'),
         (MaterialPrice, MaterialPrice.owner_client_id, 'партиди материал на съхранение'),
         (DeliveryNote, DeliveryNote.client_id, 'приемания на съхранение'),
+        (MaterialTransfer, MaterialTransfer.from_client_id, 'протоколи за прехвърляне на материал'),
+        (MaterialTransfer, MaterialTransfer.to_client_id, 'протоколи за прехвърляне на материал'),
     ) if model.query.filter(column == client.id).first()]
+    used_in = list(dict.fromkeys(used_in))
     if used_in:
         flash(f'Клиентът "{client.name}" има {", ".join(used_in)} и не може да бъде изтрит.', 'danger')
         return redirect(url_for('admin_clients'))
@@ -12605,7 +12668,8 @@ def _lock_or_404(model, row_id):
 # Keys for pg_advisory_xact_lock(), one per family of "max + 1" numbers. Plain
 # constants: they only have to differ from each other and from the detector's
 # 735100 (_detection_lock) - advisory locks share one key space per database.
-NUMBER_LOCK_KEYS = {'erp': 735201, 'offer': 735202, 'capa': 735203, 'audit': 735204, 'hall': 735205, 'order': 735206}
+NUMBER_LOCK_KEYS = {'erp': 735201, 'offer': 735202, 'capa': 735203, 'audit': 735204, 'hall': 735205, 'order': 735206,
+                    'transfer': 735207}
 
 
 def _lock_numbering(family):
@@ -12625,6 +12689,17 @@ def _lock_numbering(family):
 
 
 DELIVERY_NOTE_TARGET_MODELS = {'material': MaterialPrice, 'detail': Detail, 'product': Product}
+
+
+def _material_unused(material):
+    """Nothing refers to this lot: no foreign key (details, orders, offers, requests, ...) and no delivery-note
+    line of either kind (those point at it by target_type/target_id, not a foreign key)."""
+    if _fk_references(material):
+        return False
+    for model in (DeliveryNoteItem, ClientDeliveryNoteItem):
+        if model.query.filter_by(target_type='material', target_id=material.id).first():
+            return False
+    return True
 
 
 def _find_or_create_delivery_target(item_type, name, brand, width, height, thickness, unit_price, material_key,
@@ -12699,6 +12774,8 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
         if owner_client_id:
             unit_price = None
             cost_per_m2 = None
+        if unit_price is not None and unit_price <= 0:
+            unit_price = None   # a 0 price on the line = "no price", never a new price lot (owner's decision 2026-11-21)
         material_type = material_type if material_type in material_type_labels() else 'sheets'
         # A restock line from the delivery-note dropdown carries material_key -
         # the exact row the admin picked - so trust that directly instead of
@@ -12713,9 +12790,13 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
         # when the line's own fields no longer match that exact row (the
         # admin edited dims/description away from the catalog default on this
         # line - see the "distinct variant row" fallback further down).
-        existing = None
+        existing = picked = None
         if material_key:
             picked = MaterialPrice.query.filter_by(key=material_key).first()
+            # An empty "Описание" on the line means "as the catalog row" - not "a row without its Забележка"
+            # (material #86 with a note got a new lot #89 on every delivery, owner's report 2026-11-21).
+            if picked and notes is None:
+                notes = picked.notes
             if picked and (picked.display_name, picked.notes, picked.sheet_width_mm,
                             picked.sheet_length_mm, picked.thickness_mm, picked.type, picked.owner_client_id) == \
                           (name, notes, width, height, thickness, material_type, owner_client_id):
@@ -12726,6 +12807,16 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
                 sheet_length_mm=height, thickness_mm=thickness, type=material_type,
                 owner_client_id=owner_client_id
             ).first()
+        # A receipt from a client of a material created just for it (ours, no stock, no price, nothing refers to
+        # it) - the material simply becomes the client's instead of leaving an empty twin behind (owner's decision
+        # 2026-11-21). The client's own lot of the same material, when there is one, still wins (found above).
+        if (existing is None and owner_client_id and picked and picked.owner_client_id is None
+                and abs(picked.stock_quantity or 0) <= PRODUCTION_STOCK_TOLERANCE and not picked.cost_per_m2
+                and (picked.display_name, picked.notes, picked.sheet_width_mm, picked.sheet_length_mm,
+                     picked.thickness_mm, picked.type) == (name, notes, width, height, thickness, material_type)
+                and _material_unused(picked)):
+            picked.owner_client_id = owner_client_id
+            existing = picked
         # The intake price on this line IS the material's price - admins no
         # longer enter one on admin_materials.html (see admin_add_material).
         if unit_price is not None:
@@ -12779,6 +12870,7 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
             pierce_rate_per_min=pierce_rate_per_min, sheet_width_mm=width, sheet_length_mm=height,
             thickness_mm=thickness, brand=brand, notes=notes, type=material_type, erp_number=_next_erp_number(),
             owner_client_id=owner_client_id,
+            height_mm=source_row.height_mm if source_row else None,   # a profile's height is not on the line
             calibrated=bool(source_row and source_row.calibrated),
             calibration=source_row.calibration if source_row and source_row.calibrated else None,
         )
@@ -13903,6 +13995,9 @@ def _note_signatures(note):
     note's author (User.full_name), the other side the client's / supplier's МОЛ. A DeliveryNote is received by us,
     a ClientDeliveryNote handed over by us."""
     author = note.created_by.full_name if note.created_by else ''
+    if isinstance(note, MaterialTransfer):   # each side: the client's МОЛ, or the author when it is us
+        handed, received = ((c.mol or '') if c else author for c in (note.from_client, note.to_client))
+        return note.handed_by or handed, note.received_by or received
     party = getattr(note, 'client', None) or getattr(note, 'supplier', None)
     other = (getattr(party, 'mol', None) or '') if party else ''
     handed, received = (other, author) if isinstance(note, DeliveryNote) else (author, other)
@@ -13914,12 +14009,15 @@ app.jinja_env.globals['note_signatures'] = _note_signatures
 
 @app.route('/admin/delivery-notes/<int:note_id>/signatures', methods=['POST'])
 @app.route('/admin/client-delivery-notes/<int:note_id>/signatures', methods=['POST'], endpoint='client_note_signatures')
+@app.route('/admin/material-transfers/<int:note_id>/signatures', methods=['POST'], endpoint='transfer_signatures')
 @role_required('admin')
 def note_signatures(note_id):
     """Saves the Предал/Приел names of one note (print page form); a field left empty or equal to the default
     goes back to the default."""
-    client_side = request.endpoint == 'client_note_signatures'
-    note = (ClientDeliveryNote if client_side else DeliveryNote).query.get_or_404(note_id)
+    model, back = {'client_note_signatures': (ClientDeliveryNote, 'admin_client_delivery_note_print'),
+                   'transfer_signatures': (MaterialTransfer, 'admin_material_transfer_print')}.get(
+        request.endpoint, (DeliveryNote, 'admin_delivery_note_print'))
+    note = model.query.get_or_404(note_id)
     note.handed_by = note.received_by = None
     default_handed, default_received = _note_signatures(note)
     handed = request.form.get('handed_by', '').strip()[:150]
@@ -13927,10 +14025,182 @@ def note_signatures(note_id):
     note.handed_by = handed if handed and handed != default_handed else None
     note.received_by = received if received and received != default_received else None
     db.session.commit()
-    log_action(f'Предал/Приел на протокол №{note.number}: {handed or "-"} / {received or "-"}')
+    number = note.doc_number if model is MaterialTransfer else note.number
+    log_action(f'Предал/Приел на протокол №{number}: {handed or "-"} / {received or "-"}')
     flash('Имената за Предал/Приел са запазени.', 'success')
-    return redirect(url_for('admin_client_delivery_note_print' if client_side else 'admin_delivery_note_print',
-                            note_id=note.id))
+    return redirect(url_for(back, note_id=note.id))
+
+
+# ----------------- ПРЕХВЪРЛЯНЕ НА МАТЕРИАЛ МЕЖДУ СОБСТВЕНИЦИ -----------------
+# Identity of a lot for _transfer_target_lot(): everything that makes it "the same material" (owner and price aside).
+TRANSFER_LOT_IDENTITY = ('display_name', 'notes', 'type', 'sheet_width_mm', 'sheet_length_mm', 'thickness_mm',
+                         'height_mm', 'brand', 'grade_id', 'calibrated', 'calibration')
+# Copied onto a new lot besides the identity; price (0), stock, ERP №, key, owner and min_quantity are not.
+TRANSFER_LOT_COPY = ('display_name_en', 'display_name_de', 'cutting_speed_mm_per_min', 'pierce_rate_per_min',
+                     'weight_kg', 'code_number')
+
+
+def _owner_label(client):
+    return client.name if client else 'Трафком'
+
+
+def _transfer_target_lot(source, owner_client_id):
+    """The lot of `owner_client_id` (None = us) that material moved from `source` goes into: an existing lot of
+    that owner with the same identity (TRANSFER_LOT_IDENTITY) and no price (cost_per_m2 0), else a copy of
+    `source` for that owner at price 0 with a new ERP № (the caller holds _lock_numbering('erp')).
+    _find_or_create_delivery_target() is not reused: for owner None it would merge into one of our PRICED lots,
+    and the owner's rule is that transferred material carries no delivery price."""
+    lot = (MaterialPrice.query
+           .filter_by(owner_client_id=owner_client_id, **{f: getattr(source, f) for f in TRANSFER_LOT_IDENTITY})
+           .filter(db.or_(MaterialPrice.cost_per_m2 == 0, MaterialPrice.cost_per_m2.is_(None)))
+           .filter(MaterialPrice.id != source.id).order_by(MaterialPrice.id).first())
+    if lot:
+        return lot
+    lot = MaterialPrice(key='pending', cost_per_m2=0.0, price_per_unit=None, stock_quantity=0.0,
+                        owner_client_id=owner_client_id, erp_number=_next_erp_number(),
+                        **{f: getattr(source, f) for f in TRANSFER_LOT_IDENTITY + TRANSFER_LOT_COPY})
+    db.session.add(lot)
+    db.session.flush()
+    lot.key = f'material_{lot.id}'
+    return lot
+
+
+def _transfer_owner(raw):
+    """'' -> (True, None) = us; a client id -> (True, Client); anything else -> (False, None)."""
+    raw = (raw or '').strip()
+    if not raw:
+        return True, None
+    client = db.session.get(Client, int(raw)) if raw.isdigit() else None
+    return client is not None, client
+
+
+@app.route('/admin/material-transfers')
+@role_required('admin')
+def admin_material_transfers():
+    """Протоколи за прехвърляне на материал: the list + the "+ Нов протокол" dialog (lines = our / clients' lots,
+    filtered by the chosen "from" owner in the page's JS; create_material_transfer() re-checks)."""
+    transfers = (MaterialTransfer.query.order_by(MaterialTransfer.number.desc())
+                 .options(db.joinedload(MaterialTransfer.from_client), db.joinedload(MaterialTransfer.to_client),
+                          db.selectinload(MaterialTransfer.items).joinedload(MaterialTransferItem.source_material))
+                 .all())
+    materials = (MaterialPrice.query.filter(MaterialPrice.stock_quantity > PRODUCTION_STOCK_TOLERANCE)
+                 .options(db.joinedload(MaterialPrice.owner_client))
+                 .order_by(MaterialPrice.type, MaterialPrice.display_name).all())
+    clients = Client.query.order_by(Client.name).all()
+    return render_template('admin_material_transfers.html', transfers=transfers, materials=materials,
+                           clients=clients, active_page='storage')
+
+
+@app.route('/admin/material-transfers/create', methods=['POST'])
+@role_required('admin')
+@retry_on_db_busy
+def create_material_transfer():
+    """Records a transfer protocol. Form: from_owner / to_owner ('' = us, else a client id), transfer_date, notes,
+    items_json = [{material_id, qty}] (qty in the lot's stock unit). Every source lot must belong to "from" and hold
+    the quantity (ours too - nothing is handed over that is not there); refused as a whole otherwise. Lines of
+    the same lot add up."""
+    back = redirect(url_for('admin_material_transfers'))
+    ok_from, from_client = _transfer_owner(request.form.get('from_owner'))
+    ok_to, to_client = _transfer_owner(request.form.get('to_owner'))
+    if not (ok_from and ok_to):
+        flash('Невалиден собственик.', 'danger')
+        return back
+    from_id, to_id = (from_client.id if from_client else None), (to_client.id if to_client else None)
+    if from_id == to_id:
+        flash('Материалът трябва да се прехвърли към друг собственик.', 'danger')
+        return back
+    wanted = {}
+    for row in _delivery_note_form_items():
+        try:
+            material_id, quantity = int(row.get('material_id')), float(row.get('qty'))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if not 0 < quantity < float('inf'):
+            flash('Количеството трябва да е положително число.', 'danger')
+            return back
+        wanted[material_id] = round(wanted.get(material_id, 0) + quantity, 3)
+    if not wanted:
+        flash('Добавете поне един ред с материал.', 'danger')
+        return back
+    try:
+        transfer_date = datetime.strptime(request.form.get('transfer_date', '').strip(), '%Y-%m-%d').date()
+    except ValueError:
+        transfer_date = datetime.now(APP_TZ).date()
+
+    _lock_numbering('erp')       # a new target lot takes an ERP № - before any row lock (see create_delivery_note())
+    _lock_numbering('transfer')
+    sources = {mid: _lock_or_404(MaterialPrice, mid) for mid in sorted(wanted)}
+    for mid, source in sources.items():
+        if source.owner_client_id != from_id:
+            db.session.rollback()
+            flash(f'"{source.display_name}" не е партида на {_owner_label(from_client)}.', 'danger')
+            return back
+        if wanted[mid] > (source.stock_quantity or 0) + PRODUCTION_STOCK_TOLERANCE:
+            db.session.rollback()
+            flash(f'Отказано: от "{source.display_name}" има само {material_qty_text(source)}, '
+                  f'а се прехвърлят {material_qty_text(source, wanted[mid])}.', 'danger')
+            return back
+
+    number = (db.session.query(db.func.max(MaterialTransfer.number)).scalar() or 0) + 1
+    transfer = MaterialTransfer(number=number, transfer_date=transfer_date, from_client_id=from_id, to_client_id=to_id,
+                                notes=request.form.get('notes', '').strip()[:255] or None,
+                                created_by_id=current_user.id)
+    db.session.add(transfer)
+    lines = []
+    for mid, source in sources.items():
+        target = _transfer_target_lot(source, to_id)
+        _bump_stock(source, -wanted[mid])
+        _bump_stock(target, wanted[mid])
+        transfer.items.append(MaterialTransferItem(source_material_id=source.id, target_material_id=target.id,
+                                                   quantity=wanted[mid],
+                                                   description_snapshot=format_material_option(source)[:255]))
+        lines.append(f'{source.display_name} x {material_qty_text(source, wanted[mid])} -> партида #{target.id}')
+    db.session.commit()
+    log_action(f'Протокол за прехвърляне на материал №{transfer.doc_number}: '
+               f'{_owner_label(from_client)} -> {_owner_label(to_client)}', details='\n'.join(lines))
+    flash(f'Протокол №{transfer.doc_number} е записан, материалът е прехвърлен.', 'success')
+    return redirect(url_for('admin_material_transfer_print', note_id=transfer.id))
+
+
+@app.route('/admin/material-transfers/<int:note_id>')
+@role_required('admin')
+def admin_material_transfer_print(note_id):
+    """Print page of a transfer protocol (shared print framework)."""
+    transfer = MaterialTransfer.query.get_or_404(note_id)
+    return render_template('admin_material_transfer_print.html', note=transfer)
+
+
+@app.route('/admin/material-transfers/<int:note_id>/delete', methods=['POST'])
+@role_required('admin')
+@retry_on_db_busy
+def delete_material_transfer(note_id):
+    """Reverses a transfer (target lots down, source lots up) and deletes it. Refused when a target lot no longer
+    holds what it received (it was used or moved on) - ours as well as a client's."""
+    transfer = _lock_or_404(MaterialTransfer, note_id)
+    lots = {}
+    for mid in sorted({i.source_material_id for i in transfer.items} | {i.target_material_id for i in transfer.items}):
+        lots[mid] = _lock_or_404(MaterialPrice, mid)
+    received = {}
+    for item in transfer.items:
+        received[item.target_material_id] = received.get(item.target_material_id, 0) + item.quantity
+    for mid, quantity in received.items():
+        if (lots[mid].stock_quantity or 0) < quantity - PRODUCTION_STOCK_TOLERANCE:
+            db.session.rollback()
+            flash(f'Отказано: от прехвърления материал "{lots[mid].display_name}" вече е използвано - наличност '
+                  f'{material_qty_text(lots[mid])}, прехвърлени {material_qty_text(lots[mid], quantity)}.', 'danger')
+            return redirect(url_for('admin_material_transfers'))
+    lines = []
+    for item in transfer.items:
+        _bump_stock(lots[item.target_material_id], -item.quantity)
+        _bump_stock(lots[item.source_material_id], item.quantity)
+        lines.append(f'{item.description_snapshot} x {item.quantity:g}')
+    number = transfer.doc_number
+    db.session.delete(transfer)
+    db.session.commit()
+    log_action(f'Изтрит протокол за прехвърляне на материал №{number} (наличностите са върнати)',
+               details='\n'.join(lines))
+    flash(f'Протокол №{number} е изтрит, наличностите са върнати.', 'success')
+    return redirect(url_for('admin_material_transfers'))
 
 
 @app.route('/admin/content')
@@ -20287,6 +20557,9 @@ def admin_delete_material(key):
         used_in.append('издадена стокова разписка (остатък)')
     if OfferItem.query.filter_by(material_id=material.id).first():
         used_in.append('оферта')
+    if MaterialTransferItem.query.filter(db.or_(MaterialTransferItem.source_material_id == material.id,
+                                                MaterialTransferItem.target_material_id == material.id)).first():
+        used_in.append('протокол за прехвърляне')
     if (OrderItem.query.filter_by(consumed_material_id=material.id).first()
             or OrderItemComponent.query.filter_by(consumed_material_id=material.id).first()):
         used_in.append('поръчка (изразходван материал)')

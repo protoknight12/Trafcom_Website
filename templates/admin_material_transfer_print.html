@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Протокол за прехвърляне на материал № {{ note.doc_number }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    {% include 'partials/print_doc.html' %}
+    {% from 'partials/company.html' import party, client_party %}
+</head>
+<body class="doc-page">
+{% include 'partials/navbar.html' %}
+
+<div class="doc-toolbar no-print">
+    <a href="{{ url_for('admin_material_transfers') }}" class="btn-secondary" style="padding: 10px 18px; border-radius: var(--border-radius-sm); font-weight: 600; font-size: 0.88rem;">← Обратно</a>
+    <button class="btn-submit" style="padding: 12px 24px;" onclick="window.print()">Печат / PDF</button>
+</div>
+
+{% set doc_date = note.transfer_date or ((note.created_at|local) if note.created_at else none) %}
+<div class="doc-sheet">
+<table class="doc-frame">
+    <thead><tr><td>{% include 'partials/doc_header.html' %}</td></tr></thead>
+    <tbody><tr><td class="doc-body">
+
+    <div class="doc-titlebar">
+        <div>
+            <div class="doc-title">Протокол за прехвърляне на материал</div>
+            <div class="doc-subtitle">смяна на собственика на материал, съхраняван в склада</div>
+        </div>
+        <table class="doc-meta">
+            <tr><td>Номер</td><td>{{ note.doc_number }}</td></tr>
+            {% if doc_date %}<tr><td>Дата</td><td>{{ doc_date.strftime('%d.%m.%Y') }}</td></tr>{% endif %}
+        </table>
+    </div>
+
+    <div class="doc-parties">
+        {% if note.from_client %}{{ client_party('Предаваща страна', note.from_client) }}{% else %}{{ party('Предаваща страна') }}{% endif %}
+        {% if note.to_client %}{{ client_party('Приемаща страна', note.to_client) }}{% else %}{{ party('Приемаща страна') }}{% endif %}
+    </div>
+
+    <table class="doc-table">
+        <thead>
+        <tr><th class="idx">№</th><th>Наименование</th><th class="num">Количество</th></tr>
+        </thead>
+        <tbody>
+        {% for item in note.items %}
+        {% set mat = item.source_material %}
+        <tr>
+            <td class="idx">{{ loop.index }}</td>
+            <td>{{ item.description_snapshot }}{% set _nums = catalog_numbers_for('material', item.target_material_id) %}{% if _nums %}<div class="muted" style="font-size: .85em;">{{ _nums }}</div>{% endif %}</td>
+            <td class="num">{{ material_qty_text(mat, item.quantity, places=2) }}{% set kgt = material_stock_kg(mat, item.quantity)|kg(2)|trim %}{% if kgt %}<div class="muted" style="font-size: .85em;">{{ kgt }}</div>{% endif %}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+
+    <div class="doc-notes">
+        <p>Материалът е предаден от предаващата на приемащата страна и остава на съхранение в склада на {{ company().name }}. Прехвърлянето е без стойност.</p>
+        {% if note.notes %}<p>{{ note.notes }}</p>{% endif %}
+    </div>
+
+    {% set save_url = url_for('transfer_signatures', note_id=note.id) %}
+    {% include 'partials/note_signatures.html' %}
+
+    </td></tr></tbody>
+</table>
+</div>
+</body>
+</html>

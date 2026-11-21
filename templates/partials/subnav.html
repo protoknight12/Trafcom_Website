@@ -8,7 +8,8 @@
 {% set SUBNAV_GROUPS = {
     'catalog': [('Детайли', 'admin_details', True), ('Продукти', 'admin_products', True),
                 ('Материали', 'admin_materials', True), ('Склад материали', 'storage_materials', False),
-                ('Доставки', 'admin_delivery_notes', False), ('Протоколи с клиент', 'admin_client_delivery_notes', False)],
+                ('Доставки', 'admin_delivery_notes', False), ('Протоколи с клиент', 'admin_client_delivery_notes', False),
+                ('Прехвърляния', 'admin_material_transfers', True)],
 } %}
 {% set subnav_items = SUBNAV_GROUPS.get(subnav) if subnav is defined else none %}
 {% if current_user.is_authenticated and (subnav_items or request.path.startswith('/admin')) %}

@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Прехвърляне на материал - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .add-item-row { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
+        .add-item-row .form-group { flex: 1; min-width: 180px; margin-bottom: 0; }
+        .add-item-row .form-group.qty-field { flex: 0 0 140px; min-width: 100px; }
+    </style>
+</head>
+<body>
+{% set subnav = 'catalog' %}
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <section class="admin-card" id="transferSection" data-dialog-section="+ Нов протокол">
+        <h3 data-dialog-title>Нов протокол за прехвърляне на материал</h3>
+        <p class="section-subtitle">Материалът сменя собственика си в склада: количеството излиза от избраната партида и влиза в партида на новия собственик, без доставна цена (0).</p>
+
+        <form action="{{ url_for('create_material_transfer') }}" method="POST" id="transferForm" data-once>
+            {% include 'partials/csrf_field.html' %}
+            <div class="add-item-row" style="margin-bottom: 16px;">
+                <div class="form-group">
+                    <label for="from_owner">От (предава)</label>
+                    <select id="from_owner" name="from_owner" data-remember="off">
+                        <option value="">Трафком</option>
+                        {% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="to_owner">Към (приема)</label>
+                    <select id="to_owner" name="to_owner" data-remember="off">
+                        <option value="">Трафком</option>
+                        {% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="transfer_date">Дата (празно = днес)</label>
+                    <input type="date" id="transfer_date" name="transfer_date">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="transfer_notes">Бележка (по избор)</label>
+                <input type="text" id="transfer_notes" name="notes" maxlength="255">
+            </div>
+
+            <div class="add-item-row">
+                <div class="form-group">
+                    <label for="tr_material">Материал (партида на „От“) *</label>
+                    <select id="tr_material" data-picker="material">
+                        <option value="">-- Изберете материал --</option>
+                        {% for type_key, group in materials|groupby('type') %}
+                        <optgroup label="{{ material_type_label(type_key) }}">
+                            {% for m in group %}
+                            <option value="{{ m.id }}" data-owner="{{ m.owner_client_id or '' }}"
+                                    data-owner-name="{{ m.owner_client.name if m.owner_client else 'Трафком' }}"
+                                    data-stock="{{ m.stock_quantity or 0 }}" data-stock-kg="{{ material_stock_kg(m)|num3 }}"
+                                    data-grade="{{ m.grade.name if m.grade else 'Без вид' }}" data-brand="{{ m.brand or '' }}"
+                                    data-t="{{ m.thickness_mm if m.thickness_mm is not none else '' }}"
+                                    data-type="{{ m.type }}" data-w="{{ m.sheet_width_mm if m.sheet_width_mm is not none else '' }}"
+                                    data-h="{{ m.sheet_length_mm if m.sheet_length_mm is not none else '' }}"
+                                    data-hm="{{ m.height_mm or '' }}" data-weight="{{ m.weight_kg or '' }}"
+                                    data-density="{{ material_density(m) or '' }}">{{ format_material_option(m) }} (наличност: {{ material_qty_text(m) }})</option>
+                            {% endfor %}
+                        </optgroup>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group qty-field">
+                    <label for="tr_qty">Количество</label>
+                    <input type="number" id="tr_qty" value="1" min="0.001" step="0.001">
+                    <div class="text-muted text-small" id="tr_qty_text"></div>
+                </div>
+                <div class="form-group" style="flex: 0 0 auto;">
+                    <button type="button" class="btn-secondary" id="trAddBtn" style="padding: 12px 20px;">+ Добави</button>
+                </div>
+            </div>
+
+            <div class="table-responsive" style="margin-top: 20px;">
+                <table class="data-table" data-table-tools="off">
+                    <thead><tr><th>Материал</th><th class="text-center">Количество</th><th class="text-right">Действие</th></tr></thead>
+                    <tbody id="trBody"></tbody>
+                </table>
+            </div>
+
+            <input type="hidden" name="items_json" id="trItemsJson">
+            <button type="submit" class="btn-submit" style="width: 100%; margin-top: 16px;" id="trSubmit" data-dialog-submit disabled>Запиши протокола и прехвърли</button>
+        </form>
+    </section>
+
+    <section class="admin-card">
+        <h3>Протоколи за прехвърляне на материал</h3>
+        {% if transfers %}
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr><th>№</th><th>Дата</th><th>От</th><th>Към</th><th>Материали</th><th class="text-right">Действие</th></tr>
+                </thead>
+                <tbody>
+                {% for t in transfers %}
+                <tr>
+                    <td><a href="{{ url_for('admin_material_transfer_print', note_id=t.id) }}">{{ t.doc_number }}</a></td>
+                    <td>{{ (t.transfer_date or (t.created_at|local)).strftime('%d.%m.%Y') }}</td>
+                    <td>{{ t.from_client.name if t.from_client else 'Трафком' }}</td>
+                    <td>{{ t.to_client.name if t.to_client else 'Трафком' }}</td>
+                    <td>
+                        {% for it in t.items %}<div>{{ it.description_snapshot }}: {{ material_qty_text(it.source_material, it.quantity) }}</div>{% endfor %}
+                        {% if t.notes %}<div class="text-muted text-small">{{ t.notes }}</div>{% endif %}
+                    </td>
+                    <td class="text-right" style="white-space: nowrap;">
+                        <a href="{{ url_for('admin_material_transfer_print', note_id=t.id) }}" class="btn-secondary" style="padding: 4px 10px;">Печат</a>
+                        <form method="POST" action="{{ url_for('delete_material_transfer', note_id=t.id) }}" style="display: inline;"
+                              data-confirm="Изтриване на протокол № {{ t.doc_number }}? Наличностите ще бъдат върнати.">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete" style="padding: 6px 12px; font-size: 0.85rem;">Изтрий</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма записани протоколи.</p>
+        {% endif %}
+    </section>
+</main>
+
+<script src="{{ url_for('static', filename='js/material_weight.js') }}"></script>
+<script>
+(function () {
+    const TYPES = {{ material_types_js()|tojson }};
+    const fromSel = document.getElementById('from_owner');
+    const toSel = document.getElementById('to_owner');
+    const matSel = document.getElementById('tr_material');
+    const qtyEl = document.getElementById('tr_qty');
+    const qtyText = document.getElementById('tr_qty_text');
+    const body = document.getElementById('trBody');
+    const submit = document.getElementById('trSubmit');
+    let lines = [];
+
+    function opt(id) { return matSel.querySelector('option[value="' + id + '"]'); }
+    function text(id, q) { const o = opt(id); return o ? MaterialKg.qtyText(q, MaterialKg.optionParams(o, TYPES)) : String(q); }
+
+    // Only the "from" owner's lots are offered (the server re-checks).
+    function filterLots() {
+        Array.from(matSel.options).forEach(function (o) {
+            if (!o.value) return;
+            const mine = (o.dataset.owner || '') === fromSel.value;
+            o.hidden = o.disabled = !mine;
+        });
+        if (matSel.selectedOptions[0] && matSel.selectedOptions[0].disabled) matSel.value = '';
+        showQty();
+    }
+    function showQty() {
+        const q = parseFloat(qtyEl.value);
+        qtyText.textContent = matSel.value && q > 0 ? text(matSel.value, q) : '';
+    }
+    function render() {
+        body.replaceChildren();
+        lines.forEach(function (l, i) {
+            const tr = document.createElement('tr');
+            const name = document.createElement('td');
+            name.textContent = opt(l.material_id) ? opt(l.material_id).textContent : l.material_id;
+            const q = document.createElement('td');
+            q.className = 'text-center';
+            q.textContent = text(l.material_id, l.qty);
+            const act = document.createElement('td');
+            act.className = 'text-right';
+            const del = document.createElement('button');
+            del.type = 'button';
+            del.className = 'btn-delete';
+            del.textContent = 'Премахни';
+            del.addEventListener('click', function () { lines.splice(i, 1); render(); });
+            act.appendChild(del);
+            tr.append(name, q, act);
+            body.appendChild(tr);
+        });
+        document.getElementById('trItemsJson').value = JSON.stringify(lines);
+        submit.disabled = !lines.length || fromSel.value === toSel.value;
+    }
+
+    fromSel.addEventListener('change', function () { lines = []; filterLots(); render(); });
+    toSel.addEventListener('change', render);
+    matSel.addEventListener('change', showQty);
+    qtyEl.addEventListener('input', showQty);
+    document.getElementById('trAddBtn').addEventListener('click', function () {
+        const q = parseFloat(qtyEl.value);
+        if (!matSel.value || !(q > 0)) return;
+        const stock = parseFloat(opt(matSel.value).dataset.stock) || 0;
+        const already = lines.filter(function (l) { return l.material_id === matSel.value; })
+                             .reduce(function (s, l) { return s + l.qty; }, 0);
+        if (q + already > stock + 1e-6) { alert('Наличността е ' + text(matSel.value, stock) + '.'); return; }
+        lines.push({material_id: matSel.value, qty: q});
+        matSel.value = '';
+        render();
+        showQty();
+    });
+    document.addEventListener('dialog-open', function (e) {
+        if (!e.target.contains(fromSel)) return;
+        lines = [];
+        filterLots();
+        render();
+    });
+
+    // ?dialog=new&lot=ID (the "Прехвърли" link on the storage page): start with that lot and its owner as "От".
+    document.addEventListener('DOMContentLoaded', function () {
+        const lot = new URLSearchParams(window.location.search).get('lot');
+        if (!lot) return;
+        setTimeout(function () {
+            const o = opt(lot);
+            if (!o) return;
+            fromSel.value = o.dataset.owner || '';
+            fromSel.dispatchEvent(new Event('change'));
+            if (toSel.value === fromSel.value) toSel.value = fromSel.value ? '' : (toSel.options[1] ? toSel.options[1].value : '');
+            matSel.value = lot;
+            matSel.dispatchEvent(new Event('change'));
+            render();
+        }, 0);
+    });
+    filterLots();
+    render();
+})();
+</script>
+</body>
+</html>

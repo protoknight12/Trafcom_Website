@@ -121,6 +121,52 @@ with app.app_context():
     assert edited_variant.id not in (m1.id, new_lot.id), "an edited-dims restock line must create its own distinct row, not bump either lookalike"
     assert MaterialPrice.query.count() == 5
 
+    # -- Material #86 (owner's report 2026-11-21): a picked material that has a Забележка (notes) and a profile
+    #    height, delivered with an empty "Описание" on the line, is THAT material - it takes the price in place;
+    #    a 0 price on the line never makes a new price lot either.
+    profile = MaterialPrice(key='prof86', display_name='Профил 100x80', notes='затворен профил', type='profiles',
+                            sheet_width_mm=100.0, sheet_length_mm=6000.0, thickness_mm=4.0, height_mm=80.0,
+                            cost_per_m2=0.0)
+    db.session.add(profile)
+    db.session.commit()
+    picked = _find_or_create_delivery_target('material', 'Профил 100x80', None, 100.0, 6000.0, 4.0, 58.469, 'prof86',
+                                             material_type='profiles')
+    db.session.commit()
+    assert picked.id == profile.id and picked.price_per_unit == 58.469, "the picked noted material takes the price"
+    zero = _find_or_create_delivery_target('material', 'Профил 100x80', None, 100.0, 6000.0, 4.0, 0.0, 'prof86',
+                                           material_type='profiles')
+    assert zero.id == profile.id and profile.price_per_unit == 58.469, "a 0 price never splits nor overwrites"
+    other = _find_or_create_delivery_target('material', 'Профил 100x80', None, 100.0, 6000.0, 4.0, 70.0, 'prof86',
+                                            material_type='profiles')
+    db.session.commit()
+    assert other.id != profile.id and other.height_mm == 80.0 and other.notes == 'затворен профил', \
+        "a new price lot keeps the profile height and the note"
+    assert MaterialPrice.query.count() == 7
+
+    # -- A receipt from a client of a material created just for it (ours, empty, no price, unused) makes it the
+    #    client's - no empty twin; a second client gets its own copy, a used / priced lot is never taken over.
+    from app import Client
+    c1, c2 = Client(name='Клиент 1'), Client(name='Клиент 2')
+    blank = MaterialPrice(key='blank', display_name='Лист DC01 3', type='sheets', sheet_width_mm=1000.0,
+                          sheet_length_mm=3200.0, thickness_mm=3.0, cost_per_m2=0.0, stock_quantity=0.0)
+    db.session.add_all([c1, c2, blank])
+    db.session.commit()
+    got = _find_or_create_delivery_target('material', 'Лист DC01 3', None, 1000.0, 3200.0, 3.0, None, 'blank',
+                                          owner_client_id=c1.id)
+    db.session.commit()
+    assert got.id == blank.id and blank.owner_client_id == c1.id, "the empty unused lot becomes the client's"
+    assert MaterialPrice.query.count() == 8
+    got2 = _find_or_create_delivery_target('material', 'Лист DC01 3', None, 1000.0, 3200.0, 3.0, None, 'blank',
+                                           owner_client_id=c2.id)
+    db.session.commit()
+    assert got2.id != blank.id and got2.owner_client_id == c2.id and blank.owner_client_id == c1.id
+    assert MaterialPrice.query.count() == 9
+    got3 = _find_or_create_delivery_target('material', 'Профил 100x80', None, 100.0, 6000.0, 4.0, None, 'prof86',
+                                           material_type='profiles', owner_client_id=c1.id)
+    db.session.commit()
+    assert got3.id != profile.id and profile.owner_client_id is None, "a priced lot of ours is never taken over"
+    assert MaterialPrice.query.count() == 10
+
     # -- Material: a brand-new material with no price and no cutting speeds is
     #    created at 0 ("няма доставна цена"), like one from admin_materials.html -
     #    speeds belong to the detail / machine now (owner's decision 2026-11-20) --

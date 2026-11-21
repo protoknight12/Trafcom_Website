@@ -59,6 +59,8 @@ def test_matching_separates_owner(admin_client):
     with flask_app.app_context():
         c = Client(name='Клиент А'); db.session.add(c); db.session.commit()
         ours = MaterialPrice.query.filter_by(key='steel').one()
+        ours.cost_per_m2 = 20.0   # a priced lot of ours is copied (an empty unpriced one would become the client's)
+        db.session.commit()
         lot = _find_or_create_delivery_target('material', 'Стомана 2мм', None, 1000, 2000, 2.0, None, 'steel',
                                               material_type='sheets', owner_client_id=c.id)
         assert lot.id != ours.id and lot.owner_client_id == c.id and lot.cost_per_m2 == 0
@@ -99,6 +101,8 @@ def _receipt(client, c_id, lines, note_id=None, **extra):
 
 def test_client_receipt_creates_owner_lot(admin_client):
     c = _client()
+    MaterialPrice.query.filter_by(key='steel').one().cost_per_m2 = 20.0   # priced -> copied, not taken over
+    db.session.commit()
     # line picked as 'steel' (our lot) with a unit price -> client lot, price ignored, our lot untouched
     r = _receipt(admin_client, c.id, [_line(3, 55.0)])
     assert r.status_code == 200
@@ -112,6 +116,8 @@ def test_client_receipt_creates_owner_lot(admin_client):
 
 def test_client_receipt_from_our_lot_pick(admin_client):   # Review Focus 1
     c = _client()
+    MaterialPrice.query.filter_by(key='steel').one().cost_per_m2 = 20.0
+    db.session.commit()
     _receipt(admin_client, c.id, [_line(2)])
     lot = MaterialPrice.query.filter_by(owner_client_id=c.id).one()
     assert lot.cutting_speed_mm_per_min == 2000 and lot.pierce_rate_per_min == 30
@@ -564,3 +570,12 @@ def test_issue_is_the_default_kind_and_prints_izdavane(admin_client):
     html = admin_client.get(f'/admin/client-delivery-notes/{ids[0]}/print').get_data(as_text=True)
     assert 'издаване' in html and 'връщане' not in html
     assert 'връщане' in admin_client.get(f'/admin/client-delivery-notes/{ids[1]}/print').get_data(as_text=True)
+
+
+def test_client_receipt_takes_over_an_empty_unused_lot(admin_client):
+    """Our 'steel' (no stock, no price, nothing refers to it) was made just to receive it from the client: the
+    receipt makes it the client's lot instead of leaving an empty twin (owner's decision 2026-11-21)."""
+    c = _client()
+    _receipt(admin_client, c.id, [_line(3)])
+    steel = MaterialPrice.query.filter_by(key='steel').one()
+    assert MaterialPrice.query.count() == 1 and steel.owner_client_id == c.id and steel.stock_quantity == 3
