@@ -188,17 +188,22 @@ def test_client_lot_keeps_its_owner_and_cannot_go_negative(c, ids):
     assert (name, w, h, stock, cost, owner) == ('Стомана клиент - остатък', 300, 300, 1, 0, owner_id)
 
 
-def test_client_lot_true_up_below_zero_is_refused(c, ids):
+def test_lot_holding_only_a_piece_is_cut_from_that_piece(c, ids):
+    """The lot has 0.7 of a sheet (a piece, 1.4 m²): the cut came from that piece, so the true-up takes only what is
+    left (0.1, not 0.4 up to a whole sheet), usage is against the piece and returning the rest is accepted."""
     with flask_app.app_context():
         db.session.get(MaterialPrice, ids['lot']).stock_quantity = 0.7
         db.session.commit()
     order_id, (item,) = ids['orders']['ORD-R-C']
-    _produce(c, item, 1)                            # 0.7 - 0.6 = 0.1 left, a whole sheet needs 0.4 more
-    res = _decide(c, order_id, ids['lot'], [{'action': 'scrap'}])
-    assert res.status_code == 400 and 'клиентска партида' in res.get_json()['message']
-    assert _stock(ids['lot']) == pytest.approx(0.1)
+    prompt = _produce(c, item, 1)                   # 0.7 - 0.6 = 0.1 left
+    assert prompt['sheets'] == 1
+    [usage] = prompt['usage']
+    assert (usage['used_m2'], usage['left_m2']) == (pytest.approx(1.2), pytest.approx(0.2))   # of the 1.4 m² piece
+    res = _decide(c, order_id, ids['lot'], [{'action': 'return', 'width': 1000, 'height': 200}])
+    assert res.get_json()['status'] == 'success', res.get_json()
+    assert _stock(ids['lot']) == pytest.approx(0, abs=1e-9)
     with flask_app.app_context():
-        assert OrderMaterialRemnant.query.count() == 0
+        assert OrderMaterialRemnant.query.one().extra_taken == pytest.approx(0.1)
 
 
 def test_non_sheet_material_never_asks(c, ids):

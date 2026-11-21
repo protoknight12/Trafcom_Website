@@ -5897,7 +5897,7 @@ def _pending_remnants(orders):
                         continue
                     used = sum(piece_m2.get((it.target_type, it.target_id), 0.0) * it.quantity for it in sheet.items)
                     result.setdefault(order.id, []).append(dict(
-                        base, sheets=sheet.copies, consumed=float(sheet.copies), cut_sheet_id=sheet.id, seq=sheet.seq,
+                        base, sheets=sheet.copies, consumed=float(sheet.copies), extra=0.0, cut_sheet_id=sheet.id, seq=sheet.seq,
                         estimate=True,
                         usage=[_sheet_usage(used, sheet_m2)]))
                 continue
@@ -5909,9 +5909,16 @@ def _pending_remnants(orders):
             consumed = sum(r.material_consumed or 0 for r, _ in group if r.consumed_material_id == lot_id)
             if consumed > PRODUCTION_STOCK_TOLERANCE and all(r.quantity_produced >= target for r, target in group):
                 sheets = max(1, math.ceil(consumed - PRODUCTION_STOCK_TOLERANCE))
+                # true-up to whole sheets, but never more than the lot still has: a lot holding only a piece (0.5
+                # of a sheet) was cut from that piece - its last "sheet" is the piece (owner's report 2026-11-21).
+                # ponytail: assumes the partial piece is the last sheet cut; a lot with several pieces is not tracked.
+                extra = min(sheets - consumed, max(0.0, lot.stock_quantity or 0))
+                last_used = consumed - (sheets - 1)
+                areas = [sheet_m2] * (sheets - 1) + [min(1.0, last_used + extra) * sheet_m2]
                 result.setdefault(order.id, []).append(dict(
-                    base, sheets=sheets, consumed=consumed, cut_sheet_id=None, seq=None, estimate=False,
-                    usage=[_sheet_usage(min(1.0, max(0.0, consumed - i)) * sheet_m2, sheet_m2) for i in range(sheets)]))
+                    base, sheets=sheets, consumed=consumed, extra=max(0.0, extra), cut_sheet_id=None, seq=None,
+                    estimate=False,
+                    usage=[_sheet_usage(min(1.0, max(0.0, consumed - i)) * sheet_m2, areas[i]) for i in range(sheets)]))
     return result
 
 
@@ -16824,7 +16831,7 @@ def admin_order_remnants():
                           f'({lot.sheet_width_mm:g}x{lot.sheet_length_mm:g} mm).')
         returned.append((width, height))
 
-    extra = group['sheets'] - group['consumed']
+    extra = group['extra']      # up to whole sheets, capped by what the lot still has (_pending_remnants())
     if extra > PRODUCTION_STOCK_TOLERANCE:
         _bump_stock(lot, -extra)
     created = []
