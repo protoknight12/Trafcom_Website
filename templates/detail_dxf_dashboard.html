@@ -420,10 +420,10 @@
     {% endif %}
 
     {% if has_geometry %}
-    <section class="admin-card" style="flex: 1 1 420px; min-width: 0;">
+    <section class="admin-card" style="flex: 0 1 620px; min-width: 0;">
         <h3>Чертеж</h3>
         <div style="display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start;">
-            <div id="detail_dxf_view" style="flex: 1 1 360px; height: 340px; background-color: var(--bg-input);
+            <div id="detail_dxf_view" style="flex: 1 1 260px; max-width: 340px; height: 220px; background-color: var(--bg-input);
                         border: 1px solid var(--border-color); border-radius: var(--border-radius-sm);">
                 <canvas id="detail_dxf_canvas" style="display: block;"></canvas>
             </div>
