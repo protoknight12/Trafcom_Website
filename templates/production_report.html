@@ -503,7 +503,8 @@
                 const label = document.createElement('label');
                 const input = document.createElement('input');
                 input.type = 'number';
-                input.min = '1';
+                input.min = f[0] === 'count' ? '1' : '10';
+                if (f[0] === 'count') input.max = '50';
                 input.step = f[0] === 'count' ? '1' : 'any';
                 if (f[0] === 'count') input.value = '1';
                 input.dataset.field = f[0];
@@ -548,9 +549,10 @@
     function remnantPiecesError(g, pieces) {
         const limits = [g.default_w, g.default_h].filter(Boolean).sort(function (a, b) { return a - b; });
         let area = 0;
+        if (pieces.reduce(function (s, p) { return s + (p.count || 0); }, 0) > 50) return 'най-много 50 парчета на лист.';
         for (const p of pieces) {
-            if (!(p.width > 0 && p.height > 0)) return 'въведете ширина и височина на всяко парче (> 0).';
-            if (!(Number.isInteger(p.count) && p.count >= 1 && p.count <= 100)) return 'броят на парчето трябва да е цяло число от 1 до 100.';
+            if (!(p.width >= 10 && p.height >= 10)) return 'въведете ширина и височина на всяко парче (поне 10 mm).';
+            if (!(Number.isInteger(p.count) && p.count >= 1 && p.count <= 50)) return 'броят на парчето трябва да е цяло число от 1 до 50.';
             const sorted = [p.width, p.height].sort(function (a, b) { return a - b; });
             if (limits.length === 2 && (sorted[0] > limits[0] || sorted[1] > limits[1])) return 'парче ' + p.width + 'x' + p.height + ' е по-голямо от листа.';
             area += p.width * p.height * p.count;

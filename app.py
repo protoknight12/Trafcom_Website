@@ -16847,7 +16847,7 @@ def admin_order_remnants():
         pieces = s.get('pieces') if 'pieces' in s else [{'width': s.get('width'), 'height': s.get('height')}]
         if not isinstance(pieces, list) or not pieces or not all(isinstance(p, dict) for p in pieces):
             return refuse(f'Лист {number}: въведете поне едно използваемо парче или изберете "Брак".')
-        area = 0.0
+        area, sheet_pieces = 0.0, 0     # pieces >= 10 mm a side, <= 50 per sheet (owner's decision 2026-11-21)
         for p in pieces:
             try:
                 width, height = float(p.get('width')), float(p.get('height'))
@@ -16855,16 +16855,19 @@ def admin_order_remnants():
                 count = int(count) if float(count) == int(count) else 0
             except (TypeError, ValueError, OverflowError):
                 width = height = count = 0
-            if not (0 < width < float('inf') and 0 < height < float('inf')):
-                return refuse(f'Лист {number}: ширината и височината на парчето трябва да са по-големи от 0.')
-            if not 1 <= count <= 100:
-                return refuse(f'Лист {number}: броят парчета {width:g}x{height:g} трябва да е цяло число от 1 до 100.')
+            if not (10 <= width < float('inf') and 10 <= height < float('inf')):
+                return refuse(f'Лист {number}: ширината и височината на парчето трябва да са поне 10 mm.')
+            if not 1 <= count <= 50:
+                return refuse(f'Лист {number}: броят парчета {width:g}x{height:g} трябва да е цяло число от 1 до 50.')
             small, big = sorted((width, height))
             if small > sheet_size[0] or big > sheet_size[1]:
                 return refuse(f'Лист {number}: парчето {width:g}x{height:g} mm е по-голямо от листа '
                               f'({lot.sheet_width_mm:g}x{lot.sheet_length_mm:g} mm).')
             area += width * height * count
             returned += [(width, height)] * count
+            sheet_pieces += count
+        if sheet_pieces > 50:
+            return refuse(f'Лист {number}: най-много 50 парчета на лист.')
         if area > sheet_size[0] * sheet_size[1] * (1 + 1e-9):
             return refuse(f'Лист {number}: парчетата са общо {area / 1e6:g} m² - повече от листа '
                           f'({sheet_size[0] * sheet_size[1] / 1e6:g} m²).')

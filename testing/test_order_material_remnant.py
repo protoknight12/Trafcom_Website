@@ -230,7 +230,9 @@ def test_several_usable_pieces_of_one_sheet_rest_is_scrap(c, ids):
     order_id, (item,) = ids['orders']['ORD-R-1']
     _produce(c, item, 6)                            # 0.6 of a 2 m² sheet used, 0.8 m² left
     for pieces in ([], [{'width': 500, 'height': 400, 'count': 0}], [{'width': 500, 'height': 400, 'count': 1.5}],
-                   [{'width': 500, 'height': 2100}], [{'width': 1000, 'height': 2000}, {'width': 100, 'height': 100}]):
+                   [{'width': 500, 'height': 2100}], [{'width': 1000, 'height': 2000}, {'width': 100, 'height': 100}],
+                   [{'width': 9, 'height': 500}], [{'width': 10, 'height': 10, 'count': 51}],
+                   [{'width': 10, 'height': 10, 'count': 50}, {'width': 10, 'height': 10}]):
         res = _decide(c, order_id, ids['ours'], [{'action': 'return', 'pieces': pieces}])
         assert res.status_code == 400, pieces
     assert _remnant_lots() == [] and _stock(ids['ours']) == pytest.approx(10 - 0.6)
