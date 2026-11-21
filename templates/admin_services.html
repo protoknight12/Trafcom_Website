@@ -105,7 +105,7 @@
                     {% endfor %}
                 </div>
             </div>
-            <div class="form-group">
+            <div class="form-group" id="new_service_price_group">
                 <label for="new_service_price">Цена на час (€/60 мин)</label>
                 <input type="number" id="new_service_price" step="0.01" min="0.01" name="price_per_hour_eur" placeholder="напр. 50.00" required>
             </div>
@@ -157,7 +157,14 @@
             const mode = document.getElementById('new_service_pricing_mode').value;
             document.getElementById('new_service_price_meter_group').style.display = mode === 'length' ? '' : 'none';
             document.getElementById('new_service_price_piece_group').style.display = mode === 'piece' ? '' : 'none';
+            // per piece: priced by count x price per piece only - no hourly rate
+            document.getElementById('new_service_price_group').style.display = mode === 'piece' ? 'none' : '';
+            document.getElementById('new_service_price').required = mode !== 'piece';
+            document.getElementById('new_service_price_piece').required = mode === 'piece';
         }
+        document.getElementById('new_service_pricing_mode').form.addEventListener('reset', function () {
+            setTimeout(toggleNewServicePriceMeter, 0);
+        });
     </script>
 
     <section class="admin-card">
@@ -189,7 +196,7 @@
                     </td>
                     <td>{{ service.machine_type or '—' }}</td>
                     <td>{{ service.machines|map(attribute='name')|join(', ') or '—' }}</td>
-                    <td>{{ '%.2f'|format(service.price_per_hour_eur) }}</td>
+                    <td>{{ '—' if service.pricing_mode == 'piece' else '%.2f'|format(service.price_per_hour_eur) }}</td>
                     <td>{{ {'length': 'По дължина', 'piece': 'По брой'}.get(service.pricing_mode, 'По време') }}</td>
                     <td>{% if service.pricing_mode == 'length' and service.price_per_meter_eur %}{{ '%.2f'|format(service.price_per_meter_eur) }} / м{% elif service.pricing_mode == 'piece' and service.price_per_piece_eur %}{{ service.price_per_piece_eur|price3 }} / бр.{% else %}—{% endif %}</td>
                     <td>{{ service.description or '—' }}</td>

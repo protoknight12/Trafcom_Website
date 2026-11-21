@@ -1446,6 +1446,8 @@ class OrderItemOperation(db.Model):
     service_id = db.Column(db.Integer, db.ForeignKey('service.id'), nullable=False)
     sequence = db.Column(db.Integer, nullable=False, default=0)
     duration_minutes = db.Column(db.Float, nullable=False)
+    # a per-piece Service (pricing_mode 'piece'): the count, priced at price_per_piece_eur; duration_minutes is 0
+    pieces = db.Column(db.Float, nullable=True)
     # Free-text note distinguishing operations that share a Service but mean
     # different things in practice (e.g. "лазерно рязане" in-house vs.
     # "външно лазерно рязане" outsourced) - same purpose as Operation.description.
@@ -1458,6 +1460,8 @@ class OrderItemOperation(db.Model):
 
     @property
     def cost(self):
+        if self.pieces is not None:
+            return round(self.pieces * (self.service.price_per_piece_eur or 0), 2)
         return round(self.duration_minutes * (self.service.price_per_hour_eur / 60.0), 2)
 
 
@@ -5250,11 +5254,13 @@ def client_service_rate(service):
     services.html/library.html/upload.html so a linked client only ever sees
     their own negotiated rate. Anonymous/unlinked/staff viewers see the plain
     list rate."""
+    # a per-piece service shows its price per piece (no hourly rate - owner's decision 2026-11-21)
+    rate = (service.price_per_piece_eur or 0) if service.pricing_mode == 'piece' else service.price_per_hour_eur
     client = _viewer_client()
     if not client:
-        return service.price_per_hour_eur
+        return rate
     adj_type, adj_percent = _client_service_adjustment(client, service)
-    return round(_apply_adjustment(service.price_per_hour_eur, adj_type, adj_percent), 2)
+    return round(_apply_adjustment(rate, adj_type, adj_percent), 2)
 
 
 def client_material_rate(material):
@@ -14815,17 +14821,18 @@ def _parse_service_pricing(form):
     calculate_cnc_price() - keeps pricing correctly if this Service is ever
     picked as a Detail's cutting service. Returns (price_per_hour_eur,
     pricing_mode, price_per_meter_eur, error_message); error_message is None
-    on success."""
-    try:
-        price_per_hour_eur = float(form.get('price_per_hour_eur', ''))
-    except ValueError:
-        return None, None, None, 'Цената на час трябва да бъде валидно число.'
-    if price_per_hour_eur <= 0:
-        return None, None, None, 'Цената на час трябва да бъде положително число.'
-
+    on success. A per-piece service needs no hourly rate (owner's decision 2026-11-21) - blank is stored as 0."""
     pricing_mode = form.get('pricing_mode', 'time').strip()
     if pricing_mode not in ('time', 'length', 'piece'):
         pricing_mode = 'time'
+
+    raw_hour = (form.get('price_per_hour_eur') or '').strip()
+    try:
+        price_per_hour_eur = float(raw_hour) if raw_hour or pricing_mode != 'piece' else 0.0
+    except ValueError:
+        return None, None, None, 'Цената на час трябва да бъде валидно число.'
+    if price_per_hour_eur < 0 or (price_per_hour_eur == 0 and pricing_mode != 'piece'):
+        return None, None, None, 'Цената на час трябва да бъде положително число.'
 
     price_per_meter_eur = None
     if pricing_mode == 'length':
@@ -15587,18 +15594,26 @@ def _order_item_operations_cost(order_item, rows, client=None):
             continue
         try:
             service_id = int(row.get('service_id'))
-            duration_minutes = float(row.get('duration_minutes'))
         except (TypeError, ValueError):
             continue
         service = db.session.get(Service, service_id)
-        if duration_minutes <= 0 or not service or not client_allows('services', service_id):
+        if not service or not client_allows('services', service_id):
+            continue
+        per_piece = service.pricing_mode == 'piece'     # a per-piece service counts pieces, not minutes
+        try:
+            amount = float(row.get('pieces' if per_piece else 'duration_minutes'))
+        except (TypeError, ValueError):
+            continue
+        if not amount > 0:
             continue
         description = (row.get('description') or '').strip() or None
         db.session.add(OrderItemOperation(
             order_item_id=order_item.id, service_id=service_id, sequence=sequence,
-            duration_minutes=round(duration_minutes, 2), description=description
+            duration_minutes=0 if per_piece else round(amount, 2), pieces=round(amount, 3) if per_piece else None,
+            description=description
         ))
-        row_cost = duration_minutes * (service.price_per_hour_eur / 60.0)
+        row_cost = (amount * (service.price_per_piece_eur or 0) if per_piece
+                    else amount * (service.price_per_hour_eur / 60.0))
         if client:
             adj_type, adj_percent = _client_service_adjustment(client, service)
             row_cost = _apply_adjustment(row_cost, adj_type, adj_percent)
@@ -16554,7 +16569,8 @@ def create_order():
     # JSON-friendly service list so the per-detail operations picker can
     # preview an operation's cost client-side, same convention as
     # admin_details.html's ND_SERVICES.
-    services_data = [{'id': s.id, 'name': localized(s, 'name'), 'price_per_hour_eur': s.price_per_hour_eur} for s in services]
+    services_data = [{'id': s.id, 'name': localized(s, 'name'), 'price_per_hour_eur': s.price_per_hour_eur,
+                      'pricing_mode': s.pricing_mode, 'price_per_piece_eur': s.price_per_piece_eur} for s in services]
     # Per-client discount/markup terms (Детайли + per-service), so the cart's
     # JS can preview the real charged price as soon as a client is picked in
     # the dropdown - mirrors _apply_adjustment()/_client_service_adjustment()
@@ -17340,7 +17356,8 @@ def _order_item_current_price(item, client):
     for op in item.operations:
         if not op.service:
             continue
-        cost = (op.duration_minutes or 0) * (op.service.price_per_hour_eur / 60.0)
+        cost = (op.pieces * (op.service.price_per_piece_eur or 0) if op.pieces is not None
+                else (op.duration_minutes or 0) * (op.service.price_per_hour_eur / 60.0))
         if client:
             cost = _apply_adjustment(cost, *_client_service_adjustment(client, op.service))
         ops += cost

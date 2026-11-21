@@ -124,7 +124,7 @@
                 <tr>
                     <td>{{ localized(service, 'name') }}</td>
                     <td>{{ service.machine_type or '-' }}</td>
-                    <td>{{ "%.2f"|format(client_service_rate(service)) }} €</td>
+                    <td>{{ "%.2f"|format(client_service_rate(service)) }} €{% if service.pricing_mode == 'piece' %} / {{ _('бр.') }}{% endif %}</td>
                 </tr>
                 {% endfor %}
                 </tbody>

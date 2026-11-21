@@ -104,14 +104,15 @@
             <label>{{ _('Операции за този детайл (незадължително - рязане, огъване, пробиване...)') }}</label>
             <p class="text-small text-muted" style="margin-top: -4px;">{{ _('Приложени само към детайла, който ще бъде добавен към количката по-долу.') }}</p>
             <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: flex-end;">
-                <select id="pending_op_service_id" data-create="{{ create_url('service') }}" style="flex: 1; min-width: 200px;">
+                <select id="pending_op_service_id" data-create="{{ create_url('service') }}" onchange="pendingOpServiceChanged(this)" style="flex: 1; min-width: 200px;">
                     <option value="">-- {{ _('Изберете услуга') }} --</option>
                     {% for s in services %}
-                    <option value="{{ s.id }}">{{ localized(s, 'name') }} ({{ "%.2f"|format(client_service_rate(s)) }} €/{{ _('час') }})</option>
+                    <option value="{{ s.id }}">{{ localized(s, 'name') }} ({{ "%.2f"|format(client_service_rate(s)) }} €/{{ _('бр.') if s.pricing_mode == 'piece' else _('час') }})</option>
                     {% endfor %}
                 </select>
                 <input type="text" id="pending_op_description" placeholder="{{ _('Описание (незадължително, напр. външно лазерно рязане)') }}" style="flex: 1; min-width: 200px;">
-                <input type="number" id="pending_op_duration_minutes" step="0.01" min="0.01" placeholder="{{ _('Продължителност (мин)') }}" style="width: 180px;">
+                <input type="number" id="pending_op_duration_minutes" step="0.01" min="0.01" placeholder="{{ _('Продължителност (мин)') }}" style="width: 180px;"
+                       data-minutes="{{ _('Продължителност (мин)') }}" data-pieces="{{ _('Брой') }}">
                 <button type="button" class="btn-secondary" onclick="addPendingOperation()">+ {{ _('Добави операция') }}</button>
             </div>
             <table class="data-table" id="pendingOpsTable" style="margin-top: 10px;">
@@ -554,11 +555,21 @@
         return round2(cp ? applyClientAdjustment(price, cp.product_type, cp.product_percent) : price);
     }
 
+    // A per-piece service counts pieces: the op's amount (durationMinutes) is then the count.
+    function opIsPiece(serviceId) {
+        const service = SERVICES_DATA.find(function (s) { return s.id === serviceId; });
+        return !!service && service.pricing_mode === 'piece';
+    }
+    function opAmountText(op) {
+        return op.durationMinutes + ' ' + (opIsPiece(op.serviceId) ? "{{ _('бр.') }}" : "{{ _('мин') }}");
+    }
+
     // One order-time operation - mirrors _order_item_operations_cost().
     function pendingOpCost(serviceId, durationMinutes) {
         const service = SERVICES_DATA.find(function (s) { return s.id === serviceId; });
         if (!service) return 0;
-        const cost = durationMinutes * (service.price_per_hour_eur / 60);
+        const cost = service.pricing_mode === 'piece' ? durationMinutes * (service.price_per_piece_eur || 0)
+            : durationMinutes * (service.price_per_hour_eur / 60);
         const cp = selectedClientPricing();
         const adj = cp && cp.services[serviceId];
         return adj ? applyClientAdjustment(cost, adj.type, adj.percent) : cost;
@@ -589,6 +600,12 @@
         return d ? detailLinePrice(d, item.ownMaterial, item.operations, item.materialKey) : (item.unitPrice || 0);
     }
 
+    // the amount input asks minutes, or a count for a per-piece service
+    function pendingOpServiceChanged(select) {
+        const input = document.getElementById('pending_op_duration_minutes');
+        input.placeholder = opIsPiece(parseInt(select.value, 10)) ? input.dataset.pieces : input.dataset.minutes;
+    }
+
     function addPendingOperation() {
         const serviceSelect = document.getElementById('pending_op_service_id');
         const descriptionInput = document.getElementById('pending_op_description');
@@ -597,7 +614,10 @@
         const duration = parseFloat(durationInput.value);
 
         if (!serviceId) { alert("{{ _('Моля изберете услуга.') }}"); return; }
-        if (!duration || duration <= 0) { alert("{{ _('Моля въведете валидна продължителност в минути.') }}"); return; }
+        if (!duration || duration <= 0) {
+            alert(opIsPiece(serviceId) ? "{{ _('Моля въведете валиден брой.') }}" : "{{ _('Моля въведете валидна продължителност в минути.') }}");
+            return;
+        }
 
         pendingDetailOps.push({
             serviceId: serviceId,
@@ -634,7 +654,7 @@
                 removeBtn.addEventListener('click', function () { removePendingOperation(idx); });
                 const td = document.createElement('td');
                 td.textContent = op.serviceName + (op.description ? ' (' + op.description + ')' : '') +
-                    ' — ' + op.durationMinutes + " {{ _('мин') }} — " + cost.toFixed(2) + ' €';
+                    ' — ' + opAmountText(op) + ' — ' + cost.toFixed(2) + ' €';
                 td.appendChild(document.createElement('br'));
                 td.appendChild(removeBtn);
                 tr.appendChild(td);
@@ -795,7 +815,7 @@
                     const opsLine = document.createElement('div');
                     opsLine.className = 'text-small text-muted';
                     opsLine.textContent = item.operations.map(function (op) {
-                        return op.serviceName + (op.description ? ' (' + op.description + ')' : '') + ' (' + op.durationMinutes + " {{ _('мин') }})";
+                        return op.serviceName + (op.description ? ' (' + op.description + ')' : '') + ' (' + opAmountText(op) + ')';
                     }).join(', ');
                     nameTd.appendChild(opsLine);
                 }
@@ -851,7 +871,9 @@
                 if (c.materialKey) row.material_key = c.materialKey;
                 if (c.operations && c.operations.length > 0) {
                     row.operations = c.operations.map(function (op) {
-                        return { service_id: op.serviceId, duration_minutes: op.durationMinutes, description: op.description };
+                        return opIsPiece(op.serviceId)
+                            ? { service_id: op.serviceId, pieces: op.durationMinutes, description: op.description }
+                            : { service_id: op.serviceId, duration_minutes: op.durationMinutes, description: op.description };
                     });
                 }
                 if (c.attachment) {

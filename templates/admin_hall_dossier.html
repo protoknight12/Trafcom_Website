@@ -79,7 +79,7 @@
                     </div>
                     <label>Услуги, които се изпълняват на машината</label>
                     <div class="dz-checks">
-                        {% for sv in services %}<label><input type="checkbox" name="service_ids" value="{{ sv.id }}" {{ 'checked' if sv in machine.services }}> {{ sv.name }} <span class="dz-muted">{{ sv.price_per_hour_eur }} €/ч</span></label>{% endfor %}
+                        {% for sv in services %}<label><input type="checkbox" name="service_ids" value="{{ sv.id }}" {{ 'checked' if sv in machine.services }}> {{ sv.name }} <span class="dz-muted">{% if sv.pricing_mode == 'piece' %}{{ sv.price_per_piece_eur|price3 }} €/бр.{% else %}{{ sv.price_per_hour_eur }} €/ч{% endif %}</span></label>{% endfor %}
                         {% if not services %}<span class="dz-muted">Няма въведени услуги.</span>{% endif %}
                     </div>
                     <label class="dz-inline"><input type="checkbox" name="is_laser" value="1" {{ 'checked' if machine.is_laser }}> Машина за лазерно рязане (технологии на рязане, избор в детайла)</label>

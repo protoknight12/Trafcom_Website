@@ -150,3 +150,31 @@ def test_detail_without_operations_keeps_base_price(client):
         item = OrderItem.query.filter_by(order_id=order.id).first()
         assert item.unit_price == 5.0
         assert OrderItemOperation.query.filter_by(order_item_id=item.id).count() == 0
+
+
+def test_per_piece_service_counts_pieces(client):
+    """A per-piece service (owner's decision 2026-11-21): the order-time row carries `pieces`, priced pieces x
+    price_per_piece_eur; no hourly rate is needed for such a service."""
+    c, hinge_id, _, _ = client
+    with flask_app.app_context():
+        holes = Service(name='Отвори', price_per_hour_eur=0, pricing_mode='piece', price_per_piece_eur=0.5)
+        db.session.add(holes)
+        db.session.commit()
+        holes_id = holes.id
+    cart = [{'type': 'detail', 'id': hinge_id, 'qty': 2,
+             'operations': [{'service_id': holes_id, 'pieces': 6}]}]          # 6 x 0.5 = 3 €
+    res = c.post('/orders/new', data={'customer_name': 'QA Pieces', 'cart_json': json.dumps(cart)})
+    assert res.status_code == 302
+    with flask_app.app_context():
+        item = OrderItem.query.join(Order).filter(Order.customer_name == 'QA Pieces').one()
+        assert item.unit_price == 8.0                                          # base 5 + 3
+        [op] = item.operations
+        assert (op.pieces, op.duration_minutes, op.cost) == (6, 0, 3.0)
+
+
+def test_per_piece_service_needs_no_hourly_rate():
+    from app import _parse_service_pricing
+    hour, mode, rate, error = _parse_service_pricing({'pricing_mode': 'piece', 'price_per_piece_eur': '0.4'})
+    assert (hour, mode, rate, error) == (0.0, 'piece', 0.4, None)
+    assert _parse_service_pricing({'pricing_mode': 'time'})[3]                # time still needs it
+    assert _parse_service_pricing({'pricing_mode': 'piece', 'price_per_piece_eur': ''})[3]
