@@ -74,7 +74,11 @@ def test_detail_cut_technology(s):
     assert sorted((t.gas or '', t.cutting_speed_mm_per_min) for t in MachineCutTechnology.query) == \
            [('', 2600), ('nitrogen', 3100)]
     page = c.get(f'/details/{d.id}/files').get_data(as_text=True)
-    assert f'"{m1.id}|nitrogen"' in page and 'id="ct_gas"' in page
+    import json, re
+    tech_js = json.loads(re.search(r'const TECH = (.*?);\n', page).group(1))
+    # per machine, first recorded first: picking the machine fills the first, the rest are listed under the form
+    assert [(t['gas'], t['speed']) for t in tech_js[str(m1.id)]] == [('', 2600), ('nitrogen', 3100)]
+    assert 'id="ct_gas"' in page and 'id="ct_others"' in page
     MachineCutTechnology.query.filter_by(gas='nitrogen').delete()
     db.session.commit()
 

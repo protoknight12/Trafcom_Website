@@ -165,35 +165,62 @@
             {% endif %}
             <button type="submit" class="btn-secondary" style="padding: 10px 16px;">{{ 'Запази технологията' if _laser else 'Запази машината' }}</button>
             <div id="ct_hint" class="text-small text-muted" style="flex-basis: 100%;"></div>
+            <div id="ct_others" class="text-small" style="flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;"></div>
         </form>
     </section>
     {% if _laser %}
     <script>
         (function () {
+            // {machine_id: [{gas, speed, pierce}]} for this Вид + thickness, first recorded first
             const TECH = {{ cut_tech|tojson }};
             const sel = document.getElementById('ct_machine'), gas = document.getElementById('ct_gas');
-            const hint = document.getElementById('ct_hint');
-            // which gases this machine has a technology for (this Вид + thickness), as a hint under the form
-            function gasesOf(machineId) {
-                return Object.keys(TECH).filter(function (k) { return k.split('|')[0] === machineId; })
-                    .map(function (k) { const g = k.split('|')[1]; return g ? gas.querySelector('option[value="' + g + '"]').textContent : 'без газ'; });
+            const hint = document.getElementById('ct_hint'), others = document.getElementById('ct_others');
+            function gasName(g) { return g ? gas.querySelector('option[value="' + g + '"]').textContent : 'без газ'; }
+            function apply(t) {
+                gas.value = t.gas;
+                if (t.speed) document.getElementById('ct_speed').value = t.speed;
+                if (t.pierce) document.getElementById('ct_pierce').value = t.pierce;
             }
-            function fill() {
-                const t = TECH[sel.value + '|' + gas.value];
-                if (!sel.value) { hint.textContent = ''; return; }
-                if (t) {
-                    if (t.speed) document.getElementById('ct_speed').value = t.speed;
-                    if (t.pierce) document.getElementById('ct_pierce').value = t.pierce;
-                    hint.textContent = 'Попълнено от технологията на машината. Натиснете „Запази технологията“.';
-                } else {
-                    const known = gasesOf(sel.value);
-                    hint.textContent = 'Машината няма записана технология за този вид, дебелина и газ'
-                        + (known.length ? ' (има за: ' + known.join(', ') + ')' : '')
-                        + ' - въведете я и отметнете „Запиши като технология на машината“.';
-                }
+            // the other technologies of this machine (another gas) as buttons under the form
+            function list(current) {
+                others.textContent = '';
+                const rest = (TECH[sel.value] || []).filter(function (t) { return t !== current; });
+                if (!rest.length) return;
+                const label = document.createElement('span');
+                label.className = 'text-muted';
+                label.textContent = 'Други технологии за същия вид и дебелина:';
+                others.appendChild(label);
+                rest.forEach(function (t) {
+                    const b = document.createElement('button');
+                    b.type = 'button';
+                    b.className = 'btn-secondary';
+                    b.style.padding = '2px 8px';
+                    b.textContent = gasName(t.gas) + ' - ' + (t.speed || '—') + ' мм/мин, ' + (t.pierce || '—') + ' сек';
+                    b.addEventListener('click', function () { apply(t); show(t); });
+                    others.appendChild(b);
+                });
             }
-            sel.addEventListener('change', fill);
-            gas.addEventListener('change', fill);
+            function show(t) {
+                hint.textContent = t ? 'Попълнено от технологията на машината (' + gasName(t.gas) + '). Натиснете „Запази технологията“.'
+                    : 'Машината няма записана технология за този вид, дебелина и газ - въведете я и отметнете „Запиши като технология на машината“.';
+                list(t);
+            }
+            // machine picked: fill everything from its first recorded technology
+            sel.addEventListener('change', function () {
+                if (!sel.value) { hint.textContent = ''; others.textContent = ''; return; }
+                const t = (TECH[sel.value] || [])[0];
+                if (t) apply(t);
+                show(t || null);
+            });
+            // gas changed by hand: that gas's technology, if the machine has one
+            gas.addEventListener('change', function () {
+                if (!sel.value) return;
+                const t = (TECH[sel.value] || []).find(function (x) { return x.gas === gas.value; });
+                if (t) apply(t);
+                show(t || null);
+            });
+            // on load: list the saved machine's technologies (fields keep the detail's own values)
+            if (sel.value) list((TECH[sel.value] || []).find(function (x) { return x.gas === gas.value; }) || null);
         })();
     </script>
     {% endif %}

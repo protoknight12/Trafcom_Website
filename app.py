@@ -15176,15 +15176,17 @@ def detail_dxf_dashboard(detail_id):
             machines = Machine.query.filter(db.or_(Machine.is_laser.is_(True), Machine.id == detail.cutting_machine_id)) \
                 .order_by(Machine.name).all()
             grade_id = detail.material.grade_id if detail.material else None
-            # every stored technology for this Вид + thickness, keyed "machine_id|gas" ('' = no gas)
+            # every stored technology for this Вид + thickness: {machine_id: [{gas, speed, pierce}]}, first recorded
+            # first (id order) - picking a machine fills the first, the others are listed under the form
             if detail.cut_thickness is not None and machines:
                 q = MachineCutTechnology.query.filter(
                     MachineCutTechnology.machine_id.in_([m.id for m in machines]),
                     db.func.abs(MachineCutTechnology.thickness_mm - detail.cut_thickness) < 0.0005,
                     MachineCutTechnology.grade_id.is_(None) if grade_id is None
-                    else MachineCutTechnology.grade_id == grade_id)
-                cut_tech = {f'{t.machine_id}|{t.gas or ""}': {'speed': t.cutting_speed_mm_per_min,
-                                                               'pierce': t.pierce_time_sec} for t in q}
+                    else MachineCutTechnology.grade_id == grade_id).order_by(MachineCutTechnology.id)
+                for t in q:
+                    cut_tech.setdefault(str(t.machine_id), []).append(
+                        {'gas': t.gas or '', 'speed': t.cutting_speed_mm_per_min, 'pierce': t.pierce_time_sec})
         else:
             machines = Machine.query.order_by(Machine.name).all()      # not sheet: any machine, no speeds
     return render_template('detail_dxf_dashboard.html', detail=detail, files=files, services=services,
