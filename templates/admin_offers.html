@@ -29,8 +29,40 @@
         <a href="{{ url_for('admin_offer_new') }}" data-frame data-frame-scope="/admin/offers/" class="btn-submit" style="display: inline-block; margin-bottom: 1rem;">+ Нова оферта</a>
 
         {% if offers %}
-        <div class="form-group" style="max-width: 360px;">
-            <input type="text" id="adminOffersSearchInput" placeholder="Търсене по №, обект, клиент...">
+        <div class="no-print" style="display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 1rem;">
+            <div class="form-group" style="margin: 0; min-width: 240px;">
+                <label for="adminOffersSearchInput">Търсене</label>
+                <input type="text" id="adminOffersSearchInput" placeholder="№, обект, клиент, поръчка...">
+            </div>
+            <div class="form-group" style="margin: 0;">
+                <label for="filterOfferClient">Клиент</label>
+                <select id="filterOfferClient">
+                    <option value="">Всички</option>
+                    <option value="-">Без клиент</option>
+                    {% for name in offers|selectattr('client')|map(attribute='client.name')|unique|sort %}
+                    <option value="{{ name }}">{{ name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin: 0;">
+                <label for="filterOfferStatus">Статус</label>
+                <select id="filterOfferStatus">
+                    <option value="">Всички</option>
+                    <option value="ordered">С поръчка</option>
+                    <option value="open">Без поръчка</option>
+                    <option value="valid">Валидни</option>
+                    <option value="expired">Изтекли</option>
+                </select>
+            </div>
+            <div class="form-group" style="margin: 0;">
+                <label for="filterOfferFrom">Дата от</label>
+                <input type="date" id="filterOfferFrom" data-remember>
+            </div>
+            <div class="form-group" style="margin: 0;">
+                <label for="filterOfferTo">до</label>
+                <input type="date" id="filterOfferTo" data-remember>
+            </div>
+            <button type="button" class="btn-secondary" id="offerFiltersClear">Изчисти</button>
         </div>
         {% endif %}
 
@@ -53,7 +85,11 @@
                 </thead>
                 <tbody id="adminOffersTableBody">
                 {% for offer in offers %}
-                <tr data-search="{{ (offer.number ~ ' ' ~ (offer.object_title or '') ~ ' ' ~ (offer.client.name if offer.client else '')) | lower }}">
+                <tr data-search="{{ (offer.number ~ ' ' ~ (offer.object_title or '') ~ ' ' ~ (offer.client.name if offer.client else '') ~ ' ' ~ (offer.order.order_number if offer.order else '')) | lower }}"
+                    data-client="{{ offer.client.name if offer.client else '-' }}"
+                    data-ordered="{{ '1' if offer.order else '0' }}"
+                    data-date="{{ (offer.created_at|local).strftime('%Y-%m-%d') }}"
+                    data-valid="{{ offer.valid_until.isoformat() if offer.valid_until else '' }}">
                     <td><strong>{{ elink('offer', offer.id, offer.number) }}</strong></td>
                     <td>{{ offer.object_title or '-' }}</td>
                     <td>{{ offer.client.name if offer.client else '-' }}</td>
@@ -90,7 +126,40 @@
 
 </main>
 <script src="{{ url_for('static', filename='js/table_search.js') }}"></script>
-<script>initTableSearch('adminOffersSearchInput', 'adminOffersTableBody');</script>
+<script>
+    (function () {
+        const $ = id => document.getElementById(id);
+        const pad = n => String(n).padStart(2, '0');
+        const now = new Date();
+        const today = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate());
+        function extra(row) {
+            const d = row.dataset, client = $('filterOfferClient').value, status = $('filterOfferStatus').value;
+            const from = $('filterOfferFrom').value, to = $('filterOfferTo').value;
+            if (client && d.client !== client) return false;
+            if (status === 'ordered' && d.ordered !== '1') return false;
+            if (status === 'open' && d.ordered !== '0') return false;
+            // no "valid until" date = never expires
+            if (status === 'valid' && d.valid && d.valid < today) return false;
+            if (status === 'expired' && !(d.valid && d.valid < today)) return false;
+            if (from && d.date < from) return false;
+            if (to && d.date > to) return false;
+            return true;
+        }
+        const search = initTableSearch('adminOffersSearchInput', 'adminOffersTableBody', extra);
+        if (!search) return;
+        ['filterOfferClient', 'filterOfferStatus', 'filterOfferFrom', 'filterOfferTo'].forEach(function (id) {
+            $(id).addEventListener('change', search.apply);
+            $(id).addEventListener('input', search.apply);
+        });
+        $('offerFiltersClear').addEventListener('click', function () {
+            ['adminOffersSearchInput', 'filterOfferClient', 'filterOfferStatus', 'filterOfferFrom', 'filterOfferTo'].forEach(function (id) {
+                $(id).value = '';
+                $(id).dispatchEvent(new Event('change'));
+            });
+            search.apply();
+        });
+    })();
+</script>
 <script>
     // ?open=<id> (after "Дублирай") opens that offer's editor in the frame
     // dialog; the param is dropped first so reloading the list after the
