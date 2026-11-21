@@ -11913,7 +11913,7 @@ def admin_material_history(material_id):
             'kind': 'order_scrap' if r.scrap_count else 'order_production', 'direction': 'out',
             'quantity': r.extra_taken, 'party': r.order.customer_name, 'note_number': r.order.order_number,
             'unit_price': None,
-            'notes': f'до {r.sheets} цели листа: {r.scrap_count} брак, {r.sheets - r.scrap_count} върнати като остатък',
+            'notes': f'до {r.sheets} цели листа: {r.scrap_count} брак, {len(r.returned)} парчета върнати като остатък',
         })
     for r in _remnant_decisions_returning_to(material_id):
         sizes = [f'{s["width"]:g}x{s["height"]:g} mm' for s in r.returned if s.get('material_id') == material_id]
@@ -16794,9 +16794,12 @@ def admin_order_remnants():
     """
     The decision behind the production report's "Остатък" dialog for one
     ready (order, sheet lot) group (_pending_remnants()): `sheets` is a JSON
-    list, one {action: 'scrap'|'return', width, height} per sheet used. In one
+    list, one per sheet used: {action: 'scrap'} or {action: 'return', pieces:
+    [{width, height, count}]} - the usable pieces go back to stock, the rest of
+    that sheet is scrap (the old {action: 'return', width, height} = one piece;
+    each piece must fit the sheet, their area not exceed it). In one
     transaction the lot gives up whole sheets - what the lines consumed is
-    trued up to `sheets` (extra_taken) - every returned sheet goes into stock
+    trued up to `sheets` (extra_taken) - every returned piece goes into stock
     as a "<name> - остатък" lot of the entered size (_sheet_remnant_lot(), same
     owner and €/m²), scrap stays written off, and an OrderMaterialRemnant
     records it so the group is never asked again. A client's lot may not go
@@ -16834,20 +16837,37 @@ def admin_order_remnants():
                       else f'Очакват се {group["sheets"]} листа.')
     sheet_size = sorted((lot.sheet_width_mm, lot.sheet_length_mm))
     returned = []
+    scrap = 0       # sheets with nothing usable left
     for number, s in enumerate(sheets, 1):
         if s['action'] != 'return':
+            scrap += 1
             continue
-        try:
-            width, height = float(s.get('width')), float(s.get('height'))
-        except (TypeError, ValueError):
-            width = height = 0
-        if not (0 < width < float('inf') and 0 < height < float('inf')):
-            return refuse(f'Лист {number}: ширината и височината на остатъка трябва да са по-големи от 0.')
-        small, big = sorted((width, height))
-        if small > sheet_size[0] or big > sheet_size[1]:
-            return refuse(f'Лист {number}: остатъкът {width:g}x{height:g} mm е по-голям от листа '
-                          f'({lot.sheet_width_mm:g}x{lot.sheet_length_mm:g} mm).')
-        returned.append((width, height))
+        # Several usable pieces of one sheet (owner's decision 2026-11-21): pieces = [{width, height, count}],
+        # the rest of the sheet is scrap. The old one-piece form {width, height} still works.
+        pieces = s.get('pieces') if 'pieces' in s else [{'width': s.get('width'), 'height': s.get('height')}]
+        if not isinstance(pieces, list) or not pieces or not all(isinstance(p, dict) for p in pieces):
+            return refuse(f'Лист {number}: въведете поне едно използваемо парче или изберете "Брак".')
+        area = 0.0
+        for p in pieces:
+            try:
+                width, height = float(p.get('width')), float(p.get('height'))
+                count = p.get('count', 1)
+                count = int(count) if float(count) == int(count) else 0
+            except (TypeError, ValueError, OverflowError):
+                width = height = count = 0
+            if not (0 < width < float('inf') and 0 < height < float('inf')):
+                return refuse(f'Лист {number}: ширината и височината на парчето трябва да са по-големи от 0.')
+            if not 1 <= count <= 100:
+                return refuse(f'Лист {number}: броят парчета {width:g}x{height:g} трябва да е цяло число от 1 до 100.')
+            small, big = sorted((width, height))
+            if small > sheet_size[0] or big > sheet_size[1]:
+                return refuse(f'Лист {number}: парчето {width:g}x{height:g} mm е по-голямо от листа '
+                              f'({lot.sheet_width_mm:g}x{lot.sheet_length_mm:g} mm).')
+            area += width * height * count
+            returned += [(width, height)] * count
+        if area > sheet_size[0] * sheet_size[1] * (1 + 1e-9):
+            return refuse(f'Лист {number}: парчетата са общо {area / 1e6:g} m² - повече от листа '
+                          f'({sheet_size[0] * sheet_size[1] / 1e6:g} m²).')
 
     extra = group['extra']      # up to whole sheets, capped by what the lot still has (_pending_remnants())
     if extra > PRODUCTION_STOCK_TOLERANCE:
@@ -16862,7 +16882,6 @@ def admin_order_remnants():
     names = _negative_client_lots({('material', lot.id)}, details=False)
     if names:
         return refuse(f'Отказано: наличността на клиентска партида би станала отрицателна ({", ".join(names)}).')
-    scrap = group['sheets'] - len(created)
     db.session.add(OrderMaterialRemnant(order_id=order.id, material_id=lot.id, sheets=group['sheets'],
                                         scrap_count=scrap, extra_taken=max(0.0, extra), cut_sheet_id=cut_sheet_id,
                                         returned_json=json.dumps(created), decided_by_id=current_user.id))
@@ -16872,8 +16891,9 @@ def admin_order_remnants():
     if cut_sheet_id:
         which = f'лист {group["seq"]} от разкроя' + (f' ({which})' if group['sheets'] > 1 else '')
     log_action(f'Остатък по поръчка {order.order_number}: {which} "{lot.display_name}", '
-               f'{scrap} брак, {len(created)} върнати{sizes}')
-    return jsonify({'status': 'success', 'message': f'Записано: {scrap} брак, {len(created)} върнати в склада.'})
+               f'{scrap} брак, {len(created)} върнати парчета{sizes}')
+    return jsonify({'status': 'success',
+                    'message': f'Записано: {scrap} брак, {len(created)} парчета върнати в склада.'})
 
 
 @app.route('/admin/production/remnants/<int:remnant_id>/undo', methods=['POST'])
@@ -16906,7 +16926,7 @@ def admin_order_remnant_undo(remnant_id):
         _bump_stock(lots[lot_id], -count)
     if decision.extra_taken:
         _bump_stock(lots[decision.material_id], decision.extra_taken)
-    what = f'{decision.scrap_count} брак, {len(decision.returned)} върнати'
+    what = f'{decision.scrap_count} брак, {len(decision.returned)} върнати парчета'
     lot_name = lots[decision.material_id].display_name
     db.session.delete(decision)
     db.session.commit()
@@ -17172,7 +17192,7 @@ def admin_uncut_sheet(sheet_id):
         _bump_stock(lots[lot_id], -count)
     undone = ''
     if decision:
-        undone = f', решението за остатъка е отменено ({decision.scrap_count} брак, {len(decision.returned)} върнати)'
+        undone = f', решението за остатъка е отменено ({decision.scrap_count} брак, {len(decision.returned)} върнати парчета)'
         db.session.delete(decision)
     lines = []
     for (row, detail, qty), share in zip(parts, _cut_sheet_shares(parts, lot)):

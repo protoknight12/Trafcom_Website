@@ -224,6 +224,32 @@ def test_remnant_larger_than_the_sheet_is_refused(c, ids):
     assert res.get_json()['status'] == 'success'
 
 
+def test_several_usable_pieces_of_one_sheet_rest_is_scrap(c, ids):
+    """One sheet, two sizes of usable pieces (one of them x2): each size its own remnant lot, stock = count;
+    the sheet is not counted as scrap; bad pieces are refused and move nothing."""
+    order_id, (item,) = ids['orders']['ORD-R-1']
+    _produce(c, item, 6)                            # 0.6 of a 2 m² sheet used, 0.8 m² left
+    for pieces in ([], [{'width': 500, 'height': 400, 'count': 0}], [{'width': 500, 'height': 400, 'count': 1.5}],
+                   [{'width': 500, 'height': 2100}], [{'width': 1000, 'height': 2000}, {'width': 100, 'height': 100}]):
+        res = _decide(c, order_id, ids['ours'], [{'action': 'return', 'pieces': pieces}])
+        assert res.status_code == 400, pieces
+    assert _remnant_lots() == [] and _stock(ids['ours']) == pytest.approx(10 - 0.6)
+    res = _decide(c, order_id, ids['ours'], [{'action': 'return', 'pieces': [
+        {'width': 500, 'height': 400, 'count': 2}, {'width': 300, 'height': 200, 'count': '1'}]}])
+    assert res.get_json()['status'] == 'success', res.get_json()
+    assert _stock(ids['ours']) == pytest.approx(9)  # the whole sheet left the lot
+    assert sorted((w, h, stock) for _, _, w, h, stock, *_ in _remnant_lots()) == [(300, 200, 1), (500, 400, 2)]
+    with flask_app.app_context():
+        r = OrderMaterialRemnant.query.one()
+        assert (r.sheets, r.scrap_count, len(r.returned)) == (1, 0, 3)
+    report = c.get('/admin/production').get_data(as_text=True)
+    assert '0 брак, 3 върнати парчета' in report
+    # undo takes every piece out again
+    c.post(f'/admin/production/remnants/{r.id}/undo')
+    assert [lot[4] for lot in _remnant_lots()] == [0, 0]
+    assert _stock(ids['ours']) == pytest.approx(10 - 0.6)
+
+
 def test_later_leaves_a_badge_until_decided(c, ids):
     order_id, (item,) = ids['orders']['ORD-R-1']
     _produce(c, item, 6)                            # the dialog is closed with "По-късно": no POST
@@ -243,7 +269,7 @@ def test_decision_can_be_undone_and_decided_again(c, ids):
     with flask_app.app_context():
         rid = OrderMaterialRemnant.query.one().id
     page = c.get('/admin/production').get_data(as_text=True)
-    assert f'/admin/production/remnants/{rid}/undo' in page and '1 брак, 1 върнати (600x400)' in page
+    assert f'/admin/production/remnants/{rid}/undo' in page and '1 брак, 1 върнати парчета (600x400)' in page
 
     res = c.post(f'/admin/production/remnants/{rid}/undo')
     assert res.status_code == 302

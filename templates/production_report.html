@@ -113,9 +113,9 @@
                 {#- Recorded decisions - "Промени" undoes one (admin_order_remnant_undo()), then it is decided again. #}
                 {% for r in decided_remnants.get(order.id, []) %}
                 <form method="post" action="{{ url_for('admin_order_remnant_undo', remnant_id=r.id) }}" data-once
-                      data-confirm="Да се отмени решението за остатъка ({{ r.scrap_count }} брак, {{ r.returned|length }} върнати)? Върнатите листове се изваждат от склада и решавате отново." style="margin-top: 4px;">
+                      data-confirm="Да се отмени решението за остатъка ({{ r.scrap_count }} брак, {{ r.returned|length }} върнати парчета)? Върнатите листове се изваждат от склада и решавате отново." style="margin-top: 4px;">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <span class="status-badge status-completed">Остатък: {{ r.scrap_count }} брак, {{ r.returned|length }} върнати{% for s in r.returned %}{{ ' (' if loop.first else ', ' }}{{ '%g'|format(s.width) }}x{{ '%g'|format(s.height) }}{{ ')' if loop.last }}{% endfor %} - {{ elink('material', r.material_id, r.material.display_name) }}</span>
+                    <span class="status-badge status-completed">Остатък: {{ r.scrap_count }} брак, {{ r.returned|length }} върнати парчета{% for s in r.returned %}{{ ' (' if loop.first else ', ' }}{{ '%g'|format(s.width) }}x{{ '%g'|format(s.height) }}{{ ')' if loop.last }}{% endfor %} - {{ elink('material', r.material_id, r.material.display_name) }}</span>
                     <button type="submit" class="btn-secondary" style="padding: 4px 10px; font-size: 0.78rem;">Промени</button>
                 </form>
                 {% endfor %}
@@ -440,7 +440,7 @@
             });
     }
 
-    // Remnant dialog: one row per sheet used ("Лист 1 от N"), scrap or back to stock with
+    // Remnant dialog: one row per sheet used ("Лист 1 от N"), all scrap or usable pieces back to stock with
     // its size. Built with textContent only - the material name comes from the DB.
     let remnantGroup = null;
 
@@ -467,23 +467,96 @@
         box.appendChild(wrap);
     }
 
-    function remnantDims(g) {
-        const dims = document.createElement('div');
-        dims.style.cssText = 'display: flex; gap: 12px; margin-top: 6px;';
-        dims.hidden = true;
-        [['width', 'Ширина (mm)', g.default_w], ['height', 'Височина (mm)', g.default_h]].forEach(function (f) {
-            const label = document.createElement('label');
-            const input = document.createElement('input');
-            input.type = 'number';
-            input.min = '1';
-            input.step = 'any';
-            input.dataset.field = f[0];
-            input.style.cssText = 'width: 110px; margin-left: 6px;';
-            if (f[2]) input.placeholder = 'до ' + f[2];
-            label.append(f[1], input);
-            dims.appendChild(label);
-        });
-        return dims;
+    // The usable pieces of one sheet: rows of width x height x count ("+ Парче" adds one), the area
+    // summed live; the rest of the sheet is scrap. leftM2 = what the cut left (an estimate, may be null).
+    function remnantPieces(g, leftM2) {
+        const box = document.createElement('div');
+        box.className = 'remnant-pieces';
+        box.style.marginTop = '6px';
+        box.hidden = true;
+        const list = document.createElement('div');
+        const summary = document.createElement('div');
+        summary.className = 'text-small';
+        summary.style.marginTop = '4px';
+        const sheetM2 = (g.default_w && g.default_h) ? g.default_w * g.default_h / 1e6 : null;
+        const r3 = function (x) { return Math.round(x * 1000) / 1000; };
+        function update() {
+            const pieces = box.readPieces();
+            const area = pieces.reduce(function (s, p) {
+                return s + ((p.width > 0 && p.height > 0 && p.count > 0) ? p.width * p.height * p.count / 1e6 : 0);
+            }, 0);
+            const left = leftM2 != null ? leftM2 : sheetM2;
+            let text = 'Използваеми парчета: ' + pieces.reduce(function (s, p) { return s + (p.count > 0 ? p.count : 0); }, 0)
+                + ' бр., ' + r3(area) + ' m²';
+            if (left != null) text += ' · Брак: ' + r3(Math.max(0, left - area)) + ' m²';
+            summary.textContent = text;
+            summary.style.color = (left != null && area > left + 1e-9) ? 'var(--danger-text, #e57373)' : '';
+            if (left != null && area > left + 1e-9) summary.textContent += ' - парчетата са повече от остатъка'
+                + (leftM2 != null && g.estimate ? ' (остатъкът е оценка)' : '');
+        }
+        function addPiece() {
+            const row = document.createElement('div');
+            row.className = 'remnant-piece';
+            row.style.cssText = 'display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 4px;';
+            [['width', 'Ширина (mm)', g.default_w, '110px'], ['height', 'Височина (mm)', g.default_h, '110px'],
+             ['count', 'Брой', null, '60px']].forEach(function (f) {
+                const label = document.createElement('label');
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.min = '1';
+                input.step = f[0] === 'count' ? '1' : 'any';
+                if (f[0] === 'count') input.value = '1';
+                input.dataset.field = f[0];
+                input.style.cssText = 'width: ' + f[3] + '; margin-left: 6px;';
+                if (f[2]) input.placeholder = 'до ' + f[2];
+                input.addEventListener('input', update);
+                label.append(f[1], input);
+                row.appendChild(label);
+            });
+            const del = document.createElement('button');
+            del.type = 'button';
+            del.className = 'btn-delete';
+            del.style.cssText = 'padding: 2px 8px;';
+            del.textContent = '✕';
+            del.title = 'Премахни парчето';
+            del.addEventListener('click', function () {
+                if (list.children.length > 1) row.remove();
+                update();
+            });
+            row.appendChild(del);
+            list.appendChild(row);
+            update();
+        }
+        box.readPieces = function () {
+            return Array.from(list.querySelectorAll('.remnant-piece')).map(function (row) {
+                const v = function (f) { return parseFloat(row.querySelector('[data-field=' + f + ']').value); };
+                return {width: v('width'), height: v('height'), count: v('count')};
+            });
+        };
+        const add = document.createElement('button');
+        add.type = 'button';
+        add.className = 'btn-secondary';
+        add.style.cssText = 'padding: 4px 10px; font-size: 0.8rem;';
+        add.textContent = '+ Парче';
+        add.addEventListener('click', addPiece);
+        box.append(list, add, summary);
+        addPiece();
+        return box;
+    }
+
+    // Checks the pieces of one sheet like admin_order_remnants() does; '' = fine.
+    function remnantPiecesError(g, pieces) {
+        const limits = [g.default_w, g.default_h].filter(Boolean).sort(function (a, b) { return a - b; });
+        let area = 0;
+        for (const p of pieces) {
+            if (!(p.width > 0 && p.height > 0)) return 'въведете ширина и височина на всяко парче (> 0).';
+            if (!(Number.isInteger(p.count) && p.count >= 1 && p.count <= 100)) return 'броят на парчето трябва да е цяло число от 1 до 100.';
+            const sorted = [p.width, p.height].sort(function (a, b) { return a - b; });
+            if (limits.length === 2 && (sorted[0] > limits[0] || sorted[1] > limits[1])) return 'парче ' + p.width + 'x' + p.height + ' е по-голямо от листа.';
+            area += p.width * p.height * p.count;
+        }
+        if (limits.length === 2 && area > limits[0] * limits[1] * (1 + 1e-9)) return 'парчетата са по-големи от целия лист.';
+        return '';
     }
 
     function remnantUsage(g, u, suffix) {
@@ -506,12 +579,13 @@
         const legend = document.createElement('legend');
         legend.textContent = 'Лист ' + g.seq + ' - ' + g.sheets + ' листа';
         row.appendChild(legend);
-        if ((g.usage || [])[0]) row.appendChild(remnantUsage(g, g.usage[0], ' на всеки лист'));
-        const dims = remnantDims(g);
+        const u0 = (g.usage || [])[0];
+        if (u0) row.appendChild(remnantUsage(g, u0, ' на всеки лист'));
+        const dims = remnantPieces(g, u0 ? u0.left_m2 : null);
         const counts = document.createElement('div');
-        counts.style.cssText = 'display: flex; gap: 12px; align-items: center;';
+        counts.style.cssText = 'display: flex; gap: 12px; align-items: center; flex-wrap: wrap;';
         counts.append('От тези ' + g.sheets + ' листа:');
-        [['scrap', 'брак', g.sheets], ['return', 'се връщат в склада', 0]].forEach(function (f) {
+        [['scrap', 'целите са брак', g.sheets], ['return', 'имат използваеми парчета (еднакви на всеки лист)', 0]].forEach(function (f) {
             const label = document.createElement('label');
             const input = document.createElement('input');
             input.type = 'number';
@@ -554,8 +628,8 @@
             row.appendChild(legend);
             const u = (g.usage || [])[i - 1];
             if (u) row.appendChild(remnantUsage(g, u, ''));
-            const dims = remnantDims(g);
-            [['scrap', 'Брак'], ['return', 'Връща се в склада']].forEach(function (opt) {
+            const dims = remnantPieces(g, u ? u.left_m2 : null);
+            [['scrap', 'Целият остатък е брак'], ['return', 'Има използваеми парчета (останалото е брак)']].forEach(function (opt) {
                 const label = document.createElement('label');
                 label.style.marginRight = '16px';
                 const radio = document.createElement('input');
@@ -579,35 +653,27 @@
         const g = remnantGroup;
         const errorEl = document.getElementById('remnantError');
         const sheets = [];
-        const limits = [g.default_w, g.default_h].filter(Boolean).sort(function (a, b) { return a - b; });
         let error = '';
         document.querySelectorAll('#remnantRows .remnant-sheet').forEach(function (row, idx) {
-            if (row.dataset.batch) {   // one size for every returned sheet of the batch, posted per sheet
+            const pieces = row.querySelector('.remnant-pieces').readPieces();
+            if (row.dataset.batch) {   // the same pieces on every sheet that has some, posted per sheet
                 const scrap = Number(row.querySelector('[data-field=scrap]').value);
                 const back = Number(row.querySelector('[data-field=return]').value);
                 if (!Number.isInteger(scrap) || !Number.isInteger(back) || scrap < 0 || back < 0 || scrap + back !== g.sheets) {
-                    error = 'Брак + върнати трябва да са точно ' + g.sheets + ' листа.';
+                    error = 'Брак + листа с парчета трябва да са точно ' + g.sheets + ' листа.';
                     return;
                 }
-                const w = parseFloat(row.querySelector('[data-field=width]').value);
-                const h = parseFloat(row.querySelector('[data-field=height]').value);
-                const sorted = [w, h].sort(function (a, b) { return a - b; });
-                if (back && !(w > 0 && h > 0)) error = 'Въведете ширина и височина на остатъка (> 0).';
-                else if (back && limits.length === 2 && (sorted[0] > limits[0] || sorted[1] > limits[1]))
-                    error = 'Остатъкът е по-голям от листа.';
+                const pieceError = back ? remnantPiecesError(g, pieces) : '';
+                if (pieceError) error = 'Парчета: ' + pieceError;
                 for (let i = 0; i < scrap; i++) sheets.push({action: 'scrap'});
-                for (let i = 0; i < back; i++) sheets.push({action: 'return', width: w, height: h});
+                for (let i = 0; i < back; i++) sheets.push({action: 'return', pieces: pieces});
                 return;
             }
             const action = row.querySelector('input[type=radio]:checked').value;
             if (action === 'scrap') { sheets.push({action: 'scrap'}); return; }
-            const w = parseFloat(row.querySelector('[data-field=width]').value);
-            const h = parseFloat(row.querySelector('[data-field=height]').value);
-            const sorted = [w, h].sort(function (a, b) { return a - b; });
-            if (!(w > 0 && h > 0)) error = error || ('Лист ' + (idx + 1) + ': въведете ширина и височина на остатъка (> 0).');
-            else if (limits.length === 2 && (sorted[0] > limits[0] || sorted[1] > limits[1]))
-                error = error || ('Лист ' + (idx + 1) + ': остатъкът е по-голям от листа.');
-            sheets.push({action: 'return', width: w, height: h});
+            const pieceError = remnantPiecesError(g, pieces);
+            if (pieceError) error = error || ('Лист ' + (idx + 1) + ': ' + pieceError);
+            sheets.push({action: 'return', pieces: pieces});
         });
         if (error) { errorEl.textContent = error; errorEl.hidden = false; return; }
 
