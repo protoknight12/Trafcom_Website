@@ -118,6 +118,11 @@
                                 data-action="{{ url_for('update_material_request', request_id=req.id) }}"
                                 data-title="Заявка: {{ format_material_option(req.material) if req.material else 'Изтрит материал' }}"
                                 data-values='{{ {"status": req.status, "supplier_id": req.supplier_id or ""}|tojson|forceescape }}'>Промени статус</button>
+                        <form method="POST" action="{{ url_for('delete_material_request', request_id=req.id) }}" style="display: inline;"
+                              data-confirm="Изтриване на заявката за &quot;{{ req.material.display_name if req.material else 'изтрит материал' }}&quot;?">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
                     </td>
                 </tr>
                 {% else %}

@@ -12209,6 +12209,22 @@ def update_material_request(request_id):
     return redirect(url_for('storage_requests'))
 
 
+@app.route('/storage/requests/<int:request_id>/delete', methods=['POST'])
+@role_required(['admin', 'worker'])
+def delete_material_request(request_id):
+    """Deletes a request that turned out not to be needed (owner's request 2026-11-21). A request never moves
+    stock and nothing refers to it, so it simply goes."""
+    material_request = MaterialRequest.query.get_or_404(request_id)
+    what = (f'#{material_request.id} '
+            f'"{material_request.material.display_name if material_request.material else "изтрит материал"}" '
+            f'x {material_request.quantity:g} ({material_request.status_label})')
+    db.session.delete(material_request)
+    db.session.commit()
+    log_action(f'Изтрита заявка за материал {what}')
+    flash('Заявката беше изтрита.', 'success')
+    return redirect(url_for('storage_requests'))
+
+
 @app.route('/storage/details')
 @role_required(['admin', 'worker'])
 def storage_details():

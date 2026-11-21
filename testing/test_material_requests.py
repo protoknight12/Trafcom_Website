@@ -148,3 +148,22 @@ def test_update_status_back_to_processing_clears_supplier(worker_client, app):
         req = MaterialRequest.query.get(req_id)
         assert req.status == 'processing'
         assert req.supplier_id is None
+
+
+def test_delete_request(worker_client, app):
+    """An unneeded request can be deleted (owner's request 2026-11-21); stock is not touched."""
+    with flask_app.app_context():
+        material = MaterialPrice.query.filter_by(key='qa_steel').first()
+        stock = material.stock_quantity
+        req = MaterialRequest(material_id=material.id, quantity=3)
+        db.session.add(req)
+        db.session.commit()
+        req_id = req.id
+    page = worker_client.get('/storage/requests').get_data(as_text=True)
+    assert f'/storage/requests/{req_id}/delete' in page
+    res = worker_client.post(f'/storage/requests/{req_id}/delete')
+    assert res.status_code == 302
+    with flask_app.app_context():
+        assert db.session.get(MaterialRequest, req_id) is None
+        assert MaterialPrice.query.filter_by(key='qa_steel').first().stock_quantity == stock
+    assert worker_client.post(f'/storage/requests/{req_id}/delete').status_code == 404
