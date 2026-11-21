@@ -372,6 +372,91 @@
         </form>
     </section>
 
+    {% if ppu %}
+    {% set ppu_word = {'m2': 'лист', 'm': 'прът'}.get(ppu.unit, 'брой') %}
+    <section class="admin-card">
+        <h3>Детайли от една единица</h3>
+        <p class="section-subtitle">
+            Колко детайла излизат от един {{ ppu_word }} от материала. Тогава един детайл взема 1/N от него
+            вместо габарита си - за цената, заделянето и изписването. Размерите на детайла не се променят.
+            {% if not ppu.whole %}<strong>Материалът няма размер на лист / дължина на прът - изчислява се по габарита.</strong>{% endif %}
+        </p>
+        <form action="{{ url_for('admin_update_detail_pieces_per_unit', detail_id=detail.id) }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="pieces_per_unit">Детайли от един {{ ppu_word }}</label>
+                <input type="number" id="pieces_per_unit" name="pieces_per_unit" min="1" max="10000" step="1" required
+                       value="{{ detail.pieces_per_unit or '' }}">
+                <p class="text-small text-muted" id="ppu_hint" style="margin-top: 4px;"></p>
+            </div>
+            <button type="submit" class="btn-submit">Запиши</button>
+            {% if detail.pieces_per_unit %}
+            <button type="submit" name="clear" value="1" class="btn-secondary" formnovalidate>Изчисти</button>
+            {% endif %}
+        </form>
+    </section>
+    <script>
+        // Mirrors _detail_material_unit_qty() / _detail_material_cost() in app.py BY HAND - keep in sync: with N and
+        // a known unit (sheet area / bar length / 1 piece) one detail = unit / N, else its bounding box; cost = qty x
+        // rate (the server sends the rate already with _material_terms()).
+        (function () {
+            const P = {{ ppu|tojson }};
+            const U = {m2: 'м²', m: 'м'}[P.unit] || 'бр';
+            const bbox = P.unit === 'm' ? P.h / 1000 : (P.unit === 'pcs' ? 1 : P.w * P.h / 1e6);
+            const input = document.getElementById('pieces_per_unit');
+            const hint = document.getElementById('ppu_hint');
+            function update() {
+                const n = parseInt(input.value, 10);
+                if (!(n >= 1) || !P.whole) { hint.textContent = ''; return; }
+                const qty = P.whole / n;
+                hint.textContent = '1 детайл = ' + qty.toFixed(3) + ' ' + U + ' (вместо ' + bbox.toFixed(3) + ' ' + U +
+                    ' по габарита) · материал ≈ ' + (qty * P.rate).toFixed(2) + ' €';
+            }
+            input.addEventListener('input', update);
+            update();
+        })();
+    </script>
+    {% endif %}
+
+    {% if has_geometry %}
+    <section class="admin-card">
+        <h3>Чертеж</h3>
+        <div style="display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start;">
+            <div id="detail_dxf_view" style="flex: 1 1 360px; height: 340px; background-color: var(--bg-input);
+                        border: 1px solid var(--border-color); border-radius: var(--border-radius-sm);">
+                <canvas id="detail_dxf_canvas" style="display: block;"></canvas>
+            </div>
+            {% if detail.laser_cut %}
+            <table class="data-table" style="flex: 0 1 280px;" data-table-tools="off">
+                <tbody>
+                <tr><td>Дължина на рязане</td><td class="text-right">{{ detail.total_length|num3 }} мм ({{ (detail.total_length / 1000)|num3 }} м)</td></tr>
+                <tr><td>Пробивания</td><td class="text-right">{{ detail.pierce_count }}</td></tr>
+                <tr><td>Габарит</td><td class="text-right">{{ detail.width|num3 }} × {{ detail.height|num3 }} мм</td></tr>
+                </tbody>
+            </table>
+            {% endif %}
+        </div>
+    </section>
+    <script>
+        // The detail's own drawing in dxf_viewer.js's drawShapes(); fetched and drawn once the tab is visible
+        // (a hidden panel has no size), redrawn when the box resizes.
+        (function () {
+            const box = document.getElementById('detail_dxf_view');
+            const canvas = document.getElementById('detail_dxf_canvas');
+            let shapes = null, loading = false;
+            new ResizeObserver(function () {
+                if (!box.clientWidth) return;
+                if (shapes) { drawShapes(shapes, canvas); return; }
+                if (loading) return;
+                loading = true;
+                fetch('{{ url_for('admin_detail_geometry', detail_id=detail.id) }}')
+                    .then(function (r) { return r.json(); })
+                    .then(function (d) { shapes = d.shapes || []; if (shapes.length) drawShapes(shapes, canvas); });
+            }).observe(box);
+        })();
+    </script>
+    {% endif %}
+
     <section class="admin-card">
         <h3>Други разрешени материали</h3>
         <p class="section-subtitle">

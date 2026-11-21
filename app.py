@@ -896,6 +896,10 @@ class Detail(db.Model):
     cutting_speed_mm_per_min = db.Column(db.Float, nullable=True)
     pierce_time_sec = db.Column(db.Float, nullable=True)
     cutting_gas = db.Column(db.String(10), nullable=True)      # key of CUT_GASES, NULL = not set
+    # "Детайли от една единица" (owner's decision 2026-11-21): how many of this detail come out of ONE stock unit of
+    # its material (a sheet / bar / piece); one detail then takes 1/N of it instead of its bounding box - see
+    # _detail_material_unit_qty(). NULL = off. width/height stay the real size.
+    pieces_per_unit = db.Column(db.Integer, nullable=True)
 
     material = db.relationship('MaterialPrice')
     cutting_machine = db.relationship('Machine')
@@ -963,6 +967,15 @@ class Detail(db.Model):
         else:
             markup = company()['material_markup']
             suffix = f", +{markup:g}% надценка" if markup else ''
+        n = self.pieces_per_unit
+        if n and _material_whole_unit_qty(self.material):
+            m = self.material
+            qty = _detail_material_unit_qty(self)
+            if unit == 'm2':
+                return f"1/{n} от лист {m.sheet_width_mm:g}×{m.sheet_length_mm:g} = {qty:.3f} м² × {rate:.2f} €/м²{suffix}"
+            if unit == 'm':
+                return f"1/{n} от прът {m.sheet_length_mm:g} мм = {qty:.3f} м × {rate:.2f} €/м{suffix}"
+            return f"1/{n} бр × {rate:.2f} €/бр{suffix}"
         if unit == 'm':
             return f"{height:.0f} мм × {rate:.2f} €/м{suffix}"
         if unit == 'pcs':
@@ -1537,7 +1550,7 @@ def _detail_total_price(detail, material=None):
     ops = sum(op.cost for op in detail.operations)
     if material.owner_client_id:
         return round(ops * _own_material_factor(detail.owner_client), 2)
-    material_price = round(_material_cost(detail.effective_width, detail.effective_height, material, detail.owner_client), 2)
+    material_price = round(_detail_material_cost(detail, material, detail.owner_client), 2)
     return round(material_price + ops, 2)
 
 
@@ -5496,13 +5509,40 @@ def _detail_material_unit_qty(detail, material=None):
     material need. `material` = the one it is cut from when not the
     default (an order line's chosen material, _line_material()).
     """
+    material = material or detail.material
+    # "Детайли от една единица" (Detail.pieces_per_unit, owner's decision 2026-11-21): N details from one sheet /
+    # bar / piece -> one detail takes 1/N of it, not its bounding box. Mirrored by hand in detail_dxf_dashboard.html.
+    n = getattr(detail, 'pieces_per_unit', None)   # getattr: plain stand-ins (tests, the wizard) have no column
+    whole = _material_whole_unit_qty(material) if n else None
+    if whole:
+        return whole / n
     width, height = detail.effective_width, detail.effective_height
-    unit = material_price_unit((material or detail.material).type)
+    unit = material_price_unit(material.type)
     if unit == 'm':
         return height / 1000.0
     if unit == 'pcs':
         return 1.0
     return (width * height) / 1_000_000.0
+
+
+def _material_whole_unit_qty(material):
+    """Native quantity of ONE stock unit for the pieces-per-unit calculator: a sheet's area (m²), a bar's length (m),
+    1 piece - None when the lot has no sheet size / bar length (the calculator then cannot apply)."""
+    unit = material_price_unit(material.type)
+    if unit == 'm2':
+        return _material_sheet_area_m2(material)
+    if unit == 'm':
+        return material.sheet_length_mm / 1000.0 if material.sheet_length_mm else None
+    return 1.0
+
+
+def _detail_material_cost(detail, material, client=None):
+    """Material cost of ONE `detail` cut from `material` with `client`'s terms (_material_terms()): the quantity
+    _detail_material_unit_qty() takes (bounding box, or 1/N of a unit) x the delivery rate; a client's own lot 0.
+    Equals _material_cost(effective size) when pieces_per_unit is not used."""
+    if material.owner_client_id:
+        return 0.0
+    return _material_terms(_detail_material_unit_qty(detail, material) * material.cost_per_m2, client)
 
 
 def _material_sheet_area_m2(material):
@@ -6086,8 +6126,11 @@ def _detail_material_price(detail):
     (plain price when public). Width/height unset -> price left as is."""
     if detail.width is None or detail.height is None:
         return detail.calculated_price
-    return calculate_material_price(detail.effective_width, detail.effective_height,
-                                    detail.material_key, detail.owner_client)
+    with db.session.no_autoflush:   # keep the caller's pending changes for describe_changes()
+        material = MaterialPrice.query.filter_by(key=detail.material_key).first()   # by key: relationship may be stale
+    if not material:
+        return 0.0
+    return round(_detail_material_cost(detail, material, detail.owner_client), 2)
 
 
 def _reprice_material_details(*criteria):
@@ -15520,9 +15563,49 @@ def detail_dxf_dashboard(detail_id):
                         {'gas': t.gas or '', 'speed': t.cutting_speed_mm_per_min, 'pierce': t.pierce_time_sec})
         else:
             machines = Machine.query.order_by(Machine.name).all()      # not sheet: any machine, no speeds
+    # "Детайли от една единица" hint data (the JS in the template mirrors _detail_material_unit_qty() by hand) and
+    # whether there is a drawing to show (its length only - the shapes are fetched when the tab opens).
+    ppu, has_geometry = None, False
+    if current_user.is_admin and detail.material and detail.width and detail.height:
+        m = detail.material
+        ppu = {'unit': material_price_unit(m.type), 'whole': _material_whole_unit_qty(m),
+               'sheet_w': m.sheet_width_mm, 'sheet_l': m.sheet_length_mm,
+               'w': detail.effective_width, 'h': detail.effective_height,
+               'rate': 0.0 if m.owner_client_id else _material_terms(m.cost_per_m2 or 0, detail.owner_client)}
+    if current_user.is_admin:
+        has_geometry = (db.session.query(db.func.length(Detail.geometry_json)).filter(Detail.id == detail.id)
+                        .scalar() or 0) > 2
     return render_template('detail_dxf_dashboard.html', detail=detail, files=files, services=services,
                             materials=materials, services_data=services_data, alt_materials=alt_materials,
-                            machines=machines, cut_tech=cut_tech, cut_gases=CUT_GASES, active_page='admin_details')
+                            machines=machines, cut_tech=cut_tech, cut_gases=CUT_GASES, ppu=ppu,
+                            has_geometry=has_geometry, active_page='admin_details')
+
+
+@app.route('/admin/details/<int:detail_id>/geometry')
+@role_required('admin')
+def admin_detail_geometry(detail_id):
+    """The detail's own parsed drawing (Detail.geometry_json, analyze_dxf_geometry() shapes) for the inline view on
+    the "Материал и размери" tab - same response shape as get_geometry(); admin only like the file previews."""
+    detail = Detail.query.get_or_404(detail_id)
+    try:
+        shapes = json.loads(detail.geometry_json) if detail.geometry_json else []
+    except (TypeError, ValueError):
+        shapes = []
+    return jsonify({'shapes': shapes if isinstance(shapes, list) else []})
+
+
+def _detail_open_orders_reserved(detail):
+    """Open orders cutting `detail` + what each has reserved now ({order_id: {material_id: qty}}). After a change
+    to the detail's material need, _sync_order_reservation(order, needs_before[order.id]) moves the reservation;
+    diffed against the rows actually reserved, so saving again also repairs an order left on an old lot."""
+    order_ids = {i for (i,) in db.session.query(OrderItem.order_id).filter(OrderItem.detail_id == detail.id)} | \
+                {i for (i,) in db.session.query(OrderItem.order_id).join(OrderItemComponent)
+                 .filter(OrderItemComponent.detail_id == detail.id)}
+    open_orders = live_orders().filter(Order.id.in_(order_ids), Order.status.notin_(('completed', 'cancelled'))).all() \
+        if order_ids else []
+    needs_before = {o.id: {r.material_id: r.quantity for r in OrderMaterialReservation.query.filter_by(order_id=o.id)}
+                    for o in open_orders}
+    return open_orders, needs_before
 
 
 @app.route('/details/<int:detail_id>/update-material', methods=['POST'])
@@ -15564,15 +15647,7 @@ def admin_update_detail_material(detail_id):
         flash('Размерите не могат да бъдат отрицателни.', 'danger')
         return redirect(url_for('detail_dxf_dashboard', detail_id=detail_id))
 
-    # Open orders cutting this detail from its default: their reservation follows the new material/size.
-    # Diffed against the rows actually reserved, so saving again also repairs an order left on an old lot.
-    order_ids = {i for (i,) in db.session.query(OrderItem.order_id).filter(OrderItem.detail_id == detail.id)} | \
-                {i for (i,) in db.session.query(OrderItem.order_id).join(OrderItemComponent)
-                 .filter(OrderItemComponent.detail_id == detail.id)}
-    open_orders = live_orders().filter(Order.id.in_(order_ids), Order.status.notin_(('completed', 'cancelled'))).all() \
-        if order_ids else []
-    needs_before = {o.id: {r.material_id: r.quantity for r in OrderMaterialReservation.query.filter_by(order_id=o.id)}
-                    for o in open_orders}
+    open_orders, needs_before = _detail_open_orders_reserved(detail)
 
     detail.material_key = material_key
     detail.width = width
@@ -16121,6 +16196,42 @@ def admin_update_detail_cut_technology(detail_id):
                    f'{values[0] or "-"} мм/мин, {values[1] or "-"} сек пробиване')
     db.session.commit()
     flash('Технологията на рязане е записана.', 'success')
+    return back
+
+
+@app.route('/admin/details/<int:detail_id>/pieces-per-unit', methods=['POST'])
+@role_required('admin')
+def admin_update_detail_pieces_per_unit(detail_id):
+    """"Детайли от една единица" on the detail page (Detail.pieces_per_unit): how many details come out of one
+    sheet / bar / piece of the material - a whole number 1..10000, `clear` = off (NULL). The stored material price
+    and the open orders' reservations follow (_detail_material_unit_qty())."""
+    detail = Detail.query.get_or_404(detail_id)
+    back = redirect(url_for('detail_dxf_dashboard', detail_id=detail.id))
+    if not (detail.width and detail.height and detail.material):
+        flash('Детайл без размери (ръчна цена) няма изчисление по материал.', 'danger')
+        return back
+    n = None
+    if not request.form.get('clear'):
+        raw = request.form.get('pieces_per_unit', '').strip()
+        if not raw.isdecimal() or not 1 <= int(raw) <= 10000:
+            flash('Броят детайли трябва да е цяло число от 1 до 10000.', 'danger')
+            return back
+        n = int(raw)
+    open_orders, needs_before = _detail_open_orders_reserved(detail)
+    detail.pieces_per_unit = n
+    detail.calculated_price = _detail_material_price(detail)
+    log_action(describe_changes(f'детайл "{detail.name}"', detail, {
+        'pieces_per_unit': 'детайли от една единица', 'calculated_price': 'цена €'}))
+    db.session.flush()
+    warnings = []
+    for o in open_orders:
+        warnings += _sync_order_reservation(o, needs_before[o.id])
+    db.session.commit()
+    for w in warnings:
+        flash(w, 'warning')
+    if n and not _material_whole_unit_qty(detail.material):
+        flash('Материалът няма размер на лист / дължина на прът - изчислява се по габарита.', 'warning')
+    flash('Броят детайли от една единица е записан.' if n else 'Изчислението по единица е изчистено.', 'success')
     return back
 
 

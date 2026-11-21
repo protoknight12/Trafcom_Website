@@ -77,8 +77,9 @@ function closeDxfViewer() {
     dxfViewerOverlay.classList.remove('active');
 }
 
-function drawShapes(shapes) {
-    const canvas = dxfViewerCanvas;
+// `canvas` (optional): draw into another canvas, sized by its parent (the detail page's inline view), not the modal.
+function drawShapes(shapes, canvas) {
+    canvas = canvas || dxfViewerCanvas;
     const body = canvas.parentElement;
 
     // Match canvas pixel size to its rendered CSS size for crisp lines
