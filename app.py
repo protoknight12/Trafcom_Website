@@ -11353,6 +11353,8 @@ def process_dxf_upload(file, material_key, service_ids, machine_id=None, own_mat
 
         services = Service.query.filter(Service.id.in_(service_ids)).all() if service_ids else []
         services = allowed_only('services', services)
+        # a DXF cut is priced by time: a per-piece service (no hourly rate) is never accepted here, even if posted
+        services = [sv for sv in services if sv.pricing_mode != 'piece' and (sv.price_per_hour_eur or 0) > 0]
         service_ids = [sv.id for sv in services]
         if not services:
             return None, None, 'Моля изберете поне една услуга.'
