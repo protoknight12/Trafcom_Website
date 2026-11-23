@@ -2306,6 +2306,29 @@ class MachineCutTechnology(db.Model):
     grade = db.relationship('MaterialGrade')
 
 
+class MachineThicknessRange(db.Model):
+    """From what to what thickness a laser machine cuts one Вид на материала (owner's request 2026-11-23). grade_id
+    NULL = every Вид without its own row (and material without a Вид); a missing bound = no limit that side; a
+    machine with no rows is not limited. Edited in the laser's dossier; checked by _thickness_refusal() when a
+    technology is saved and when a detail picks its laser, and shown on the detail page. One row per (machine, grade) -
+    kept unique in code, since a NULL grade escapes a DB unique constraint. New table from db.create_all()."""
+    id = db.Column(db.Integer, primary_key=True)
+    machine_id = db.Column(db.Integer, db.ForeignKey('machine.id'), nullable=False, index=True)
+    grade_id = db.Column(db.Integer, db.ForeignKey('material_grade.id'), nullable=True)
+    min_thickness_mm = db.Column(db.Float, nullable=True)
+    max_thickness_mm = db.Column(db.Float, nullable=True)
+
+    machine = db.relationship('Machine', backref=db.backref('thickness_ranges', cascade='all, delete-orphan'))
+    grade = db.relationship('MaterialGrade')
+
+    @property
+    def text(self):
+        lo, hi = self.min_thickness_mm, self.max_thickness_mm
+        if lo is not None and hi is not None:
+            return f'{lo:g}-{hi:g} мм'
+        return f'от {lo:g} мм' if lo is not None else (f'до {hi:g} мм' if hi is not None else 'без граница')
+
+
 class Service(db.Model):
     """
     A billable operation type (e.g. "Лазерно рязане", "Фрезоване - 3 оси")
@@ -10634,6 +10657,10 @@ def admin_hall_dossier(machine_id):
             tech_raw[t.id] = json.loads(t.params_json) if t.params_json else []
         except ValueError:
             tech_raw[t.id] = []
+    # "Граници на дебелината": the machine's ranges (Вид order, "всички видове" last) and the technologies outside them
+    ranges = sorted(m.machine.thickness_ranges, key=lambda r: (r.grade is None, r.grade.name if r.grade else '')) \
+        if m.machine else []
+    tech_outside = {t.id: _thickness_refusal(m.machine, t.grade_id, t.thickness_mm, ranges) for t in cut_techs}
     return render_template('admin_hall_dossier.html', m=m, card=m.card, files=m.files, categories=HALL_FILE_CATEGORIES,
                            models=HALL_MODELS, acc_sides=HALL_ACC_SIDES, active_page='machines',
                            conn_kinds=HALL_CONN_KINDS, net_hosts=NetworkHost.query.order_by(NetworkHost.hostname, NetworkHost.ip_address).all(),
@@ -10644,7 +10671,7 @@ def admin_hall_dossier(machine_id):
                            grades=MaterialGrade.query.order_by(MaterialGrade.sort_order, MaterialGrade.name).all(),
                            cut_techs=cut_techs, cut_gases=CUT_GASES, tech_cols=tech_cols, tech_values=tech_values,
                            fscut_formats=FSCUT_FORMATS,
-                           tech_raw=tech_raw,
+                           tech_raw=tech_raw, thickness_ranges=ranges, tech_outside=tech_outside,
                            free_machines=[x for x in Machine.query.order_by(Machine.name) if x.hall_record is None])
 
 
@@ -10750,6 +10777,9 @@ def admin_hall_cut_tech_save(machine_id):
         fields = _parse_cut_tech_fields(request.form)
     except ValueError as e:
         return _dossier_back(hm.id, str(e), 'danger')
+    refusal = _thickness_refusal(mc, grade_id, thickness)
+    if refusal:
+        return _dossier_back(hm.id, refusal + ' Технологията не е записана.', 'danger')
     same = _cut_technology(mc.id, grade_id, thickness, gas, nozzle)
     if same and same is not tech:
         return _dossier_back(hm.id, 'Вече има технология за този вид, дебелина, газ и дюза - редактирайте нея.', 'danger')
@@ -10777,6 +10807,54 @@ def admin_hall_cut_tech_delete(machine_id, tech_id):
     db.session.commit()
     log_action(f'Изтрита технология на "{hm.name}": {label}')
     return _dossier_back(hm.id, 'Технологията е изтрита.')
+
+
+@app.route('/admin/hall/<int:machine_id>/thickness-range', methods=['POST'])
+@role_required('admin')
+def admin_hall_thickness_range_save(machine_id):
+    """"Граници на дебелината" in a laser machine's dossier: add (no range_id) or edit one MachineThicknessRange -
+    Вид (grade_id, blank = всички останали видове), от / до мм (either may be blank, not both). One row per Вид."""
+    hm = HallMachine.query.get_or_404(machine_id)
+    mc = hm.machine
+    if mc is None:
+        return _dossier_back(hm.id, 'Досието не е свързано с машина.', 'danger')
+    range_id = request.form.get('range_id', type=int)
+    row = MachineThicknessRange.query.filter_by(id=range_id, machine_id=mc.id).first_or_404() if range_id else None
+    grade_raw = request.form.get('grade_id', '')
+    grade_id = int(grade_raw) if grade_raw.isdigit() and db.session.get(MaterialGrade, int(grade_raw)) else None
+    try:
+        lo, hi = (round(float(v.replace(',', '.')), 3) if v else None
+                  for v in ((request.form.get(n) or '').strip() for n in ('min_thickness_mm', 'max_thickness_mm')))
+    except ValueError:
+        return _dossier_back(hm.id, 'Дебелините трябва да са числа.', 'danger')
+    if lo is None and hi is None:
+        return _dossier_back(hm.id, 'Задайте поне една от двете граници.', 'danger')
+    if any(v is not None and not (math.isfinite(v) and v > 0) for v in (lo, hi)) or (lo and hi and lo > hi):
+        return _dossier_back(hm.id, 'Границите трябва да са положителни и „от“ да не е над „до“.', 'danger')
+    same = next((r for r in mc.thickness_ranges if r.grade_id == grade_id), None)
+    if same is not None and same is not row:
+        return _dossier_back(hm.id, 'За този вид вече има граница - редактирайте нея.', 'danger')
+    if row is None:
+        row = MachineThicknessRange(machine_id=mc.id)
+        db.session.add(row)
+    row.grade_id, row.min_thickness_mm, row.max_thickness_mm = grade_id, lo, hi
+    db.session.flush()
+    grade = db.session.get(MaterialGrade, grade_id) if grade_id else None
+    log_action(f'Граница на дебелината на "{mc.name}": {grade.name if grade else "всички видове"} {row.text}')
+    db.session.commit()
+    return _dossier_back(hm.id, 'Границата е записана.')
+
+
+@app.route('/admin/hall/<int:machine_id>/thickness-range/<int:range_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_hall_thickness_range_delete(machine_id, range_id):
+    hm = HallMachine.query.get_or_404(machine_id)
+    row = MachineThicknessRange.query.filter_by(id=range_id, machine_id=hm.machine_id).first_or_404()
+    label = f'{row.grade.name if row.grade else "всички видове"} {row.text}'
+    db.session.delete(row)
+    db.session.commit()
+    log_action(f'Изтрита граница на дебелината на "{hm.name}": {label}')
+    return _dossier_back(hm.id, 'Границата е изтрита.')
 
 
 @app.route('/admin/hall/<int:machine_id>/connections', methods=['POST'])
@@ -11978,6 +12056,12 @@ def admin_delete_material_grade(grade_id):
     used = MaterialPrice.query.filter_by(grade_id=grade.id).count()
     if used:
         flash(f'Видът "{grade.name}" се използва от {used} материала и не може да бъде изтрит.', 'danger')
+        return redirect(url_for('admin_materials'))
+    on_machines = (MachineCutTechnology.query.filter_by(grade_id=grade.id).count()
+                   + MachineThicknessRange.query.filter_by(grade_id=grade.id).count())
+    if on_machines:
+        flash(f'Видът "{grade.name}" има технологии или граници на дебелината в лазерни машини ({on_machines}) - '
+              'изтрийте ги от досието на машината.', 'danger')
         return redirect(url_for('admin_materials'))
     db.session.delete(grade)
     db.session.commit()
@@ -15778,7 +15862,7 @@ def detail_dxf_dashboard(detail_id):
     # Other allowed materials with the list price of the detail in each (admin tab "Материал и размери").
     alt_materials = [(dm, _detail_total_price(detail, dm.material)) for dm in detail.alt_materials if dm.material]
     # "Технология на рязане": each machine's stored speeds for this detail's Вид + thickness (filled in on pick).
-    machines, cut_tech = [], {}
+    machines, cut_tech, machine_refusal = [], {}, {}
     if current_user.is_admin:
         if detail.laser_cut:
             # sheet: laser machines only (Machine.is_laser) - plus the detail's current one, so it never vanishes
@@ -15797,6 +15881,12 @@ def detail_dxf_dashboard(detail_id):
                     cut_tech.setdefault(str(t.machine_id), []).append(
                         {'gas': t.gas or '', 'nozzle': t.nozzle or '', 'speed': t.cutting_speed_mm_per_min,
                          'pierce': t.pierce_time_sec})
+            # a laser that cannot cut this Вид + thickness (MachineThicknessRange): shown disabled, refused on save
+            ranges = {}
+            for r in MachineThicknessRange.query.filter(MachineThicknessRange.machine_id.in_([m.id for m in machines])):
+                ranges.setdefault(r.machine_id, []).append(r)
+            machine_refusal = {m.id: _thickness_refusal(m, grade_id, detail.cut_thickness, ranges.get(m.id, []))
+                               for m in machines}
         else:
             machines = Machine.query.order_by(Machine.name).all()      # not sheet: any machine, no speeds
     # "Детайли от една единица" hint data (the JS in the template mirrors _detail_material_unit_qty() by hand) and
@@ -15814,6 +15904,7 @@ def detail_dxf_dashboard(detail_id):
     return render_template('detail_dxf_dashboard.html', detail=detail, files=files, services=services,
                             materials=materials, services_data=services_data, alt_materials=alt_materials,
                             machines=machines, cut_tech=cut_tech, cut_gases=CUT_GASES, ppu=ppu,
+                            machine_refusal=machine_refusal,
                             fscut_formats=FSCUT_FORMATS,
                             has_geometry=has_geometry, active_page='admin_details')
 
@@ -16295,6 +16386,10 @@ def view_detail_nest_save_tech(file_id):
     if not (thickness > 0 and math.isfinite(thickness)):
         flash('Дебелината трябва да е положително число.', 'danger')
         return back
+    refusal = _thickness_refusal(machine, grade_id, thickness)
+    if refusal:
+        flash(refusal + ' Технологията не е записана.', 'danger')
+        return back
     tech = _cut_technology(machine.id, grade_id, thickness, ch['gas'], ch['nozzle'])
     if tech is None:
         tech = MachineCutTechnology(machine_id=machine.id, grade_id=grade_id, thickness_mm=thickness, gas=ch['gas'],
@@ -16675,6 +16770,29 @@ def _cut_technology(machine_id, grade_id, thickness, gas, nozzle=None):
     return q.filter(db.func.abs(t.thickness_mm - thickness) < 0.0005).first()
 
 
+def _thickness_range(machine_id, grade_id, rows=None):
+    """The MachineThicknessRange that applies to (machine, Вид): its own row, else the machine's row without a Вид,
+    else None (= no limit). `rows` = the machine's rows when already loaded."""
+    rows = MachineThicknessRange.query.filter_by(machine_id=machine_id).all() if rows is None else rows
+    return next((r for r in rows if r.grade_id == grade_id), None) or next((r for r in rows if r.grade_id is None), None)
+
+
+def _thickness_refusal(machine, grade_id, thickness, rows=None):
+    """Bulgarian message when the laser cannot cut this Вид at this thickness (outside its MachineThicknessRange),
+    else None - also None without a machine, a thickness or a range."""
+    if machine is None or thickness is None:
+        return None
+    r = _thickness_range(machine.id, grade_id, rows)
+    if r is None:
+        return None
+    if (r.min_thickness_mm is not None and thickness < r.min_thickness_mm - 1e-6) or \
+            (r.max_thickness_mm is not None and thickness > r.max_thickness_mm + 1e-6):
+        grade = db.session.get(MaterialGrade, grade_id) if grade_id else None
+        return (f'„{machine.name}“ реже {grade.name if grade else "този материал"} {r.text} - '
+                f'не {thickness:g} мм.')
+    return None
+
+
 def _parse_cut_gas(form, name='gas'):
     gas = form.get(name, '')
     return gas if gas in CUT_GASES else None
@@ -16729,6 +16847,10 @@ def admin_update_detail_cut_technology(detail_id):
         return back
     if machine and not machine.is_laser and machine.id != detail.cutting_machine_id:
         flash('За листов материал изберете машина за лазерно рязане.', 'danger')
+        return back
+    refusal = _thickness_refusal(machine, detail.material.grade_id if detail.material else None, detail.cut_thickness)
+    if refusal:
+        flash(refusal + ' Изберете друга машина.', 'danger')
         return back
     gas = _parse_cut_gas(request.form)
     try:

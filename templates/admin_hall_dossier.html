@@ -140,6 +140,54 @@
     </div>
 
     {% if machine and machine.is_laser %}
+    {#- MachineThicknessRange rows (admin_hall_thickness_range_save / _delete): from what to what thickness this laser
+        cuts each Вид; a technology or a detail's machine outside it is refused (_thickness_refusal). #}
+    <div class="dz-panel">
+        <h2>Граници на дебелината ({{ thickness_ranges|length }})</h2>
+        <p class="dz-muted" style="margin-top:0">От каква до каква дебелина машината реже всеки вид материал. „Всички останали видове“ важи за вид без собствен ред; без нито един ред машината не е ограничена. Технология или детайл извън границата не се записват.</p>
+        {% if thickness_ranges %}
+        <table class="dz-table dz-files" data-table-tools="off">
+            <thead><tr><th>Вид</th><th>От мм</th><th>До мм</th><th></th></tr></thead>
+            <tbody>
+            {% for r in thickness_ranges %}
+            {% set rname = r.grade.name if r.grade else 'всички останали видове' %}
+            <tr>
+                <td>{{ rname }}</td>
+                <td>{{ r.min_thickness_mm|num3 if r.min_thickness_mm is not none else '-' }}</td>
+                <td>{{ r.max_thickness_mm|num3 if r.max_thickness_mm is not none else '-' }}</td>
+                <td style="white-space:nowrap;">
+                    <button class="btn" type="button" data-dialog="tr-form-dialog" data-title="Граница: {{ rname }}"
+                            data-action="{{ url_for('admin_hall_thickness_range_save', machine_id=m.id) }}"
+                            data-values='{{ {"range_id": r.id, "grade_id": r.grade_id or "", "min_thickness_mm": r.min_thickness_mm if r.min_thickness_mm is not none else "", "max_thickness_mm": r.max_thickness_mm if r.max_thickness_mm is not none else ""}|tojson|forceescape }}'>Редактирай</button>
+                    <form method="post" action="{{ url_for('admin_hall_thickness_range_delete', machine_id=m.id, range_id=r.id) }}" style="display:inline; margin:0;"
+                          data-confirm="Изтриване на границата за {{ rname }}?">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button class="btn" type="submit">Изтрий</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="dz-muted">Няма зададени граници - машината не е ограничена.</p>
+        {% endif %}
+        <section id="tr-form" data-dialog-section="+ Нова граница">
+        <form method="post" action="{{ url_for('admin_hall_thickness_range_save', machine_id=m.id) }}" class="dz-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="range_id" value="">
+            <div class="dz-row">
+                <div><label>Вид материал</label>
+                    <select name="grade_id" data-picker="off"><option value="">- всички останали видове -</option>
+                        {% for gr in grades %}<option value="{{ gr.id }}">{{ gr.name }}</option>{% endfor %}</select></div>
+                <div><label>От (мм)</label><input type="number" name="min_thickness_mm" step="0.001" min="0.001"></div>
+                <div><label>До (мм)</label><input type="number" name="max_thickness_mm" step="0.001" min="0.001"></div>
+            </div>
+            <button class="btn btn-primary" type="submit" style="margin-top:12px">Запази</button>
+        </form>
+        </section>
+    </div>
+
     {#- MachineCutTechnology rows (admin_hall_cut_tech_save / _delete): what a detail's "Технология на рязане"
         offers for this machine by Вид + thickness. Each row is its own small form. #}
     <div class="dz-panel">
@@ -153,7 +201,8 @@
             <tbody>
             {% for t in cut_techs %}
             <tr>
-                <td>{{ t.grade.name if t.grade else 'без вид' }}</td><td>{{ t.thickness_mm|num3 }} мм</td>
+                <td>{{ t.grade.name if t.grade else 'без вид' }}</td><td>{{ t.thickness_mm|num3 }} мм{% if tech_outside[t.id] %}
+                    <div class="alert alert-warning" style="margin:4px 0 0; padding:2px 6px; font-size:0.78rem;" title="{{ tech_outside[t.id] }}">извън границата</div>{% endif %}</td>
                 <td>{{ cut_gases.get(t.gas, '-') }}</td><td>{{ t.nozzle or '-' }}</td>
                 <td>{{ t.cutting_speed_mm_per_min|num3 if t.cutting_speed_mm_per_min else '-' }}</td>
                 <td>{{ t.pierce_time_sec|num3 if t.pierce_time_sec else '-' }}</td>

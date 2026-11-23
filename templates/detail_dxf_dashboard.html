@@ -138,10 +138,17 @@
                 <select id="ct_machine" name="machine_id" data-picker="off">
                     <option value="">— без машина —</option>
                     {% for m in machines %}
-                    <option value="{{ m.id }}" {{ 'selected' if m.id == detail.cutting_machine_id }}>{{ m.name }}</option>
+                    {#- a laser whose MachineThicknessRange leaves out this Вид + thickness: disabled (the current one stays
+                        selectable, so the form still shows it) - the server refuses it anyway #}
+                    {% set _out = machine_refusal.get(m.id) %}
+                    <option value="{{ m.id }}" {{ 'selected' if m.id == detail.cutting_machine_id }} {{ 'disabled' if _out and m.id != detail.cutting_machine_id }}
+                            {% if _out %}title="{{ _out }}"{% endif %}>{{ m.name }}{{ ' (не реже тази дебелина)' if _out }}</option>
                     {% endfor %}
                 </select>
             </div>
+            {% if machine_refusal.get(detail.cutting_machine_id) %}
+            <p class="alert alert-warning" style="flex-basis: 100%; margin: 0;">{{ machine_refusal[detail.cutting_machine_id] }} Изберете друга машина.</p>
+            {% endif %}
             {% if _laser %}
             <div class="form-group" style="margin: 0; flex: 1 1 140px;">
                 <label for="ct_gas">Газ</label>

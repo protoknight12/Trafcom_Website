@@ -176,3 +176,62 @@ def test_dossier_cut_technologies(s):
     c.post(f'{base}/{t.id}/delete')
     db.session.expire_all()
     assert MachineCutTechnology.query.count() == 1
+
+
+def test_thickness_ranges(s):
+    """A laser's thickness range per Вид (owner's request 2026-11-23): edited in the dossier (one row per Вид, a
+    "всички останали видове" row, validation); a technology outside it is refused in the dossier and from the detail
+    page; the detail page disables an out-of-range laser and refuses picking it; no range = no limit; a grade that a
+    range uses cannot be deleted."""
+    from app import HallMachine, MachineThicknessRange
+    c = _login('ct_admin')
+    m1, m2 = Machine.query.filter_by(is_laser=True).order_by(Machine.id).all()
+    hm = HallMachine(name=m1.name, machine=m1)
+    db.session.add(hm)
+    db.session.commit()
+    grade = MaterialGrade.query.filter_by(name='Стомана QA').one()
+    url = f'/admin/hall/{hm.id}/thickness-range'
+    c.post(url, data={'grade_id': grade.id, 'min_thickness_mm': '3', 'max_thickness_mm': '20'})
+    c.post(url, data={'grade_id': grade.id, 'min_thickness_mm': '1'})                 # duplicate Вид: refused
+    c.post(url, data={'grade_id': '', 'max_thickness_mm': '6'})                       # всички останали видове
+    for bad in ({'min_thickness_mm': '5', 'max_thickness_mm': '2'}, {}, {'min_thickness_mm': '-1'},
+                {'min_thickness_mm': 'x'}):
+        c.post(url, data={'grade_id': '', **bad})
+    db.session.expire_all()
+    rows = {r.grade_id: (r.min_thickness_mm, r.max_thickness_mm) for r in MachineThicknessRange.query}
+    assert rows == {grade.id: (3, 20), None: (None, 6)}
+    page = c.get(f'/admin/hall/{hm.id}/dossier').get_data(as_text=True)
+    assert 'Граници на дебелината (2)' in page and 'всички останали видове' in page
+
+    tech = f'/admin/hall/{hm.id}/cut-tech'
+    c.post(tech, data={'grade_id': grade.id, 'thickness_mm': '2', 'cutting_speed_mm_per_min': '1'})     # 2 < 3
+    c.post(tech, data={'grade_id': '', 'thickness_mm': '8', 'cutting_speed_mm_per_min': '1'})           # 8 > 6
+    c.post(tech, data={'grade_id': grade.id, 'thickness_mm': '8', 'cutting_speed_mm_per_min': '1'})     # its own Вид
+    db.session.expire_all()
+    assert [(t.grade_id, t.thickness_mm) for t in MachineCutTechnology.query] == [(grade.id, 8)]
+
+    # the detail (Стомана QA, 2 mm): laser 1 cannot cut 2 mm of this Вид, laser 2 has no range
+    c.post('/admin/details/add', data={'name': 'Тънка', 'material': 'ct_steel', 'manual_price': '1'})
+    d = Detail.query.filter_by(name='Тънка').one()
+    page = c.get(f'/details/{d.id}/files').get_data(as_text=True)
+    assert f'value="{m1.id}"  disabled' in page and 'не реже тази дебелина' in page
+    ct = f'/admin/details/{d.id}/cut-technology'
+    c.post(ct, data={'machine_id': m1.id, 'cutting_speed_mm_per_min': '2000', 'save_to_machine': '1'})
+    db.session.expire_all()
+    assert db.session.get(Detail, d.id).cutting_machine_id is None and MachineCutTechnology.query.count() == 1
+    c.post(ct, data={'machine_id': m2.id, 'cutting_speed_mm_per_min': '2000', 'save_to_machine': '1'})
+    db.session.expire_all()
+    assert db.session.get(Detail, d.id).cutting_machine_id == m2.id and MachineCutTechnology.query.count() == 2
+
+    c.post(f'/admin/material-grades/{grade.id}/delete')                              # used by a range: refused
+    db.session.expire_all()
+    assert db.session.get(MaterialGrade, grade.id) is not None
+    r = MachineThicknessRange.query.filter_by(grade_id=None).one()
+    c.post(f'{url}/{r.id}/delete')
+    c.post(url, data={'range_id': MachineThicknessRange.query.one().id, 'grade_id': grade.id,
+                      'min_thickness_mm': '1', 'max_thickness_mm': ''})               # edit: only a lower bound
+    db.session.expire_all()
+    assert [(x.grade_id, x.min_thickness_mm, x.max_thickness_mm) for x in MachineThicknessRange.query] == \
+           [(grade.id, 1, None)]
+    assert _login('ct_worker').post(url, data={'grade_id': '', 'max_thickness_mm': '1'}).status_code == 302
+    assert MachineThicknessRange.query.count() == 1
