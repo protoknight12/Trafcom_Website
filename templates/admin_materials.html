@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+{% from 'partials/remnant_outline.html' import remnant_outline with context %}
 <html lang="bg">
 <head>
     <meta charset="UTF-8">
@@ -275,6 +276,7 @@
                         {% if material.calibrated %}<div class="text-muted" style="font-size:0.8rem;">Калиброван{% if material.calibration %} {{ material.calibration }}{% endif %}</div>{% endif %}
                         {% if material.owner_client_id %}<div class="text-muted" style="font-size:0.8rem;">Собственик: {{ material.owner_client.name if material.owner_client else '—' }}</div>{% endif %}
                         {% if material.display_name_en or material.display_name_de %}<div class="text-muted" style="font-size:0.8rem;">{{ [material.display_name_en, material.display_name_de]|select|join(' / ') }}</div>{% endif %}
+                        {{ remnant_outline(material) }}
                     </td>
                     <td>{{ material.brand or '—' }}</td>
                     <td>{{ material.notes or '—' }}</td>

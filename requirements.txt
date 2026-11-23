@@ -27,3 +27,4 @@ htheatpump
 cadquery-ocp-novtk
 pyserial
 tzdata
+shapely

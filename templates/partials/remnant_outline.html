@@ -1,0 +1,11 @@
+{#- A remnant lot with its real outline (MaterialPrice.remnant_outline, from a cut sheet's FSCUT nest): the picture
+    and the plate files for CypCut (admin_material_remnant_file). Nothing for any other lot. #}
+{% macro remnant_outline(m) %}{% set pts = m.remnant_points %}{% if pts %}
+<div class="remnant-outline-box" style="margin-top: 4px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+    {{ outline_svg(pts, 90) }}
+    <span class="text-small">Остатък от разкрой:
+        <a href="{{ url_for('admin_material_remnant_file', material_id=m.id, fmt='lxd') }}">стар FSCUT</a> ·
+        <a href="{{ url_for('admin_material_remnant_file', material_id=m.id, fmt='lxds') }}">нов FSCUT</a> ·
+        <a href="{{ url_for('admin_material_remnant_file', material_id=m.id, fmt='dxf') }}">DXF</a></span>
+</div>
+{% endif %}{% endmacro %}

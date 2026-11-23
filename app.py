@@ -519,6 +519,19 @@ class MaterialPrice(db.Model):
     # (compose_material_name()); calibration is only meaningful when calibrated is set.
     calibrated = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     calibration = db.Column(db.String(30), nullable=True)
+    # A remnant lot from a cut sheet with an FSCUT nest (owner's request 2026-11-23): its real outline as JSON
+    # {"pts": [[x, y], ...], "from": "..."} - the picture on the material lists and the plate for CypCut
+    # (admin_material_remnant_file()). sheet_width_mm x sheet_length_mm stay the largest rectangle inside it.
+    remnant_outline = db.Column(db.Text, nullable=True)     # not deferred: the lists show it (NULL for most lots)
+
+    @property
+    def remnant_points(self):
+        try:
+            data = json.loads(self.remnant_outline) if self.remnant_outline else None
+        except ValueError:
+            return None
+        pts = data.get('pts') if isinstance(data, dict) else None
+        return [(float(x), float(y)) for x, y in pts] if pts else None
 
 
 class MaterialType(db.Model):
@@ -1395,6 +1408,10 @@ class OrderCutSheet(db.Model):
     status = db.Column(db.String(20), nullable=False, default='planned')   # 'planned' | 'cut'
     cut_at = db.Column(db.DateTime, nullable=True)
     cut_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    # the FSCUT nest of this sheet (owner's request 2026-11-23): stored file in ORDER_ITEM_FILE_FOLDER
+    # (cutnest_<order>_<uuid>.lxd|.lxds, shared by the rows a batch split into) + the uploaded name
+    nest_file = db.Column(db.String(255), nullable=True)
+    nest_file_name = db.Column(db.String(255), nullable=True)
 
     order = db.relationship('Order', backref=db.backref('cut_sheets', cascade='all, delete-orphan', lazy=True))
     material = db.relationship('MaterialPrice')
@@ -6110,9 +6127,13 @@ def _pending_remnants(orders):
                     if sheet.status != 'cut' or (order.id, lot_id, sheet.id) in decided:
                         continue
                     used = sum(piece_m2.get((it.target_type, it.target_id), 0.0) * it.quantity for it in sheet.items)
+                    # a sheet with an FSCUT nest: its remnant (largest rectangle + outline) is offered in the dialog
+                    rem = _cut_sheet_remnant(sheet) if sheet.nest_file else None
                     result.setdefault(order.id, []).append(dict(
                         base, sheets=sheet.copies, consumed=float(sheet.copies), extra=0.0, cut_sheet_id=sheet.id, seq=sheet.seq,
                         estimate=True,
+                        suggest={'width': rem['rect'][0], 'height': rem['rect'][1], 'pts': rem['pts'],
+                                 'area_m2': rem['area_m2']} if rem and min(rem['rect']) >= 10 else None,
                         usage=[_sheet_usage(used, sheet_m2)]))
                 continue
             if (order.id, lot_id, None) in decided:
@@ -6187,6 +6208,7 @@ def _order_cut_groups(orders):
             'sheet_w': lot.sheet_width_mm, 'sheet_h': lot.sheet_length_mm, 'sheet_m2': sheet_m2,
             'lines': lines, 'blocked': blocked, 'editable': status[order_id] not in ('completed', 'cancelled'),
             'sheets': [{'id': s.id, 'seq': s.seq, 'status': s.status, 'copies': s.copies,
+                        'nest': s.nest_file, 'nest_name': s.nest_file_name,
                         'items': {f'{it.target_type}:{it.target_id}': it.quantity for it in s.items},
                         'label': ', '.join(f'{names.get(f"{it.target_type}:{it.target_id}", "?")} x{it.quantity}'
                                            for it in s.items)} for s in sheets]})
@@ -13992,7 +14014,7 @@ def _client_note_refusal(note, added_any, errors, empty_message, touched):
     return _negative_client_lots_refusal(touched, 'admin_client_delivery_notes', details=note.kind == 'consume')
 
 
-def _sheet_remnant_lot(source, width, height):
+def _sheet_remnant_lot(source, width, height, tag=None):
     """The "<name> - остатък" lot a leftover piece (width x height mm) of sheet
     lot `source` goes into - a client's consume line
     (_apply_client_delivery_note_items()) and an order's sheet remnant
@@ -14003,12 +14025,14 @@ def _sheet_remnant_lot(source, width, height):
     same size at another rate becomes its own price lot. None when it cannot
     be created. A source named by compose_material_name() gives a remnant named the same way with the
     piece's size (what migration/data_compose_material_names.py gives existing remnants), else
-    "<source name> - остатък"."""
+    "<source name> - остатък". `tag` (a remnant with its own outline, e.g. "П-123 л.2") goes after the suffix, so
+    that remnant is its own lot, never merged with another of the same size."""
     name = source.display_name
     if name == compose_material_name(source):
         name = compose_material_name(source, sheet_width_mm=width, sheet_length_mm=height, notes=None)
+    suffix = f'{REMNANT_SUFFIX} {tag}' if tag else REMNANT_SUFFIX
     lot = _find_or_create_delivery_target(
-        'material', f'{name[:MATERIAL_NAME_MAX - len(REMNANT_SUFFIX)]}{REMNANT_SUFFIX}', source.brand, width, height, source.thickness_mm,
+        'material', f'{name[:MATERIAL_NAME_MAX - len(suffix)]}{suffix}', source.brand, width, height, source.thickness_mm,
         None if source.owner_client_id else (source.cost_per_m2 or 0) * width * height / 1_000_000,
         source.key, material_type=source.type, notes=None, owner_client_id=source.owner_client_id)
     if lot and lot.height_mm is None:
@@ -18032,6 +18056,16 @@ def admin_order_remnants():
     sheet_size = sorted((lot.sheet_width_mm, lot.sheet_length_mm))
     returned = []
     scrap = 0       # sheets with nothing usable left
+    # {outline: true} on a returned sheet of a cut row with an FSCUT nest (owner's request 2026-11-23): its one
+    # piece is the nest's remnant - its own lot keeping the real outline (picture + plate file)
+    outline = None
+    if any(s['action'] == 'return' and s.get('outline') for s in sheets):
+        cut_row = db.session.get(OrderCutSheet, cut_sheet_id) if cut_sheet_id else None
+        outline = _cut_sheet_remnant(cut_row) if cut_row else None
+        if outline is None:
+            return refuse('Контурът на остатъка се взема от разкрой (FSCUT) на изрязания лист - тук няма такъв.')
+        outline = {'pts': [list(p) for p in outline['pts']],
+                   'from': f'поръчка {order.order_number}, лист {cut_row.seq}', 'tag': f'{order.order_number} л.{cut_row.seq}'}
     for number, s in enumerate(sheets, 1):
         if s['action'] != 'return':
             scrap += 1
@@ -18058,10 +18092,12 @@ def admin_order_remnants():
                 return refuse(f'Лист {number}: парчето {width:g}x{height:g} mm е по-голямо от листа '
                               f'({lot.sheet_width_mm:g}x{lot.sheet_length_mm:g} mm).')
             area += width * height * count
-            returned += [(width, height)] * count
+            returned += [(width, height, bool(s.get('outline')))] * count
             sheet_pieces += count
         if sheet_pieces > 50:
             return refuse(f'Лист {number}: най-много 50 парчета на лист.')
+        if s.get('outline') and sheet_pieces != 1:
+            return refuse(f'Лист {number}: остатъкът с контура от разкроя е едно парче.')
         if area > sheet_size[0] * sheet_size[1] * (1 + 1e-9):
             return refuse(f'Лист {number}: парчетата са общо {area / 1e6:g} m² - повече от листа '
                           f'({sheet_size[0] * sheet_size[1] / 1e6:g} m²).')
@@ -18070,10 +18106,12 @@ def admin_order_remnants():
     if extra > PRODUCTION_STOCK_TOLERANCE:
         _bump_stock(lot, -extra)
     created = []
-    for (width, height), count in Counter(returned).items():   # one remnant lot per size, stock + count
-        remnant = _sheet_remnant_lot(lot, width, height)
+    for (width, height, shaped), count in Counter(returned).items():   # one remnant lot per size, stock + count
+        remnant = _sheet_remnant_lot(lot, width, height, tag=outline['tag'] if shaped else None)
         if not remnant:
             return refuse(f'Остатъкът {width:g}x{height:g} mm не можа да бъде записан.')
+        if shaped:
+            remnant.remnant_outline = json.dumps({'pts': outline['pts'], 'from': outline['from']})
         _bump_stock(remnant, count)
         created += [{'width': width, 'height': height, 'material_id': remnant.id}] * count
     names = _negative_client_lots({('material', lot.id)}, details=False)
@@ -18180,6 +18218,10 @@ def admin_cut_plan_save():
     new, planned = [], Counter()
     for number, sheet in enumerate(plan, 1):
         counts, copies = {}, sheet.pop('copies', 1)
+        # the sheet's FSCUT nest (admin_cut_plan_nest()): a stored file of this order, else none
+        nest = _cut_nest_token(order.id, sheet.pop('nest', None) if isinstance(sheet.get('nest'), str) else None)
+        nest_name = str(sheet.pop('nest_name', '') or '')[:255] or None
+        sheet.pop('nest', None)
         if not isinstance(copies, int) or isinstance(copies, bool) or copies < 1:
             return refuse(f'Лист {number}: копията трябва да са цяло число (1 или повече).')
         for key, qty in sheet.items():
@@ -18191,7 +18233,7 @@ def admin_cut_plan_save():
                 counts[key] = qty
                 planned[key] += qty * copies
         if counts:
-            new.append((counts, copies))
+            new.append((counts, copies, nest, sanitize_display_filename(nest_name) if nest and nest_name else nest))
     for key, total in planned.items():
         row, needed = group[key]
         if total > needed - row.quantity_produced:
@@ -18199,25 +18241,198 @@ def admin_cut_plan_save():
                           f'{max(0, needed - row.quantity_produced)} бр.')
 
     needs_before = _order_material_needs(order)
+    old_nests = {s.nest_file for s in sheets if s.status != 'cut' and s.nest_file}
     for sheet in sheets:
         if sheet.status != 'cut':
             db.session.delete(sheet)
     db.session.flush()   # the freed seq numbers are reused below (unique per group)
     seq = max((s.seq for s in sheets if s.status == 'cut'), default=0)
-    for counts, copies in new:
+    for counts, copies, nest, nest_name in new:
         seq += 1
-        db.session.add(OrderCutSheet(order_id=order.id, material_id=lot.id, seq=seq, copies=copies, items=[
+        db.session.add(OrderCutSheet(order_id=order.id, material_id=lot.id, seq=seq, copies=copies,
+                                     nest_file=nest, nest_file_name=nest_name, items=[
             OrderCutSheetItem(target_type=key.split(':')[0], target_id=int(key.split(':')[1]), quantity=qty)
             for key, qty in counts.items()]))
     db.session.flush()
     warnings = _sync_order_reservation(order, needs_before)
     db.session.commit()
-    total = sum(copies for _, copies in new)
+    # a replaced plan's nest files no row uses any more go (after the commit)
+    still = {n for (n,) in db.session.query(OrderCutSheet.nest_file).filter(OrderCutSheet.nest_file.in_(old_nests))}
+    _remove_files([_cut_nest_path(n) for n in old_nests - still])
+    total = sum(c[1] for c in new)
     log_action(f'Разкрой по листове за поръчка {order.order_number}, "{lot.display_name}": {total} планирани листа',
                details='\n'.join(f'Лист x{copies}: ' + ', '.join(f'{_row_name(group[k][0])} x{q}' for k, q in counts.items())
-                                 for counts, copies in new))
+                                 + (f' (разкрой {name})' if name else '')
+                                 for counts, copies, _, name in new))
     return jsonify({'status': 'success', 'message': f'Разкроят е записан: {total} планирани листа.',
                     'warnings': warnings})
+
+
+CUT_NEST_RE = re.compile(r'cutnest_(\d+)_[0-9a-f]{32}\.lxds?')
+CUT_NEST_GAP_MM = 10            # owner's decision 2026-11-23: the remnant keeps 10 mm off every part by default
+
+
+def _cut_nest_path(name):
+    return os.path.join(app.config['ORDER_ITEM_FILE_FOLDER'], name)
+
+
+def _cut_nest_token(order_id, token):
+    """A stored nest file name posted back with the plan - only one uploaded for this order that still exists."""
+    m = CUT_NEST_RE.fullmatch(token or '')
+    return token if m and int(m.group(1)) == order_id and os.path.isfile(_cut_nest_path(token)) else None
+
+
+def _cut_nest_matches(sheet, rows):
+    """Each nest part -> the plan line ('item:<id>' / 'component:<id>') it is: same drawing (contour count + cut
+    length of Detail.geometry_json, fscut._sig) first, else the same name as the detail / line (case-insensitive);
+    a line is used once. rows = _cut_group_rows()."""
+    lines = []
+    for r, d, _ in rows:
+        try:
+            shapes = json.loads(d.geometry_json) if d is not None and d.geometry_json else []
+        except ValueError:
+            shapes = []
+        lines.append(('%s:%s' % _row_key(r), fscut._sig(shapes) if shapes else None,
+                      {(d.name if d else '').strip().casefold(), (_row_name(r) or '').strip().casefold()}))
+    used, out = set(), []
+    for p in sheet['parts']:
+        name = (p['name'] or '').strip().casefold()
+        key = next((k for k, sig, _ in lines if k not in used and sig == p['sig']), None) or \
+            next((k for k, _, names in lines if k not in used and name in names), None)
+        if key:
+            used.add(key)
+        out.append(key)
+    return out
+
+
+@app.route('/admin/production/cut-plan/nest', methods=['POST'])
+@role_required(['admin', 'worker'])
+def admin_cut_plan_nest():
+    """"Разкрой (FSCUT)" on one sheet block of the cutting-plan dialog (owner's request 2026-11-23): the uploaded
+    .lxd / .lxds is kept (ORDER_ITEM_FILE_FOLDER) and read; the reply gives the block its copies (the file's sheet
+    count), each nest part with its count per sheet and the order line it is matched to (_cut_nest_matches) and
+    `token` - posted back with the plan, admin_cut_plan_save() stores it on the sheet row. Nothing else is saved."""
+    def refuse(message):
+        return jsonify({'status': 'error', 'message': message}), 400
+    try:
+        order_id, material_id = int(request.form.get('order_id')), int(request.form.get('material_id'))
+    except (TypeError, ValueError):
+        return refuse('Невалидни данни.')
+    order = db.session.get(Order, order_id)
+    lot = db.session.get(MaterialPrice, material_id)
+    if order is None or order.deleted_at or lot is None:
+        return refuse('Няма такава поръчка или материал.')
+    upload = request.files.get('file')
+    ext = os.path.splitext(upload.filename or '')[1].lower() if upload else ''
+    if ext not in FSCUT_EXTENSIONS:
+        return refuse('Качете разкрой от FSCUT (.lxd или .lxds).')
+    name = f'cutnest_{order.id}_{uuid.uuid4().hex}{ext}'
+    upload.save(_cut_nest_path(name))
+    try:
+        nest = fscut.parse(_cut_nest_path(name))
+        sheet = fscut.nest_sheet(nest)
+    except (ValueError, IndexError, KeyError) as e:
+        os.remove(_cut_nest_path(name))
+        app.logger.warning('cut-plan nest for order %s unreadable: %s', order.id, e)
+        return refuse('Файлът не е разкрой с лист (няма резултат) или не може да се прочете.')
+    matches = _cut_nest_matches(sheet, _cut_group_rows(order, lot.id))
+    warnings = []
+    if sheet['results'] > 1:
+        warnings.append(f'Файлът има {sheet["results"]} разкроя - взет е първият.')
+    w, h = sheet['size'] or (None, None)
+    if w and lot.sheet_width_mm and lot.sheet_length_mm and \
+            sorted((round(w), round(h))) != sorted((round(lot.sheet_width_mm), round(lot.sheet_length_mm))):
+        warnings.append(f'Листът в разкроя е {w:g} x {h:g} мм, а в партидата {lot.sheet_width_mm:g} x '
+                        f'{lot.sheet_length_mm:g} мм.')
+    if any(m is None for m in matches):
+        warnings.append('Някои детайли от разкроя не са разпознати - изберете реда им от поръчката.')
+    return jsonify({'status': 'success', 'token': name, 'name': sanitize_display_filename(upload.filename)[:255],
+                    'copies': sheet['copies'], 'warnings': warnings,
+                    'parts': [{'name': p['name'], 'count': p['count'], 'size': p['size'], 'key': key}
+                              for p, key in zip(sheet['parts'], matches)]})
+
+
+def _cut_sheet_for_staff(sheet_id):
+    sheet = db.session.get(OrderCutSheet, sheet_id) or abort(404)
+    if not sheet.nest_file or not os.path.isfile(_cut_nest_path(sheet.nest_file)):
+        abort(404)
+    return sheet
+
+
+@app.route('/admin/production/cut-sheets/<int:sheet_id>/nest')
+@role_required(['admin', 'worker'])
+def admin_cut_sheet_nest(sheet_id):
+    """The sheet row's FSCUT nest file as uploaded."""
+    sheet = _cut_sheet_for_staff(sheet_id)
+    return send_file(_cut_nest_path(sheet.nest_file), as_attachment=True,
+                     download_name=sheet.nest_file_name or sheet.nest_file)
+
+
+def _cut_sheet_remnant(sheet, gap=CUT_NEST_GAP_MM):
+    """fscut.nest_remnant() of the sheet row's nest file, or None (no file / nothing left / unreadable)."""
+    if not sheet.nest_file:
+        return None
+    try:
+        return fscut.nest_remnant(fscut.parse(_cut_nest_path(sheet.nest_file)), gap=gap)
+    except (ValueError, IndexError, KeyError, OSError) as e:
+        app.logger.warning('remnant of cut sheet %s: %s', sheet.id, e)
+        return None
+
+
+@app.route('/admin/production/cut-sheets/<int:sheet_id>/remnant/<any(dxf, lxd, lxds):fmt>')
+@role_required(['admin', 'worker'])
+def admin_cut_sheet_remnant(sheet_id, fmt):
+    """The rest of the sheet (owner's decision 2026-11-23: the sheet minus the placed parts grown by `gap` mm, default
+    10) as a plate for CypCut: a DXF with its one outline, or an FSCUT document whose only content is that NestPlate."""
+    sheet = _cut_sheet_for_staff(sheet_id)
+    gap = request.args.get('gap', type=float)
+    gap = CUT_NEST_GAP_MM if gap is None or not (0 <= gap <= 200) else gap
+    remnant = _cut_sheet_remnant(sheet, gap)
+    if remnant is None:
+        flash('От този лист не остава използваем остатък.', 'warning')
+        return redirect(url_for('admin_production_report') + f'#order-{sheet.order_id}')
+    name = f'Остатък {sheet.order.order_number} лист {sheet.seq}'
+    if fmt == 'dxf':
+        data = _entities_dxf([{'kind': 'poly', 'pts': [(x, y, 0.0) for x, y in remnant['pts']], 'closed': True}])
+    elif fmt == 'lxds':
+        data = fscut.write_lxds_plate(remnant['pts'], name)
+    else:
+        data = fscut.write_lxd_plate(remnant['pts'], name)
+    log_action(f'Остатък от лист {sheet.seq} на поръчка {sheet.order.order_number} като .{fmt} (отстояние {gap:g} мм)')
+    return _fscut_download(data, name, '.' + fmt)
+
+
+def outline_svg(pts, size=120):
+    """A remnant outline as a small inline SVG (numbers only - safe Markup), y up like the drawing."""
+    if not pts:
+        return ''
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    w, h = (max(xs) - min(xs)) or 1, (max(ys) - min(ys)) or 1
+    k = size / max(w, h)
+    path = ' '.join(f'{(x - min(xs)) * k:.1f},{(max(ys) - y) * k:.1f}' for x, y in pts)
+    return Markup(f'<svg class="remnant-outline" width="{w * k:.0f}" height="{h * k:.0f}" '
+                  f'viewBox="0 0 {w * k:.1f} {h * k:.1f}" role="img" aria-label="контур на остатъка">'
+                  f'<polygon points="{path}" fill="rgba(80,170,90,.35)" stroke="#2e7d32" stroke-width="1"/></svg>')
+
+
+app.jinja_env.globals['outline_svg'] = outline_svg
+
+
+@app.route('/admin/materials/<int:material_id>/remnant/<any(dxf, lxd, lxds):fmt>')
+@role_required(['admin', 'worker'])
+def admin_material_remnant_file(material_id, fmt):
+    """A remnant lot's real outline (MaterialPrice.remnant_outline) as a plate for CypCut: DXF or an FSCUT document
+    whose only content is that NestPlate."""
+    m = db.session.get(MaterialPrice, material_id) or abort(404)
+    pts = m.remnant_points
+    if not pts:
+        abort(404)
+    name = m.display_name
+    if fmt == 'dxf':
+        data = _entities_dxf([{'kind': 'poly', 'pts': [(x, y, 0.0) for x, y in pts], 'closed': True}])
+    else:
+        data = (fscut.write_lxds_plate if fmt == 'lxds' else fscut.write_lxd_plate)(pts, name[:100])
+    return _fscut_download(data, name, '.' + fmt)
 
 
 def _cut_sheet_shares(parts, lot):
@@ -18317,6 +18532,7 @@ def admin_cut_sheet(sheet_id):
     if count < sheet.copies:   # the rest of the batch stays planned as its own row
         last = db.session.query(db.func.max(OrderCutSheet.seq)).filter_by(order_id=order.id, material_id=lot.id).scalar()
         db.session.add(OrderCutSheet(order_id=order.id, material_id=lot.id, seq=last + 1, copies=sheet.copies - count,
+                                     nest_file=sheet.nest_file, nest_file_name=sheet.nest_file_name,
                                      items=[OrderCutSheetItem(target_type=it.target_type, target_id=it.target_id,
                                                               quantity=it.quantity) for it in sheet.items]))
         sheet.copies = count

@@ -542,6 +542,39 @@
         add.addEventListener('click', addPiece);
         box.append(list, add, summary);
         addPiece();
+        box.withOutline = function () { return false; };
+        if (g.suggest) {
+            // a sheet cut by an FSCUT nest: its remnant - the largest rectangle inside it as the piece's size, and
+            // (ticked) the real outline kept with the remnant lot (picture + plate file); the choice stays the user's
+            const first = list.querySelector('.remnant-piece');
+            first.querySelector('[data-field=width]').value = g.suggest.width;
+            first.querySelector('[data-field=height]').value = g.suggest.height;
+            const flag = document.createElement('label');
+            flag.className = 'text-small';
+            flag.style.cssText = 'display: flex; gap: 8px; align-items: center; margin: 4px 0;';
+            const check = document.createElement('input');
+            check.type = 'checkbox';
+            check.checked = true;
+            flag.append(check, 'С контура от разкроя (' + g.suggest.area_m2 + ' m²): картинка и FSCUT файл към партидата на остатъка - едно парче с размера по-горе');
+            const svgNS = 'http://www.w3.org/2000/svg';
+            const xs = g.suggest.pts.map(function (p) { return p[0]; }), ys = g.suggest.pts.map(function (p) { return p[1]; });
+            const minX = Math.min(...xs), maxY = Math.max(...ys);
+            const k = 140 / Math.max(Math.max(...xs) - minX, maxY - Math.min(...ys), 1);
+            const svg = document.createElementNS(svgNS, 'svg');
+            svg.setAttribute('width', ((Math.max(...xs) - minX) * k).toFixed(0));
+            svg.setAttribute('height', ((maxY - Math.min(...ys)) * k).toFixed(0));
+            const poly = document.createElementNS(svgNS, 'polygon');
+            poly.setAttribute('points', g.suggest.pts.map(function (p) {
+                return ((p[0] - minX) * k).toFixed(1) + ',' + ((maxY - p[1]) * k).toFixed(1);
+            }).join(' '));
+            poly.setAttribute('fill', 'rgba(80,170,90,.35)');
+            poly.setAttribute('stroke', '#2e7d32');
+            svg.appendChild(poly);
+            box.insertBefore(flag, list);
+            box.insertBefore(svg, flag);
+            box.withOutline = function () { return check.checked; };
+            update();
+        }
         return box;
     }
 
@@ -667,15 +700,16 @@
                 }
                 const pieceError = back ? remnantPiecesError(g, pieces) : '';
                 if (pieceError) error = 'Парчета: ' + pieceError;
+                const outline = row.querySelector('.remnant-pieces').withOutline();
                 for (let i = 0; i < scrap; i++) sheets.push({action: 'scrap'});
-                for (let i = 0; i < back; i++) sheets.push({action: 'return', pieces: pieces});
+                for (let i = 0; i < back; i++) sheets.push({action: 'return', pieces: pieces, outline: outline});
                 return;
             }
             const action = row.querySelector('input[type=radio]:checked').value;
             if (action === 'scrap') { sheets.push({action: 'scrap'}); return; }
             const pieceError = remnantPiecesError(g, pieces);
             if (pieceError) error = error || ('Лист ' + (idx + 1) + ': ' + pieceError);
-            sheets.push({action: 'return', pieces: pieces});
+            sheets.push({action: 'return', pieces: pieces, outline: row.querySelector('.remnant-pieces').withOutline()});
         });
         if (error) { errorEl.textContent = error; errorEl.hidden = false; return; }
 
@@ -765,6 +799,7 @@
             + 'а решението за остатъка се отменя (върнат остатък се изважда от склада). Листът отново става планиран.';
         undo.addEventListener('click', function () { uncutSheet(s.id, undo); });
         box.append(legend, s.label, undo);
+        if (s.nest) box.append(nestInfo(s.id, s.nest_name || 'файл'), remnantLinks(s.id));
         return box;
     }
 
@@ -792,7 +827,134 @@
             });
     }
 
-    function cutPlanSheetBlock(counts, copies) {
+    // The sheet's FSCUT nest (admin_cut_plan_nest()): its file name, the nest's parts each bound to an order line
+    // (picked from the lines, pre-matched by the server) and the remnant downloads. The bound counts are written into
+    // the block's count inputs; the stored file goes back with the plan (dataset.nest). textContent only.
+    function remnantLinks(sheetId) {
+        const wrap = document.createElement('div');
+        wrap.className = 'text-small';
+        wrap.style.marginTop = '4px';
+        const gap = document.createElement('input');
+        gap.type = 'number';
+        gap.min = '0';
+        gap.max = '200';
+        gap.step = 'any';
+        gap.value = '10';
+        gap.style.cssText = 'width: 60px; margin: 0 4px;';
+        gap.title = 'Отстояние на остатъка от детайлите (мм)';
+        wrap.append('Остатък от листа (отстояние', gap, 'мм):');
+        [['dxf', 'DXF'], ['lxd', 'стар FSCUT'], ['lxds', 'нов FSCUT']].forEach(function (f) {
+            const a = document.createElement('a');
+            a.textContent = f[1];
+            a.style.marginLeft = '8px';
+            a.href = '#';
+            a.addEventListener('click', function (e) {
+                e.preventDefault();
+                window.location.href = '/admin/production/cut-sheets/' + sheetId + '/remnant/' + f[0]
+                    + '?gap=' + encodeURIComponent(gap.value || '10');
+            });
+            wrap.appendChild(a);
+        });
+        return wrap;
+    }
+
+    function nestInfo(sheetId, name) {
+        const info = document.createElement('div');
+        info.className = 'text-small cut-plan-nest-name';
+        info.append('Разкрой: ');
+        if (sheetId) {
+            const a = document.createElement('a');
+            a.href = '/admin/production/cut-sheets/' + sheetId + '/nest';
+            a.textContent = name;
+            info.appendChild(a);
+        } else {
+            info.append(name + ' (записва се с разкроя)');
+        }
+        return info;
+    }
+
+    function nestBlock(box, sheet) {
+        const wrap = document.createElement('div');
+        wrap.className = 'cut-plan-nest';
+        wrap.style.cssText = 'margin: 4px 0 8px; padding: 6px 8px; border: 1px dashed var(--border-color); border-radius: 6px;';
+        const head = document.createElement('label');
+        head.className = 'text-small';
+        head.style.cssText = 'display: flex; gap: 8px; align-items: center; flex-wrap: wrap;';
+        const file = document.createElement('input');
+        file.type = 'file';
+        file.accept = '.lxd,.lxds';
+        head.append('Разкрой от FSCUT за този лист:', file);
+        const info = document.createElement('div');
+        const map = document.createElement('div');
+        const warn = document.createElement('div');
+        warn.className = 'text-small';
+        warn.style.color = 'var(--danger-text, #e57373)';
+        wrap.append(head, info, map, warn);
+        if (sheet && sheet.nest) {
+            box.dataset.nest = sheet.nest;
+            box.dataset.nestName = sheet.nest_name || '';
+            info.appendChild(nestInfo(sheet.id, sheet.nest_name || 'файл'));
+            if (sheet.id) info.appendChild(remnantLinks(sheet.id));
+        }
+        file.addEventListener('change', function () {
+            if (!file.files.length) return;
+            const formData = new FormData();
+            formData.append('csrf_token', window.CSRF_TOKEN);
+            formData.append('order_id', cutPlan.order_id);
+            formData.append('material_id', cutPlan.material_id);
+            formData.append('file', file.files[0]);
+            warn.textContent = 'Чете се...';
+            fetch('/admin/production/cut-plan/nest', { method: 'POST', body: formData })
+                .then(function (response) { return response.json(); })
+                .then(function (data) {
+                    if (data.status !== 'success') { warn.textContent = data.message || 'Файлът не може да се прочете.'; return; }
+                    box.dataset.nest = data.token;
+                    box.dataset.nestName = data.name;
+                    info.replaceChildren(nestInfo(null, data.name));
+                    box.querySelector('.cut-plan-copies').value = data.copies;
+                    map.replaceChildren();
+                    data.parts.forEach(function (p) {
+                        const row = document.createElement('label');
+                        row.className = 'text-small';
+                        row.style.cssText = 'display: flex; gap: 8px; align-items: center; margin: 2px 0;';
+                        const sel = document.createElement('select');
+                        sel.dataset.picker = 'off';
+                        sel.dataset.count = p.count;
+                        sel.className = 'cut-plan-nest-line';
+                        const none = document.createElement('option');
+                        none.value = '';
+                        none.textContent = '- не е от поръчката -';
+                        sel.appendChild(none);
+                        cutPlan.lines.forEach(function (line) {
+                            const o = document.createElement('option');
+                            o.value = line.key;
+                            o.textContent = line.name;
+                            sel.appendChild(o);
+                        });
+                        sel.value = p.key || '';
+                        sel.addEventListener('change', function () { applyNest(box); });
+                        row.append(p.name + ' x' + p.count + ' на лист (' + p.size[0] + ' x ' + p.size[1] + ' мм) =', sel);
+                        map.appendChild(row);
+                    });
+                    warn.textContent = (data.warnings || []).join(' ');
+                    applyNest(box);
+                })
+                .catch(function () { warn.textContent = 'Връзката със сървъра беше прекъсната.'; });
+        });
+        return wrap;
+    }
+
+    // the nest's parts as counts per sheet: every bound line gets the sum of its parts' counts, the others 0
+    function applyNest(box) {
+        const counts = {};
+        box.querySelectorAll('.cut-plan-nest-line').forEach(function (sel) {
+            if (sel.value) counts[sel.value] = (counts[sel.value] || 0) + Number(sel.dataset.count || 0);
+        });
+        box.querySelectorAll('input[data-key]').forEach(function (input) { input.value = counts[input.dataset.key] || 0; });
+        refreshCutPlan();
+    }
+
+    function cutPlanSheetBlock(counts, copies, sheet) {
         const box = document.createElement('fieldset');
         box.className = 'cut-plan-sheet';
         box.style.cssText = 'border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; margin-bottom: 8px;';
@@ -809,6 +971,7 @@
         copiesInput.addEventListener('input', refreshCutPlan);
         copiesLabel.append('Копия:', copiesInput, ' еднакви листа с бройките по-долу на всеки');
         box.appendChild(copiesLabel);
+        box.appendChild(nestBlock(box, sheet));
         cutPlan.lines.forEach(function (line) {
             const label = document.createElement('label');
             label.style.cssText = 'display: flex; gap: 8px; align-items: center; margin-bottom: 4px;';
@@ -897,7 +1060,7 @@
         const sheets = document.getElementById('cutPlanSheets');
         sheets.replaceChildren();
         g.sheets.forEach(function (s) {
-            if (s.status === 'planned') sheets.appendChild(cutPlanSheetBlock(s.items, s.copies));
+            if (s.status === 'planned') sheets.appendChild(cutPlanSheetBlock(s.items, s.copies, s));
         });
         if (!sheets.children.length && g.editable) sheets.appendChild(cutPlanSheetBlock({}, 1));
         sheets.querySelectorAll('fieldset').forEach(function (box) { box.disabled = !g.editable; });
@@ -922,6 +1085,7 @@
             const copies = Number(box.querySelector('.cut-plan-copies').value || 1);
             if (!Number.isInteger(copies) || copies < 1) error = error || 'Копията трябва да са цяло число (1 или повече).';
             const counts = {copies: copies};
+            if (box.dataset.nest) { counts.nest = box.dataset.nest; counts.nest_name = box.dataset.nestName || ''; }
             box.querySelectorAll('input[data-key]').forEach(function (input) {
                 const v = Number(input.value || 0);
                 if (!Number.isInteger(v) || v < 0) error = error || 'Бройките трябва да са цели числа (0 или повече).';

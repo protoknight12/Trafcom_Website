@@ -1127,6 +1127,25 @@ def nest_parts(nest):
     return parts
 
 
+def nest_sheet(nest, result=0):
+    """One result of a nest as a cutting-plan sheet (owner's request 2026-11-23): {'parts': [{'name', 'count' (pieces
+    on one sheet), 'sig', 'size'}], 'copies' (sheets cut with it), 'size' (sheet w, h), 'results' (how many the file
+    has)}. ValueError for a file with no result."""
+    parts, _, results = _nest_layout(nest)
+    r = results[result]
+    counts = {}
+    for p in r['placed']:
+        counts[p['part']] = counts.get(p['part'], 0) + 1
+    out = []
+    for n, p in enumerate(parts):
+        if counts.get(n):
+            shapes = [s for e in p['ents'] for s in _entity_shapes(e)]
+            b = bbox(shapes)
+            out.append({'name': p['name'], 'count': counts[n], 'sig': _sig(shapes),
+                        'size': (round(b[2] - b[0], 1), round(b[3] - b[1], 1))})
+    return {'parts': out, 'copies': r['plate_amount'] or 1, 'size': r['size'], 'results': len(results)}
+
+
 def write_lxd_nest(nest, channel=None):
     """A nest (parse() of an .lxd / .lxds with results) as an old-format .lxd: the parts as Blocks + NestParts, the
     sheets as NestPlates, each result as a NestResult whose Entities are the placed contours (the old format keeps
@@ -1495,3 +1514,146 @@ def write_lxds_nest(nest, channel=None, material=None, thickness=None):
     return _lxds_zip(store, h, out_results[0][1]['ID'], _lxds_technical(channel, material, thickness),
                      blocks=blocks, parts=parts_el, plates=plates_el, results=out_results,
                      counts=(len(parts), len(plates), len(results)))
+
+
+# ---------- the rest of a sheet ("остатък") ----------
+# Owner's decision 2026-11-23: the remnant = the sheet minus every placed part's outer contour grown by a gap
+# (default 10 mm); one hole-free outline so it can go into CypCut as a plate (DXF or an FSCUT NestPlate). Needs
+# shapely (imported here only, so parsing works without it).
+
+ARC_STEP_DEG = 5
+
+
+def _entity_points(ent):
+    """A closed contour as a point ring (arcs / circles flattened every ARC_STEP_DEG)."""
+    if ent['kind'] == 'circle':
+        n = max(12, int(360 / ARC_STEP_DEG))
+        return [(ent['cx'] + ent['r'] * math.cos(2 * math.pi * i / n), ent['cy'] + ent['r'] * math.sin(2 * math.pi * i / n))
+                for i in range(n)]
+    pts, out = ent['pts'], []
+    for i, (x, y, b) in enumerate(pts):
+        out.append((x, y))
+        if abs(b) > 1e-12 and (ent['closed'] or i < len(pts) - 1):
+            x2, y2, _ = pts[(i + 1) % len(pts)]
+            arc = _bulge_shape((x, y), (x2, y2), b)
+            if arc:
+                a1, a2 = arc['start_angle'], arc['end_angle']
+                sweep = (a2 - a1) % 360 or 360
+                steps = max(1, int(sweep / ARC_STEP_DEG))
+                mids = [math.radians(a1 + sweep * k / steps) for k in range(1, steps)]
+                ring = [(arc['cx'] + arc['r'] * math.cos(t), arc['cy'] + arc['r'] * math.sin(t)) for t in mids]
+                out += ring if b > 0 else ring[::-1]
+    return out
+
+
+def _largest_rect(poly, step):
+    """Largest axis-aligned rectangle (w, h) inside `poly`, on a grid of `step` mm (cells whose centre lies in the
+    polygon shrunk by half a cell) - histogram method, O(cells)."""
+    import numpy as np
+    import shapely
+    inner = poly.buffer(-step / 2)
+    if inner.is_empty:
+        return 0.0, 0.0
+    x0, y0, x1, y1 = poly.bounds
+    xs = np.arange(x0 + step / 2, x1, step)
+    ys = np.arange(y0 + step / 2, y1, step)
+    gx, gy = np.meshgrid(xs, ys)
+    mask = shapely.contains_xy(inner, gx, gy)
+    heights = np.zeros(len(xs), dtype=int)
+    best = (0, 0, 0)
+    for row in mask:
+        heights = np.where(row, heights + 1, 0)
+        stack = []
+        for i, hgt in enumerate(list(heights) + [0]):
+            start = i
+            while stack and stack[-1][1] >= hgt:
+                start, top = stack.pop()
+                if top * (i - start) > best[0]:
+                    best = (top * (i - start), i - start, top)
+            stack.append((start, hgt))
+    return round(float(best[1] * step), 1), round(float(best[2] * step), 1)
+
+
+def nest_remnant(nest, result=0, gap=10.0):
+    """The rest of a nest result's sheet: {'pts' [(x, y)] (one hole-free ring), 'area_m2', 'size' (w, h of its box),
+    'rect' (w, h of the largest rectangle inside, for a stock remnant lot)} or None when nothing is left. The sheet =
+    the result's outline (or its plate size at the origin); every placed part's outer contours (IsFill, else every
+    closed one) grown by `gap` mm are taken out; the largest free region is kept, its holes opened to the outline by
+    0.1 mm slits (a plate is one contour). ValueError for a file without results."""
+    from shapely.geometry import Polygon, box
+    from shapely.ops import nearest_points, unary_union
+    from shapely.geometry import LineString
+    parts, plates, results = _nest_layout(nest)
+    r = results[result]
+    if r['outline'] is not None:
+        sheet = Polygon(_entity_points(r['outline'])).buffer(0)
+    elif r['size']:
+        sheet = box(0, 0, r['size'][0], r['size'][1])
+    else:
+        raise ValueError('no sheet')
+    used = []
+    for p in r['placed']:
+        closed = [e for e in p['ents'] if e['kind'] == 'circle' or e['closed']]
+        outer = [e for e in closed if e['attrs'].get('IsFill') == 'true'] or closed
+        used += [Polygon(_entity_points(e)).buffer(0) for e in outer if len(_entity_points(e)) >= 3]
+    free = sheet.difference(unary_union(used).buffer(max(0.0, gap))) if used else sheet
+    polys = [g for g in getattr(free, 'geoms', [free]) if g.geom_type == 'Polygon' and not g.is_empty]
+    if not polys:
+        return None
+    region = max(polys, key=lambda g: g.area).simplify(0.05)
+    for _ in range(200):                                    # keyhole: each hole joined to the outline by a slit
+        if not region.interiors:
+            break
+        a, b = nearest_points(Polygon(region.interiors[0]).exterior, region.exterior)
+        region = region.difference(LineString([a, b]).buffer(0.05, cap_style=3))   # square ends: cuts through
+        if region.geom_type != 'Polygon':
+            region = max(region.geoms, key=lambda g: g.area)
+    if region.interiors:
+        raise ValueError('remnant holes could not be opened')
+    if region.area < 100:                                   # under 1 cm2: nothing usable
+        return None
+    x0, y0, x1, y1 = region.bounds
+    step = max(2.0, max(x1 - x0, y1 - y0) / 500)
+    return {'pts': [(round(x, 3), round(y, 3)) for x, y in list(region.exterior.coords)[:-1]],
+            'area_m2': round(region.area / 1e6, 4), 'size': (round(x1 - x0, 1), round(y1 - y0, 1)),
+            'rect': _largest_rect(region, step)}
+
+
+def _plate_entity(pts):
+    return {'kind': 'poly', 'pts': [(x, y, 0.0) for x, y in pts], 'closed': True, 'attrs': {}, 'cam': []}
+
+
+def write_lxd_plate(pts, name='Остатък'):
+    """A remnant as an old-format document whose only content is one NestPlate with that outline."""
+    plate = _plate_entity(pts)
+    h = _Handles(1000)
+    doc, head = _lxd_doc(_ents_box([plate]), None, h)
+    for tag, hd in (('Blocks', '4'), ('Entities', '2'), ('NestParts', '7')):
+        ET.SubElement(doc, tag, {'Handle': hd})
+    plates_el = ET.SubElement(doc, 'NestPlates', {'Handle': '8'})
+    el = ET.SubElement(plates_el, 'NestPlate', {'Handle': str(h()), 'Name': name, 'Amount': '1', 'AmountUsed': '0',
+                                                'ShapeCls': 'LwPolyline'})
+    _lxd_entity(el, plate, h(), port=False)
+    for tag, hd in (('NestGroups', '9'), ('NestResults', '10')):
+        ET.SubElement(doc, tag, {'Handle': hd})
+    return _lxd_bytes(doc, head, h)
+
+
+def write_lxds_plate(pts, name='Остатък'):
+    """A remnant as a new-format document whose only content is one NestPlate with that outline."""
+    plate = _plate_entity(pts)
+    h = _Handles(1100)
+    store = _ShapeStore(h)
+    plates_el = ET.Element('Plates')
+    ph = h()
+    el = ET.SubElement(plates_el, 'NestPlate', {'Handle': str(ph), 'Name': name, 'Amount': '1', 'AmountUsed': '0',
+                                                'GUID': _new_id(), 'ShapeCls': 'LwPolyline'})
+    sh, _ = store.add(plate, layer=False)
+    poly = ET.SubElement(el, 'LwPolyline', {'Handle': str(sh), 'NestPlate': str(ph),
+                                            'PointCount': str(len(pts)), 'PolyFlag': '1'})
+    ET.SubElement(poly, 'ToolCompensation')
+    for x, y in pts:
+        ET.SubElement(poly, 'Point', {k: _num(v) for k, v in (('X', x), ('Y', y)) if v})
+    ET.SubElement(el, 'Shape', {'Class': 'LwPolyline', 'Handle': str(sh), 'NestPlate': str(ph)})
+    ET.SubElement(el, 'ExtShapes')
+    return _lxds_zip(store, h, _new_id(), _lxds_technical(None, None, None), plates=plates_el, counts=(0, 1, 0))

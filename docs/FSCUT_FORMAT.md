@@ -188,5 +188,10 @@ One part of a nest (`fscut.nest_parts()`, the same parts the converters write): 
 `.lxds`, with its lead-in / micro-joints / compensation and the nest's technology) or a DXF, or made a catalog Detail
 - see `view_detail_nest_part()` / `view_detail_nest_part_detail()` in `app.py`.
 
-Not written: remnants (`LayerName="Remnant"`), thumbnails. An old short lead-in (`<LeadIn Pos Angle>` with no
+The rest of a sheet as a plate (`fscut.nest_remnant()`, `write_lxd_plate()` / `write_lxds_plate()`): the sheet minus
+every placed part's outer contour grown by a gap (default 10 mm), the largest free region, holes opened to the outline
+by 0.1 mm slits so it is one contour; written as a document whose only content is one `NestPlate` with that
+`LwPolyline` (or a DXF with one closed LWPOLYLINE - how the owner loads plates). Needs shapely. Not yet opened in CypCut.
+
+Not written: CypCut's own remnant outlines (`LayerName="Remnant"`), thumbnails. An old short lead-in (`<LeadIn Pos Angle>` with no
 length) goes into the new format as LeadType 0 / length 0. Lead-ins/micro-joints are not drawn or counted on the page.
