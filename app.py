@@ -16129,7 +16129,129 @@ def view_detail_nest(file_id):
                            grades=MaterialGrade.query.order_by(MaterialGrade.sort_order, MaterialGrade.name).all(),
                            default_grade_id=detail.material.grade_id if detail.material else None,
                            default_thickness=nest['technology']['thickness'] or detail.cut_thickness,
+                           nest_parts=_nest_parts(nest),
+                           materials=detail_materials_query(detail.owner_client_id)
+                           .order_by(MaterialPrice.type, MaterialPrice.display_name).all(),
                            active_page='admin_details')
+
+
+def _nest_parts(nest):
+    try:
+        return fscut.nest_parts(nest) if nest['results'] else []
+    except ValueError:
+        return []
+
+
+def _nest_part(f, n):
+    """(nest, part n, channel-1 technology) of a nest file, or None after a flash; 404 for a wrong part number."""
+    nest = _detail_nest(f)
+    if nest is None:
+        return None
+    parts = _nest_parts(nest)
+    if not 0 <= n < len(parts):
+        abort(404)
+    t = nest['technology']
+    return nest, parts[n], (t['channels'][0] if t['channels'] else None)
+
+
+def _entities_dxf(ents):
+    """Contours (fscut entities) as a plain DXF (R2010, mm): CIRCLE / LWPOLYLINE with bulges, layer 0."""
+    doc = ezdxf.new('R2010')
+    doc.units = ezdxf.units.MM
+    msp = doc.modelspace()
+    for e in ents:
+        if e['kind'] == 'circle':
+            msp.add_circle((e['cx'], e['cy']), e['r'])
+        else:
+            msp.add_lwpolyline([(x, y, 0, 0, b) for x, y, b in e['pts']], format='xyseb', close=e['closed'])
+    out = io.StringIO()
+    doc.write(out)
+    return out.getvalue().encode('utf-8')
+
+
+def _nest_part_bytes(nest, part, ch, fmt):
+    """One part of a nest as a file: 'dxf', or an FSCUT part ('lxd' / 'lxds') with the nest's technology and the
+    part's own lead-in / micro-joints / compensation."""
+    t = nest['technology']
+    if fmt == 'dxf':
+        return _entities_dxf(part['ents'])
+    if fmt == 'lxds':
+        return fscut.write_lxds([], ch, part['ents'], name=part['name'], material=t['material'],
+                                thickness=t['thickness'])
+    return fscut.write_lxd([], ch, part['ents'])
+
+
+@app.route('/details/files/<int:file_id>/nest/part/<int:n>/<any(lxd, lxds, dxf):fmt>')
+@role_required('admin')
+def view_detail_nest_part(file_id, n, fmt):
+    """Download one part of a nest file (owner's request 2026-11-23) as an FSCUT part (.lxd / .lxds) or a DXF."""
+    f = DetailDxfFile.query.get_or_404(file_id)
+    got = _nest_part(f, n)
+    if got is None:
+        return redirect(url_for('detail_dxf_dashboard', detail_id=f.detail_id))
+    nest, part, ch = got
+    data = _nest_part_bytes(nest, part, ch, fmt)
+    log_action(f'Детайл "{part["name"]}" от разкрой "{f.original_filename}" като .{fmt}')
+    return _fscut_download(data, part['name'], '.' + fmt)
+
+
+@app.route('/details/files/<int:file_id>/nest/part/<int:n>/create-detail', methods=['POST'])
+@role_required('admin')
+def view_detail_nest_part_detail(file_id, n):
+    """A catalog Detail made of one part of a nest file (owner's request 2026-11-23): its drawing is written as a DXF
+    and priced through analyze_dxf_geometry() like any uploaded DXF; the DXF and the part as an FSCUT part file (the
+    nest's format, with its lead-in / micro-joints / compensation) are kept as the detail's files. Same owner as the
+    detail the nest file belongs to; material picked in the dialog (detail_materials_query of that owner)."""
+    f = DetailDxfFile.query.get_or_404(file_id)
+    back = redirect(url_for('view_detail_nest', file_id=f.id))
+    got = _nest_part(f, n)
+    if got is None:
+        return redirect(url_for('detail_dxf_dashboard', detail_id=f.detail_id))
+    nest, part, ch = got
+    name = request.form.get('name', '').strip()[:200] or part['name']
+    owner_id = f.detail.owner_client_id
+    material = detail_materials_query(owner_id).filter_by(key=request.form.get('material', '')).first()
+    if material is None:
+        flash('Невалиден избор на материал.', 'danger')
+        return back
+    base = secure_filename(part['name']) or 'part'
+    stored = []
+    try:
+        files = []
+        for ext, data in (('.dxf', _entities_dxf(part['ents'])),
+                          ('.' + nest['format'], _nest_part_bytes(nest, part, ch, nest['format']))):
+            fname = f'{uuid.uuid4().hex}_{base}{ext}'
+            path = os.path.join(app.config['DETAIL_DXF_FOLDER'], fname)
+            with open(path, 'wb') as fh:
+                fh.write(data)
+            stored.append(path)
+            files.append((fname, sanitize_display_filename(name) + ext))
+        report = {}
+        width, height, total_length, pierce_count, shapes = analyze_dxf_geometry(stored[0], report)
+        if width is None:
+            raise ValueError(report.get('error') or 'DXF')
+        owner = db.session.get(Client, owner_id) if owner_id else None
+        detail = Detail(name=name, material_key=material.key, width=width, height=height,
+                        total_length=total_length, pierce_count=pierce_count,
+                        calculated_price=calculate_material_price(width, height, material.key, owner),
+                        geometry_json=json.dumps(shapes), erp_number=_next_erp_number(), owner_client_id=owner_id)
+        db.session.add(detail)
+        db.session.flush()
+        for fname, shown in files:
+            db.session.add(DetailDxfFile(detail_id=detail.id, filename=fname, original_filename=shown,
+                                         uploaded_by_id=current_user.id))
+        db.session.commit()
+    except Exception as e:                                              # nothing stays half-made
+        db.session.rollback()
+        for path in stored:
+            if os.path.exists(path):
+                os.remove(path)
+        app.logger.warning('Detail from nest part failed (file %s, part %s): %s', f.id, n, e)
+        flash('Детайлът не може да се създаде от този детайл на разкроя.', 'danger')
+        return back
+    log_action(f'Създаден детайл "{name}" от разкрой "{f.original_filename}" (детайл "{part["name"]}")')
+    flash(f'Детайлът "{name}" е създаден.', 'success')
+    return redirect(url_for('detail_dxf_dashboard', detail_id=detail.id))
 
 
 def _detail_nest(f):

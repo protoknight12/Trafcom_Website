@@ -184,5 +184,9 @@ Checked on both samples, both ways: same sheet, counts per part, cut length, pie
 outer contour per placed part. The owner opened `garn_разкрой_от_lxd.lxds` and `jeep_разкрой_от_lxds.lxd` in CypCut
 (2026-11-23): they work.
 
+One part of a nest (`fscut.nest_parts()`, the same parts the converters write): downloaded as an FSCUT part (`.lxd` /
+`.lxds`, with its lead-in / micro-joints / compensation and the nest's technology) or a DXF, or made a catalog Detail
+- see `view_detail_nest_part()` / `view_detail_nest_part_detail()` in `app.py`.
+
 Not written: remnants (`LayerName="Remnant"`), thumbnails. An old short lead-in (`<LeadIn Pos Angle>` with no
 length) goes into the new format as LeadType 0 / length 0. Lead-ins/micro-joints are not drawn or counted on the page.

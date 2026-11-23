@@ -162,6 +162,53 @@
             <span class="text-muted text-small">детайлите, листовете, поставянето, технологията, lead-in, micro-joint-ите и компенсацията от файла</span></p>
     </section>
     {% endif %}
+    {% if nest_parts %}
+    {#- view_detail_nest_part / view_detail_nest_part_detail: one part of the nest as a file or as a catalog Detail #}
+    <section class="admin-card">
+        <h3>Детайли в разкроя</h3>
+        <div class="table-responsive"><table class="data-table" data-table-tools="off">
+            <thead><tr><th>Детайл</th><th>Бройки</th><th>Габарит</th><th>Свали</th><th></th></tr></thead>
+            <tbody>
+            {% for p in nest_parts %}
+            <tr>
+                <td>{{ p.name }}</td>
+                <td>{{ p.amount }}</td>
+                <td>{{ p.size[0]|num3 }} × {{ p.size[1]|num3 }} мм</td>
+                <td style="white-space: nowrap;">
+                    {% set pn = loop.index0 %}
+                    {% for fmt, label in (('lxd', 'стар FSCUT'), ('lxds', 'нов FSCUT'), ('dxf', 'DXF')) %}
+                    <a class="btn-secondary" style="padding: 4px 8px; font-size: 0.78rem;" href="{{ url_for('view_detail_nest_part', file_id=file.id, n=pn, fmt=fmt) }}">{{ label }}</a>
+                    {% endfor %}
+                </td>
+                <td><button type="button" class="btn-secondary" style="padding: 4px 8px; font-size: 0.78rem;"
+                            data-dialog="nestPartDialog" data-action="{{ url_for('view_detail_nest_part_detail', file_id=file.id, n=loop.index0) }}"
+                            data-values='{{ {"name": p.name}|tojson|forceescape }}' data-title="Нов детайл от „{{ p.name }}“">Създай детайл</button></td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table></div>
+    </section>
+    <dialog id="nestPartDialog" class="form-dialog">
+        <form method="POST" class="admin-form" data-once>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <h3>Нов детайл от разкроя</h3>
+            <p class="text-muted text-small">Чертежът става DXF на детайла (цената се смята от него), а детайлът - и като FSCUT парт с lead-in, micro-joint-ите и компенсацията.{% if detail.owner_client %} Собственик: {{ detail.owner_client.name }}, както детайла на файла.{% endif %}</p>
+            <label for="np_name">Име</label>
+            <input id="np_name" name="name" required maxlength="200">
+            <label for="np_material">Материал</label>
+            <select id="np_material" name="material" required data-picker="material">
+                {% for type_key, group in materials|groupby('type') %}
+                <optgroup label="{{ material_type_label(type_key) }}">
+                    {% for m in group %}
+                    <option value="{{ m.key }}" {{ 'selected' if m.key == detail.material_key }} data-grade="{{ m.grade.name if m.grade else 'Без вид' }}" data-brand="{{ m.brand or '' }}" data-t="{{ m.thickness_mm if m.thickness_mm is not none else '' }}" data-owner-name="{{ m.owner_client.name if m.owner_client else 'Трафком' }}">{{ format_material_option(m) }}</option>
+                    {% endfor %}
+                </optgroup>
+                {% endfor %}
+            </select>
+            <div style="margin-top: 12px;"><button type="submit" class="btn btn-primary">Създай</button></div>
+        </form>
+    </dialog>
+    {% endif %}
     {% set pm = nest.model %}
     {% if pm %}
     {#- a part file (детайл, записан от FSCUT): its own drawing, no sheet - drawn in the canvas after the results #}

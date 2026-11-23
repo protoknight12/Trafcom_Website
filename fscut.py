@@ -1117,6 +1117,16 @@ def _nest_layout(nest):
     return parts, plates, results
 
 
+def nest_parts(nest):
+    """The parts of a nest one by one (owner's request 2026-11-23: download a part / make a catalog Detail of it):
+    [{'name', 'amount', 'ents' (writable, outer contour marked), 'size'}]. ValueError for a file with no result."""
+    parts = _nest_layout(nest)[0]
+    for p in parts:
+        b = _ents_box(p['ents'])
+        p['size'] = (round(b[2] - b[0], 3), round(b[3] - b[1], 3))
+    return parts
+
+
 def write_lxd_nest(nest, channel=None):
     """A nest (parse() of an .lxd / .lxds with results) as an old-format .lxd: the parts as Blocks + NestParts, the
     sheets as NestPlates, each result as a NestResult whose Entities are the placed contours (the old format keeps

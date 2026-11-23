@@ -495,6 +495,47 @@ def test_nest_conversion_both_ways(tmp_path):
         fscut.write_lxd_nest(fscut.parse(_write(tmp_path / 'p.lxd', CAM_LXD.encode())))   # a part file has no result
 
 
+def test_nest_parts_download_and_create_detail(s, tmp_path):
+    """Each part of a nest: downloaded as an old / new FSCUT part (with its lead-in) or a DXF, or made a catalog
+    Detail (priced from the DXF through analyze_dxf_geometry, the DXF + the FSCUT part kept as its files)."""
+    d = Detail(name='Разкрой 1', material_key='fn_steel', width=10, height=10, total_length=40, pierce_count=1,
+               calculated_price=1)
+    db.session.add(d)
+    db.session.commit()
+    f, path = _attach(d, 'разкрой.lxd', _old_nest().encode())
+    made = []
+    try:
+        c = _login('fn_admin')
+        page = c.get(f'/details/files/{f.id}/nest').get_data(as_text=True)
+        assert 'Детайли в разкроя' in page and 'Квадрат' in page and 'Създай детайл' in page
+        for fmt in ('lxd', 'lxds'):
+            r = c.get(f'/details/files/{f.id}/nest/part/0/{fmt}')
+            assert r.status_code == 200 and f'.{fmt}' in r.headers['Content-Disposition']
+            m = fscut.parse(_write(tmp_path / f'p.{fmt}', r.data))['model']
+            assert m['size'] == (100, 50) and m['pierces'] == 2
+            assert any(t == 'LeadIn' and a.get('Length') == '3' for e in m['entities'] for t, a, _ in e['cam'])
+        r = c.get(f'/details/files/{f.id}/nest/part/1/dxf')
+        from app import analyze_dxf_geometry
+        w, h, length, pierces, _ = analyze_dxf_geometry(_write(tmp_path / 'q.dxf', r.data))
+        assert (round(w, 3), round(h, 3), round(length, 3), pierces) == (40, 40, 160, 1)
+        assert c.get(f'/details/files/{f.id}/nest/part/9/dxf').status_code == 404
+        r = c.post(f'/details/files/{f.id}/nest/part/0/create-detail', data={'name': 'Планка от разкрой',
+                                                                          'material': 'fn_steel'})
+        new = Detail.query.filter_by(name='Планка от разкрой').one()
+        made = [os.path.join(flask_app.config['DETAIL_DXF_FOLDER'], x.filename) for x in new.dxf_files]
+        assert r.status_code == 302 and f'/details/{new.id}/files' in r.headers['Location']
+        assert (round(new.width, 3), round(new.height, 3), new.pierce_count, new.material_key) == (100, 50, 2, 'fn_steel')
+        assert new.erp_number and new.calculated_price > 0 and new.geometry_json
+        assert sorted(os.path.splitext(x.original_filename)[1] for x in new.dxf_files) == ['.dxf', '.lxd']
+        c.post(f'/details/files/{f.id}/nest/part/1/create-detail', data={'name': 'Х', 'material': 'nope'})
+        assert Detail.query.filter_by(name='Х').count() == 0                # an unknown material: nothing made
+        assert _login('fn_worker').get(f'/details/files/{f.id}/nest/part/0/dxf').status_code == 302
+    finally:
+        for p in [path] + made:
+            if os.path.exists(p):
+                os.remove(p)
+
+
 def test_fscut_download_for_machine(s, tmp_path):
     laser = Machine(name='Лазер стар', is_laser=True)
     db.session.add(laser)
