@@ -433,6 +433,68 @@ def test_write_lxd_keeps_lead_in_micro_joints_compensation(tmp_path):
     assert not ents.findall('.//LeadIn') and all(not t.attrib for t in ents.iter('ToolCompensation'))
 
 
+def _old_nest():
+    """Old-format nest as CypCut writes it: two parts (a 100x50 plate with a hole + a 40x40 square), the result
+    flattened - two plates (one turned 90 degrees, its lead-in kept) and one square, a cut-off line, the sheet."""
+    plate = ('<LwPolyline Handle="{h}" ChannelPort="1" LayerName="0" IsFill="true" PointCount="4" PolyFlag="1">'
+             '{lead}<ToolCompensation Style="1" Size=".2"/><MicroConnects><MicroConnect Pos="1" Size=".5"/>'
+             '</MicroConnects>{pts}</LwPolyline>'
+             '<Circle Handle="{h2}" ChannelPort="1" LayerName="0" Radius="5" StartAngle=".785398163"><ToolCompensation/>'
+             '<MicroConnects/><Center X="{cx}" Y="{cy}"/></Circle>')
+    pts = lambda P: ''.join(f'<Point X="{x}" Y="{y}"/>' for x, y in P)
+    lead = '<LeadIn LeadType="1" Pos=".5" Angle="1.57079633" Length="3" ArcRadius="2" LeadHoleR=".5"/>'
+    sq = lambda h, x, y: (f'<LwPolyline Handle="{h}" ChannelPort="1" LayerName="0" IsFill="true" PointCount="4" '
+                          f'PolyFlag="1"><ToolCompensation/><MicroConnects/>'
+                          + pts([(x, y), (x + 40, y), (x + 40, y + 40), (x, y + 40)]) + '</LwPolyline>')
+    return ('<?xml version="1.0" encoding="utf-8"?><LXDDocument>' + TECH.replace('Technical MaterialName="碳钢" Thickness="8"', 'Technical') +
+            '<Blocks><Block Name="P1"><BasePoint/><Entities>'
+            + plate.format(h=1, h2=2, lead=lead, pts=pts([(0, 0), (100, 0), (100, 50), (0, 50)]), cx=50, cy=25)
+            + '</Entities></Block><Block Name="P2"><BasePoint/><Entities>' + sq(3, 0, 0) + '</Entities></Block></Blocks>'
+            '<NestParts><NestPart Name="Планка" Amount="2" AmountUsed="2"><Insert><BlockName>P1</BlockName></Insert></NestPart>'
+            '<NestPart Name="Квадрат" Amount="1" AmountUsed="1"><Insert><BlockName>P2</BlockName></Insert></NestPart></NestParts>'
+            '<NestPlates><NestPlate Handle="9" Name="Rectangle" Amount="1" AmountUsed="1"><LwPolyline><Point/>'
+            '<Point X="1000"/><Point X="1000" Y="500"/><Point Y="500"/></LwPolyline></NestPlate></NestPlates>'
+            '<NestResults><NestResult Name="R1" Utilization="2.5"><Entities>'
+            + plate.format(h=10, h2=11, lead=lead, pts=pts([(10, 10), (110, 10), (110, 60), (10, 60)]), cx=60, cy=35)
+            + plate.format(h=12, h2=13, lead=lead, pts=pts([(200, 10), (250, 10), (250, 110), (200, 110)]), cx=225, cy=60)
+            + sq(14, 300, 10) +
+            '<LwPolyline Handle="15" ChannelPort="1" PointCount="2"><Point X="0" Y="200"/><Point X="1000" Y="200"/></LwPolyline>'
+            '<LwPolyline Handle="16" NestPlate="9" PointCount="4" PolyFlag="1"><Point/><Point X="1000"/>'
+            '<Point X="1000" Y="500"/><Point Y="500"/></LwPolyline>'
+            '</Entities></NestResult></NestResults></LXDDocument>')
+
+
+def test_nest_conversion_both_ways(tmp_path):
+    """A nest converted .lxd -> .lxds -> .lxd and .lxds -> .lxd: same sheet, parts, counts per part, cut length and
+    pierces; every placed part keeps its outer contour (IsFill), lead-in, compensation and micro-joints."""
+    src = fscut.parse(_write(tmp_path / 'n.lxd', _old_nest().encode()))
+    r = src['results'][0]
+    assert r['counts'] == {'Планка': 2, 'Квадрат': 1} and len(r['extra']) == 1     # grouped by outer contour
+
+    def facts(p):
+        r = p['results'][0]
+        cam = sorted((e['attrs'].get('IsFill') or '', tuple(t for t, a, k in e['cam'] if a or k))
+                     for pl in r['placed'] for e, _ in pl['pieces'] if e)
+        return (r['plate'], r['counts'], r['cut_length_mm'], r['pierces'], [x['name'] for x in p['parts']],
+                [x['amount'] for x in p['parts']], cam, r['utilization'])
+    want = facts(src)
+    new = fscut.parse(_write(tmp_path / 'n.lxds', fscut.write_lxds_nest(src, None, '碳钢', 8)))
+    assert new['format'] == 'lxds' and facts(new) == want
+    assert new['technology']['material'] == '碳钢' and new['technology']['thickness'] == 8
+    back = fscut.parse(_write(tmp_path / 'b.lxd', fscut.write_lxd_nest(new)))
+    assert back['format'] == 'lxd' and facts(back) == want
+    again = fscut.parse(_write(tmp_path / 'a.lxd', fscut.write_lxd_nest(src)))
+    assert facts(again) == want
+    lead = [a for pl in new['results'][0]['placed'] for e, _ in pl['pieces'] if e for t, a, _ in e['cam'] if t == 'LeadIn']
+    assert lead and all(a['Length'] == '3' and a['Pos'] == '.5' for a in lead)
+    with zipfile.ZipFile(io.BytesIO(fscut.write_lxds_nest(src))) as z:     # CypCut's nest layout
+        assert 'Model2D/content.xml' not in z.namelist() and 'Nest2D/Results/1/content.xml' in z.namelist()
+        res = ET.fromstring(z.read('Nest2D/Results/1/content.xml'))
+        assert len(res.findall("Shapes/Shape[@Class='Insert']")) == 3 and res.find("Shapes/Shape[@NestPlate]") is not None
+    with pytest.raises(ValueError):
+        fscut.write_lxd_nest(fscut.parse(_write(tmp_path / 'p.lxd', CAM_LXD.encode())))   # a part file has no result
+
+
 def test_fscut_download_for_machine(s, tmp_path):
     laser = Machine(name='Лазер стар', is_laser=True)
     db.session.add(laser)
@@ -479,7 +541,11 @@ def test_fscut_download_for_machine(s, tmp_path):
         r = c.get(f'/details/files/{part.id}/nest/lxd')
         m = fscut.parse(_write(tmp_path / 'p.lxd', r.data))['model']
         assert r.status_code == 200 and m['size'] == (300, 50)
-        assert c.get(f'/details/files/{nest.id}/nest/lxd').status_code == 302
+        r = c.get(f'/details/files/{nest.id}/nest/lxd')                    # a nest: converted too
+        assert r.status_code == 200 and '.lxd' in r.headers['Content-Disposition']
+        n = fscut.parse(_write(tmp_path / 'n.lxd', r.data))
+        assert n['results'][0]['plate'] == (1000, 2000) and [p['name'] for p in n['parts']] == ['Планка']
+        assert 'Изтегли разкроя като стар FSCUT' in c.get(f'/details/files/{nest.id}/nest').get_data(as_text=True)
         old, old_path = _attach(d, 'гггг.lxd', CAM_LXD.encode())            # old part -> new format, with leads
         try:
             assert 'Изтегли като нов FSCUT' in c.get(f'/details/files/{old.id}/nest').get_data(as_text=True)

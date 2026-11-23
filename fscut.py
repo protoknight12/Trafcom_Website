@@ -409,6 +409,44 @@ def _model(name, shapes, entities=(), loose=None):
             'cut_length_mm': round(sum(shape_length(s) for s in shapes), 1), 'pierces': count_contours(shapes)}
 
 
+def _sig(shapes):
+    """Rotation-free fingerprint of a part: contours + cut length (0.5 mm)."""
+    return count_contours(shapes), round(sum(shape_length(s) for s in shapes) * 2)
+
+
+def _group_placed(pieces, parts):
+    """An old-format nest result stores the placed parts flattened into plain contours. pieces = [(entity|None,
+    shapes)] -> (placed [{'part': index|None, 'pieces'}], extra pieces). One placed part = an outer contour (IsFill, or
+    by containment when none is marked) + every piece whose box lies in its box (the smallest one); it is matched to a
+    NestPart by _sig(). A piece in no outer contour (a cut-off line) is extra."""
+    boxes = [bbox(sh) if sh else None for _, sh in pieces]
+    closed = [i for i, (e, sh) in enumerate(pieces) if e is not None and (e['kind'] == 'circle' or e['closed'])]
+    outer = [i for i in closed if pieces[i][0]['attrs'].get('IsFill') == 'true']
+
+    def inside(b, o):
+        return o[0] - 1e-6 <= b[0] and o[1] - 1e-6 <= b[1] and b[2] <= o[2] + 1e-6 and b[3] <= o[3] + 1e-6
+    if not outer:
+        outer = [i for i in closed if not any(j != i and inside(boxes[i], boxes[j]) and boxes[i] != boxes[j]
+                                              for j in closed)]
+    groups, extra = {i: [i] for i in outer}, []
+    for i, b in enumerate(boxes):
+        if i in groups or b is None:
+            continue
+        hosts = [o for o in outer if inside(b, boxes[o])]
+        if hosts:
+            groups[min(hosts, key=lambda o: (boxes[o][2] - boxes[o][0]) * (boxes[o][3] - boxes[o][1]))].append(i)
+        else:
+            extra.append(pieces[i])
+    sigs = {}
+    for n, p in enumerate(parts):
+        sigs.setdefault(_sig([s for _, sh in p.get('pieces', []) for s in sh]), n)
+    placed = []
+    for o in outer:
+        members = [pieces[i] for i in sorted(groups[o])]
+        placed.append({'part': sigs.get(_sig([s for _, sh in members for s in sh])), 'pieces': members})
+    return placed, extra
+
+
 def _finish_result(res, cut_shapes, plate_shapes, remnant_shapes):
     res['shapes'] = cut_shapes
     res['plate_shapes'] = plate_shapes
@@ -471,32 +509,51 @@ def _parse_lxd(data):
     out = _empty('lxd')
     out['technology'] = _technology(root.find('Technical'))
     blocks = {b.get('Name'): b for b in root.iter('Block')}
+    budget = [0]
+
+    def pieces_of(container):
+        """Entities of a Block / NestResult -> [(entity|None, shapes)] (entity for Circle / LwPolyline)."""
+        out_p = []
+        for e in (container if container is not None else []):
+            got = _xml_entity_shapes(e, blocks, out['skipped'], budget)
+            if got:
+                out_p.append((_xml_entity(e), got))
+        return out_p
     for p in root.iter('NestPart'):
+        block = blocks.get((p.findtext('Insert/BlockName') or '').strip())
         out['parts'].append({'name': p.get('Name'), 'amount': int(_f(p.get('Amount'))),
-                             'used': int(_f(p.get('AmountUsed'))), 'done': int(_f(p.get('AmountDone')))})
+                             'used': int(_f(p.get('AmountUsed'))), 'done': int(_f(p.get('AmountDone'))),
+                             'pieces': pieces_of(block.find('Entities')) if block is not None else []})
     plates = {}
     for p in root.iter('NestPlate'):
         size = _plate_size(p.find('LwPolyline'))
         plates[p.get('Handle')] = size
-        out['plates'].append({'size': size, 'amount': int(_f(p.get('Amount'))), 'used': int(_f(p.get('AmountUsed')))})
+        out['plates'].append({'size': size, 'amount': int(_f(p.get('Amount'))), 'used': int(_f(p.get('AmountUsed'))),
+                              'name': p.get('Name')})
     used_plates = [pl['size'] for pl in out['plates'] if pl['used']] or [pl['size'] for pl in out['plates']]
-    budget = [0]
     for r in root.iter('NestResult'):
         res = {'name': r.get('Name'), 'utilization': _f(r.get('Utilization'), None),
                'plate_amount': int(_f(r.get('PlateAmount'), 1)) or 1, 'plate': used_plates[0] if used_plates else None,
-               'counts': {}}
-        cut, plate, remnant = [], [], []
+               'counts': {}, 'plate_outline': None}
+        cut, plate, remnant, pieces = [], [], [], []
         ents = r.find('Entities')
         for e in (ents if ents is not None else []):
             shapes = _xml_entity_shapes(e, blocks, out['skipped'], budget)
             if e.get('NestPlate'):
                 plate += shapes
+                res['plate_outline'] = _xml_entity(e)
             elif e.get('LayerName') == 'Remnant':
                 remnant += shapes
             else:
                 cut += shapes
+                if shapes:
+                    pieces.append((_xml_entity(e), shapes))
         if plate:                                    # the result's own sheet outline wins over the plate list
             res['plate'] = None
+        res['placed'], res['extra'] = _group_placed(pieces, out['parts'])
+        for pl in res['placed']:                    # the old format cannot say it - counted from the matched parts
+            name = out['parts'][pl['part']]['name'] if pl['part'] is not None else '?'
+            res['counts'][name] = res['counts'].get(name, 0) + 1
         out['results'].append(_finish_result(res, cut, plate, remnant))
     # a part file: the drawing sits in the document's own Entities (no nest result)
     own = root.find('Entities')
@@ -642,44 +699,85 @@ def _parse_lxds(zf):
                           _f(e.get('Angle') or e.findtext('Angle')),
                           _f(e.findtext('XScale'), 1.0), _f(e.findtext('YScale'), 1.0))
 
+    attr_data = zf.read('Shapes2D/data.bin') if 'Shapes2D/data.bin' in names else b''
+
+    def piece(handle, depth=0):
+        """(entity|None, shapes) of one shape handle (entity for a Circle / LwPolyline)."""
+        got = handle_shapes(handle, depth)
+        e = shape_xml.get(handle)
+        return (_bin_entity(geo, attr_data, e) if got and e is not None else None), got
+
+    def insert_pieces(e, depth=0):
+        """The pieces of an Insert's block. A result's {GUID} block holds the part already placed; an Insert that
+        still moves / turns its block gives the moved shapes without cutting attributes."""
+        block = blocks.get((e.findtext('BlockName') or '').strip())
+        if block is None or depth >= 4:
+            return []
+        out_p = [piece(s.get('Handle'), depth + 1) for s in block.iter('Shape')]
+        args = (_xy(block.find('BasePoint')), _xy(e.find('InsertPoint')), _f(e.get('Angle') or e.findtext('Angle')),
+                _f(e.findtext('XScale'), 1.0), _f(e.findtext('YScale'), 1.0))
+        if args != ((0.0, 0.0), (0.0, 0.0), 0.0, 1.0, 1.0):
+            out_p = [(None, _transform(sh, *args)) for _, sh in out_p]
+        return [p for p in out_p if p[1]]
+
     parts_el = xml('Nest2D/Parts/content.xml')
-    part_names = {}
+    part_names, part_index = {}, {}
     for p in (parts_el if parts_el is not None else []):
         part_names[p.get('Handle')] = p.get('Name')
+        part_index[p.get('Handle')] = len(out['parts'])
+        pieces = []
+        for sh in p.findall('Shape'):
+            if sh.get('Class') == 'Insert':
+                pieces += insert_pieces(sh)
+            else:
+                got = piece(sh.get('Handle'))
+                if got[1]:
+                    pieces.append(got)
         out['parts'].append({'name': p.get('Name'), 'amount': int(_f(p.get('Amount'))),
-                             'used': int(_f(p.get('AmountUsed'))), 'done': int(_f(p.get('AmountDone')))})
+                             'used': int(_f(p.get('AmountUsed'))), 'done': int(_f(p.get('AmountDone'))),
+                             'pieces': pieces})
     plates_el = xml('Nest2D/Plates/content.xml')
     plate_size = {}
     for p in (plates_el if plates_el is not None else []):
         size = _plate_size(p.find('LwPolyline'))
         plate_size[p.get('Handle')] = size
-        out['plates'].append({'size': size, 'amount': int(_f(p.get('Amount'))), 'used': int(_f(p.get('AmountUsed')))})
+        out['plates'].append({'size': size, 'amount': int(_f(p.get('Amount'))), 'used': int(_f(p.get('AmountUsed'))),
+                              'name': p.get('Name')})
     summary = xml('Nest2D/Results/content.xml')
     for s in (summary if summary is not None else []):
         r = xml(f"Nest2D/Results/{s.get('Index')}/content.xml")
         if r is None:
             continue
         res = {'name': s.get('Name'), 'utilization': _f(r.get('Utilization') or s.get('Utilization'), None),
-               'plate_amount': int(_f(r.get('PlateAmount'), 1)) or 1, 'plate': None, 'counts': {}}
+               'plate_amount': int(_f(r.get('PlateAmount'), 1)) or 1, 'plate': None, 'counts': {},
+               'plate_outline': None, 'placed': [], 'extra': []}
         cut, plate, remnant = [], [], []
         shapes_list = r.find('Shapes')
         for sh in (shapes_list if shapes_list is not None else []):
             if sh.get('Class') == 'Insert':
                 name = part_names.get(sh.get('NestPart'), '?')
                 res['counts'][name] = res['counts'].get(name, 0) + 1
-                cut += insert_shapes(sh)
+                pieces = insert_pieces(sh)
+                res['placed'].append({'part': part_index.get(sh.get('NestPart')), 'pieces': pieces})
+                cut += [s for _, got in pieces for s in got]
             elif sh.get('NestPlate'):
                 res['plate'] = plate_size.get(sh.get('NestPlate'))
-                plate += handle_shapes(sh.get('Handle'))
+                ent, got = piece(sh.get('Handle'))
+                plate += got
+                res['plate_outline'] = ent
             else:
                 e = shape_xml.get(sh.get('Handle'))
-                (remnant if e is not None and e.get('LayerName') == 'Remnant' else cut).extend(
-                    handle_shapes(sh.get('Handle')))
+                ent, got = piece(sh.get('Handle'))
+                if e is not None and e.get('LayerName') == 'Remnant':
+                    remnant += got
+                else:
+                    cut += got
+                    if got:
+                        res['extra'].append((ent, got))
         out['results'].append(_finish_result(res, cut, plate, remnant))
     # a part file: Model2D lists the part's own shapes (each with its GeoAddr)
     model = xml('Model2D/content.xml')
     if model is not None:
-        attr_data = zf.read('Shapes2D/data.bin') if 'Shapes2D/data.bin' in names else b''
         shapes, entities, loose = [], [], []
         for sh in model.iter('Shape'):
             shape_xml.setdefault(sh.get('Handle'), sh)
@@ -831,76 +929,271 @@ def _cam_children(el, cam):
             ET.SubElement(c, ktag, kattrs)
 
 
-def write_lxd(shapes, channel=None, entities=None):
-    """One part as an old-format .lxd (bytes, CRLF like CypCut). `channel` = {'raw', 'fields', 'speed_mm_min', 'gas'}
-    (any may be missing) or None = an empty technology (CypCut uses its own). `entities` = contours kept as the source
-    stored them with their lead-in / micro-joints / compensation (parse()['model']['entities']); `shapes` are then the
-    other shapes (model['loose']), chained. ValueError without geometry."""
-    import uuid
-    entities = _part_entities(shapes, entities)
-    if not entities:
-        raise ValueError('no geometry')
-    handle = [1000]
+def _part_entities(shapes, entities, mark_outer=True):
+    """Kept contours + the other shapes chained into plain ones (no cutting attributes). CypCut tells an outer contour
+    from a hole by IsFill (owner's report 2026-11-23: without it the outer contour was cut as a hole, so its lead-in
+    and compensation went to the wrong side). When no contour carries it (a DXF), every closed contour whose box lies
+    inside no other contour's box gets it."""
+    out = [dict(e, attrs=dict(e.get('attrs') or {})) for e in entities or []]
+    for it in chain(shapes):
+        if it[0] == 'circle':
+            out.append({'kind': 'circle', 'cx': it[1], 'cy': it[2], 'r': it[3], 'attrs': {}, 'cam': []})
+        else:
+            out.append({'kind': 'poly', 'pts': it[1], 'closed': it[2], 'attrs': {}, 'cam': []})
+    if mark_outer and not any(e['attrs'].get('IsFill') == 'true' for e in out):
+        boxes = [bbox(_entity_shapes(e)) if e['kind'] == 'circle' or e['closed'] else None for e in out]
+        tol = 1e-6
+        for e, b in zip(out, boxes):
+            if b and not any(o is not None and o is not b and o[0] - tol <= b[0] and o[1] - tol <= b[1]
+                             and b[2] <= o[2] + tol and b[3] <= o[3] + tol and o != b for o in boxes):
+                e['attrs']['IsFill'] = 'true'
+    return out
 
-    def h():
-        handle[0] += 1
-        return str(handle[0])
-    b = bbox([s for ent in entities for s in _entity_shapes(ent)])
+
+def _pieces_entities(pieces, mark_outer=True):
+    """parse() pieces [(entity|None, shapes)] -> writable entities (see _part_entities)."""
+    return _part_entities([s for e, sh in pieces if e is None for s in sh], [e for e, _ in pieces if e is not None],
+                          mark_outer)
+
+
+def _rect_entity(w, h):
+    return {'kind': 'poly', 'pts': [(0.0, 0.0, 0.0), (w, 0.0, 0.0), (w, h, 0.0), (0.0, h, 0.0)], 'closed': True,
+            'attrs': {}, 'cam': []}
+
+
+def _ents_box(ents):
+    return bbox([s for e in ents for s in _entity_shapes(e)])
+
+
+def _outer_handle(ents, handles):
+    return next((h for e, h in zip(ents, handles) if e['attrs'].get('IsFill') == 'true'), handles[0] if handles else 0)
+
+
+def _new_id():
+    import uuid
+    return '{' + str(uuid.uuid4()).upper() + '}'
+
+
+# ---------- old format ----------
+
+def _lxd_entity(parent, ent, handle, extra=None, port=True):
+    """One Circle / LwPolyline of an old document, with its cutting attributes."""
+    common = {'Handle': str(handle), **({'ChannelPort': '1', 'LayerName': '0'} if port else {}), **(extra or {})}
+    a = ent.get('attrs') or {}
+    if ent['kind'] == 'circle':
+        el = ET.SubElement(parent, 'Circle', {**common, **{k: a[k] for k in ('IsFill',) if k in a},
+                                              'Radius': _num(ent['r']),
+                                              **({'StartAngle': a['StartAngle']} if 'StartAngle' in a else {})})
+        _cam_children(el, ent.get('cam'))
+        ET.SubElement(el, 'Center', {'X': _num(ent['cx']), 'Y': _num(ent['cy'])})
+        return el
+    el = ET.SubElement(parent, 'LwPolyline', {**common, **{k: a[k] for k in ('IsFill', 'PathStartParam') if k in a},
+                                              'PointCount': str(len(ent['pts'])),
+                                              'PolyFlag': '1' if ent['closed'] else '0'})
+    _cam_children(el, ent.get('cam'))
+    for x, y, bulge in ent['pts']:
+        p = {'X': _num(x), 'Y': _num(y)}
+        if abs(bulge) > 1e-12:
+            p['Bulge'] = _num(bulge)
+        ET.SubElement(el, 'Point', p)
+    return el
+
+
+class _Handles:
+    def __init__(self, start):
+        self.n = start
+
+    def __call__(self):
+        self.n += 1
+        return self.n
+
+
+def _lxd_doc(box, channel, h):
+    """The head of an old document: DocHeader, Technical, Viewports, TextStyles, Layers -> (doc, DocHeader)."""
     doc = ET.Element('LXDDocument')
-    head = ET.SubElement(doc, 'DocHeader', {'DefaultChannel': '1', 'HandleSeed': '0',
-                                             'ID': '{' + str(uuid.uuid4()).upper() + '}'})
-    ET.SubElement(head, 'ExtMin', {'X': _num(b[0]), 'Y': _num(b[1])})
-    ET.SubElement(head, 'ExtMax', {'X': _num(b[2]), 'Y': _num(b[3])})
+    head = ET.SubElement(doc, 'DocHeader', {'DefaultChannel': '1', 'HandleSeed': '0', 'ID': _new_id()})
+    ET.SubElement(head, 'ExtMin', {'X': _num(box[0]), 'Y': _num(box[1])})
+    ET.SubElement(head, 'ExtMax', {'X': _num(box[2]), 'Y': _num(box[3])})
     ET.SubElement(head, 'InsertBase')
-    ET.SubElement(head, 'HomeRef', {'Enabled': 'true', 'RefType': '3', 'X': _num(b[0]), 'Y': _num(b[1])})
+    ET.SubElement(head, 'HomeRef', {'Enabled': 'true', 'RefType': '3', 'X': _num(box[0]), 'Y': _num(box[1])})
     chans = ET.SubElement(ET.SubElement(doc, 'Technical'), 'Channels')
     ET.SubElement(chans, 'Channel', {'ParamFlag': '256'})
     c = channel or {}
     chans.append(_channel_el(1, c.get('raw'), c.get('fields'), c.get('speed_mm_min'), c.get('gas')))
     for port in range(2, LXD_EMPTY_PORTS + 1):
         ET.SubElement(chans, 'Channel', {'ChannelPort': str(port)})
-    vp = ET.SubElement(ET.SubElement(doc, 'Viewports', {'Handle': '3'}), 'VPort', {'Handle': h()})
+    vp = ET.SubElement(ET.SubElement(doc, 'Viewports', {'Handle': '3'}), 'VPort', {'Handle': str(h())})
     ET.SubElement(vp, 'ViewCenter')
     ET.SubElement(vp, 'ViewHeight').text = '100'
     ET.SubElement(vp, 'AspectRatio').text = '1'
     rect = ET.SubElement(vp, 'DisplayRect')
     ET.SubElement(rect, 'Right').text = '1024'
     ET.SubElement(rect, 'Bottom').text = '768'
-    for tag, hd in (('TextStyles', '6'), ('Layers', '5'), ('Blocks', '4')):
+    for tag, hd in (('TextStyles', '6'), ('Layers', '5')):
         ET.SubElement(doc, tag, {'Handle': hd})
-    ents = ET.SubElement(doc, 'Entities', {'Handle': '2'})
-    for ent in entities:
-        common = {'Handle': h(), 'ChannelPort': '1', 'LayerName': '0'}
-        a = ent.get('attrs') or {}
-        if ent['kind'] == 'circle':
-            el = ET.SubElement(ents, 'Circle', {**common, **{k: a[k] for k in ('IsFill',) if k in a},
-                                                'Radius': _num(ent['r']),
-                                                **({'StartAngle': a['StartAngle']} if 'StartAngle' in a else {})})
-            _cam_children(el, ent.get('cam'))
-            ET.SubElement(el, 'Center', {'X': _num(ent['cx']), 'Y': _num(ent['cy'])})
-            continue
-        el = ET.SubElement(ents, 'LwPolyline', {**common,
-                                                 **{k: a[k] for k in ('IsFill', 'PathStartParam') if k in a},
-                                                 'PointCount': str(len(ent['pts'])), 'PolyFlag': '1' if ent['closed'] else '0'})
-        _cam_children(el, ent.get('cam'))
-        for x, y, bulge in ent['pts']:
-            p = {'X': _num(x), 'Y': _num(y)}
-            if abs(bulge) > 1e-12:
-                p['Bulge'] = _num(bulge)
-            ET.SubElement(el, 'Point', p)
-    for tag, hd in (('NestParts', '7'), ('NestPlates', '8'), ('NestGroups', '9'), ('NestResults', '10')):
-        ET.SubElement(doc, tag, {'Handle': hd})
-    head.set('HandleSeed', str(handle[0] + 1))
+    return doc, head
+
+
+def _lxd_bytes(doc, head, h):
+    head.set('HandleSeed', str(h.n + 1))
     ET.indent(doc, '\t')
     text = '<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(doc, encoding='unicode') + '\n'
     return text.replace('\n', '\r\n').encode('utf-8')
 
 
+def write_lxd(shapes, channel=None, entities=None):
+    """One part as an old-format .lxd (bytes, CRLF like CypCut). `channel` = {'raw', 'fields', 'speed_mm_min', 'gas'}
+    (any may be missing) or None = an empty technology (CypCut uses its own). `entities` = contours kept as the source
+    stored them with their lead-in / micro-joints / compensation (parse()['model']['entities']); `shapes` are then the
+    other shapes (model['loose']), chained. ValueError without geometry."""
+    ents = _part_entities(shapes, entities)
+    if not ents:
+        raise ValueError('no geometry')
+    h = _Handles(1000)
+    doc, head = _lxd_doc(_ents_box(ents), channel, h)
+    ET.SubElement(doc, 'Blocks', {'Handle': '4'})
+    ents_el = ET.SubElement(doc, 'Entities', {'Handle': '2'})
+    for ent in ents:
+        _lxd_entity(ents_el, ent, h())
+    for tag, hd in (('NestParts', '7'), ('NestPlates', '8'), ('NestGroups', '9'), ('NestResults', '10')):
+        ET.SubElement(doc, tag, {'Handle': hd})
+    return _lxd_bytes(doc, head, h)
+
+
+def _nest_layout(nest):
+    """parse() output of a nest -> writable parts / plates / results (entities, outer contour marked)."""
+    parts = []
+    for p in nest['parts']:
+        ents = _pieces_entities(p.get('pieces') or [])
+        if ents:
+            parts.append({'name': p['name'] or f'Part{len(parts) + 1}', 'amount': p['amount'], 'used': p['used'],
+                          'ents': ents, 'src': p})
+    index = {id(p['src']): n for n, p in enumerate(parts)}
+    src_parts = nest['parts']
+    plates = [{'name': pl.get('name') or 'Rectangle', 'size': pl['size'], 'amount': pl['amount'], 'used': pl['used']}
+              for pl in nest['plates'] if pl.get('size')]
+    results = []
+    for r in nest['results']:
+        placed = []
+        for pl in r.get('placed') or []:
+            ents = _pieces_entities(pl['pieces'])
+            if not ents:
+                continue
+            k = pl['part']
+            if k is None:                                           # a placed part no NestPart matched: its own part
+                parts.append({'name': f'Part{len(parts) + 1}', 'amount': 1, 'used': 1, 'ents': ents, 'src': None})
+                k = len(parts) - 1
+            elif id(src_parts[k]) not in index:                     # its NestPart has no drawing: the placed one
+                src = src_parts[k]
+                index[id(src)] = len(parts)
+                parts.append({'name': src['name'] or f'Part{len(parts) + 1}', 'amount': src['amount'] or 1,
+                              'used': src['used'], 'ents': ents, 'src': src})
+                k = len(parts) - 1
+            else:
+                k = index[id(src_parts[k])]
+            placed.append({'part': k, 'ents': ents})
+        extra = _pieces_entities(r.get('extra') or [], mark_outer=False)
+        outline = r.get('plate_outline')
+        size = r.get('plate')
+        if outline is None and size is None and plates:
+            size = plates[0]['size']
+        if outline is None and size:
+            outline = _rect_entity(*size)
+        if outline is not None:
+            outline = dict(outline, attrs={}, cam=[])
+            ob = _ents_box([outline])
+            size = (round(ob[2] - ob[0], 3), round(ob[3] - ob[1], 3))
+        if size and not any(abs(p['size'][0] - size[0]) < 0.01 and abs(p['size'][1] - size[1]) < 0.01 for p in plates):
+            plates.append({'name': 'Rectangle', 'size': size, 'amount': r.get('plate_amount') or 1,
+                           'used': r.get('plate_amount') or 1})
+        plate = next((n for n, p in enumerate(plates) if size and abs(p['size'][0] - size[0]) < 0.01
+                      and abs(p['size'][1] - size[1]) < 0.01), None)
+        if placed or extra:
+            results.append({'name': r.get('name') or f'Nest result {len(results) + 1}',
+                            'utilization': r.get('utilization'), 'plate_amount': r.get('plate_amount') or 1,
+                            'placed': placed, 'extra': extra, 'outline': outline, 'plate': plate, 'size': size})
+    if not results:
+        raise ValueError('no nest result')
+    return parts, plates, results
+
+
+def write_lxd_nest(nest, channel=None):
+    """A nest (parse() of an .lxd / .lxds with results) as an old-format .lxd: the parts as Blocks + NestParts, the
+    sheets as NestPlates, each result as a NestResult whose Entities are the placed contours (the old format keeps
+    them flattened) with their lead-in / micro-joints / compensation + the sheet outline. ValueError without a
+    result."""
+    parts, plates, results = _nest_layout(nest)
+    h = _Handles(1000)
+    every = [e for r in results for e in [x for p in r['placed'] for x in p['ents']] + r['extra']
+             + ([r['outline']] if r['outline'] else [])]
+    doc, head = _lxd_doc(_ents_box(every), channel, h)
+    blocks_el = ET.SubElement(doc, 'Blocks', {'Handle': '4'})
+    block_names = []
+    for n, p in enumerate(parts):
+        name = f'Part{n + 1}'
+        block_names.append(name)
+        b = ET.SubElement(blocks_el, 'Block', {'Handle': str(h()), 'Name': name, 'Flags': '512'})
+        box = _ents_box(p['ents'])
+        ET.SubElement(b, 'BasePoint', {'X': _num(box[0]), 'Y': _num(box[1])})
+        ents_el = ET.SubElement(b, 'Entities', {'Handle': str(h())})
+        handles = [h() for _ in p['ents']]
+        for ent, hd in zip(p['ents'], handles):
+            _lxd_entity(ents_el, ent, hd)
+        b.set('OutlineID', str(_outer_handle(p['ents'], handles)))
+        p['base'] = box
+    ET.SubElement(doc, 'Entities', {'Handle': '2'})
+    parts_el = ET.SubElement(doc, 'NestParts', {'Handle': '7'})
+    for n, p in enumerate(parts):
+        np_el = ET.SubElement(parts_el, 'NestPart', {'Handle': str(h()), 'Name': p['name'], 'Amount': str(p['amount']),
+                                                     **({'AmountUsed': str(p['used'])} if p['used'] else {}),
+                                                     'ShapeCls': 'Insert'})
+        ins = ET.SubElement(np_el, 'Insert', {'Handle': str(h()), 'ChannelPort': '1'})
+        ET.SubElement(ins, 'InsertPoint', {'X': _num(p['base'][0]), 'Y': _num(p['base'][1])})
+        ET.SubElement(ins, 'BlockName').text = block_names[n]
+        for tag in ('XScale', 'YScale', 'ZScale'):
+            ET.SubElement(ins, tag).text = '1'
+    plates_el = ET.SubElement(doc, 'NestPlates', {'Handle': '8'})
+    plate_handles = []
+    for pl in plates:
+        plate_handles.append(h())
+        el = ET.SubElement(plates_el, 'NestPlate', {'Handle': str(plate_handles[-1]), 'Name': pl['name'],
+                                                    'Amount': str(pl['amount']), 'AmountUsed': str(pl['used']),
+                                                    'ShapeCls': 'LwPolyline'})
+        _lxd_entity(el, _rect_entity(*pl['size']), h(), port=False)
+    ET.SubElement(doc, 'NestGroups', {'Handle': '9'})
+    results_el = ET.SubElement(doc, 'NestResults', {'Handle': '10'})
+    for n, r in enumerate(results):
+        rh = h()
+        if n == 0:
+            results_el.set('ActiveModel', str(rh))
+        attrs = {'Handle': str(rh), 'Name': r['name'], 'Flags': '704', 'ID': _new_id()}
+        if r['utilization'] is not None:
+            attrs['Utilization'] = _num(r['utilization'])
+        if r['plate_amount'] > 1:
+            attrs['PlateAmount'] = str(r['plate_amount'])
+        res_el = ET.SubElement(results_el, 'NestResult', attrs)
+        ents_el = ET.SubElement(res_el, 'Entities', {'Handle': str(h())})
+        for p in r['placed']:
+            for ent in p['ents']:
+                _lxd_entity(ents_el, ent, h())
+        if r['outline'] is not None and r['plate'] is not None:
+            _lxd_entity(ents_el, r['outline'], h(), {'NestPlate': str(plate_handles[r['plate']])}, port=False)
+        for ent in r['extra']:
+            _lxd_entity(ents_el, ent, h())
+        box = _ents_box([e for p in r['placed'] for e in p['ents']] + r['extra']
+                        + ([r['outline']] if r['outline'] else []))
+        ET.SubElement(res_el, 'ExtMin', {'X': _num(box[0]), 'Y': _num(box[1])})
+        ET.SubElement(res_el, 'ExtMax', {'X': _num(box[2]), 'Y': _num(box[3])})
+        ET.SubElement(res_el, 'HomeRef', {'RefType': '3', 'X': _num(box[0]), 'Y': _num(box[1])})
+    return _lxd_bytes(doc, head, h)
+
+
 # ---------- writing the new format (.lxds) ----------
 # Step 2 (owner's decision 2026-11-23, after the .lxd files worked in CypCut): one part as a new-format part file,
-# mirroring the part CypCutE 6.4 saved (`Model2D`, no nest). Geometry2D/data.bin and Shapes2D/data.bin are built with
-# the record layout of docs/FSCUT_FORMAT.md; each content.xml next to a data.bin carries its MD5 (as CypCut writes).
-# Not written: thumbnail.emf, GalvoParams/TechFlags (CypCut uses its defaults), nests.
+# mirroring the part CypCutE 6.4 saved (`Model2D`, no nest), and nests (mirroring CypCut's own nest file).
+# Geometry2D/data.bin and Shapes2D/data.bin are built with the record layout of docs/FSCUT_FORMAT.md; each
+# content.xml next to a data.bin carries its MD5 (as CypCut writes). Not written: thumbnail.emf,
+# GalvoParams/TechFlags (CypCut uses its defaults), remnants.
 
 LXDS_APP_VER = '6.4.2330.6'
 
@@ -927,16 +1220,6 @@ def _bin_record(cls, subs):
     rec = subs(_bin_name(rec, 'TGks' + cls)) + b'\xd0\xd0\xd0\xd0'
     rec[8:16] = struct.pack('<Q', len(rec))
     return bytes(rec + b'\x00' * (-len(rec) % 8))
-
-
-def _bin_file(records):
-    """BCMP u32 length u32 1, zeros to 4096, then the records -> (bytes, [address of each record])."""
-    out, addrs = bytearray(4096), []
-    for r in records:
-        addrs.append(len(out))
-        out += r
-    out[0:12] = b'BCMP' + struct.pack('<II', len(out), 1)
-    return bytes(out), addrs
 
 
 def _geo_record(ent):
@@ -971,25 +1254,40 @@ def _attr_record(ent, handle):
     return _bin_record(cls, subs)
 
 
-def _part_entities(shapes, entities):
-    """Kept contours + the other shapes chained into plain ones (no cutting attributes). CypCut tells an outer contour
-    from a hole by IsFill (owner's report 2026-11-23: without it the outer contour was cut as a hole, so its lead-in
-    and compensation went to the wrong side). When no contour carries it (a DXF), every closed contour whose box lies
-    inside no other contour's box gets it."""
-    out = [dict(e, attrs=dict(e.get('attrs') or {})) for e in entities or []]
-    for it in chain(shapes):
-        if it[0] == 'circle':
-            out.append({'kind': 'circle', 'cx': it[1], 'cy': it[2], 'r': it[3], 'attrs': {}, 'cam': []})
-        else:
-            out.append({'kind': 'poly', 'pts': it[1], 'closed': it[2], 'attrs': {}, 'cam': []})
-    if not any(e['attrs'].get('IsFill') == 'true' for e in out):
-        boxes = [bbox(_entity_shapes(e)) if e['kind'] == 'circle' or e['closed'] else None for e in out]
-        tol = 1e-6
-        for e, b in zip(out, boxes):
-            if b and not any(o is not None and o is not b and o[0] - tol <= b[0] and o[1] - tol <= b[1]
-                             and b[2] <= o[2] + tol and b[3] <= o[3] + tol and o != b for o in boxes):
-                e['attrs']['IsFill'] = 'true'
-    return out
+class _ShapeStore:
+    """The shapes of a new-format document: Geometry2D + Shapes2D records and the Shapes2D/content.xml list."""
+
+    def __init__(self, h):
+        self.h = h
+        self.geo, self.attr = bytearray(4096), bytearray(4096)
+        self.xml = ET.Element('Shapes2D')
+
+    def add(self, ent, layer=True):
+        """-> (handle, class) of a new shape."""
+        handle = self.h()
+        cls = 'Circle' if ent['kind'] == 'circle' else 'LwPolyline'
+        ga, da = len(self.geo), len(self.attr)
+        self.geo += _geo_record(ent)
+        self.attr += _attr_record(ent, handle)
+        el = ET.SubElement(self.xml, cls, {'Handle': str(handle), **({'LayerName': '0'} if layer else {}),
+                                           'DataAddr': str(da), 'GeoAddr': str(ga)})
+        micro = next((kids for tag, _, kids in ent.get('cam') or [] if tag == 'MicroConnects'), [])
+        if micro:
+            mc = ET.SubElement(el, 'MicroConnects')
+            for _, attrs in micro:
+                ET.SubElement(ET.SubElement(mc, 'MicroConnect', attrs), 'LeadIn')
+        return handle, cls
+
+    def files(self):
+        import hashlib
+        for buf in (self.geo, self.attr):
+            buf[0:12] = b'BCMP' + struct.pack('<II', len(buf), 1)
+        geo, attr = bytes(self.geo), bytes(self.attr)
+        ET.SubElement(self.xml, 'MD5').text = hashlib.md5(attr).hexdigest().upper()
+        geo_el = ET.Element('Geometry2D')
+        ET.SubElement(geo_el, 'MD5').text = hashlib.md5(geo).hexdigest().upper()
+        return [('Shapes2D/', None), ('Shapes2D/data.bin', attr), ('Shapes2D/content.xml', _xml_bytes(self.xml)),
+                ('Geometry2D/', None), ('Geometry2D/data.bin', geo), ('Geometry2D/content.xml', _xml_bytes(geo_el))]
 
 
 def _xml_bytes(el):
@@ -998,41 +1296,7 @@ def _xml_bytes(el):
     return text.replace('\n', '\r\n').encode('utf-8')
 
 
-def write_lxds(shapes, channel=None, entities=None, name='Part', material=None, thickness=None):
-    """One part as a new-format .lxds (ZIP bytes). Arguments as write_lxd(); `name` = the part's name in CypCut,
-    `material` / `thickness` = Technical's MaterialName / Thickness (left out when None). ValueError without geometry."""
-    import hashlib
-    import io
-    import time
-    import uuid
-    ents = _part_entities(shapes, entities)
-    if not ents:
-        raise ValueError('no geometry')
-    b = bbox([s for e in ents for s in _entity_shapes(e)])
-    handles = list(range(1100, 1100 + len(ents)))
-    geo, geo_addr = _bin_file([_geo_record(e) for e in ents])
-    attr, attr_addr = _bin_file([_attr_record(e, h) for e, h in zip(ents, handles)])
-    model_id = '{' + str(uuid.uuid4()).upper() + '}'
-
-    shapes_el = ET.Element('Shapes2D')
-    model = ET.Element('Model2D', {'Handle': '13', 'Name': name, 'ID': model_id})
-    ET.SubElement(model, 'ExtMin', {'X': _num(b[0]), 'Y': _num(b[1])})
-    ET.SubElement(model, 'ExtMax', {'X': _num(b[2]), 'Y': _num(b[3])})
-    ET.SubElement(model, 'HomeRef', {'RefType': '515', 'X': _num(b[0]), 'Y': _num(b[1])})
-    mshapes = ET.SubElement(model, 'Shapes')
-    for e, h, ga, da in zip(ents, handles, geo_addr, attr_addr):
-        cls = 'Circle' if e['kind'] == 'circle' else 'LwPolyline'
-        el = ET.SubElement(shapes_el, cls, {'Handle': str(h), 'LayerName': '0', 'DataAddr': str(da), 'GeoAddr': str(ga)})
-        micro = next((kids for tag, _, kids in e.get('cam') or [] if tag == 'MicroConnects'), [])
-        if micro:
-            mc = ET.SubElement(el, 'MicroConnects')
-            for _, attrs in micro:
-                ET.SubElement(ET.SubElement(mc, 'MicroConnect', attrs), 'LeadIn')
-        ET.SubElement(mshapes, 'Shape', {'Class': cls, 'Handle': str(h), 'DataAddr': str(da), 'GeoAddr': str(ga)})
-    ET.SubElement(shapes_el, 'MD5').text = hashlib.md5(attr).hexdigest().upper()
-    geo_el = ET.Element('Geometry2D')
-    ET.SubElement(geo_el, 'MD5').text = hashlib.md5(geo).hexdigest().upper()
-
+def _lxds_technical(channel, material, thickness):
     tech = ET.Element('Technical', {'Handle': '2', **({'MaterialName': material} if material else {}),
                                     **({'Thickness': _num(thickness)} if thickness else {})})
     chans = ET.SubElement(tech, 'Channels')
@@ -1041,15 +1305,22 @@ def write_lxds(shapes, channel=None, entities=None, name='Part', material=None, 
     chans.append(_channel_el(1, c.get('raw'), c.get('fields'), c.get('speed_mm_min'), c.get('gas')))
     for port in range(2, LXD_EMPTY_PORTS + 1):
         ET.SubElement(chans, 'Channel', {'ChannelPort': str(port)})
+    return tech
 
+
+def _lxds_zip(store, h, active_id, technical, name=None, model=None, blocks=None, parts=None, plates=None,
+              results=(), counts=(0, 0, 0)):
+    """The ZIP of a new-format document, entries in CypCut's order. results = [(index, summary attrs, content el)]."""
+    import io
+    import time
     pack = ET.Element('PackData', {'DocType': 'Model2D'})
-    head = ET.SubElement(pack, 'Header', {'DefaultChannel': '1', 'HandleSeed': str(handles[-1] + 1),
-                                          'ID': '{' + str(uuid.uuid4()).upper() + '}', 'Version': '419963393',
-                                          'PortionName': name, 'OrgAppName': 'CypCutE', 'OrgAppVer': LXDS_APP_VER})
+    head = ET.SubElement(pack, 'Header', {'DefaultChannel': '1', 'HandleSeed': str(h.n + 1), 'ID': _new_id(),
+                                          'Version': '419963393', **({'PortionName': name} if name else {}),
+                                          'OrgAppName': 'CypCutE', 'OrgAppVer': LXDS_APP_VER})
     ET.SubElement(head, 'InsertBase')
     for tag, hd in (('Technical', '2'), ('Viewports', '3'), ('Layers', '5'), ('TextStyles', '6'), ('Blocks', '4')):
         ET.SubElement(pack, tag, {'Handle': hd})
-    ET.SubElement(pack, 'Portions', {'Handle': '12', 'ActiveModelID': model_id})
+    ET.SubElement(pack, 'Portions', {'Handle': '12', 'ActiveModelID': active_id})
     info = ET.Element('PackData')
     ET.SubElement(info, 'DocVersion', {'Major': '1'})
     ET.SubElement(info, 'Application', {'AppName': 'CypCutE', 'AppVer': LXDS_APP_VER})
@@ -1063,23 +1334,154 @@ def write_lxds(shapes, channel=None, entities=None, name='Part', material=None, 
     ET.SubElement(rect, 'Right').text = '1024'
     ET.SubElement(rect, 'Bottom').text = '768'
     nest = ET.Element('NestInfo')
-    ET.SubElement(nest, 'Parts', {'Count': '0'})
-    for tag in ('NestGroups', 'Plates', 'Results'):
-        ET.SubElement(nest, tag)
-
-    files = [('info.xml', _xml_bytes(info)), ('content.xml', _xml_bytes(pack)), ('Model2D/', None),
-             ('Model2D/content.xml', _xml_bytes(model)), ('Shapes2D/', None), ('Shapes2D/data.bin', attr),
-             ('Shapes2D/content.xml', _xml_bytes(shapes_el)), ('TextStyles/', None),
-             ('TextStyles/content.xml', _xml_bytes(ET.Element('TextStyles', {'Handle': '6'}))), ('Blocks/', None),
-             ('Blocks/content.xml', _xml_bytes(ET.Element('Blocks'))), ('Technical/', None),
-             ('Technical/content.xml', _xml_bytes(tech)), ('Layers/', None),
-             ('Layers/content.xml', _xml_bytes(ET.Element('Layers', {'Handle': '5'}))), ('Nest2D/Parts/', None),
-             ('Nest2D/Parts/content.xml', _xml_bytes(ET.Element('Parts'))), ('Nest2D/', None),
-             ('Nest2D/content.xml', _xml_bytes(nest)), ('Viewports/', None),
-             ('Viewports/content.xml', _xml_bytes(vports)), ('Geometry2D/', None), ('Geometry2D/data.bin', geo),
-             ('Geometry2D/content.xml', _xml_bytes(geo_el))]
+    ET.SubElement(nest, 'Parts', {'Count': str(counts[0])})
+    ET.SubElement(nest, 'NestGroups')
+    ET.SubElement(nest, 'Plates', {'Count': str(counts[1])} if counts[1] else {})
+    ET.SubElement(nest, 'Results', {'Count': str(counts[2])} if counts[2] else {})
+    files = [('info.xml', _xml_bytes(info)), ('content.xml', _xml_bytes(pack))]
+    if results:
+        summary = ET.Element('NestResults')
+        for _, attrs, _ in results:
+            ET.SubElement(summary, 'NestResult', attrs)
+        files += [('Nest2D/Results/', None), ('Nest2D/Results/content.xml', _xml_bytes(summary))]
+    if model is not None:
+        files += [('Model2D/', None), ('Model2D/content.xml', _xml_bytes(model))]
+    sh = store.files()
+    files += sh[:3]
+    files += [('TextStyles/', None), ('TextStyles/content.xml', _xml_bytes(ET.Element('TextStyles', {'Handle': '6'}))),
+              ('Blocks/', None), ('Blocks/content.xml', _xml_bytes(blocks if blocks is not None else ET.Element('Blocks'))),
+              ('Technical/', None), ('Technical/content.xml', _xml_bytes(technical)),
+              ('Layers/', None), ('Layers/content.xml', _xml_bytes(ET.Element('Layers', {'Handle': '5'}))),
+              ('Nest2D/Parts/', None),
+              ('Nest2D/Parts/content.xml', _xml_bytes(parts if parts is not None else ET.Element('Parts')))]
+    if plates is not None:
+        files += [('Nest2D/Plates/', None), ('Nest2D/Plates/content.xml', _xml_bytes(plates))]
+    files += [('Nest2D/', None), ('Nest2D/content.xml', _xml_bytes(nest))]
+    for index, _, el in results:
+        files += [(f'Nest2D/Results/{index}/', None), (f'Nest2D/Results/{index}/content.xml', _xml_bytes(el))]
+    files += [('Viewports/', None), ('Viewports/content.xml', _xml_bytes(vports))] + sh[3:]
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_STORED) as z:
         for fname, data in files:
             z.writestr(fname, data if data is not None else b'')
     return buf.getvalue()
+
+
+def write_lxds(shapes, channel=None, entities=None, name='Part', material=None, thickness=None):
+    """One part as a new-format .lxds (ZIP bytes). Arguments as write_lxd(); `name` = the part's name in CypCut,
+    `material` / `thickness` = Technical's MaterialName / Thickness (left out when None). ValueError without geometry."""
+    ents = _part_entities(shapes, entities)
+    if not ents:
+        raise ValueError('no geometry')
+    h = _Handles(1100)
+    store = _ShapeStore(h)
+    b = _ents_box(ents)
+    model_id = _new_id()
+    model = ET.Element('Model2D', {'Handle': '13', 'Name': name, 'ID': model_id})
+    ET.SubElement(model, 'ExtMin', {'X': _num(b[0]), 'Y': _num(b[1])})
+    ET.SubElement(model, 'ExtMax', {'X': _num(b[2]), 'Y': _num(b[3])})
+    ET.SubElement(model, 'HomeRef', {'RefType': '515', 'X': _num(b[0]), 'Y': _num(b[1])})
+    mshapes = ET.SubElement(model, 'Shapes')
+    for e in ents:
+        handle, cls = store.add(e)
+        el = store.xml[-1]
+        ET.SubElement(mshapes, 'Shape', {'Class': cls, 'Handle': str(handle), 'DataAddr': el.get('DataAddr'),
+                                         'GeoAddr': el.get('GeoAddr')})
+    return _lxds_zip(store, h, model_id, _lxds_technical(channel, material, thickness), name=name, model=model)
+
+
+def write_lxds_nest(nest, channel=None, material=None, thickness=None):
+    """A nest (parse() of an .lxd / .lxds with results) as a new-format .lxds, mirroring CypCut's own nest file:
+    every part = a Block of its shapes + a NestPart (Insert of that block); every sheet = a NestPlate; every result =
+    Nest2D/Results/<n>/content.xml listing the sheet outline and one Insert per placed part, whose {GUID} block holds
+    the part already placed (sheet coordinates) with its lead-in / micro-joints / compensation. ValueError without a
+    result."""
+    parts, plates, results = _nest_layout(nest)
+    h = _Handles(1100)
+    store = _ShapeStore(h)
+    blocks = ET.Element('Blocks')
+
+    def block(name, ents, flags=True):
+        b = ET.SubElement(blocks, 'Block', {'Handle': str(h()), 'Name': name, **({'Flags': '512'} if flags else {})})
+        ET.SubElement(b, 'BasePoint')
+        shapes_el = ET.SubElement(b, 'Shapes', {'Handle': str(h())})
+        handles = []
+        for e in ents:
+            handle, cls = store.add(e)
+            handles.append(handle)
+            ET.SubElement(shapes_el, 'Shape', {'Class': cls, 'Handle': str(handle)})
+        b.set('OutlineID', str(_outer_handle(ents, handles)))
+        keys = list(b.attrib)                                   # CypCut's attribute order: Handle Name OutlineID Flags
+        order = ['Handle', 'Name', 'OutlineID', 'Flags']
+        b.attrib = {k: b.attrib[k] for k in sorted(keys, key=order.index)}
+
+    def insert(parent, tag, handle, block_name, extra=None):
+        el = ET.SubElement(parent, tag, {**({'Class': 'Insert'} if tag == 'Shape' else {}), 'Handle': str(handle),
+                                         'ChannelPort': '1', **(extra or {})})
+        ET.SubElement(el, 'BlockName').text = block_name
+        ET.SubElement(el, 'XScale').text = '1'
+        ET.SubElement(el, 'YScale').text = '1'
+        return el
+
+    parts_el = ET.Element('Parts')
+    part_handles = []
+    for p in parts:
+        name = _new_id()
+        block(name, p['ents'])
+        part_handles.append(h())
+        np_el = ET.SubElement(parts_el, 'NestPart', {'Handle': str(part_handles[-1]), 'Name': p['name'],
+                                                     'Amount': str(p['amount']), 'AmountUsed': str(p['used']),
+                                                     'GUID': _new_id(), 'ShapeCls': 'Insert'})
+        ih = h()
+        insert(np_el, 'Insert', ih, name)
+        insert(np_el, 'Shape', ih, name)
+        ET.SubElement(np_el, 'ExtShapes')
+    plates_el = ET.Element('Plates')
+    plate_handles = []
+    for pl in plates:
+        plate_handles.append(h())
+        el = ET.SubElement(plates_el, 'NestPlate', {'Handle': str(plate_handles[-1]), 'Name': pl['name'],
+                                                    'Amount': str(pl['amount']), 'AmountUsed': str(pl['used']),
+                                                    'GUID': _new_id(), 'ShapeCls': 'LwPolyline'})
+        rect = _rect_entity(*pl['size'])
+        sh_handle, _ = store.add(rect, layer=False)
+        poly = ET.SubElement(el, 'LwPolyline', {'Handle': str(sh_handle), 'NestPlate': str(plate_handles[-1]),
+                                                'PointCount': '4', 'PolyFlag': '1'})
+        ET.SubElement(poly, 'ToolCompensation')
+        for x, y, _ in rect['pts']:
+            ET.SubElement(poly, 'Point', {k: _num(v) for k, v in (('X', x), ('Y', y)) if v})
+        ET.SubElement(el, 'Shape', {'Class': 'LwPolyline', 'Handle': str(sh_handle),
+                                    'NestPlate': str(plate_handles[-1])})
+        ET.SubElement(el, 'ExtShapes')
+    out_results = []
+    for n, r in enumerate(results, 1):
+        rid = _new_id()
+        el = ET.Element('NestResult', {'Handle': str(h()), 'Name': r['name'], 'ID': rid, 'Flags': '64',
+                                       'PlateAmount': str(r['plate_amount']),
+                                       **({'Utilization': _num(r['utilization'])} if r['utilization'] is not None
+                                          else {})})
+        box = _ents_box([e for p in r['placed'] for e in p['ents']] + r['extra']
+                        + ([r['outline']] if r['outline'] else []))
+        ET.SubElement(el, 'ExtMin', {k: _num(v) for k, v in (('X', box[0]), ('Y', box[1])) if v})
+        ET.SubElement(el, 'ExtMax', {'X': _num(box[2]), 'Y': _num(box[3])})
+        ET.SubElement(el, 'HomeRef', {'RefType': '515', **{k: _num(v) for k, v in (('X', box[0]), ('Y', box[1])) if v}})
+        shapes_el = ET.SubElement(el, 'Shapes')
+        if r['outline'] is not None and r['plate'] is not None:
+            oh, _ = store.add(r['outline'], layer=False)
+            ET.SubElement(shapes_el, 'Shape', {'Class': 'LwPolyline', 'Handle': str(oh),
+                                               'NestPlate': str(plate_handles[r['plate']])})
+        for p in r['placed']:
+            name = _new_id()
+            block(name, p['ents'], flags=False)
+            insert(shapes_el, 'Shape', h(), name, {'NestPart': str(part_handles[p['part']]), 'Selected': 'true'})
+        for e in r['extra']:
+            eh, cls = store.add(e)
+            ET.SubElement(shapes_el, 'Shape', {'Class': cls, 'Handle': str(eh)})
+        summary = {'Index': str(n), 'Name': r['name'], 'PartCount': str(len(r['placed'])),
+                   **({'Utilization': _num(r['utilization'])} if r['utilization'] is not None else {}),
+                   'PlanCount': str(r['plate_amount']),
+                   **({'SizeX': _num(r['size'][0]), 'SizeY': _num(r['size'][1])} if r['size'] else {}), 'ID': rid}
+        out_results.append((n, summary, el))
+    return _lxds_zip(store, h, out_results[0][1]['ID'], _lxds_technical(channel, material, thickness),
+                     blocks=blocks, parts=parts_el, plates=plates_el, results=out_results,
+                     counts=(len(parts), len(plates), len(results)))

@@ -163,4 +163,26 @@ CypCut's own part, both binary files came out byte for byte the same as CypCut's
 Not written: `thumbnail.emf`, `GalvoParams` / `TechFlags` in Technical (CypCut uses its defaults), nests.
 The owner opened `цом_от_lxd.lxds` and `osnova_от_dxf.lxds` in CypCut (2026-11-23, after the IsFill fix): they work.
 
-Not done: converting nests (only parts). Lead-ins/micro-joints are not drawn or counted on the page.
+## Converting nests (`fscut.write_lxd_nest()` / `write_lxds_nest()`)
+
+Owner's request 2026-11-23, both ways, no reference pair (written from `garn_copy.lxd` and the jeep `.lxds`).
+`parse()` now also gives each part its `pieces` ([(entity | None, shapes)] - entity = Circle / LwPolyline with its
+cutting attributes) and each result `placed` ([{'part': index, 'pieces'}]), `extra` (cut-off lines and other pieces
+outside the parts) and `plate_outline`. New format: one placed part = one result Insert ({GUID} block, already in
+sheet coordinates). Old format: the result keeps only flattened contours, so they are grouped - every outer contour
+(IsFill, or by containment when none is marked) + everything inside its box = one placed part, matched to a NestPart
+by contour count + cut length (`_sig()`, turned parts match too). This also gives the old format its counts per part.
+
+Written: old - one `Block` (`PartN`, BasePoint = the part's lower left, OutlineID = its outer contour) + `NestPart`
+(Insert of it) per part, `NestPlates`, and per result a `NestResult` (`Flags="704"`) whose Entities are the placed
+contours + the extra ones + the sheet outline (`NestPlate=`), then ExtMin / ExtMax / HomeRef. New - per part a
+`{GUID}` block (Flags 512) + `NestPart` (Insert + Shape + ExtShapes), per sheet a `NestPlate` (inline LwPolyline +
+Shape), per result `Nest2D/Results/<n>/content.xml` (sheet outline Shape + one Insert Shape per placed part, each in
+its own `{GUID}` block without Flags) + the summary line in `Nest2D/Results/content.xml`; `content.xml`'s
+`ActiveModelID` = the first result's ID, no `Model2D`. A placed part that matches no NestPart becomes its own part.
+Checked on both samples, both ways: same sheet, counts per part, cut length, pierces, lead-ins, micro-joints and one
+outer contour per placed part. The owner opened `garn_разкрой_от_lxd.lxds` and `jeep_разкрой_от_lxds.lxd` in CypCut
+(2026-11-23): they work.
+
+Not written: remnants (`LayerName="Remnant"`), thumbnails. An old short lead-in (`<LeadIn Pos Angle>` with no
+length) goes into the new format as LeadType 0 / length 0. Lead-ins/micro-joints are not drawn or counted on the page.

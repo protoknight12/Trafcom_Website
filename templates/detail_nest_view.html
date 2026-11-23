@@ -150,11 +150,18 @@
         </table>
         </div>
         {% elif nest.format == 'lxd' %}
-        <p class="text-muted text-small">Старият формат не пази кой детайл къде е поставен - бройките по детайли не се виждат.</p>
+        <p class="text-muted text-small">Старият формат не пази кой детайл къде е поставен, а поставените контури не съвпаднаха с детайлите от списъка - бройките по детайли не се виждат.</p>
         {% endif %}
         <div class="nest-canvas-wrap"><canvas id="nest-canvas-{{ loop.index }}"></canvas></div>
     </section>
     {% endfor %}
+    {% if nest.results %}
+    {% set _to = 'lxd' if nest.format == 'lxds' else 'lxds' %}
+    <section class="admin-card">
+        <p><a class="btn-secondary" href="{{ url_for('view_detail_nest_lxd', file_id=file.id, fmt=_to) }}" style="padding: 8px 14px;">Изтегли разкроя като {{ 'стар FSCUT (.lxd)' if _to == 'lxd' else 'нов FSCUT (.lxds)' }}</a>
+            <span class="text-muted text-small">детайлите, листовете, поставянето, технологията, lead-in, micro-joint-ите и компенсацията от файла</span></p>
+    </section>
+    {% endif %}
     {% set pm = nest.model %}
     {% if pm %}
     {#- a part file (детайл, записан от FSCUT): its own drawing, no sheet - drawn in the canvas after the results #}

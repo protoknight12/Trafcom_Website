@@ -16250,21 +16250,28 @@ def admin_detail_fscut(detail_id):
 @app.route('/details/files/<int:file_id>/nest/<any(lxd, lxds):fmt>')
 @role_required('admin')
 def view_detail_nest_lxd(file_id, fmt):
-    """A part file (one detail, no nest) rewritten in the other FSCUT format (fmt), with its own channel-1 technology
-    and the contours' lead-in / micro-joints / compensation. Nests are not converted."""
+    """A part file (one detail) or a nest rewritten in the other FSCUT format (fmt), with its own channel-1 technology
+    and the contours' lead-in / micro-joints / compensation (fscut.write_lxd[s] / write_lxd[s]_nest)."""
     f = DetailDxfFile.query.get_or_404(file_id)
     nest = _detail_nest(f)
     if nest is None:
         return redirect(url_for('detail_dxf_dashboard', detail_id=f.detail_id))
-    if not nest['model']:
-        flash('Засега се преобразуват само файлове с един детайл (парт), не разкрои.', 'warning')
-        return redirect(url_for('view_detail_nest', file_id=f.id))
     m, t = nest['model'], nest['technology']
     ch = t['channels'][0] if t['channels'] else None
     name = os.path.splitext(f.original_filename)[0]
-    data = (fscut.write_lxds(m['loose'], ch, m['entities'], name=m.get('name') or name, material=t['material'],
-                             thickness=t['thickness']) if fmt == 'lxds'
-            else fscut.write_lxd(m['loose'], ch, m['entities']))
+    try:
+        if nest['results']:
+            data = (fscut.write_lxds_nest(nest, ch, t['material'], t['thickness']) if fmt == 'lxds'
+                    else fscut.write_lxd_nest(nest, ch))
+        elif m:
+            data = (fscut.write_lxds(m['loose'], ch, m['entities'], name=m.get('name') or name,
+                                     material=t['material'], thickness=t['thickness']) if fmt == 'lxds'
+                    else fscut.write_lxd(m['loose'], ch, m['entities']))
+        else:
+            raise ValueError('nothing to write')
+    except (ValueError, KeyError, TypeError, IndexError):
+        flash('Файлът няма чертеж, който да се запише в другия формат.', 'warning')
+        return redirect(url_for('view_detail_nest', file_id=f.id))
     log_action(f'FSCUT .{fmt} от "{f.original_filename}" (детайл "{f.detail.name}")')
     return _fscut_download(data, name, '.' + fmt)
 
