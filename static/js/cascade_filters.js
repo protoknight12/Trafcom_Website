@@ -10,6 +10,16 @@
 //
 // An option with value '' ("Всички ...") is never hidden. Options are hidden and disabled, not removed.
 (function () {
+    // Test for a material filter select (options from partials/material_options.html: value = key, data-id = id)
+    // against rows that list their material ids in data-materials="1,5,9" - "only the rows with this material".
+    window.materialFilterTest = function (select) {
+        const ids = {};
+        Array.prototype.forEach.call(select.options, function (o) { if (o.value) ids[o.value] = o.dataset.id; });
+        return function (row, v) {
+            return (row.dataset.materials || '').split(',').indexOf(ids[v]) !== -1;
+        };
+    };
+
     window.cascadeFilters = function (rows, filters, extra) {
         rows = Array.prototype.slice.call(rows);
         return function update() {

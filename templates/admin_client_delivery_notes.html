@@ -247,6 +247,10 @@
                 <option value="">Всички видове</option>
                 {% for k, label in kinds.items() %}<option value="{{ k }}">{{ label }}</option>{% endfor %}
             </select>
+            <select id="filterMaterial" data-picker="material" style="flex: 1 1 200px;">
+                <option value="">Всички материали</option>
+                {% with materials = history_materials %}{% include 'partials/material_options.html' %}{% endwith %}
+            </select>
             <select id="filterInvoice" style="flex: 1 1 150px;">
                 <option value="">Фактура: всички</option>
                 <option value="none">Не е фактурирано</option>
@@ -278,6 +282,7 @@
                 {% for note in notes %}
                 {% set day = note.note_date or (note.created_at|local).date() %}
                 <tr data-search="{{ ([note.number, note.note_number, note.client.name if note.client else '', kinds[note.kind]] + note.items|map(attribute='description_snapshot')|list)|select|join(' ')|lower }}"
+                    data-materials="{{ note.items|selectattr('target_type', 'equalto', 'material')|map(attribute='target_id')|join(',') }}"
                     data-client="{{ note.client_id or 'none' }}" data-kind="{{ note.kind }}" data-date="{{ day.isoformat() }}"
                     data-invoice="{{ ('paid' if note.paid else 'invoiced') if note.invoiced else ('paid_only' if note.paid else 'none') }}">
                     <td><strong>{{ note.number }}</strong></td>
@@ -365,6 +370,8 @@
         const q = document.getElementById('cdnHistorySearchInput');
         const fClient = document.getElementById('filterClient'), fKind = document.getElementById('filterKind');
         const fInvoice = document.getElementById('filterInvoice');
+        const fMat = document.getElementById('filterMaterial');
+        const hasMat = materialFilterTest(fMat);
         const fFrom = document.getElementById('filterFrom'), fTo = document.getElementById('filterTo');
         const body = document.getElementById('cdnHistoryBody');
         const rows = Array.from(body.querySelectorAll('tr[data-search]'));
@@ -378,6 +385,7 @@
             { el: fClient, test: (r, v) => r.dataset.client === v },
             { el: fKind, test: (r, v) => r.dataset.kind === v },
             { el: fInvoice, test: (r, v) => r.dataset.invoice === v },
+            { el: fMat, test: hasMat },
         ], base);
         function apply() {
             updateOptions();
@@ -385,7 +393,8 @@
             rows.forEach(function (r) {
                 const ok = base(r) && (!fClient.value || r.dataset.client === fClient.value)
                     && (!fKind.value || r.dataset.kind === fKind.value)
-                    && (!fInvoice.value || r.dataset.invoice === fInvoice.value);
+                    && (!fInvoice.value || r.dataset.invoice === fInvoice.value)
+                    && (!fMat.value || hasMat(r, fMat.value));
                 r.hidden = !ok;
                 if (ok) shown++;
             });
@@ -393,9 +402,9 @@
         }
         let timer = null;
         q.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(apply, 120); });
-        [fClient, fKind, fInvoice, fFrom, fTo].forEach(function (el) { el.addEventListener('change', apply); el.addEventListener('input', apply); });
+        [fClient, fKind, fInvoice, fMat, fFrom, fTo].forEach(function (el) { el.addEventListener('change', apply); el.addEventListener('input', apply); });
         document.getElementById('cdnFilterReset').addEventListener('click', function () {
-            q.value = ''; fClient.value = ''; fKind.value = ''; fInvoice.value = ''; fFrom.value = ''; fTo.value = '';
+            q.value = ''; fClient.value = ''; fKind.value = ''; fInvoice.value = ''; fMat.value = ''; fFrom.value = ''; fTo.value = '';
             apply();
         });
         apply();

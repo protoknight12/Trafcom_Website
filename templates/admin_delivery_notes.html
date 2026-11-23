@@ -401,6 +401,22 @@
 
     <section class="admin-card">
         <h3>История на разписките</h3>
+        {% if notes %}
+        {#- Client-side filters (remembered per page, dependent selects - cascade_filters.js). #}
+        <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem;">
+            <input type="text" id="dnHistorySearchInput" placeholder="Търсене по №, доставчик, фактура, артикул..." style="flex: 2 1 240px;">
+            <select id="filterParty" style="flex: 1 1 180px;">
+                <option value="">Всички доставчици / клиенти</option>
+                {% for s in suppliers %}<option value="s{{ s.id }}">{{ s.name }}</option>{% endfor %}
+                {% for c in clients %}<option value="c{{ c.id }}">{{ c.name }} (съхранение)</option>{% endfor %}
+            </select>
+            <select id="filterMaterial" data-picker="material" style="flex: 1 1 200px;">
+                <option value="">Всички материали</option>
+                {% with materials = history_materials %}{% include 'partials/material_options.html' %}{% endwith %}
+            </select>
+            <button type="button" id="dnFilterReset" class="btn-secondary" style="padding: 6px 12px;">Изчисти</button>
+        </div>
+        {% endif %}
         <div class="table-responsive">
             <table class="users-table">
                 <thead>
@@ -412,9 +428,11 @@
                     <th></th>
                 </tr>
                 </thead>
-                <tbody>
+                <tbody id="dnHistoryBody">
                 {% for note in notes %}
-                <tr>
+                <tr data-search="{{ ([note.number, note.note_number, note.supplier.name if note.supplier else '', note.client.name if note.client else ''] + note.items|map(attribute='description_snapshot')|list)|select|join(' ')|lower }}"
+                    data-party="{{ ('c' ~ note.client_id) if note.client_id else ('s' ~ note.supplier_id if note.supplier_id else '') }}"
+                    data-materials="{{ note.items|selectattr('target_type', 'equalto', 'material')|map(attribute='target_id')|join(',') }}">
                     <td>{{ (note.created_at|local).strftime('%d.%m.%Y %H:%M') }}</td>
                     <td>{% if note.client %}{{ note.client.name }} (съхранение){% else %}{{ note.supplier.name if note.supplier else '-' }}{% endif %}</td>
                     <td>{{ note.note_number or '-' }}</td>
@@ -459,12 +477,55 @@
                     <td colspan="5" class="text-center no-data">Няма записани разписки.</td>
                 </tr>
                 {% endfor %}
+                {% if notes %}<tr class="search-empty-row" hidden><td colspan="5" class="text-center no-data">Няма съвпадения.</td></tr>{% endif %}
                 </tbody>
             </table>
         </div>
     </section>
 
 </main>
+
+{% if notes %}
+<script>
+    // History filters: text, supplier/client, material (rows with a line of that material).
+    (function () {
+        const q = document.getElementById('dnHistorySearchInput');
+        const fParty = document.getElementById('filterParty'), fMat = document.getElementById('filterMaterial');
+        const hasMat = materialFilterTest(fMat);
+        const body = document.getElementById('dnHistoryBody');
+        const rows = Array.from(body.querySelectorAll('tr[data-search]'));
+        const empty = body.querySelector('.search-empty-row');
+        function base(r) {
+            const text = q.value.trim().toLowerCase();
+            return !text || r.dataset.search.indexOf(text) !== -1;
+        }
+        const updateOptions = cascadeFilters(rows, [
+            { el: fParty, test: (r, v) => r.dataset.party === v },
+            { el: fMat, test: hasMat },
+        ], base);
+        function apply() {
+            updateOptions();
+            let shown = 0;
+            rows.forEach(function (r) {
+                const ok = base(r) && (!fParty.value || r.dataset.party === fParty.value)
+                    && (!fMat.value || hasMat(r, fMat.value));
+                r.hidden = !ok;
+                if (ok) shown++;
+            });
+            empty.hidden = shown !== 0;
+        }
+        let timer = null;
+        q.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(apply, 120); });
+        [fParty, fMat].forEach(function (el) { el.addEventListener('change', apply); });
+        document.getElementById('dnFilterReset').addEventListener('click', function () {
+            q.value = ''; fParty.value = ''; fMat.value = '';
+            apply();
+            q.dispatchEvent(new Event('input', {bubbles: true}));   // remember_filters saves the cleared values
+        });
+        apply();
+    })();
+</script>
+{% endif %}
 
 {% if current_user.is_admin %}
 <script src="{{ url_for('static', filename='js/material_weight.js') }}"></script>

@@ -13140,6 +13140,13 @@ def _find_or_create_delivery_target(item_type, name, brand, width, height, thick
     return None
 
 
+def _notes_materials(notes, materials):
+    """The materials (from `materials`, same order) that at least one line of `notes` names - the options of the
+    "Материал" filter on a delivery-note history (each row carries data-materials with its material ids)."""
+    used = {it.target_id for n in notes for it in n.items if it.target_type == 'material'}
+    return [m for m in materials if m.id in used]
+
+
 @app.route('/admin/delivery-notes')
 @role_required(['admin', 'worker'])
 def admin_delivery_notes():
@@ -13197,7 +13204,7 @@ def admin_delivery_notes():
         note_rows[note.id] = rows
     return render_template(
         'admin_delivery_notes.html', suppliers=suppliers, clients=clients, notes=notes, note_rows=note_rows,
-        materials=materials, details=details, products=products, services=services,
+        materials=materials, history_materials=_notes_materials(notes, materials), details=details, products=products, services=services,
         materials_data=materials_data, details_data=details_data, products_data=products_data,
         active_page='admin_delivery_notes'
     )
@@ -13651,6 +13658,7 @@ def admin_client_delivery_notes():
                            for it in note.items] for note in notes}
     return render_template(
         'admin_client_delivery_notes.html', clients=clients, notes=notes, note_rows=note_rows, materials=materials,
+        history_materials=_notes_materials(notes, materials),
         materials_data=materials_data, details_data=details_data, products_data=products_data,
         material_prices=material_prices, kinds=CLIENT_NOTE_KINDS, active_page='admin_client_delivery_notes'
     )
