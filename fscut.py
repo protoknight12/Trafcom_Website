@@ -55,6 +55,79 @@ def _xy(e):
     return (_f(e.get('X')), _f(e.get('Y'))) if e is not None else (0.0, 0.0)
 
 
+# ---------- cutting attributes of a part's contours (lead-in, micro-joints, compensation) ----------
+# Kept for part files so a converted .lxd keeps what CypCut set (owner's decision 2026-11-23: only what the source
+# file has - nothing is generated). An "entity" = one source Circle / LwPolyline with its geometry exactly as stored
+# (Pos values count along its own vertices) + 'attrs' (StartAngle, PathStartParam) + 'cam' [(tag, attrs, children)].
+
+CAM_TAGS = ('LeadIn', 'ToolCompensation', 'MicroConnects')
+
+
+def _cam_xml(e):
+    """LeadIn / ToolCompensation / MicroConnects children of an XML shape (2 levels; a MicroConnect's own LeadIn of the
+    new format is left out - not seen in old files)."""
+    return [(c.tag, dict(c.attrib), [(g.tag, dict(g.attrib)) for g in c]) for c in e if c.tag in CAM_TAGS]
+
+
+def _xml_entity(e):
+    """Old-format Circle / LwPolyline -> entity, or None for anything else."""
+    attrs = {k: e.get(k) for k in ('StartAngle', 'PathStartParam') if e.get(k) is not None}
+    if e.tag == 'Circle':
+        c = _xy(e.find('Center'))
+        return {'kind': 'circle', 'cx': c[0], 'cy': c[1], 'r': _f(e.get('Radius')), 'attrs': attrs, 'cam': _cam_xml(e)}
+    if e.tag == 'LwPolyline':
+        pts = [(_f(p.get('X')), _f(p.get('Y')), _f(p.get('Bulge'))) for p in e.findall('Point')]
+        return {'kind': 'poly', 'pts': pts, 'closed': bool(int(_f(e.get('PolyFlag'))) & 1), 'attrs': attrs,
+                'cam': _cam_xml(e)}
+    return None
+
+
+def _entity_shapes(ent):
+    if ent['kind'] == 'circle':
+        return [{'type': 'circle', 'cx': ent['cx'], 'cy': ent['cy'], 'r': ent['r']}]
+    return _poly_shapes(ent['pts'], ent['closed'])
+
+
+def _sub_payload(rec, name):
+    """Offset of the payload of the first sub-record called `name` inside a Shapes2D/data.bin record, or None.
+    Sub-record: c1c1c1c1 u32 u64 size 'S' 00 u16 len name pad8 payload c0c0c0c0 (pad relative to the record start)."""
+    key = b'S\x00' + struct.pack('<H', len(name)) + name.encode('ascii')
+    i = rec.find(key)
+    if i < 16:
+        return None
+    return (i + 4 + len(name) + 7) // 8 * 8
+
+
+def _bin_cam(data, xml_el, kind):
+    """Lead-in (LeadParam) and compensation (Curve) of a new-format shape from Shapes2D/data.bin, + its XML
+    micro-joints. Layout checked against the same part saved by CypCut as .lxd and .lxds (docs/FSCUT_FORMAT.md)."""
+    cam, attrs = [], {}
+    addr = xml_el.get('DataAddr')
+    rec = b''
+    if addr is not None and data[int(addr):int(addr) + 4] == b'\xd1\xd1\xd1\xd1':
+        a = int(addr)
+        rec = data[a:a + 16 + struct.unpack_from('<Q', data, a + 8)[0]]
+    o = _sub_payload(rec, 'LeadParam')
+    if o is not None:
+        typ = struct.unpack_from('<I', rec, o)[0]
+        pos, ang, length, arc_r, hole_r = struct.unpack_from('<5d', rec, o + 16)
+        lead = {'LeadType': str(typ)}
+        if kind == 'poly' and pos:
+            lead['Pos'] = _num(pos)
+            attrs['PathStartParam'] = _num(pos)
+        lead.update({'Angle': _num(ang), 'Length': _num(length), 'ArcRadius': _num(arc_r), 'LeadHoleR': _num(hole_r)})
+        cam.append(('LeadIn', lead, []))
+    o = _sub_payload(rec, 'Curve')
+    comp = {}
+    if o is not None:
+        style = struct.unpack_from('<I', rec, o + 12)[0]       # 8 bytes ?, u32 ?, u32 style, double size
+        if style:
+            comp = {'Style': str(style), 'Size': _num(struct.unpack_from('<d', rec, o + 16)[0])}
+    cam.append(('ToolCompensation', comp, []))
+    cam += [c for c in _cam_xml(xml_el) if c[0] == 'MicroConnects']
+    return cam, attrs
+
+
 # ---------- shapes ----------
 
 def _bulge_shape(p1, p2, bulge):
@@ -323,12 +396,14 @@ def _empty(fmt):
             'parts': [], 'plates': [], 'results': [], 'model': None, 'skipped': {}}
 
 
-def _model(name, shapes):
-    """A part file's own drawing (no nest): its shapes, size, cut length and pierces - or None when empty."""
+def _model(name, shapes, entities=(), loose=None):
+    """A part file's own drawing (no nest): its shapes, size, cut length and pierces - or None when empty.
+    `entities` = its Circle/LwPolyline contours with their cutting attributes, `loose` = the other shapes."""
     if not shapes:
         return None
     b = bbox(shapes)
-    return {'name': name, 'shapes': shapes, 'size': (round(b[2] - b[0], 3), round(b[3] - b[1], 3)),
+    return {'name': name, 'shapes': shapes, 'entities': list(entities),
+            'loose': shapes if loose is None else loose, 'size': (round(b[2] - b[0], 3), round(b[3] - b[1], 3)),
             'cut_length_mm': round(sum(shape_length(s) for s in shapes), 1), 'pierces': count_contours(shapes)}
 
 
@@ -423,10 +498,16 @@ def _parse_lxd(data):
         out['results'].append(_finish_result(res, cut, plate, remnant))
     # a part file: the drawing sits in the document's own Entities (no nest result)
     own = root.find('Entities')
-    shapes = []
+    shapes, entities, loose = [], [], []
     for e in (own if own is not None else []):
-        shapes += _xml_entity_shapes(e, blocks, out['skipped'], budget)
-    out['model'] = _model(None, shapes)
+        got = _xml_entity_shapes(e, blocks, out['skipped'], budget)
+        shapes += got
+        ent = _xml_entity(e)
+        if ent is not None:
+            entities.append(ent)
+        else:
+            loose += got
+    out['model'] = _model(None, shapes, entities, loose)
     return out
 
 
@@ -465,6 +546,30 @@ def _bin_shape(cls, rec, base, xml_el):
     if cls == 'PolyBezier':
         return _bezier_shapes(pts)
     return None
+
+
+def _bin_entity(geo, data, xml_el):
+    """New-format Circle / LwPolyline of a part -> entity (see _xml_entity), or None for anything else."""
+    cls = xml_el.get('Class') if xml_el.tag == 'Shape' else xml_el.tag
+    if cls not in ('Circle', 'LwPolyline') or xml_el.get('GeoAddr') is None:
+        return None
+    cls, rec, base = _read_record(geo, int(xml_el.get('GeoAddr')))
+    kind = 'circle' if cls == 'Circle' else 'poly'
+    cam, attrs = _bin_cam(data, xml_el, kind)
+    if kind == 'circle':
+        if rec[base:base + 4] != POINT_TAG:
+            return None
+        cx, cy, r = struct.unpack_from('<3d', rec, base + 4)
+        start = struct.unpack_from('<d', rec, base + 32)[0]       # point, r, u32 0, start angle (rad)
+        if start:
+            attrs['StartAngle'] = _num(start)
+        return {'kind': 'circle', 'cx': cx, 'cy': cy, 'r': r, 'attrs': attrs, 'cam': cam}
+    closed, count = struct.unpack_from('<II', rec, base + 8)
+    if count > 100_000:
+        raise ValueError('polyline too long')
+    pts = [struct.unpack_from('<3d', rec, base + 16 + 32 * i + 4) for i in range(count)]
+    return {'kind': 'poly', 'pts': pts, 'closed': bool(closed & 1 or int(_f(xml_el.get('PolyFlag'))) & 1),
+            'attrs': attrs, 'cam': cam}
 
 
 def _read_record(geo, addr):
@@ -570,11 +675,18 @@ def _parse_lxds(zf):
     # a part file: Model2D lists the part's own shapes (each with its GeoAddr)
     model = xml('Model2D/content.xml')
     if model is not None:
-        shapes = []
+        attr_data = zf.read('Shapes2D/data.bin') if 'Shapes2D/data.bin' in names else b''
+        shapes, entities, loose = [], [], []
         for sh in model.iter('Shape'):
             shape_xml.setdefault(sh.get('Handle'), sh)
-            shapes += handle_shapes(sh.get('Handle'))
-        out['model'] = _model(model.get('Name'), shapes)
+            got = handle_shapes(sh.get('Handle'))
+            shapes += got
+            ent = _bin_entity(geo, attr_data, shape_xml[sh.get('Handle')]) if got else None
+            if ent is not None:
+                entities.append(ent)
+            else:
+                loose += got
+        out['model'] = _model(model.get('Name'), shapes, entities, loose)
     return out
 
 
@@ -702,19 +814,35 @@ def _channel_el(port, raw=None, fields=None, speed_mm_min=None, gas=None):
     return ch
 
 
-def write_lxd(shapes, channel=None):
+def _cam_children(el, cam):
+    """LeadIn / ToolCompensation / MicroConnects of an entity, in CypCut's order (ToolCompensation and MicroConnects
+    always present, empty when the source had none)."""
+    got = {tag: (attrs, kids) for tag, attrs, kids in cam or []}
+    for tag in CAM_TAGS:
+        if tag not in got and tag == 'LeadIn':
+            continue
+        attrs, kids = got.get(tag, ({}, []))
+        c = ET.SubElement(el, tag, attrs)
+        for ktag, kattrs in kids:
+            ET.SubElement(c, ktag, kattrs)
+
+
+def write_lxd(shapes, channel=None, entities=None):
     """One part as an old-format .lxd (bytes, CRLF like CypCut). `channel` = {'raw', 'fields', 'speed_mm_min', 'gas'}
-    (any may be missing) or None = an empty technology (CypCut uses its own). ValueError without geometry."""
+    (any may be missing) or None = an empty technology (CypCut uses its own). `entities` = contours kept as the source
+    stored them with their lead-in / micro-joints / compensation (parse()['model']['entities']); `shapes` are then the
+    other shapes (model['loose']), chained. ValueError without geometry."""
     import uuid
+    entities = entities or []
     items = chain(shapes)
-    if not items:
+    if not items and not entities:
         raise ValueError('no geometry')
     handle = [1000]
 
     def h():
         handle[0] += 1
         return str(handle[0])
-    b = bbox(shapes)
+    b = bbox(list(shapes) + [s for ent in entities for s in _entity_shapes(ent)])
     doc = ET.Element('LXDDocument')
     head = ET.SubElement(doc, 'DocHeader', {'DefaultChannel': '1', 'HandleSeed': '0',
                                              'ID': '{' + str(uuid.uuid4()).upper() + '}'})
@@ -738,6 +866,24 @@ def write_lxd(shapes, channel=None):
     for tag, hd in (('TextStyles', '6'), ('Layers', '5'), ('Blocks', '4')):
         ET.SubElement(doc, tag, {'Handle': hd})
     ents = ET.SubElement(doc, 'Entities', {'Handle': '2'})
+    for ent in entities:
+        common = {'Handle': h(), 'ChannelPort': '1', 'LayerName': '0'}
+        a = ent.get('attrs') or {}
+        if ent['kind'] == 'circle':
+            el = ET.SubElement(ents, 'Circle', {**common, 'Radius': _num(ent['r']),
+                                                **({'StartAngle': a['StartAngle']} if 'StartAngle' in a else {})})
+            _cam_children(el, ent.get('cam'))
+            ET.SubElement(el, 'Center', {'X': _num(ent['cx']), 'Y': _num(ent['cy'])})
+            continue
+        el = ET.SubElement(ents, 'LwPolyline', {**common,
+                                                 **({'PathStartParam': a['PathStartParam']} if 'PathStartParam' in a else {}),
+                                                 'PointCount': str(len(ent['pts'])), 'PolyFlag': '1' if ent['closed'] else '0'})
+        _cam_children(el, ent.get('cam'))
+        for x, y, bulge in ent['pts']:
+            p = {'X': _num(x), 'Y': _num(y)}
+            if abs(bulge) > 1e-12:
+                p['Bulge'] = _num(bulge)
+            ET.SubElement(el, 'Point', p)
     for it in items:
         common = {'Handle': h(), 'ChannelPort': '1', 'LayerName': '0'}
         if it[0] == 'circle':

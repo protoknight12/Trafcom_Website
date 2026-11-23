@@ -16260,7 +16260,7 @@ def view_detail_nest_lxd(file_id):
         flash('Засега се преобразуват само файлове с един детайл (парт), не разкрои.', 'warning')
         return redirect(url_for('view_detail_nest', file_id=f.id))
     ch = nest['technology']['channels'][0] if nest['technology']['channels'] else None
-    data = fscut.write_lxd(nest['model']['shapes'], ch)
+    data = fscut.write_lxd(nest['model']['loose'], ch, nest['model']['entities'])
     log_action(f'FSCUT .lxd от "{f.original_filename}" (детайл "{f.detail.name}")')
     return _fscut_download(data, os.path.splitext(f.original_filename)[0], '.lxd')
 

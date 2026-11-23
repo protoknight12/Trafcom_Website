@@ -41,7 +41,7 @@ A ZIP (store or deflate, no password) of XML parts plus two binary files:
 | `Blocks/content.xml` | `Block[Name]/Shapes/Shape[Handle]`. The `{GUID}` blocks of a result hold the part **already placed** (sheet coordinates, empty `BasePoint`) |
 | `Shapes2D/content.xml` | per shape `Handle`: element = class (`Circle`, `Arc`, `Line`, `LwPolyline`, `PolyBezier`), `LayerName`, `GeoAddr` (offset into `Geometry2D/data.bin`), lead-ins, micro-joints |
 | `Geometry2D/data.bin` | the coordinates (below) |
-| `Shapes2D/data.bin` | per-shape attributes, not needed for drawing |
+| `Shapes2D/data.bin` | per-shape cutting attributes at the shape's `DataAddr` (lead-in, compensation - below) |
 
 Part names are UTF-8 (Cyrillic reads fine); CypCut's material names are Chinese (`碳钢` black steel, `不锈钢`
 stainless, `铝` aluminium) - `fscut.MATERIAL_NAMES`.
@@ -69,6 +69,31 @@ A point inside a payload is `10 00 02 00` followed by two doubles (x, y).
 
 Checked against the DXF CypCut exported from the same nest: every block's cut length agreed to 0.01 % (Bezier parts
 0.2 %, flattening), the drawing matches `thumbnail.emf`.
+
+### Lead-in, micro-joints, compensation
+
+Worked out from one part the owner saved from CypCut as both `.lxd` and `.lxds` with these set (2026-11-23).
+
+Old `.lxd` - children of the `Circle` / `LwPolyline`, in this order:
+
+```
+<LwPolyline PathStartParam="1.5" PointCount="4" PolyFlag="1">
+  <LeadIn LeadType="1" Pos="1.5" Angle="1.57079633" Length="4" ArcRadius="2" LeadHoleR=".5"/>
+  <ToolCompensation Style="1" Size=".4"/>          (empty = no compensation)
+  <MicroConnects><MicroConnect Pos="2" Size=".4"/></MicroConnects>
+  <Point .../>
+```
+
+`Pos` = segment index + fraction along the polyline's own vertices (0 is left out); `PathStartParam` = the
+lead-in's `Pos`. A circle has no `Pos` - its start is the `StartAngle` attribute (radians). Older files have a short
+`<LeadIn Pos Angle>` with no length (CypCut then uses its defaults).
+
+New `.lxds` - the shape's record in `Shapes2D/data.bin` (same `d1`/`c1`/`c0`/`d0` framing as Geometry2D, padding
+relative to the record start) holds sub-records `Object`, `Shape`, `LeadParam` (only when there is a lead-in) and
+`Curve`. `LeadParam` payload: u32 LeadType, 12 bytes, 5 doubles Pos, Angle, Length, ArcRadius, LeadHoleR. `Curve`
+payload: 8 bytes, u32 (1 = filled), u32 compensation Style (0 = none), double Size. Micro-joints stay in XML
+(`Shapes2D/content.xml`, `MicroConnects` under the shape; each `MicroConnect` may hold its own `LeadIn`, which the old
+format does not have and is not written). A circle's start angle is the double after its radius in Geometry2D.
 
 ## Part files (one detail, no nest)
 
@@ -112,7 +137,11 @@ chained end to start (`fscut.chain()`, 0.01 mm) with DXF bulges. Technology: the
 then the speed, gas and every field written over it. Round trip checked on our files (parts, a nest's geometry, a
 DXF through `analyze_dxf_geometry()`): same size, cut length, pierces and technology fields.
 
-**Not yet verified in CypCut** - the owner opens the first files on the laser PC. Not done: writing `.lxds` (needs
-the binary parts, incl. `Shapes2D/data.bin`, not decoded) and converting nests (only parts).
+The owner opened the first files in CypCut (2026-11-23): they open, but had no lead-ins / micro-joints /
+compensation. Since then a part file's contours (`parse()['model']['entities']`: every Circle / LwPolyline exactly as
+stored, with its `LeadIn` / `ToolCompensation` / `MicroConnects`, `StartAngle`, `PathStartParam`) are written as they
+are; only the other shapes (`model['loose']`: lines, arcs, Beziers) are chained. Nothing is generated (owner's
+decision): a DXF still gets none - CypCut adds them. Checked: `цом.lxds` converted gives the same 27 elements as the
+`цом.lxd` CypCut saved from the same part.
 
-Lead-ins/micro-joints are read by CypCut but not drawn or counted here, and not written (CypCut adds its own).
+Not done: writing `.lxds` and converting nests (only parts). Lead-ins/micro-joints are not drawn or counted on the page.

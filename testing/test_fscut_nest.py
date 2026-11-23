@@ -13,6 +13,7 @@ import json
 import math
 import os
 import struct
+import xml.etree.ElementTree as ET
 import zipfile
 
 import pytest
@@ -59,21 +60,42 @@ def _pt(x, y):
     return fscut.POINT_TAG + struct.pack('<2d', x, y)
 
 
-def _lxds(part=False):
+def _attr_record(cls, subs):
+    """A Shapes2D/data.bin record: named sub-records (LeadParam, Curve), each c1 ... c0 + u32 child count."""
+    body = _name('TGks' + cls)
+    for name, payload in subs:
+        payload += b'\x00' * (-len(payload) % 8)
+        body += b'\xc1\xc1\xc1\xc1' + struct.pack('<IQ', 1, 0) + _name(name) + payload + b'\xc0\xc0\xc0\xc0' + b'\x00' * 4
+    rec = b'\xd1\xd1\xd1\xd1' + struct.pack('<IQ', 0, len(body) + 4) + body + b'\xd0\xd0\xd0\xd0'
+    return rec + b'\x00' * (-len(rec) % 8)
+
+
+def _lxds(part=False, cam=False):
     """New format: plate polyline + a placed part made of a closed polyline (100x50, bulge 0) and a circle r=5 +
-    a 50 mm line and a half arc, all in Geometry2D/data.bin."""
+    a 50 mm line and a half arc, all in Geometry2D/data.bin. cam: the polyline and the circle carry a lead-in
+    (LeadParam) and a 0.4 compensation (Curve) in Shapes2D/data.bin, the polyline 2 micro-joints in XML, the circle
+    a start angle of 45 degrees - as CypCut saves them."""
     poly = struct.pack('<dII', 0, 1, 4) + b''.join(
         struct.pack('<I3dI', i + 1, x, y, 0, 0) for i, (x, y) in enumerate([(10, 10), (110, 10), (110, 60), (10, 60)]))
     plate = struct.pack('<dII', 0, 1, 4) + b''.join(
         struct.pack('<I3dI', i + 1, x, y, 0, 0) for i, (x, y) in enumerate([(0, 0), (1000, 0), (1000, 2000), (0, 2000)]))
-    records = [('LwPolyline', poly), ('Circle', _pt(60, 35) + struct.pack('<dIdd', 5, 0, 0, 0)),
+    records = [('LwPolyline', poly), ('Circle', _pt(60, 35) + struct.pack('<dIdd', 5, 0, math.pi / 4 if cam else 0, 0)),
                ('Line', _pt(200, 10) + _pt(250, 10)),
                ('Arc', _pt(300, 10) + struct.pack('<dIdd', 10, 0, 0, math.pi)), ('LwPolyline', plate)]
     geo, addrs = bytearray(b'BCMP' + b'\x00' * 4092), []
     for cls, payload in records:
         addrs.append(len(geo))
         geo += _record(cls, payload)
-    shapes = ''.join(f'<{cls} Handle="{100 + i}" LayerName="0" GeoAddr="{a}"/>'
+    attr, extra = bytearray(b'BCMP' + b'\x00' * 4092), {}
+    if cam:
+        for i, pos in ((0, 1.5), (1, 0.0)):
+            extra[i] = f' DataAddr="{len(attr)}"'
+            attr += _attr_record(records[i][0], [
+                ('LeadParam', struct.pack('<I12x5d', 1, pos, math.pi / 2, 4, 2, .5)),
+                ('Curve', struct.pack('<8xIId12x', 1, 1, .4))])
+    micro = '<MicroConnects><MicroConnect Size=".4"><LeadIn/></MicroConnect><MicroConnect Pos="2" Size=".4"/></MicroConnects>'
+    shapes = ''.join(f'<{cls} Handle="{100 + i}" LayerName="0" GeoAddr="{a}"{extra.get(i, "")}>'
+                     f'{micro if cam and i == 0 else ""}</{cls}>'
                      for i, ((cls, _), a) in enumerate(zip(records, addrs)))
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w') as z:
@@ -81,6 +103,8 @@ def _lxds(part=False):
         z.writestr('Technical/content.xml', TECH)
         z.writestr('Shapes2D/content.xml', f'<Shapes2D>{shapes}</Shapes2D>')
         z.writestr('Geometry2D/data.bin', bytes(geo))
+        if cam:
+            z.writestr('Shapes2D/data.bin', bytes(attr))
         z.writestr('Blocks/content.xml', '<Blocks><Block Name="{G1}"><BasePoint/><Shapes>'
                    + ''.join(f'<Shape Handle="{100 + i}"/>' for i in range(4)) + '</Shapes></Block></Blocks>')
         z.writestr('Nest2D/Parts/content.xml', '<Parts><NestPart Handle="7" Name="Планка" Amount="3" AmountUsed="1"/></Parts>')
@@ -357,6 +381,40 @@ def test_write_lxd_round_trip(tmp_path):
 def _write(path, data):
     path.write_bytes(data)
     return str(path)
+
+
+CAM_LXD = ('<?xml version="1.0" encoding="utf-8"?><LXDDocument><Entities>'
+           '<Circle Radius="5" StartAngle=".785398163"><LeadIn LeadType="1" Angle="1.57079633" Length="4" ArcRadius="2" '
+           'LeadHoleR=".5"/><ToolCompensation Style="1" Size=".4"/><MicroConnects/><Center X="60" Y="35"/></Circle>'
+           '<LwPolyline PathStartParam="1.5" PolyFlag="1"><LeadIn LeadType="1" Pos="1.5" Angle="1.57079633" Length="4" '
+           'ArcRadius="2" LeadHoleR=".5"/><ToolCompensation Style="1" Size=".4"/><MicroConnects><MicroConnect Size=".4"/>'
+           '<MicroConnect Pos="2" Size=".4"/></MicroConnects><Point X="10" Y="10"/><Point X="110" Y="10"/>'
+           '<Point X="110" Y="60"/><Point X="10" Y="60"/></LwPolyline></Entities></LXDDocument>')
+
+
+def test_write_lxd_keeps_lead_in_micro_joints_compensation(tmp_path):
+    """A part converted to .lxd keeps the source's lead-ins, micro-joints and compensation (old: XML, new: Shapes2D
+    data.bin + XML micro-joints), on the contour exactly as stored so the Pos values still point at the same spot."""
+    want = {('Circle', 'StartAngle', '.785398163'), ('LwPolyline', 'PathStartParam', '1.5'),
+            ('LeadIn', 'Pos', '1.5'), ('LeadIn', 'Length', '4'), ('LeadIn', 'ArcRadius', '2'),
+            ('LeadIn', 'LeadHoleR', '.5'), ('LeadIn', 'Angle', '1.57079633'),
+            ('ToolCompensation', 'Style', '1'), ('ToolCompensation', 'Size', '.4'), ('MicroConnect', 'Pos', '2')}
+    for name, data in (('old.lxd', CAM_LXD.encode()), ('new.lxds', _lxds(part=True, cam=True))):
+        m = fscut.parse(_write(tmp_path / name, data))['model']
+        out = fscut.write_lxd(m['loose'], None, m['entities'])
+        ents = ET.fromstring(out).find('Entities')
+        got = {(e.tag, k, v) for e in ents.iter() for k, v in e.attrib.items()}
+        assert want <= got, (name, want - got)
+        assert len(ents.findall('.//LeadIn')) == 2 and len(ents.findall('.//MicroConnect')) == 2
+        assert not ents.findall('.//MicroConnect/LeadIn')           # the new format's nested LeadIn is not written
+        back = fscut.parse(_write(tmp_path / (name + '.lxd'), out))['model']
+        assert (back['size'], back['pierces'], back['cut_length_mm']) == (m['size'], m['pierces'], m['cut_length_mm'])
+        pts = [(p.get('X'), p.get('Y')) for p in ents.find('LwPolyline').findall('Point')]
+        assert pts == [('10', '10'), ('110', '10'), ('110', '60'), ('10', '60')]    # vertex order kept
+    # a part with no such data: empty ToolCompensation / MicroConnects, no LeadIn (as before)
+    m = fscut.parse(_write(tmp_path / 'plain.lxds', _lxds(part=True)))['model']
+    ents = ET.fromstring(fscut.write_lxd(m['loose'], None, m['entities'])).find('Entities')
+    assert not ents.findall('.//LeadIn') and all(not t.attrib for t in ents.iter('ToolCompensation'))
 
 
 def test_fscut_download_for_machine(s, tmp_path):
