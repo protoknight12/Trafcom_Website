@@ -178,16 +178,86 @@ def bbox(shapes):
         if sh['type'] == 'line':
             xs += [sh['x1'], sh['x2']]
             ys += [sh['y1'], sh['y2']]
-        else:
+        elif sh['type'] == 'circle':
             xs += [sh['cx'] - sh['r'], sh['cx'] + sh['r']]
             ys += [sh['cy'] - sh['r'], sh['cy'] + sh['r']]
+        else:                                    # arc: its end points + the axis points inside its CCW sweep
+            for p in _ends(sh):
+                xs.append(p[0])
+                ys.append(p[1])
+            sweep = (sh['end_angle'] - sh['start_angle']) % 360 or 360
+            for k in range(4):
+                if (k * 90 - sh['start_angle']) % 360 <= sweep:
+                    xs.append(sh['cx'] + sh['r'] * round(math.cos(math.radians(k * 90))))
+                    ys.append(sh['cy'] + sh['r'] * round(math.sin(math.radians(k * 90))))
     return (min(xs), min(ys), max(xs), max(ys)) if xs else None
 
 
 # ---------- common XML bits ----------
 
+# The technology fields a machine keeps per (Вид, thickness, gas, nozzle) - MachineCutTechnology's columns are built
+# from these lists (app.py), so a new field goes here + in a new migration. (column, CamParams child (None = CamParams
+# itself), attribute, label, unit, factor). A missing attribute is None (see _attr()).
+CUT_FIELDS = [
+    ('gas_pressure_bar', 'Cut', 'GasPressure', 'Налягане', 'bar', 1),
+    ('peak_power_w', 'Cut', 'PeakPower', 'Мощност', 'W', 1),
+    ('laser_current_pct', 'Cut', 'LaserCurrent', 'Ток', '%', 1),
+    ('pwm_freq_hz', 'Cut', 'PwmFreq', 'Честота', 'Hz', 1),
+    ('pwm_ratio_pct', 'Cut', 'PwmRatio', 'Запълване', '%', 100),
+    ('focus_mm', 'Cut', 'Focus', 'Фокус', 'мм', 1),
+    ('height_mm', 'Cut', 'Height', 'Височина', 'мм', 1),
+    ('beam_size_mm', 'Cut', 'BeamSize', 'Лъч', 'мм', 1),
+    ('lift_height_mm', None, 'LiftHeight', 'Повдигане', 'мм', 1),
+]
+PIERCE_STEPS = 3                 # steps with their own fields (owner, 2026-11-23); the rest stay in the raw parameters
+STEP_FIELDS = [                  # column p<N>_<key> from element Pierce<N>; gas is a CUT_GASES key
+    ('gas', 'GasType', 'Газ', '', None),
+    ('pressure_bar', 'GasPressure', 'Налягане', 'bar', 1),
+    ('power_w', 'PeakPower', 'Мощност', 'W', 1),
+    ('current_pct', 'LaserCurrent', 'Ток', '%', 1),
+    ('freq_hz', 'PwmFreq', 'Честота', 'Hz', 1),
+    ('ratio_pct', 'PwmRatio', 'Запълване', '%', 100),
+    ('focus_mm', 'Focus', 'Фокус', 'мм', 1),
+    ('height_mm', 'Height', 'Височина', 'мм', 1),
+    ('blow_ms', 'TimeBlow', 'Продухване', 'ms', 1),
+    ('follow_ms', 'TimeFollow', 'Следене', 'ms', 1),
+    ('stay_ms', 'TimeStay', 'Задържане', 'ms', 1),
+]
+
+
+def tech_columns():
+    """[(column, label, unit, group)] of every technology field, in display order; a gas column ends in '_gas'."""
+    cols = [(c, label, unit, 'Рязане') for c, _, _, label, unit, _ in CUT_FIELDS]
+    cols.append(('pierce_steps', 'Стъпки', '', 'Пробиване'))
+    for n in range(1, PIERCE_STEPS + 1):
+        cols += [(f'p{n}_{k}', label, unit, f'Пробиване {n}') for k, _, label, unit, _ in STEP_FIELDS]
+    return cols
+
+
+def _attr(el, name, factor=1):
+    """None when the element or the attribute is missing: CypCut drops zeros, but older versions also lack newer
+    fields (PeakPower, BeamSize), so a missing value is shown as unknown rather than guessed as 0."""
+    v = _f(el.get(name), None) if el is not None else None
+    return None if v is None else round(v * factor, 6)
+
+
+def _raw(el, path=''):
+    """Every element under a channel as [path, attributes, text] - nothing of the technology is lost (a converter
+    can write it back)."""
+    out, seen = [], {}
+    for c in el:
+        seen[c.tag] = seen.get(c.tag, 0) + 1
+        p = f'{path}/{c.tag}' if path else c.tag
+        if sum(1 for x in el if x.tag == c.tag) > 1:
+            p += f'[{seen[c.tag]}]'
+        out.append([p, dict(c.attrib), (c.text or '').strip()])
+        out += _raw(c, p)
+    return out
+
+
 def _technology(tech_el):
-    """Technical: document material/thickness + one row per used channel (layer) with its cut parameters."""
+    """Technical: document material/thickness + one row per used channel (layer): summary keys, `fields`
+    (tech_columns() keys), `nozzle` and `raw` (_raw())."""
     out = {'material': None, 'thickness': None, 'channels': []}
     if tech_el is None:
         return out
@@ -198,23 +268,28 @@ def _technology(tech_el):
         cam = ch.find('CamParams')
         if port is None or cam is None or not port.isdigit() or int(port) > 16:     # 101.. = service channels
             continue
-        cut = cam.find('Cut')
-        pierce = cam.find('Pierce1')
         speed = _f(cam.get('WorkSpeed'), None)
-        row = {'port': int(port), 'name': ch.get('MaterialName') or ch.get('Name'),
-               'speed_mm_min': round(speed * 60, 1) if speed else None,
-               'gas': None, 'gas_pressure_bar': None, 'power_w': None, 'focus_mm': None, 'height_mm': None,
-               'pierce_time_sec': None}
-        if cut is not None:
-            row['gas'] = GAS.get(int(_f(cut.get('GasType'), 0)))
-            row['gas_pressure_bar'] = _f(cut.get('GasPressure'), None)
-            row['power_w'] = _f(cut.get('PeakPower'), None)
-            row['focus_mm'] = _f(cut.get('Focus'), None)
-            row['height_mm'] = _f(cut.get('Height'), None)
-        if pierce is not None:
-            ms = sum(_f(pierce.get(k)) for k in ('TimeFollow', 'TimeStay'))
-            row['pierce_time_sec'] = round(ms / 1000, 3) if ms else None
-        out['channels'].append(row)
+        fields = {c: _attr(cam if el is None else cam.find(el), attr, k) for c, el, attr, _, _, k in CUT_FIELDS}
+        steps = int(_f(cam.get('PierceStepCount'), 1)) or 1
+        fields['pierce_steps'] = steps
+        for n in range(1, PIERCE_STEPS + 1):
+            p = cam.find(f'Pierce{n}')
+            for key, attr, _, _, k in STEP_FIELDS:
+                fields[f'p{n}_{key}'] = (GAS.get(int(_f(p.get(attr), 0))) if p is not None else None) \
+                    if key == 'gas' else _attr(p, attr, k)
+        pierce_ms = sum(_f(p.get('TimeFollow')) + _f(p.get('TimeStay'))          # every used step
+                        for p in (cam.find(f'Pierce{n}') for n in range(1, steps + 1)) if p is not None)
+        cut = cam.find('Cut')
+        mp = ch.find('.//MaterialParams')
+        out['channels'].append({
+            'port': int(port), 'name': ch.get('MaterialName') or ch.get('Name'),
+            'speed_mm_min': round(speed * 60, 1) if speed else None,
+            'gas': GAS.get(int(_f(cut.get('GasType'), 0))) if cut is not None else None,
+            'gas_pressure_bar': fields['gas_pressure_bar'], 'power_w': fields['peak_power_w'],
+            'focus_mm': fields['focus_mm'], 'height_mm': fields['height_mm'],
+            'pierce_time_sec': round(pierce_ms / 1000, 3) if pierce_ms else None,
+            'nozzle': ((mp.get('NozzleSpec') or '').strip() or None) if mp is not None else None,
+            'fields': fields, 'raw': _raw(ch)})
     return out
 
 
@@ -228,7 +303,16 @@ def _plate_size(poly_el):
 
 def _empty(fmt):
     return {'format': fmt, 'app_version': None, 'technology': {'material': None, 'thickness': None, 'channels': []},
-            'parts': [], 'plates': [], 'results': [], 'skipped': {}}
+            'parts': [], 'plates': [], 'results': [], 'model': None, 'skipped': {}}
+
+
+def _model(name, shapes):
+    """A part file's own drawing (no nest): its shapes, size, cut length and pierces - or None when empty."""
+    if not shapes:
+        return None
+    b = bbox(shapes)
+    return {'name': name, 'shapes': shapes, 'size': (round(b[2] - b[0], 3), round(b[3] - b[1], 3)),
+            'cut_length_mm': round(sum(shape_length(s) for s in shapes), 1), 'pierces': count_contours(shapes)}
 
 
 def _finish_result(res, cut_shapes, plate_shapes, remnant_shapes):
@@ -320,6 +404,12 @@ def _parse_lxd(data):
         if plate:                                    # the result's own sheet outline wins over the plate list
             res['plate'] = None
         out['results'].append(_finish_result(res, cut, plate, remnant))
+    # a part file: the drawing sits in the document's own Entities (no nest result)
+    own = root.find('Entities')
+    shapes = []
+    for e in (own if own is not None else []):
+        shapes += _xml_entity_shapes(e, blocks, out['skipped'], budget)
+    out['model'] = _model(None, shapes)
     return out
 
 
@@ -460,6 +550,14 @@ def _parse_lxds(zf):
                 (remnant if e is not None and e.get('LayerName') == 'Remnant' else cut).extend(
                     handle_shapes(sh.get('Handle')))
         out['results'].append(_finish_result(res, cut, plate, remnant))
+    # a part file: Model2D lists the part's own shapes (each with its GeoAddr)
+    model = xml('Model2D/content.xml')
+    if model is not None:
+        shapes = []
+        for sh in model.iter('Shape'):
+            shape_xml.setdefault(sh.get('Handle'), sh)
+            shapes += handle_shapes(sh.get('Handle'))
+        out['model'] = _model(model.get('Name'), shapes)
     return out
 
 

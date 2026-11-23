@@ -1,7 +1,8 @@
 # FSCUT / CypCutE nesting files (.lxd, .lxds)
 
 What `fscut.py` knows about the files the laser's CypCutE (FSCUT controller software) saves for a nest ("разкрой").
-Worked out from our own files on 2026-11-23 (CypCutE 6.4.2330.6 and 10.2501.4.0). The sample files themselves are
+Worked out from our own files on 2026-11-23 (CypCutE 6.4.2330.6 and 10.2501.4.0): nests (a sheet with parts) and
+single parts, in both formats. The sample files themselves are
 machine files and stay out of git (`machine_data/fscut_samples/`, gitignored).
 
 Both formats carry the same things: the cutting technology, the parts with their quantities, the sheets, and one or
@@ -69,12 +70,37 @@ A point inside a payload is `10 00 02 00` followed by two doubles (x, y).
 Checked against the DXF CypCut exported from the same nest: every block's cut length agreed to 0.01 % (Bezier parts
 0.2 %, flattening), the drawing matches `thumbnail.emf`.
 
+## Part files (one detail, no nest)
+
+FSCUT also saves a single part (a "парт") in both formats - same container, no nest result:
+
+- old `.lxd`: the part is the document's own top-level `<Entities>` (next to empty `NestResults`).
+- new `.lxds`: `Model2D/content.xml` = `Model2D[Name]` with `ExtMin`/`ExtMax` and `Shapes/Shape[Class, Handle,
+  GeoAddr]` straight into `Geometry2D/data.bin`; `Nest2D/Plates` and `Results` are empty. (`Nest2D/Parts` may still
+  list the parts of the drawing the part came from.)
+
+`fscut.parse()` returns it as `model` (name, shapes, size, cut length, pierces). The computed size matched CypCut's
+own `ExtMin`/`ExtMax` exactly and the length the DXF of the same part.
+
 ## Technology (both formats)
 
 `CamParams[WorkSpeed]` is mm/s (x 60 = mm/min). `Cut[GasType, GasPressure (bar), PeakPower (W), Focus (mm),
 Height (mm)]`. `GasType` 1 = air, 2 = O2, 3 = N2 (4/5/6 = the same at high pressure). `Pierce1[TimeFollow,
 TimeStay]` in ms - their sum is used as the pierce time. Channels above 16 (101, 102, 111, 121) are service channels
 (rapid moves, marking) and are ignored. More on the channels: the eckert project's `docs/14_plct_converter.md`.
+
+Other groups seen in our files (kept whole, not as fields): `LeadLineParam`, `LayerCutParams`, `CornerParams`,
+`CutHeadParams`, `SuperCut`, `SmartEndTech` (+ `ExtineLaser`, `InnerLaser`), `SlowLeadHead`/`SlowLeadExt`,
+`SlowEndHead`/`SlowEndExt`, `MicroSpeedParams`, `CutModeTypeParam`, `PwmFreqFunc`/`PwmRatioFunc` (power curves as
+`Knot` points), `MaterialParams[MaterialName, NozzleSpec, Thickness]` (the nozzle). CamParams itself carries slow
+lead/end, flash-cut, cut gap, compensation and cool-down values.
+
+What a machine's technology stores (`MachineCutTechnology`, key Вид + thickness + gas + nozzle): speed, pierce time
+(sum of `TimeFollow + TimeStay` over the used pierce steps), the fields of `fscut.CUT_FIELDS` (pressure, peak power,
+current %, PWM frequency, duty % = `PwmRatio` x 100, focus, height, beam size, lift height), `PierceStepCount` and
+`fscut.STEP_FIELDS` for pierce steps 1-3, and the channel's whole tree as `[path, attributes, text]` rows
+(`fscut._raw()`, `params_json`). A field the file does not carry stays empty (older CypCut versions lack
+`PeakPower`, `BeamSize`, ...), never 0.
 
 ## Not done yet
 

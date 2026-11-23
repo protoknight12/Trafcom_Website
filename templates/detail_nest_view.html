@@ -24,7 +24,7 @@
     {% endwith %}
 
     <section class="admin-card">
-        <h2>Разкрой FSCUT: {{ file.original_filename }}</h2>
+        <h2>{{ 'Разкрой' if nest.results else 'Детайл' }} FSCUT: {{ file.original_filename }}</h2>
         <p class="text-muted text-small">
             Детайл: <a href="{{ url_for('detail_dxf_dashboard', detail_id=detail.id) }}">{{ detail.name }}</a> ·
             {{ 'нов формат (.lxds)' if nest.format == 'lxds' else 'стар формат (.lxd)' }}{% if nest.app_version %}, CypCutE {{ nest.app_version }}{% endif %}
@@ -42,28 +42,72 @@
         {% if nest.technology.channels %}
         <div class="table-responsive">
         <table class="users-table" data-table-tools="off">
-            <thead><tr><th>Слой</th><th>Скорост мм/мин</th><th>Газ</th><th>Налягане bar</th><th>Мощност W</th>
+            <thead><tr><th>Слой</th><th>Скорост мм/мин</th><th>Газ</th><th>Дюза</th><th>Налягане bar</th><th>Мощност W</th>
                 <th>Фокус мм</th><th>Височина мм</th><th>Пробиване сек</th></tr></thead>
             <tbody>
             {% for c in nest.technology.channels %}
             <tr><td>{{ c.port }}</td><td>{{ c.speed_mm_min|num3 if c.speed_mm_min else '-' }}</td>
-                <td>{{ cut_gases.get(c.gas, '-') }}</td><td>{{ c.gas_pressure_bar|num3 if c.gas_pressure_bar is not none else '-' }}</td>
+                <td>{{ cut_gases.get(c.gas, '-') }}</td><td>{{ c.nozzle or '-' }}</td>
+                <td>{{ c.gas_pressure_bar|num3 if c.gas_pressure_bar is not none else '-' }}</td>
                 <td>{{ c.power_w|num3 if c.power_w else '-' }}</td><td>{{ c.focus_mm|num3 if c.focus_mm is not none else '-' }}</td>
                 <td>{{ c.height_mm|num3 if c.height_mm is not none else '-' }}</td>
                 <td>{{ c.pierce_time_sec|num3 if c.pierce_time_sec else '-' }}</td></tr>
+            <tr><td colspan="9">
+                <details><summary class="text-muted text-small">Всички параметри на слой {{ c.port }}</summary>
+                    <div class="nest-facts" style="margin-top: 8px;">
+                    {% for col, label, unit, group in tech_cols %}
+                        <div><span>{{ group }} - {{ label }}</span>{% set v = c.fields[col] %}{% if col.endswith('_gas') %}{{ cut_gases.get(v, '-') }}{% elif v is none %}-{% else %}{{ v|num3 }} {{ unit }}{% endif %}</div>
+                    {% endfor %}
+                    </div>
+                    <p class="text-muted text-small">Във файла има още {{ c.raw|length }} групи параметри (бавен старт/край, ъгли, микровръзки, Smart End ...) - записват се цели в технологията на машината.</p>
+                </details>
+            </td></tr>
             {% endfor %}
             </tbody>
         </table>
         </div>
+        {#- the channel's whole technology -> the machine's (view_detail_nest_save_tech parses the file again) #}
+        <form action="{{ url_for('view_detail_nest_save_tech', file_id=file.id) }}" method="POST" class="admin-form"
+              style="display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-top: 12px;">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group" style="margin: 0; flex: 1 1 180px;">
+                <label for="nt_machine">Машина</label>
+                <select id="nt_machine" name="machine_id" required data-picker="off">
+                    <option value="">— изберете —</option>
+                    {% for m in lasers %}<option value="{{ m.id }}" {{ 'selected' if m.id == detail.cutting_machine_id }}>{{ m.name }}</option>{% endfor %}
+                </select>
+            </div>
+            {% if nest.technology.channels|length > 1 %}
+            <div class="form-group" style="margin: 0; flex: 0 1 100px;">
+                <label for="nt_port">Слой</label>
+                <select id="nt_port" name="port" data-picker="off">
+                    {% for c in nest.technology.channels %}<option value="{{ c.port }}">{{ c.port }}</option>{% endfor %}
+                </select>
+            </div>
+            {% else %}<input type="hidden" name="port" value="{{ channel.port }}">{% endif %}
+            <div class="form-group" style="margin: 0; flex: 1 1 180px;">
+                <label for="nt_grade">Вид материал</label>
+                <select id="nt_grade" name="grade_id" data-picker="off"><option value="">- без вид -</option>
+                    {% for gr in grades %}<option value="{{ gr.id }}" {{ 'selected' if gr.id == default_grade_id }}>{{ gr.name }}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin: 0; flex: 0 1 120px;">
+                <label for="nt_thickness">Дебелина (мм)</label>
+                <input type="number" id="nt_thickness" name="thickness_mm" step="0.001" min="0.001" required value="{{ default_thickness|num3 if default_thickness else '' }}">
+            </div>
+            <button type="submit" class="btn-secondary" style="padding: 10px 16px;">Запиши като технология на машината</button>
+            <p class="text-muted text-small" style="flex-basis: 100%; margin: 0;">Ключ: вид + дебелина + газ и дюза на слоя. Съществуваща технология със същия ключ се презаписва с всички параметри от файла.</p>
+        </form>
         {% if detail.laser_cut and channel.speed_mm_min %}
         {#- Same fields as the detail page's "Технология на рязане" form; the machine stays the detail's own. #}
         <form action="{{ url_for('admin_update_detail_cut_technology', detail_id=detail.id) }}" method="POST" target="_top"
-              data-confirm="Скорост {{ channel.speed_mm_min|num3 }} мм/мин, пробиване {{ channel.pierce_time_sec|num3 if channel.pierce_time_sec else '-' }} сек и газ - в технологията на детайла?" style="margin-top: 10px;">
+              data-confirm="Скорост {{ channel.speed_mm_min|num3 }} мм/мин, пробиване {{ channel.pierce_time_sec|num3 if channel.pierce_time_sec else '-' }} сек, газ и дюза - в технологията на детайла?" style="margin-top: 10px;">
             {% include 'partials/csrf_field.html' %}
             <input type="hidden" name="machine_id" value="{{ detail.cutting_machine_id or '' }}">
             <input type="hidden" name="cutting_speed_mm_per_min" value="{{ channel.speed_mm_min }}">
             <input type="hidden" name="pierce_time_sec" value="{{ channel.pierce_time_sec or '' }}">
             <input type="hidden" name="gas" value="{{ channel.gas or '' }}">
+            <input type="hidden" name="nozzle" value="{{ channel.nozzle or '' }}">
             <button type="submit" class="btn-secondary">Вземи технологията (слой {{ channel.port }}) в детайла</button>
         </form>
         {% endif %}
@@ -111,8 +155,24 @@
         <div class="nest-canvas-wrap"><canvas id="nest-canvas-{{ loop.index }}"></canvas></div>
     </section>
     {% endfor %}
-    {% if not nest.results %}
-    <section class="admin-card"><p>Във файла няма резултат от разкрой (само чертеж/технология).</p></section>
+    {% set pm = nest.model %}
+    {% if pm %}
+    {#- a part file (детайл, записан от FSCUT): its own drawing, no sheet - drawn in the canvas after the results #}
+    <section class="admin-card">
+        <h3>Детайл във файла{% if pm.name %}: {{ pm.name }}{% endif %}</h3>
+        <div class="nest-facts">
+            <div><span>Габарит</span>{{ pm.size[0]|num3 }} × {{ pm.size[1]|num3 }} мм</div>
+            <div><span>Дължина на реза</span>{{ fmt_num(pm.cut_length_mm / 1000, 3) }} м</div>
+            <div><span>Пробивания</span>{{ pm.pierces }}</div>
+            <div><span>Време (приблизително)</span>{{ (fmt_num(pm.minutes, 2) ~ ' мин') if pm.minutes is not none else '-' }}</div>
+        </div>
+        {% if detail.width and detail.height and (detail.width - pm.size[0])|abs > 0.5 and (detail.width - pm.size[1])|abs > 0.5 %}
+        <p class="alert alert-warning">Габаритът на детайла в каталога е {{ detail.width|num3 }} × {{ detail.height|num3 }} мм - различен от файла.</p>
+        {% endif %}
+        <div class="nest-canvas-wrap"><canvas id="nest-canvas-{{ nest.results|length + 1 }}"></canvas></div>
+    </section>
+    {% elif not nest.results %}
+    <section class="admin-card"><p>Във файла няма чертеж (само технология).</p></section>
     {% endif %}
 </main>
 
@@ -120,7 +180,7 @@
 <div id="viewerOverlay" hidden></div>
 <script src="{{ url_for('static', filename='js/dxf_viewer.js') }}"></script>
 <script>
-    const NEST_SHAPES = {{ nest.results|map(attribute='draw')|list|tojson }};
+    const NEST_SHAPES = {{ (nest.results + ([nest.model] if nest.model else []))|map(attribute='draw')|list|tojson }};
     function drawNests() {
         NEST_SHAPES.forEach((shapes, i) => drawShapes(shapes, document.getElementById('nest-canvas-' + (i + 1))));
     }

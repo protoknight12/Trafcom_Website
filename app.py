@@ -28,6 +28,7 @@ import urllib.error
 from html import escape as html_escape
 from html.parser import HTMLParser
 from concurrent.futures import ThreadPoolExecutor
+import fscut
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory, send_file, g, session, has_request_context, has_app_context, abort, Response
 from openpyxl import Workbook
 from flask_sqlalchemy import SQLAlchemy
@@ -896,6 +897,7 @@ class Detail(db.Model):
     cutting_speed_mm_per_min = db.Column(db.Float, nullable=True)
     pierce_time_sec = db.Column(db.Float, nullable=True)
     cutting_gas = db.Column(db.String(10), nullable=True)      # key of CUT_GASES, NULL = not set
+    cutting_nozzle = db.Column(db.String(30), nullable=True)   # nozzle as CypCut names it (e.g. "S2.0/3.0"), NULL = not set
     # "Детайли от една единица" (owner's decision 2026-11-21): how many of this detail come out of ONE stock unit of
     # its material (a sheet / bar / piece); one detail then takes 1/N of it instead of its bounding box - see
     # _detail_material_unit_qty(). NULL = off. width/height stay the real size.
@@ -2276,16 +2278,25 @@ CUT_GASES = {'oxygen': 'Кислород', 'nitrogen': 'Азот', 'air': 'Сг�
 
 class MachineCutTechnology(db.Model):
     """A machine's cutting technology for one Вид на материала (MaterialGrade, NULL = material without a Вид),
-    thickness and assist gas (CUT_GASES key, NULL = not set): speed mm/min + pierce time in seconds. Written from the detail page ("Запиши като технология на
-    машината"), read there to fill a detail's speeds when its machine is picked. One row per (machine, grade,
-    thickness) - kept unique in code (_save_cut_technology), since NULL grades escape a DB unique constraint."""
+    thickness, assist gas (CUT_GASES key, NULL = not set) and nozzle (NULL = not set): speed mm/min + pierce time in
+    seconds, plus every FSCUT parameter (owner's decision 2026-11-23): one column per fscut.tech_columns() field and
+    the channel's whole parameter tree in params_json (fscut._raw()). Written from the dossier, the detail page
+    ("Запиши като технология на машината") and a detail's FSCUT nesting file; read on the detail page to fill a
+    detail's speeds when its machine is picked. One row per (machine, grade, thickness, gas, nozzle) - kept unique in
+    code (_cut_technology), since NULLs escape a DB unique constraint."""
     id = db.Column(db.Integer, primary_key=True)
     machine_id = db.Column(db.Integer, db.ForeignKey('machine.id'), nullable=False, index=True)
     grade_id = db.Column(db.Integer, db.ForeignKey('material_grade.id'), nullable=True)
     thickness_mm = db.Column(db.Float, nullable=False)
     gas = db.Column(db.String(10), nullable=True)
+    nozzle = db.Column(db.String(30), nullable=True)
     cutting_speed_mm_per_min = db.Column(db.Float, nullable=True)
     pierce_time_sec = db.Column(db.Float, nullable=True)
+    params_json = db.deferred(db.Column(db.Text, nullable=True))   # [[path, {attr: value}, text]] from the file
+    source = db.Column(db.String(255), nullable=True)               # file the parameters came from, NULL = by hand
+    for _col, _label, _unit, _group in fscut.tech_columns():        # the FSCUT fields (migrate_add_cut_tech_fscut_fields)
+        locals()[_col] = db.Column(db.String(10) if _col.endswith('_gas') else db.Float, nullable=True)
+    del _col, _label, _unit, _group
 
     machine = db.relationship('Machine', backref=db.backref('cut_technologies', cascade='all, delete-orphan'))
     grade = db.relationship('MaterialGrade')
@@ -10604,6 +10615,21 @@ def admin_machines_create_missing():
 def admin_hall_dossier(machine_id):
     """The machine's dossier: all its data (hall record, linked card, identification, notes) and attached files."""
     m = HallMachine.query.get_or_404(machine_id)
+    cut_techs = sorted(m.machine.cut_technologies, key=lambda t: (t.grade.name if t.grade else '', t.thickness_mm,
+                                                                  t.gas or '', t.nozzle or '')) if m.machine else []
+    tech_cols = fscut.tech_columns()
+    # "Редактирай" fills the technology dialog from these (form_dialog.js data-values); raw = the file's parameters
+    tech_values = {t.id: {'tech_id': t.id, 'grade_id': t.grade_id or '', 'gas': t.gas or '', 'nozzle': t.nozzle or '',
+                          'thickness_mm': t.thickness_mm, 'cutting_speed_mm_per_min': t.cutting_speed_mm_per_min or '',
+                          'pierce_time_sec': t.pierce_time_sec or '',
+                          **{c: ('' if getattr(t, c) is None else getattr(t, c)) for c, *_ in tech_cols}}
+                   for t in cut_techs}
+    tech_raw = {}
+    for t in cut_techs:
+        try:
+            tech_raw[t.id] = json.loads(t.params_json) if t.params_json else []
+        except ValueError:
+            tech_raw[t.id] = []
     return render_template('admin_hall_dossier.html', m=m, card=m.card, files=m.files, categories=HALL_FILE_CATEGORIES,
                            models=HALL_MODELS, acc_sides=HALL_ACC_SIDES, active_page='machines',
                            conn_kinds=HALL_CONN_KINDS, net_hosts=NetworkHost.query.order_by(NetworkHost.hostname, NetworkHost.ip_address).all(),
@@ -10612,9 +10638,8 @@ def admin_hall_dossier(machine_id):
                            shelly=ShellyDevice.query.order_by(ShellyDevice.name).all(), modbus=ModbusDevice.query.order_by(ModbusDevice.name).all(),
                            services=Service.query.order_by(Service.name).all(), known_machine_types=_known_machine_types(),
                            grades=MaterialGrade.query.order_by(MaterialGrade.sort_order, MaterialGrade.name).all(),
-                           cut_techs=sorted(m.machine.cut_technologies,
-                                            key=lambda t: (t.grade.name if t.grade else '', t.thickness_mm, t.gas or ''))
-                           if m.machine else [], cut_gases=CUT_GASES,
+                           cut_techs=cut_techs, cut_gases=CUT_GASES, tech_cols=tech_cols, tech_values=tech_values,
+                           tech_raw=tech_raw,
                            free_machines=[x for x in Machine.query.order_by(Machine.name) if x.hall_record is None])
 
 
@@ -10694,7 +10719,8 @@ def admin_hall_dossier_system(machine_id):
 @role_required('admin')
 def admin_hall_cut_tech_save(machine_id):
     """"Технологии на рязане" in a laser machine's dossier: add (no tech_id) or edit one MachineCutTechnology row -
-    Вид (grade_id, blank = без вид), thickness mm, speed mm/min, pierce time s. One row per (Вид, thickness)."""
+    Вид (grade_id, blank = без вид), thickness mm, gas, nozzle, speed mm/min, pierce time s and every FSCUT field
+    (fscut.tech_columns()). One row per (Вид, thickness, gas, nozzle). params_json (from a file) is kept."""
     hm = HallMachine.query.get_or_404(machine_id)
     mc = hm.machine
     if mc is None:
@@ -10703,7 +10729,7 @@ def admin_hall_cut_tech_save(machine_id):
     tech = MachineCutTechnology.query.filter_by(id=tech_id, machine_id=mc.id).first_or_404() if tech_id else None
     grade_raw = request.form.get('grade_id', '')
     grade_id = int(grade_raw) if grade_raw.isdigit() and db.session.get(MaterialGrade, int(grade_raw)) else None
-    gas = _parse_cut_gas(request.form)
+    gas, nozzle = _parse_cut_gas(request.form), _parse_cut_nozzle(request.form)
     try:
         thickness = round(float(request.form.get('thickness_mm', '').replace(',', '.')), 3)
         values = []
@@ -10714,19 +10740,24 @@ def admin_hall_cut_tech_save(machine_id):
         return _dossier_back(hm.id, 'Дебелината, скоростта и времето трябва да са числа.', 'danger')
     if thickness <= 0 or any(v is not None and v <= 0 for v in values):
         return _dossier_back(hm.id, 'Дебелината, скоростта и времето трябва да са положителни.', 'danger')
-    same = _cut_technology(mc.id, grade_id, thickness, gas)
+    try:
+        fields = _parse_cut_tech_fields(request.form)
+    except ValueError as e:
+        return _dossier_back(hm.id, str(e), 'danger')
+    same = _cut_technology(mc.id, grade_id, thickness, gas, nozzle)
     if same and same is not tech:
-        return _dossier_back(hm.id, 'Вече има технология за този вид, дебелина и газ - редактирайте нея.', 'danger')
+        return _dossier_back(hm.id, 'Вече има технология за този вид, дебелина, газ и дюза - редактирайте нея.', 'danger')
     if tech is None:
         tech = MachineCutTechnology(machine_id=mc.id)
         db.session.add(tech)
-    tech.grade_id, tech.thickness_mm, tech.gas = grade_id, thickness, gas
+    tech.grade_id, tech.thickness_mm, tech.gas, tech.nozzle = grade_id, thickness, gas, nozzle
     tech.cutting_speed_mm_per_min, tech.pierce_time_sec = values
-    db.session.commit()
-    grade = db.session.get(MaterialGrade, grade_id).name if grade_id else 'без вид'
-    log_action(f'Технология на "{mc.name}": {grade}, {thickness:g} мм, {CUT_GASES.get(gas, "без газ")} - '
-               f'{values[0] or "-"} мм/мин, '
+    for col, v in fields.items():
+        setattr(tech, col, v)
+    db.session.flush()
+    log_action(f'Технология на "{mc.name}": {_cut_tech_label(tech)} - {values[0] or "-"} мм/мин, '
                f'{values[1] or "-"} сек пробиване')
+    db.session.commit()
     return _dossier_back(hm.id, 'Технологията е записана.')
 
 
@@ -10735,7 +10766,7 @@ def admin_hall_cut_tech_save(machine_id):
 def admin_hall_cut_tech_delete(machine_id, tech_id):
     hm = HallMachine.query.get_or_404(machine_id)
     tech = MachineCutTechnology.query.filter_by(id=tech_id, machine_id=hm.machine_id).first_or_404()
-    label = f'{tech.grade.name if tech.grade else "без вид"}, {tech.thickness_mm:g} мм, {CUT_GASES.get(tech.gas, "без газ")}'
+    label = _cut_tech_label(tech)
     db.session.delete(tech)
     db.session.commit()
     log_action(f'Изтрита технология на "{hm.name}": {label}')
@@ -15754,7 +15785,8 @@ def detail_dxf_dashboard(detail_id):
                     else MachineCutTechnology.grade_id == grade_id).order_by(MachineCutTechnology.id)
                 for t in q:
                     cut_tech.setdefault(str(t.machine_id), []).append(
-                        {'gas': t.gas or '', 'speed': t.cutting_speed_mm_per_min, 'pierce': t.pierce_time_sec})
+                        {'gas': t.gas or '', 'nozzle': t.nozzle or '', 'speed': t.cutting_speed_mm_per_min,
+                         'pierce': t.pierce_time_sec})
         else:
             machines = Machine.query.order_by(Machine.name).all()      # not sheet: any machine, no speeds
     # "Детайли от една единица" hint data (the JS in the template mirrors _detail_material_unit_qty() by hand) and
@@ -16062,26 +16094,90 @@ FSCUT_EXTENSIONS = ('.lxd', '.lxds')     # FSCUT / CypCutE nesting files ("ра�
 def view_detail_nest(file_id):
     """An FSCUT nesting file (.lxd old XML / .lxds new ZIP) kept with a Detail: the sheet drawing, parts per sheet,
     utilization, cut length, pierces, an estimated time and the cutting technology, plus buttons that copy the
-    technology / a part's count per sheet into the detail (the existing detail routes do the saving)."""
-    import fscut
+    technology / a part's count per sheet into the detail (the existing detail routes do the saving) and one that
+    stores a channel's whole technology as the machine's (view_detail_nest_save_tech())."""
     f = DetailDxfFile.query.get_or_404(file_id)
-    if not f.original_filename.lower().endswith(FSCUT_EXTENSIONS):
-        abort(404)
-    try:
-        nest = fscut.parse(os.path.join(app.config['DETAIL_DXF_FOLDER'], f.filename))
-    except (ValueError, OSError) as e:
-        app.logger.warning('FSCUT file %s unreadable: %s', f.id, e)
-        flash('Файлът от разкроя не може да се прочете.', 'danger')
+    nest = _detail_nest(f)
+    if nest is None:
         return redirect(url_for('detail_dxf_dashboard', detail_id=f.detail_id))
     ch = nest['technology']['channels'][0] if nest['technology']['channels'] else {}
-    for r in nest['results']:
+    if nest['model']:                                      # a part file: drawn like one more "result" without a sheet
+        nest['model'].update(draw=nest['model']['shapes'], plate_shapes=[])
+    for r in nest['results'] + ([nest['model']] if nest['model'] else []):
         r['draw'] = r['plate_shapes'] + r['shapes']        # sheet outline + parts, one dxf_viewer.js call
         # estimate only: cut at the channel-1 speed + every pierce, no rapid moves / lead-ins / slow-downs
         r['minutes'] = (r['cut_length_mm'] / ch['speed_mm_min'] + r['pierces'] * (ch.get('pierce_time_sec') or 0) / 60) \
             if ch.get('speed_mm_min') else None
-    return render_template('detail_nest_view.html', file=f, detail=f.detail, nest=nest, channel=ch,
+    detail = f.detail
+    return render_template('detail_nest_view.html', file=f, detail=detail, nest=nest, channel=ch,
                            material=fscut.material_name(nest['technology']['material']), cut_gases=CUT_GASES,
+                           tech_cols=fscut.tech_columns(),
+                           lasers=Machine.query.filter(db.or_(Machine.is_laser.is_(True),
+                                                              Machine.id == detail.cutting_machine_id))
+                           .order_by(Machine.name).all(),
+                           grades=MaterialGrade.query.order_by(MaterialGrade.sort_order, MaterialGrade.name).all(),
+                           default_grade_id=detail.material.grade_id if detail.material else None,
+                           default_thickness=nest['technology']['thickness'] or detail.cut_thickness,
                            active_page='admin_details')
+
+
+def _detail_nest(f):
+    """fscut.parse() of a detail's .lxd/.lxds file, or None after a flash (404 for any other file)."""
+    if not f.original_filename.lower().endswith(FSCUT_EXTENSIONS):
+        abort(404)
+    try:
+        return fscut.parse(os.path.join(app.config['DETAIL_DXF_FOLDER'], f.filename))
+    except (ValueError, OSError) as e:
+        app.logger.warning('FSCUT file %s unreadable: %s', f.id, e)
+        flash('Файлът от разкроя не може да се прочете.', 'danger')
+        return None
+
+
+@app.route('/details/files/<int:file_id>/nest/save-tech', methods=['POST'])
+@role_required('admin')
+def view_detail_nest_save_tech(file_id):
+    """One channel of an FSCUT file -> the machine's MachineCutTechnology for (Вид, thickness, the channel's gas and
+    nozzle): speed, pierce time, every fscut.tech_columns() field, the whole parameter tree (params_json) and the
+    file name (source). The file is parsed again here - nothing technological is taken from the form."""
+    f = DetailDxfFile.query.get_or_404(file_id)
+    back = redirect(url_for('view_detail_nest', file_id=f.id))
+    nest = _detail_nest(f)
+    if nest is None:
+        return redirect(url_for('detail_dxf_dashboard', detail_id=f.detail_id))
+    port = request.form.get('port', type=int)
+    ch = next((c for c in nest['technology']['channels'] if c['port'] == port), None)
+    machine = db.session.get(Machine, request.form.get('machine_id', type=int) or 0)
+    if ch is None or machine is None:
+        flash('Изберете машина и слой.', 'danger')
+        return back
+    if not machine.is_laser:
+        flash('Технология на рязане се пази само за машина за лазерно рязане.', 'danger')
+        return back
+    grade_raw = request.form.get('grade_id', '')
+    grade_id = int(grade_raw) if grade_raw.isdigit() and db.session.get(MaterialGrade, int(grade_raw)) else None
+    try:
+        thickness = round(float(request.form.get('thickness_mm', '').replace(',', '.')), 3)
+    except ValueError:
+        thickness = 0
+    if not (thickness > 0 and math.isfinite(thickness)):
+        flash('Дебелината трябва да е положително число.', 'danger')
+        return back
+    tech = _cut_technology(machine.id, grade_id, thickness, ch['gas'], ch['nozzle'])
+    if tech is None:
+        tech = MachineCutTechnology(machine_id=machine.id, grade_id=grade_id, thickness_mm=thickness, gas=ch['gas'],
+                                    nozzle=ch['nozzle'])
+        db.session.add(tech)
+    tech.cutting_speed_mm_per_min, tech.pierce_time_sec = ch['speed_mm_min'], ch['pierce_time_sec']
+    for col, v in ch['fields'].items():
+        setattr(tech, col, v)
+    tech.params_json = json.dumps(ch['raw'], ensure_ascii=False)
+    tech.source = f.original_filename[:255]
+    db.session.flush()
+    log_action(f'Технология на "{machine.name}" от разкрой "{f.original_filename}" (слой {port}): '
+               f'{_cut_tech_label(tech)} - {tech.cutting_speed_mm_per_min or "-"} мм/мин')
+    db.session.commit()
+    flash(f'Технологията е записана в машината "{machine.name}".', 'success')
+    return back
 
 
 @app.route('/details/files/<int:file_id>/delete', methods=['POST'])
@@ -16348,21 +16444,53 @@ def admin_update_detail_numbers(detail_id):
     return back
 
 
-def _cut_technology(machine_id, grade_id, thickness, gas):
-    """The MachineCutTechnology row for (machine, Вид, thickness, gas) or None - a None grade / gas matches rows
-    without one."""
+def _cut_technology(machine_id, grade_id, thickness, gas, nozzle=None):
+    """The MachineCutTechnology row for (machine, Вид, thickness, gas, nozzle) or None - a None grade / gas / nozzle
+    matches rows without one."""
     if not machine_id or thickness is None:
         return None
     t = MachineCutTechnology
     q = t.query.filter_by(machine_id=machine_id)
     q = q.filter(t.grade_id.is_(None)) if grade_id is None else q.filter_by(grade_id=grade_id)
     q = q.filter(t.gas.is_(None)) if gas is None else q.filter_by(gas=gas)
+    q = q.filter(t.nozzle.is_(None)) if nozzle is None else q.filter_by(nozzle=nozzle)
     return q.filter(db.func.abs(t.thickness_mm - thickness) < 0.0005).first()
 
 
-def _parse_cut_gas(form):
-    gas = form.get('gas', '')
+def _parse_cut_gas(form, name='gas'):
+    gas = form.get(name, '')
     return gas if gas in CUT_GASES else None
+
+
+def _parse_cut_nozzle(form):
+    """Nozzle as CypCut names it ("S2.0/3.0", "1.2"), free text up to 30 chars; blank = None."""
+    return (form.get('nozzle') or '').strip()[:30] or None
+
+
+def _cut_tech_label(t):
+    return (f'{t.grade.name if t.grade else "без вид"}, {t.thickness_mm:g} мм, {CUT_GASES.get(t.gas, "без газ")}'
+            + (f', дюза {t.nozzle}' if t.nozzle else ''))
+
+
+def _parse_cut_tech_fields(form):
+    """The fscut.tech_columns() fields from a form -> {column: value}; blank = None, gases checked against CUT_GASES.
+    Focus may be negative, everything else >= 0. ValueError (Bulgarian message) on a bad number."""
+    out = {}
+    for col, label, unit, group in fscut.tech_columns():
+        if col.endswith('_gas'):
+            out[col] = _parse_cut_gas(form, col)
+            continue
+        raw = (form.get(col) or '').strip().replace(',', '.')
+        try:
+            v = round(float(raw), 6) if raw else None
+        except ValueError:
+            raise ValueError(f'{group} - {label}: не е число.')
+        if v is not None and (not math.isfinite(v) or (v < 0 and not col.endswith('focus_mm'))):
+            raise ValueError(f'{group} - {label}: трябва да е положително число.')
+        out[col] = v
+    if out.get('pierce_steps') is not None:
+        out['pierce_steps'] = int(out['pierce_steps'])
+    return out
 
 
 @app.route('/admin/details/<int:detail_id>/cut-technology', methods=['POST'])
@@ -16396,12 +16524,13 @@ def admin_update_detail_cut_technology(detail_id):
     except ValueError:
         flash('Скоростта и времето за пробиване трябва да са положителни числа.', 'danger')
         return back
+    nozzle = _parse_cut_nozzle(request.form)
     detail.cutting_machine_id = machine.id if machine else None
     detail.cutting_speed_mm_per_min, detail.pierce_time_sec = values
-    detail.cutting_gas = gas
+    detail.cutting_gas, detail.cutting_nozzle = gas, nozzle
     log_action(describe_changes(f'детайл "{detail.name}"', detail, {
         'cutting_machine_id': 'машина', 'cutting_speed_mm_per_min': 'скорост мм/мин',
-        'pierce_time_sec': 'пробиване сек', 'cutting_gas': 'газ'}))
+        'pierce_time_sec': 'пробиване сек', 'cutting_gas': 'газ', 'cutting_nozzle': 'дюза'}))
     if request.form.get('save_to_machine'):
         thickness = detail.cut_thickness
         grade_id = detail.material.grade_id if detail.material else None
@@ -16410,13 +16539,14 @@ def admin_update_detail_cut_technology(detail_id):
             flash('Технологията на детайла е записана, но не и към машината - изберете машина и задайте дебелина.',
                   'warning')
             return back
-        tech = _cut_technology(machine.id, grade_id, thickness, gas)
+        tech = _cut_technology(machine.id, grade_id, thickness, gas, nozzle)
         if not tech:
-            tech = MachineCutTechnology(machine_id=machine.id, grade_id=grade_id, thickness_mm=thickness, gas=gas)
+            tech = MachineCutTechnology(machine_id=machine.id, grade_id=grade_id, thickness_mm=thickness, gas=gas,
+                                        nozzle=nozzle)
             db.session.add(tech)
-        tech.cutting_speed_mm_per_min, tech.pierce_time_sec = values
-        grade = detail.material.grade.name if detail.material and detail.material.grade else 'без вид'
-        log_action(f'Технология на "{machine.name}": {grade}, {thickness:g} мм, {CUT_GASES.get(gas, "без газ")} - '
+            db.session.flush()
+        tech.cutting_speed_mm_per_min, tech.pierce_time_sec = values      # the other FSCUT fields stay as they are
+        log_action(f'Технология на "{machine.name}": {_cut_tech_label(tech)} - '
                    f'{values[0] or "-"} мм/мин, {values[1] or "-"} сек пробиване')
     db.session.commit()
     flash('Технологията на рязане е записана.', 'success')

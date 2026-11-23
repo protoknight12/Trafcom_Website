@@ -9,6 +9,7 @@ Run with:
     pytest testing/test_fscut_nest.py -v
 """
 import io
+import json
 import math
 import os
 import struct
@@ -19,11 +20,14 @@ from flask import g
 from werkzeug.security import generate_password_hash
 
 import fscut
-from app import app as flask_app, db, User, MaterialPrice, Detail, DetailDxfFile, limiter, seed_material_types
+from app import (app as flask_app, db, User, MaterialPrice, Detail, DetailDxfFile, Machine, MachineCutTechnology,
+                 MaterialGrade, HallMachine, limiter, seed_material_types)
 
 TECH = ('<Technical MaterialName="碳钢" Thickness="8"><Channels><Channel ChannelPort="1">'
-        '<CamParams WorkSpeed="50"><Cut GasType="2" GasPressure=".7" PeakPower="6000" Focus="11" Height=".6"/>'
-        '<Pierce1 TimeFollow="500" TimeStay="100"/></CamParams></Channel>'
+        '<CamParams WorkSpeed="50" LiftHeight="30"><Cut GasType="2" GasPressure=".7" PeakPower="6000" Focus="11" '
+        'Height=".6" PwmRatio=".5"/>'
+        '<Pierce1 GasType="3" Focus="-6" TimeFollow="500" TimeStay="100"/><Pierce2 GasType="2" PwmFreq="200"/>'
+        '<SmartEndTech ExtGap=".6"/><MaterialParams NozzleSpec="S2.0/3.0" Thickness="8"/></CamParams></Channel>'
         '<Channel ChannelPort="101"><CamParams WorkSpeed="9"/></Channel></Channels></Technical>')
 
 # old format: one square 100x50 with a 10 mm hole, placed by an Insert at (10, 10)
@@ -55,7 +59,7 @@ def _pt(x, y):
     return fscut.POINT_TAG + struct.pack('<2d', x, y)
 
 
-def _lxds():
+def _lxds(part=False):
     """New format: plate polyline + a placed part made of a closed polyline (100x50, bulge 0) and a circle r=5 +
     a 50 mm line and a half arc, all in Geometry2D/data.bin."""
     poly = struct.pack('<dII', 0, 1, 4) + b''.join(
@@ -82,10 +86,15 @@ def _lxds():
         z.writestr('Nest2D/Parts/content.xml', '<Parts><NestPart Handle="7" Name="Планка" Amount="3" AmountUsed="1"/></Parts>')
         z.writestr('Nest2D/Plates/content.xml', '<Plates><NestPlate Handle="9" AmountUsed="1"><LwPolyline><Point/>'
                    '<Point X="1000"/><Point X="1000" Y="2000"/><Point Y="2000"/></LwPolyline></NestPlate></Plates>')
-        z.writestr('Nest2D/Results/content.xml', '<NestResults><NestResult Index="1" Name="Nest result" Utilization="5"/></NestResults>')
-        z.writestr('Nest2D/Results/1/content.xml', '<NestResult PlateAmount="2" Utilization="5"><Shapes>'
-                   '<Shape Class="LwPolyline" Handle="104" NestPlate="9"/>'
-                   '<Shape Class="Insert" NestPart="7"><BlockName>{G1}</BlockName></Shape></Shapes></NestResult>')
+        if part:            # a part file: Model2D lists the part's own shapes, no nest result
+            z.writestr('Model2D/content.xml', '<Model2D Name="liceva"><Shapes>'
+                       + ''.join(f'<Shape Handle="{100 + i}"/>' for i in range(4)) + '</Shapes></Model2D>')
+        else:
+            z.writestr('Nest2D/Results/content.xml',
+                       '<NestResults><NestResult Index="1" Name="Nest result" Utilization="5"/></NestResults>')
+            z.writestr('Nest2D/Results/1/content.xml', '<NestResult PlateAmount="2" Utilization="5"><Shapes>'
+                       '<Shape Class="LwPolyline" Handle="104" NestPlate="9"/>'
+                       '<Shape Class="Insert" NestPart="7"><BlockName>{G1}</BlockName></Shape></Shapes></NestResult>')
     return buf.getvalue()
 
 
@@ -109,9 +118,22 @@ def test_parse_both_formats(tmp_path):
     assert r['counts'] == {'Планка': 1} and r['plate'] == (1000, 2000) and r['plate_amount'] == 2
     assert r['cut_length_mm'] == round(300 + 2 * math.pi * 5 + 50 + math.pi * 10, 1)
     assert r['pierces'] == 4 and len(r['plate_shapes']) == 4
-    assert fscut.bbox(r['shapes'])[:2] == (10, 0)                        # the half arc reaches y = 0
+    assert fscut.bbox(r['shapes']) == (10, 10, 310, 60)                  # exact arc extents: upper half to y = 20
+    assert d['model'] is None
     arc = [s for s in r['shapes'] if s['type'] == 'arc'][0]
     assert (round(arc['start_angle']), round(arc['end_angle'])) == (0, 180)
+
+    # part files (one detail saved from FSCUT, no nest): new = Model2D, old = the document's own Entities
+    new.write_bytes(_lxds(part=True))
+    d = fscut.parse(str(new))
+    m = d['model']
+    assert not d['results'] and m['name'] == 'liceva' and m['size'] == (300, 50) and m['pierces'] == 4
+    assert m['cut_length_mm'] == round(300 + 2 * math.pi * 5 + 50 + math.pi * 10, 1)
+    old.write_text(LXD.replace('<NestResults>', '<Entities><LwPolyline PolyFlag="1"><Point/><Point X="40"/>'
+                                                '<Point X="40" Y="20"/><Point Y="20"/></LwPolyline></Entities><NestResults>'),
+                   encoding='utf-8')
+    m = fscut.parse(str(old))['model']
+    assert m['size'] == (40, 20) and m['cut_length_mm'] == 120 and m['pierces'] == 1
 
     bad = tmp_path / 'c.lxds'
     bad.write_bytes(b'not a nesting file')
@@ -119,6 +141,15 @@ def test_parse_both_formats(tmp_path):
         fscut.parse(str(bad))
     bad.write_bytes(b'<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "aaaa">]><LXDDocument>&a;</LXDDocument>')
     with pytest.raises(ValueError):                                      # no DTD / entities accepted
+        fscut.parse(str(bad))
+    # nested Inserts multiply (100 x 100 x 100 x 100 circles): refused by the per-file budget, not expanded
+    level = lambda n, child: (f'<Block Name="B{n}"><Entities>' + f'<Insert><BlockName>B{n + 1}</BlockName></Insert>' * 100
+                              + '</Entities></Block>') if child else (f'<Block Name="B{n}"><Entities>'
+                              + '<Circle Radius="1"><Center/></Circle>' * 100 + '</Entities></Block>')
+    bad.write_text('<LXDDocument><Blocks>' + ''.join(level(n, n < 3) for n in range(4)) + '</Blocks><NestResults>'
+                   '<NestResult><Entities><Insert><BlockName>B0</BlockName></Insert></Entities></NestResult>'
+                   '</NestResults></LXDDocument>', encoding='utf-8')
+    with pytest.raises(ValueError):
         fscut.parse(str(bad))
 
 
@@ -191,8 +222,94 @@ def test_nest_page(s):
         d = db.session.get(Detail, d.id)
         assert (d.pieces_per_unit, d.cutting_speed_mm_per_min, d.pierce_time_sec, d.cutting_gas) == (1, 3000, 0.6, 'oxygen')
 
+        # a part file gets the same page: its drawing, size, length, no sheet
+        part, part_path = _attach(d, 'Лицежа.lxds', _lxds(part=True))
+        try:
+            page = c.get(f'/details/files/{part.id}/nest').get_data(as_text=True)
+            assert 'Детайл FSCUT' in page and 'Детайл във файла: liceva' in page and '300 × 50 мм' in page
+            assert 'nest-canvas-1' in page and 'Вземи технологията' in page
+        finally:
+            os.remove(part_path)
+
         w = _login('fn_worker')
         assert w.get(f'/details/files/{f.id}/nest').status_code == 302          # admin only
     finally:
         for p in (path, other_path, broken_path):
             os.remove(p)
+
+
+def test_migration_matches_model():
+    """The frozen migration adds exactly the FSCUT columns the model builds from fscut.tech_columns()."""
+    src = open(os.path.join(os.path.dirname(__file__), '..', 'migration', 'migrate_add_cut_tech_fscut_fields.py'),
+               encoding='utf-8').read()
+    for col, *_ in fscut.tech_columns():
+        base = col.split('_', 1)[1] if col[:2] in ('p1', 'p2', 'p3') and col[2] == '_' else col
+        assert f"'{base}'" in src or col.endswith('_gas'), col
+    assert {c for c, *_ in fscut.tech_columns()} <= set(MachineCutTechnology.__table__.columns.keys())
+
+
+def test_machine_technology_from_nest_and_dossier(s):
+    grade = MaterialGrade(name='Стомана FN', density_kg_dm3=7.85)
+    laser = Machine(name='Лазер FN', is_laser=True)
+    lathe = Machine(name='Струг FN')
+    db.session.add_all([grade, laser, lathe])
+    db.session.flush()
+    hall = HallMachine(name='Лазер FN', machine_id=laser.id)
+    db.session.add(hall)
+    MaterialPrice.query.filter_by(key='fn_steel').one().grade_id = grade.id
+    d = Detail(name='Планка', material_key='fn_steel', width=100, height=50, total_length=300, pierce_count=2,
+               calculated_price=1)
+    db.session.add(d)
+    db.session.commit()
+    f, path = _attach(d, 'разкрой.lxds', _lxds())
+    try:
+        c = _login('fn_admin')
+        page = c.get(f'/details/files/{f.id}/nest').get_data(as_text=True)
+        assert 'S2.0/3.0' in page and 'Запиши като технология на машината' in page and 'Пробиване 3' in page
+        url = f'/details/files/{f.id}/nest/save-tech'
+        form = {'machine_id': laser.id, 'port': 1, 'grade_id': grade.id, 'thickness_mm': '8'}
+        c.post(url, data=form)
+        t = MachineCutTechnology.query.one()
+        assert (t.machine_id, t.grade_id, t.thickness_mm, t.gas, t.nozzle) == (laser.id, grade.id, 8, 'oxygen', 'S2.0/3.0')
+        assert (t.cutting_speed_mm_per_min, t.pierce_time_sec, t.gas_pressure_bar, t.peak_power_w) == (3000, 0.6, 0.7, 6000)
+        assert (t.pwm_ratio_pct, t.lift_height_mm, t.pierce_steps, t.p1_gas, t.p1_focus_mm) == (50, 30, 1, 'nitrogen', -6)
+        assert (t.p2_gas, t.p2_freq_hz, t.p3_gas, t.p3_freq_hz) == ('oxygen', 200, None, None)
+        assert t.beam_size_mm is None                               # not in the file = unknown, not 0
+        assert t.source == 'разкрой.lxds' and any(p.endswith('SmartEndTech') for p, *_ in json.loads(t.params_json))
+        c.post(url, data=form)                                      # same key: overwritten, not added
+        assert MachineCutTechnology.query.count() == 1
+        r = c.post(url, data={**form, 'machine_id': lathe.id})
+        assert MachineCutTechnology.query.count() == 1 and r.status_code == 302     # not a laser: refused
+
+        # the dossier lists it with everything and edits every field; another nozzle = another row
+        dossier = c.get(f'/admin/hall/{hall.id}/dossier').get_data(as_text=True)
+        assert 'S2.0/3.0' in dossier and 'разкрой.lxds' in dossier and 'SmartEndTech' in dossier
+        save = f'/admin/hall/{hall.id}/cut-tech'
+        edit = {'tech_id': t.id, 'grade_id': grade.id, 'thickness_mm': '8', 'gas': 'oxygen', 'nozzle': 'S2.0/3.0',
+                'cutting_speed_mm_per_min': '2500', 'p1_focus_mm': '-5', 'p2_gas': 'air', 'peak_power_w': '4000'}
+        c.post(save, data=edit)
+        db.session.expire_all()
+        t = db.session.get(MachineCutTechnology, t.id)
+        assert (t.cutting_speed_mm_per_min, t.p1_focus_mm, t.p2_gas, t.peak_power_w, t.p1_gas) == (2500, -5, 'air', 4000, None)
+        assert t.params_json                                         # the file's parameters stay with the row
+        c.post(save, data={**edit, 'peak_power_w': '-1'})            # negative power refused
+        db.session.expire_all()
+        assert db.session.get(MachineCutTechnology, t.id).peak_power_w == 4000
+        c.post(save, data={**edit, 'tech_id': '', 'nozzle': '1.2'})
+        assert MachineCutTechnology.query.count() == 2
+
+        # the detail page: picking the machine offers both, saving with a nozzle hits that row only
+        page = c.get(f'/details/{d.id}/files').get_data(as_text=True)
+        assert '"nozzle": "1.2"' in page and '"nozzle": "S2.0/3.0"' in page
+        c.post(f'/admin/details/{d.id}/cut-technology', data={
+            'machine_id': laser.id, 'gas': 'oxygen', 'nozzle': '1.2', 'cutting_speed_mm_per_min': '1800',
+            'save_to_machine': '1'})
+        db.session.expire_all()
+        assert db.session.get(Detail, d.id).cutting_nozzle == '1.2'
+        assert sorted((x.nozzle, x.cutting_speed_mm_per_min) for x in MachineCutTechnology.query) == \
+               [('1.2', 1800), ('S2.0/3.0', 2500)]
+
+        assert _login('fn_worker').post(url, data=form).status_code == 302
+        assert MachineCutTechnology.query.count() == 2
+    finally:
+        os.remove(path)
