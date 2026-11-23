@@ -6956,6 +6956,17 @@ app.jinja_env.globals['material_computed_kg_per_stock_unit'] = material_computed
 app.jinja_env.globals['material_density'] = material_density
 
 
+def material_price_per_kg(material):
+    """Delivery price per kg (cost_per_m2 / kg per native unit); None when the price or the weight is unknown."""
+    kg = material_kg_per_unit(material)
+    if not material.cost_per_m2 or not kg or kg <= 0:
+        return None
+    return material.cost_per_m2 / kg
+
+
+app.jinja_env.globals['material_price_per_kg'] = material_price_per_kg
+
+
 # Number precision (owner's decision 2026-11-19): purchase prices, kg, quantities and sizes are entered, kept and
 # shown on screen to the 3rd decimal; printed documents round them to the 2nd. Sale prices (orders/offers) stay
 # at the cent. Screens: |num3, |price3, |kg. Print documents: |num2, |money, |kg(2).

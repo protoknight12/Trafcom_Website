@@ -5,7 +5,7 @@ else density (own or guessed from the name) x geometry per type. Run: python -m 
 import math
 
 from app import (MaterialPrice, MaterialGrade, material_kg_per_unit, material_stock_kg, material_kg_per_stock_unit,
-                 material_density, material_computed_kg_per_stock_unit, material_qty_text)
+                 material_density, material_computed_kg_per_stock_unit, material_qty_text, material_price_per_kg)
 
 
 def mat(**kw):
@@ -17,6 +17,9 @@ def mat(**kw):
 def main():
     sheet = mat(thickness_mm=2, sheet_width_mm=1000, sheet_length_mm=2000, stock_quantity=3)
     assert material_density(sheet) == 7.85
+    assert math.isclose(material_price_per_kg(mat(thickness_mm=2, cost_per_m2=157)), 10)   # 157 €/m² / 15.7 kg/m²
+    assert material_price_per_kg(mat(thickness_mm=2, cost_per_m2=0)) is None              # no price
+    assert material_price_per_kg(mat(display_name='Поликарбонат', thickness_mm=4, cost_per_m2=50)) is None   # no weight
     assert math.isclose(material_kg_per_unit(sheet), 15.7)                 # kg/m²
     assert math.isclose(material_kg_per_stock_unit(sheet), 31.4)           # one 2 m² sheet
     assert math.isclose(material_stock_kg(sheet), 94.2)                    # 3 sheets
