@@ -279,7 +279,7 @@
                     <td>{{ material.brand or '—' }}</td>
                     <td>{{ material.notes or '—' }}</td>
                     <td>{{ material.grade.name if material.grade else '—' }}</td>
-                    <td>{% if material.cost_per_m2 %}{{ material.cost_per_m2|price3 }}{% elif material.owner_client_id %}—{% else %}<span style="color: var(--warning-text); white-space: nowrap;" title="Материалът още не е заприходен със стокова разписка">⚠ няма доставна цена</span>{% endif %}</td>
+                    <td>{% if material.cost_per_m2 %}{{ material.cost_per_m2|price3 }}{% elif material.owner_client_id %}—{% else %}<span style="color: var(--warning-text); white-space: nowrap;" title="Материалът още не е заприходен със стокова разписка">⚠ няма доставна цена</span>{% endif %}{% set qt = material_quote_text(material) %}{% if qt %}<div class="text-muted text-small">{{ qt }}</div>{% endif %}</td>
                     <td>{{ material.price_per_unit|price3 if material.price_per_unit is not none else '—' }}</td>
                     <td>{{ material.sheet_length_mm|num3 if material.sheet_length_mm is not none else '—' }}</td>
                     <td>{{ material.sheet_width_mm|num3 if material.sheet_width_mm is not none else '—' }}</td>

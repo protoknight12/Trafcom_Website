@@ -38,7 +38,7 @@
     <td>{{ material_type_label(m.type) }}</td>
     <td class="text-center">{{ qty_text(m, m.stock_quantity, kg) }}{% if reserved.get(m.id) %}<div class="text-muted text-small">Заделено: {{ qty_text(m, reserved[m.id], material_stock_kg(m, reserved[m.id])) }}</div>{% endif %}</td>
     {#- A client's material is not ours: no price, no value. #}
-    <td class="text-right">{{ '—' if m.owner_client_id else (m.cost_per_m2|price3) ~ ' €/' ~ unit }}</td>
+    <td class="text-right">{{ '—' if m.owner_client_id else (m.cost_per_m2|price3) ~ ' €/' ~ unit }}{% set qt = material_quote_text(m) %}{% if qt %}<div class="text-muted text-small">{{ qt }}</div>{% endif %}</td>
     <td class="text-right">{{ (m.price_per_unit|price3) ~ " €" if m.price_per_unit is not none and not m.owner_client_id else '—' }}</td>
     {#- Total value = unit price x AVAILABLE quantity (not the raw
     stock_quantity shown above) - sheet/other stock is a whole-sheet

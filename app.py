@@ -960,13 +960,19 @@ class Detail(db.Model):
         owner = self.owner_client
         # calculated_price carries _material_terms() (the owner's Материали terms or the standard markup),
         # so the rate shown is the adjusted one
-        rate = _material_terms(self.material.cost_per_m2, owner)
+        rate = _material_terms(material_cost_rate(self.material), owner)
         if owner and owner.material_adjustment_type:
             sign = '-' if owner.material_adjustment_type == 'discount' else '+'
             suffix = f", {sign}{owner.material_adjustment_percent or 0:g}% на клиента"
         else:
             markup = company()['material_markup']
             suffix = f", +{markup:g}% надценка" if markup else ''
+        # The supplier behind a quote is staff-only (any logged-in user may open the detail page).
+        quote = material_quote(self.material) if (has_request_context() and current_user.is_authenticated
+                                                  and current_user.is_staff) else None
+        if quote:
+            suffix += (f", по оферта от {quote[1] or 'доставчик'}"
+                       + (f" ({to_local(quote[2]).strftime('%d.%m.%Y')})" if quote[2] else ''))
         n = self.pieces_per_unit
         if n and _material_whole_unit_qty(self.material):
             m = self.material
@@ -1848,8 +1854,11 @@ class MaterialTransferItem(db.Model):
 REQUEST_STATUS_LABELS = {
     'new': 'Нова',
     'processing': 'В обработка',
+    'quoted': 'Оферирана',
     'ordered': 'Поръчана',
 }
+# Statuses whose quoted_unit_price prices a lot with no stock (material_cost_rate()).
+QUOTE_REQUEST_STATUSES = ('quoted', 'ordered')
 
 
 class MaterialRequest(db.Model):
@@ -1857,8 +1866,8 @@ class MaterialRequest(db.Model):
     A request to restock a material, raised from the storage materials page
     (Склад -> Материали) when stock is running low - separate from
     DeliveryNote, which records stock actually received. Tracks a request
-    through new -> processing -> ordered; supplier_id (who it was ordered
-    from) is only meaningful once status is 'ordered', reusing the same
+    through new -> processing -> quoted -> ordered; supplier_id (who quoted / it was ordered
+    from) is only meaningful once status is 'quoted'/'ordered', reusing the same
     Supplier catalog as DeliveryNote.
     """
     id = db.Column(db.Integer, primary_key=True)
@@ -1870,6 +1879,11 @@ class MaterialRequest(db.Model):
     created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     # Why it was raised, e.g. the order whose reservation fell short (_reserve_order_material()).
     note = db.Column(db.String(255), nullable=True)
+    # Supplier's quote (status 'quoted', kept while 'ordered'; owner's request 2026-11-23): € per ONE stock unit of
+    # the lot - one sheet (sheet lot with a size; else per m²), one bar of the lot's length (else per m), one piece -
+    # same meaning as a delivery line's "за бройка". Prices the lot while it has no stock (material_cost_rate()).
+    quoted_unit_price = db.Column(db.Float, nullable=True)
+    quoted_at = db.Column(db.DateTime, nullable=True)
 
     material = db.relationship('MaterialPrice')
     supplier = db.relationship('Supplier')
@@ -5331,7 +5345,7 @@ def client_material_rate(material):
     where the price identifies the lot)."""
     if current_user.is_authenticated and current_user.is_staff:
         return material.cost_per_m2
-    return round(_material_terms(material.cost_per_m2, _viewer_client()), 2)
+    return round(_material_terms(material_cost_rate(material), _viewer_client()), 2)
 
 
 def detail_price_for(detail, client, own_material=False, material_key=None):
@@ -5455,13 +5469,14 @@ def _material_cost(width, height, material, client=None):
     if material.owner_client_id:
         return 0.0   # the client's own stored lot - we charge nothing for the material
     unit = material_price_unit(material.type)
+    rate = material_cost_rate(material)   # cost_per_m2, or a supplier quote for a lot with no stock
     if unit == 'm':
-        cost = (height / 1000) * material.cost_per_m2
+        cost = (height / 1000) * rate
     elif unit == 'pcs':
-        cost = material.cost_per_m2
+        cost = rate
     else:
         area_m2 = (width * height) / 1_000_000
-        cost = area_m2 * material.cost_per_m2
+        cost = area_m2 * rate
     return _material_terms(cost, client)
 
 
@@ -5495,6 +5510,63 @@ def _cost_per_m2_from_unit_price(material_type, unit_price, width, height):
     if not width:
         return None
     return unit_price / ((width * height) / 1_000_000)
+
+
+def _material_quotes():
+    """material id -> (quoted_unit_price, supplier name, quoted_at) of the LATEST quoting MaterialRequest (status in
+    QUOTE_REQUEST_STATUSES, positive price; by quoted_at, id). One query per app context, cached in g like
+    _material_types(); dropped by _material_quotes_flushed() whenever a MaterialRequest is flushed."""
+    if not has_app_context():
+        return {}
+    cache = g.get('_material_quotes')
+    if cache is None:
+        rows = (db.session.query(MaterialRequest.material_id, MaterialRequest.quoted_unit_price, Supplier.name,
+                                 MaterialRequest.quoted_at)
+                .outerjoin(Supplier, Supplier.id == MaterialRequest.supplier_id)
+                .filter(MaterialRequest.status.in_(QUOTE_REQUEST_STATUSES), MaterialRequest.quoted_unit_price > 0)
+                .order_by(MaterialRequest.quoted_at, MaterialRequest.id).all())
+        cache = g._material_quotes = {mid: (price, supplier, at) for mid, price, supplier, at in rows}   # later wins
+    return cache
+
+
+def material_quote_unit(material):
+    """(text of ONE stock unit a quote is given for, its native quantity, native unit short) - 'лист 1000×2000' / 2.0
+    / 'м²', 'прът 6000 мм' / 6.0 / 'м', 'бр' / 1 / 'бр'; a lot without a sheet size / bar length: per м² / м."""
+    unit = material_price_unit(material.type)
+    short = material_unit_short(material.type)
+    if unit == 'm2' and _material_sheet_area_m2(material):
+        return f'лист {material.sheet_width_mm:g}×{material.sheet_length_mm:g}', _material_sheet_area_m2(material), short
+    if unit == 'm' and material.sheet_length_mm:
+        return f'прът {material.sheet_length_mm:g} мм', material.sheet_length_mm / 1000.0, short
+    return short, 1.0, short
+
+
+def material_quote(material):
+    """The supplier quote pricing `material` now, as (rate in €/native unit, supplier name, quoted_at), or None: only
+    our lot with no stock (<= PRODUCTION_STOCK_TOLERANCE) that has a quote (_material_quotes()). The rate is the quoted
+    price of one stock unit converted like a delivery line's (_cost_per_m2_from_unit_price(), the lot's own sizes)."""
+    if material is None or material.owner_client_id or (material.stock_quantity or 0) > PRODUCTION_STOCK_TOLERANCE:
+        return None
+    q = _material_quotes().get(material.id)
+    if not q:
+        return None
+    price, supplier, at = q
+    rate = _cost_per_m2_from_unit_price(material.type, price, material.sheet_width_mm, material.sheet_length_mm)
+    return (price if rate is None else rate), supplier, at
+
+
+def material_cost_rate(material):
+    """The delivery rate (€/m², €/m or €/piece - what cost_per_m2 means) every SALE price of a material is computed
+    from (owner's request 2026-11-23): cost_per_m2, except a lot of ours with no stock and a supplier quote
+    (material_quote()) - then the latest quote. Stock values, delivery notes and history keep cost_per_m2."""
+    q = material_quote(material)
+    return q[0] if q else (material.cost_per_m2 or 0)
+
+
+def _mark_quote_reprice(material_id):
+    """Queues a lot whose effective rate (material_cost_rate()) changed: _reprice_quoted_lots() reprices its Details'
+    stored prices right before the commit."""
+    db.session.info.setdefault('quote_reprice_lots', set()).add(material_id)
 
 
 def _detail_material_unit_qty(detail, material=None):
@@ -5542,7 +5614,7 @@ def _detail_material_cost(detail, material, client=None):
     Equals _material_cost(effective size) when pieces_per_unit is not used."""
     if material.owner_client_id:
         return 0.0
-    return _material_terms(_detail_material_unit_qty(detail, material) * material.cost_per_m2, client)
+    return _material_terms(_detail_material_unit_qty(detail, material) * material_cost_rate(material), client)
 
 
 def _material_sheet_area_m2(material):
@@ -5674,7 +5746,7 @@ def material_stock_unit_price(material, client=None):
     native = 1.0
     if material_price_unit(material.type) == 'm2':
         native = _material_sheet_area_m2(material) or 1.0
-    return round(_material_terms((material.cost_per_m2 or 0) * native, client), 2)
+    return round(_material_terms(material_cost_rate(material) * native, client), 2)
 
 
 def _material_stock_delta(material, native_qty):
@@ -6151,6 +6223,35 @@ def _reprice_material_details(*criteria):
             detail.calculated_price = price
             changed += 1
     return changed
+
+
+@db.event.listens_for(db.session, 'after_flush')
+def _material_quotes_flushed(session, flush_context):
+    """A MaterialRequest changed: the cached quotes (_material_quotes()) are stale."""
+    if has_app_context() and any(isinstance(o, MaterialRequest) for o in (*session.new, *session.dirty, *session.deleted)):
+        g.pop('_material_quotes', None)
+
+
+@db.event.listens_for(db.session, 'after_soft_rollback')
+def _material_quotes_rolled_back(session, previous_transaction):
+    session.info.pop('quote_reprice_lots', None)
+    if has_app_context():
+        g.pop('_material_quotes', None)
+
+
+@db.event.listens_for(db.session, 'before_commit')
+def _reprice_quoted_lots(session):
+    """Reprices the stored material price of the Details cut from every lot queued by _mark_quote_reprice() - a quote
+    set/changed/cleared on a lot with no stock, or a quoted lot whose stock went to 0 or back (_bump_stock()).
+    Frozen order/offer prices never change.
+    ponytail: only the lot's own Details' stored calculated_price; everything else prices live via material_cost_rate()."""
+    ids = session.info.pop('quote_reprice_lots', None)
+    if not ids:
+        return
+    session.flush()   # this transaction's quote change reaches _material_quotes() (the flush drops its cache)
+    keys = [k for (k,) in session.query(MaterialPrice.key).filter(MaterialPrice.id.in_(ids))]
+    if keys:
+        _reprice_material_details(Detail.material_key.in_(keys))
 
 
 def calculate_cnc_price_multi_service(width, height, total_length, pierce_count, material_key, service_ids, client=None,
@@ -6919,6 +7020,18 @@ def material_cost_text(material):
     return f'{price3(material.cost_per_m2)} €/{material_unit_short(material.type)}'
 
 
+def material_quote_text(material):
+    """"оферта: 12.500 € / лист 1000×2000 (Доставчик)" for a lot priced by a supplier quote now (material_quote()) -
+    staff only, '' otherwise. Shown on the materials list and storage materials."""
+    if not (current_user.is_authenticated and current_user.is_staff):
+        return ''
+    quote = material_quote(material)
+    if not quote:
+        return ''
+    price = _material_quotes()[material.id][0]
+    return f'оферта: {price3(price)} € / {material_quote_unit(material)[0]}' + (f' ({quote[1]})' if quote[1] else '')
+
+
 def catalog_numbers(row):
     """The numbers of a Detail / Product / MaterialPrice as one line (owner's decision 2026-11-20, shown in offers,
     orders, storage, delivery notes and declarations): "Наш № 123 · Вън. № AB-7 · КД № 01.02"; '' when none is set.
@@ -6992,6 +7105,8 @@ def delivery_note_total(note):
 app.jinja_env.filters['kg'] = kg_text
 app.jinja_env.globals['material_qty_text'] = material_qty_text
 app.jinja_env.globals['material_cost_text'] = material_cost_text
+app.jinja_env.globals['material_quote_text'] = material_quote_text
+app.jinja_env.globals['material_quote_unit'] = material_quote_unit
 app.jinja_env.globals['catalog_numbers'] = catalog_numbers
 app.jinja_env.globals['catalog_numbers_for'] = catalog_numbers_for
 app.jinja_env.globals['delivery_item_qty_text'] = delivery_item_qty_text
@@ -12241,13 +12356,32 @@ def update_material_request(request_id):
         flash('Невалиден статус.', 'danger')
         return redirect(url_for('storage_requests'))
     supplier_id = request.form.get('supplier_id', type=int)
-    if status == 'ordered' and not supplier_id:
-        flash('Изберете от кого е поръчан материалът, за да отбележите заявката като поръчана.', 'danger')
+    if status in QUOTE_REQUEST_STATUSES and not (supplier_id and db.session.get(Supplier, supplier_id)):
+        flash('Изберете доставчик - от кого е офертата / поръчката.', 'danger')
         return redirect(url_for('storage_requests'))
+    # Quote (owner's request 2026-11-23): required for 'quoted', kept/edited for 'ordered', cleared otherwise.
+    price = None
+    if status in QUOTE_REQUEST_STATUSES:
+        raw = (request.form.get('quoted_unit_price') or '').strip().replace(',', '.')
+        try:
+            price = round(float(raw), 3) if raw else None
+        except ValueError:
+            price = -1
+        if (price is not None and not (price > 0 and math.isfinite(price))) or (status == 'quoted' and price is None):
+            flash('Въведете положителна цена по офертата (€ за бройка).', 'danger')
+            return redirect(url_for('storage_requests'))
+    old = (material_request.quoted_unit_price, material_request.supplier_id, material_request.status)
     material_request.status = status
-    material_request.supplier_id = supplier_id if status == 'ordered' else None
+    material_request.supplier_id = supplier_id if status in QUOTE_REQUEST_STATUSES else None
+    if price != material_request.quoted_unit_price:
+        material_request.quoted_at = datetime.utcnow() if price else None
+    material_request.quoted_unit_price = price
+    new = (material_request.quoted_unit_price, material_request.supplier_id, material_request.status)
+    if old != new and material_request.material and (material_request.material.stock_quantity or 0) <= PRODUCTION_STOCK_TOLERANCE:
+        _mark_quote_reprice(material_request.material_id)   # the lot's rate may have changed (material_cost_rate())
     db.session.commit()
-    log_action(f'Обновен статус на заявка #{material_request.id} на "{material_request.status_label}"')
+    quote = f', оферта {price:g} €' if price else ''
+    log_action(f'Обновен статус на заявка #{material_request.id} на "{material_request.status_label}"{quote}')
     flash('Заявката беше обновена.', 'success')
     return redirect(url_for('storage_requests'))
 
@@ -12261,6 +12395,8 @@ def delete_material_request(request_id):
     what = (f'#{material_request.id} '
             f'"{material_request.material.display_name if material_request.material else "изтрит материал"}" '
             f'x {material_request.quantity:g} ({material_request.status_label})')
+    if material_request.quoted_unit_price:
+        _mark_quote_reprice(material_request.material_id)   # its quote may have priced the lot (material_cost_rate())
     db.session.delete(material_request)
     db.session.commit()
     log_action(f'Изтрита заявка за материал {what}')
@@ -12701,9 +12837,14 @@ def _bump_stock(target, quantity):
     if state is None or not state.persistent:
         target.stock_quantity = (target.stock_quantity or 0) + quantity
         return target.stock_quantity
+    quoted = isinstance(target, MaterialPrice) and target.id in _material_quotes()
+    was_empty = quoted and (target.stock_quantity or 0) <= PRODUCTION_STOCK_TOLERANCE
     target.stock_quantity = db.func.coalesce(type(target).stock_quantity, 0) + quantity
     db.session.flush()  # also sends any other pending change on the row (e.g. a corrected price); expires stock_quantity
-    return target.stock_quantity
+    total = target.stock_quantity
+    if quoted and was_empty != ((total or 0) <= PRODUCTION_STOCK_TOLERANCE):
+        _mark_quote_reprice(target.id)   # a quoted lot ran out / got stock: its rate switched (material_cost_rate())
+    return total
 
 
 def _lock_or_404(model, row_id):
@@ -13476,7 +13617,7 @@ def admin_client_delivery_notes():
     term_clients = [c for c in clients if c.material_adjustment_type]
     material_prices = {m.id: {'': material_stock_unit_price(m),
                               **{str(c.id): material_stock_unit_price(m, c) for c in term_clients}}
-                       for m in materials if not m.owner_client_id and m.cost_per_m2}
+                       for m in materials if not m.owner_client_id and material_cost_rate(m)}
     # for each note's "Редактирай" (edit_client_delivery_note)
     note_rows = {note.id: [{'type': it.target_type, 'target_id': it.target_id, 'name': it.description_snapshot,
                             'qty': it.quantity, 'unit_price': it.unit_price, 'notes': it.notes,
@@ -15571,7 +15712,7 @@ def detail_dxf_dashboard(detail_id):
         ppu = {'unit': material_price_unit(m.type), 'whole': _material_whole_unit_qty(m),
                'sheet_w': m.sheet_width_mm, 'sheet_l': m.sheet_length_mm,
                'w': detail.effective_width, 'h': detail.effective_height,
-               'rate': 0.0 if m.owner_client_id else _material_terms(m.cost_per_m2 or 0, detail.owner_client)}
+               'rate': 0.0 if m.owner_client_id else _material_terms(material_cost_rate(m), detail.owner_client)}
     if current_user.is_admin:
         has_geometry = (db.session.query(db.func.length(Detail.geometry_json)).filter(Detail.id == detail.id)
                         .scalar() or 0) > 2

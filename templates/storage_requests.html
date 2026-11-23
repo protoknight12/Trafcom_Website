@@ -10,6 +10,7 @@
         .status-badge { padding: 4px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; display: inline-block; }
         .status-new { background-color: #ffc107; color: #000; }
         .status-processing { background-color: #17a2b8; color: #fff; }
+        .status-quoted { background-color: #6f42c1; color: #fff; }
         .status-ordered { background-color: #28a745; color: #fff; }
         .add-item-row { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
         .add-item-row .form-group { flex: 1; min-width: 220px; margin-bottom: 0; }
@@ -91,7 +92,7 @@
 
     <section class="admin-card">
         <h3 style="margin-bottom: 4px;">Склад &middot; Заявки за материали</h3>
-        <p class="section-subtitle" style="margin: 0 0 16px 0;">Отбележете като "Поръчана" и изберете от кого е поръчан материалът.</p>
+        <p class="section-subtitle" style="margin: 0 0 16px 0;">Отбележете като "Оферирана" с цената по офертата на доставчика или като "Поръчана" и изберете доставчика. Докато материалът няма наличност, детайлите от него се ценят по последната оферта.</p>
 
         <div class="table-responsive">
             <table class="data-table">
@@ -101,7 +102,8 @@
                     <th class="text-center">Количество</th>
                     <th>Създадена</th>
                     <th class="text-center">Статус</th>
-                    <th>Поръчана от</th>
+                    <th>Доставчик</th>
+                    <th class="text-right">Оферта</th>
                     <th></th>
                 </tr>
                 </thead>
@@ -113,11 +115,13 @@
                     <td>{{ (req.created_at|local).strftime('%d.%m.%Y %H:%M') if req.created_at else '-' }} {% if req.created_by %}<div class="text-muted text-small">{{ req.created_by.full_name }}</div>{% endif %}</td>
                     <td class="text-center"><span class="status-badge status-{{ req.status }}">{{ req.status_label }}</span></td>
                     <td>{{ req.supplier.name if req.supplier else '-' }}</td>
+                    {% set qu = material_quote_unit(req.material) if req.material else ('', 1, '') %}
+                    <td class="text-right">{% if req.quoted_unit_price %}{{ req.quoted_unit_price|price3 }} € / {{ qu[0] }}{% if qu[1] != 1 %}<div class="text-muted text-small">{{ (req.quoted_unit_price / qu[1])|price3 }} €/{{ qu[2] }}</div>{% endif %}{% if req.quoted_at %}<div class="text-muted text-small">{{ (req.quoted_at|local).strftime('%d.%m.%Y') }}</div>{% endif %}{% else %}-{% endif %}</td>
                     <td>
                         <button type="button" class="btn-secondary" data-dialog="requestStatusDialog"
                                 data-action="{{ url_for('update_material_request', request_id=req.id) }}"
                                 data-title="Заявка: {{ format_material_option(req.material) if req.material else 'Изтрит материал' }}"
-                                data-values='{{ {"status": req.status, "supplier_id": req.supplier_id or ""}|tojson|forceescape }}'>Промени статус</button>
+                                data-values='{{ {"status": req.status, "supplier_id": req.supplier_id or "", "quoted_unit_price": req.quoted_unit_price or "", "quote_unit": qu[0], "quote_div": qu[1], "quote_native": qu[2]}|tojson|forceescape }}'>Промени статус</button>
                         <form method="POST" action="{{ url_for('delete_material_request', request_id=req.id) }}" style="display: inline;"
                               data-confirm="Изтриване на заявката за &quot;{{ req.material.display_name if req.material else 'изтрит материал' }}&quot;?">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -126,7 +130,7 @@
                     </td>
                 </tr>
                 {% else %}
-                <tr><td colspan="6" class="text-center no-data">Няма заявки за материали.</td></tr>
+                <tr><td colspan="7" class="text-center no-data">Няма заявки за материали.</td></tr>
                 {% endfor %}
                 </tbody>
             </table>
@@ -150,6 +154,12 @@
                     {% for s in suppliers %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
                 </select>
             </div>
+            <div class="form-group request-quote-group">
+                <label for="request_quoted_unit_price">Цена по оферта, € за 1 <span class="quote-unit-label">бройка</span></label>
+                <input type="number" name="quoted_unit_price" id="request_quoted_unit_price" min="0.001" step="0.001" oninput="quoteHint(this.form)">
+                <input type="hidden" name="quote_unit"><input type="hidden" name="quote_div"><input type="hidden" name="quote_native">
+                <div class="text-muted text-small quote-hint"></div>
+            </div>
             <button type="submit" class="btn-submit">Запази</button>
         </form>
     </dialog>
@@ -158,7 +168,22 @@
 <script src="{{ url_for('static', filename='js/material_weight.js') }}"></script>
 <script>
     function toggleSupplier(select) {
-        select.closest('form').querySelector('.request-supplier-group').hidden = select.value !== 'ordered';
+        const form = select.closest('form');
+        const withSupplier = select.value === 'quoted' || select.value === 'ordered';
+        form.querySelector('.request-supplier-group').hidden = !withSupplier;
+        form.querySelector('.request-quote-group').hidden = !withSupplier;
+        form.quoted_unit_price.required = select.value === 'quoted';
+        quoteHint(form);
+    }
+
+    // The quote is for ONE stock unit (a sheet / a bar of the lot's length / a piece); the hint shows the rate the
+    // details are priced from (material_quote() in app.py: price / native quantity of that unit).
+    function quoteHint(form) {
+        const unit = form.quote_unit.value, div = parseFloat(form.quote_div.value) || 1;
+        form.querySelector('.quote-unit-label').textContent = unit || 'бройка';
+        const price = parseFloat(form.quoted_unit_price.value);
+        form.querySelector('.quote-hint').textContent = price > 0 && div !== 1
+            ? '= ' + (price / div).toFixed(3) + ' €/' + form.quote_native.value : '';
     }
 
     let reqItems = [];
