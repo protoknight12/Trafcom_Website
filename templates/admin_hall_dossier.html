@@ -240,6 +240,20 @@
         {% else %}
         <p class="dz-muted">Няма записани технологии.</p>
         {% endif %}
+        {#- admin_hall_cut_tech_import: every layer of an FSCUT file loaded from a CypCut library technology #}
+        <section id="cti-form" data-dialog-section="Импорт от FSCUT файл">
+        <form method="post" action="{{ url_for('admin_hall_cut_tech_import', machine_id=m.id) }}" class="dz-form" enctype="multipart/form-data" data-once>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <p class="dz-muted" style="margin-top:0">Всеки слой на файла (.lxd / .lxds), зареден в CypCut от технология от библиотеката (напр. „8mm1.2d1.5d_D.fsm“), става технология на машината: дебелината и дюзата се вземат от името на технологията, газът и всички параметри - от слоя. Слой без технология от библиотеката се пропуска; същият вид, дебелина, газ и дюза се презаписват.</p>
+            <div class="dz-row">
+                <div><label>Вид материал на технологиите</label>
+                    <select name="grade_id" data-picker="off"><option value="">- без вид -</option>
+                        {% for gr in grades %}<option value="{{ gr.id }}">{{ gr.name }}</option>{% endfor %}</select></div>
+                <div><label>Файл</label><input type="file" name="file" accept=".lxd,.lxds" required></div>
+            </div>
+            <button class="btn btn-primary" type="submit" style="margin-top:12px">Внеси</button>
+        </form>
+        </section>
         {#- one form for add and edit (form_dialog.js: "Редактирай" fills it from data-values, "+ Нова" resets it) #}
         <section id="ct-form" data-dialog-section="+ Нова технология">
         <form method="post" action="{{ url_for('admin_hall_cut_tech_save', machine_id=m.id) }}" class="dz-form">

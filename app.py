@@ -16488,22 +16488,80 @@ def view_detail_nest_save_tech(file_id):
     if refusal:
         flash(refusal + ' Технологията не е записана.', 'danger')
         return back
-    tech = _cut_technology(machine.id, grade_id, thickness, ch['gas'], ch['nozzle'])
-    if tech is None:
-        tech = MachineCutTechnology(machine_id=machine.id, grade_id=grade_id, thickness_mm=thickness, gas=ch['gas'],
-                                    nozzle=ch['nozzle'])
-        db.session.add(tech)
-    tech.cutting_speed_mm_per_min, tech.pierce_time_sec = ch['speed_mm_min'], ch['pierce_time_sec']
-    for col, v in ch['fields'].items():
-        setattr(tech, col, v)
-    tech.params_json = json.dumps(ch['raw'], ensure_ascii=False)
-    tech.source = f.original_filename[:255]
-    db.session.flush()
+    tech = _save_channel_technology(machine, grade_id, thickness, ch['nozzle'], ch, f.original_filename)
     log_action(f'Технология на "{machine.name}" от разкрой "{f.original_filename}" (слой {port}): '
                f'{_cut_tech_label(tech)} - {tech.cutting_speed_mm_per_min or "-"} мм/мин')
     db.session.commit()
     flash(f'Технологията е записана в машината "{machine.name}".', 'success')
     return back
+
+
+def _save_channel_technology(machine, grade_id, thickness, nozzle, ch, source):
+    """One FSCUT channel (fscut.parse()['technology']['channels'][n]) as the machine's MachineCutTechnology for
+    (Вид, thickness, the channel's gas, nozzle) - added, or the same key overwritten: speed, pierce time, every
+    fscut.tech_columns() field, the whole tree (params_json) and the file name (source). Flushed, not committed."""
+    tech = _cut_technology(machine.id, grade_id, thickness, ch['gas'], nozzle)
+    if tech is None:
+        tech = MachineCutTechnology(machine_id=machine.id, grade_id=grade_id, thickness_mm=thickness, gas=ch['gas'],
+                                    nozzle=nozzle)
+        db.session.add(tech)
+    tech.cutting_speed_mm_per_min, tech.pierce_time_sec = ch['speed_mm_min'], ch['pierce_time_sec']
+    for col, v in ch['fields'].items():
+        setattr(tech, col, v)
+    tech.params_json = json.dumps(ch['raw'], ensure_ascii=False)
+    tech.source = (source or '')[:255] or None
+    db.session.flush()
+    return tech
+
+
+@app.route('/admin/hall/<int:machine_id>/cut-tech/import', methods=['POST'])
+@role_required('admin')
+def admin_hall_cut_tech_import(machine_id):
+    """"Импорт от FSCUT файл" in a laser's dossier (owner's request 2026-11-23): every layer of an .lxd / .lxds that
+    was loaded from a CypCut library technology becomes the machine's technology for the picked Вид - thickness and
+    nozzle from the library name the layer keeps ("8mm1.2d1.5d_D.fsm" -> 8 mm, 1.2d/1.5d; CypCut overwrites the
+    layer's own MaterialParams with the document's), gas and every parameter from the layer. A layer without a
+    library name or without a gas is skipped; one outside the machine's thickness range is refused (listed); the same
+    key is overwritten. The uploaded file is not kept."""
+    hm = HallMachine.query.get_or_404(machine_id)
+    mc = hm.machine
+    if mc is None or not mc.is_laser:
+        return _dossier_back(hm.id, 'Технологии се внасят само в машина за лазерно рязане.', 'danger')
+    upload = request.files.get('file')
+    ext = os.path.splitext(upload.filename or '')[1].lower() if upload else ''
+    if ext not in FSCUT_EXTENSIONS:
+        return _dossier_back(hm.id, 'Изберете файл от FSCUT (.lxd или .lxds).', 'danger')
+    grade_raw = request.form.get('grade_id', '')
+    grade_id = int(grade_raw) if grade_raw.isdigit() and db.session.get(MaterialGrade, int(grade_raw)) else None
+    tmp = os.path.join(app.config['UPLOAD_FOLDER'], f'techimport_{uuid.uuid4().hex}{ext}')
+    upload.save(tmp)
+    try:
+        channels = fscut.parse(tmp)['technology']['channels']
+    except ValueError:
+        return _dossier_back(hm.id, 'Файлът не може да се прочете.', 'danger')
+    finally:
+        os.remove(tmp)
+    saved, skipped, refused = [], [], []
+    for ch in channels:
+        thickness, nozzle = ch['library_thickness'], ch['library_nozzle'] or ch['nozzle']
+        if not ch['library'] or thickness is None or not ch['gas'] or not ch['speed_mm_min']:
+            skipped.append(str(ch['port']))
+            continue
+        refusal = _thickness_refusal(mc, grade_id, thickness)
+        if refusal:
+            refused.append(f'слой {ch["port"]} ({thickness:g} мм)')
+            continue
+        tech = _save_channel_technology(mc, grade_id, thickness, nozzle, ch, f'{upload.filename} / {ch["library"]}')
+        saved.append(_cut_tech_label(tech))
+    db.session.commit()
+    if saved:
+        log_action(f'Внесени технологии в "{mc.name}" от "{upload.filename}": {len(saved)}', details='\n'.join(saved))
+    message = f'Внесени технологии: {len(saved)}.'
+    if skipped:
+        message += f' Пропуснати слоеве без технология от библиотеката: {", ".join(skipped)}.'
+    if refused:
+        message += f' Извън границите на дебелината: {", ".join(refused)}.'
+    return _dossier_back(hm.id, message, 'success' if saved and not refused else 'warning')
 
 
 def _fscut_download(data, name, ext):

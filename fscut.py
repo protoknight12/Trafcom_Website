@@ -346,6 +346,20 @@ def _raw(el, path='', out=None, depth=0):
     return out
 
 
+def library_name_parts(name):
+    """A CypCut library file name -> (thickness mm, nozzle): "8mm1.2d1.5d_D.fsm" -> (8.0, "1.2d/1.5d"),
+    "16mm1.4E.fsm" -> (16.0, "1.4E"), "1mm1.5s2.0s_0.6_n2_D.fsm" -> (1.0, "1.5s/2.0s"). (None, None) when the name
+    does not start with "<number>mm"; text after the first "_" is the user's own suffix."""
+    import re
+    m = re.match(r'\s*(\d+(?:[.,]\d+)?)\s*mm([^_]*)', name or '', re.I)
+    if not m:
+        return None, None
+    thickness = float(m.group(1).replace(',', '.'))
+    rest = re.sub(r'\.fsm$', '', m.group(2), flags=re.I)
+    nozzles = re.findall(r'\d+(?:\.\d+)?[A-Za-z]+', rest)
+    return (thickness if 0 < thickness < 1000 else None), ('/'.join(nozzles)[:30] or None)
+
+
 def _technology(tech_el):
     """Technical: document material/thickness + one row per used channel (layer): summary keys, `fields`
     (tech_columns() keys), `nozzle` and `raw` (_raw())."""
@@ -373,8 +387,13 @@ def _technology(tech_el):
                         for p in (cam.find(f'Pierce{n}') for n in range(1, steps + 1)) if p is not None)
         cut = cam.find('Cut')
         mp = ch.find('.//MaterialParams')
+        library = (ch.findtext('MaterialName') or '').strip() or None
+        lib_thickness, lib_nozzle = library_name_parts(library)
         out['channels'].append({
             'port': int(port), 'name': ch.get('MaterialName') or ch.get('Name'),
+            # the CypCut library technology the layer was loaded from ("8mm1.2d1.5d_D.fsm"): its thickness and
+            # nozzle, which MaterialParams does not keep (CypCut overwrites it with the document's)
+            'library': library, 'library_thickness': lib_thickness, 'library_nozzle': lib_nozzle,
             'speed_mm_min': round(speed * 60, 1) if speed else None,
             'gas': _gas(cut.get('GasType')) if cut is not None else None,
             'gas_pressure_bar': fields['gas_pressure_bar'], 'power_w': fields['peak_power_w'],

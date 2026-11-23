@@ -580,6 +580,54 @@ def test_nest_parts_bound_to_catalog_details(s, tmp_path):
                 os.remove(p)
 
 
+def test_import_library_technologies(s, tmp_path):
+    """"Импорт от FSCUT файл" in a laser's dossier: each layer loaded from a CypCut library technology becomes the
+    machine's technology - thickness and nozzle from the library name (the layer's MaterialParams carries the
+    document's), gas and parameters from the layer; a layer without a library name is skipped, one outside the
+    thickness range refused, the same key overwritten."""
+    from app import MachineThicknessRange
+    assert fscut.library_name_parts('8mm1.2d1.5d_D.fsm') == (8.0, '1.2d/1.5d')
+    assert fscut.library_name_parts('16mm1.4E.fsm') == (16.0, '1.4E')
+    assert fscut.library_name_parts('1mm1.5s2.0s_0.6_n2_D.fsm') == (1.0, '1.5s/2.0s')
+    assert fscut.library_name_parts('plct_Al.fsm') == (None, None) and fscut.library_name_parts(None) == (None, None)
+
+    def layer(port, lib, speed, gas):
+        return (f'<Channel ChannelPort="{port}"><CamParams WorkSpeed="{speed}"><Cut GasType="{gas}" GasPressure=".8"/>'
+                f'<MaterialParams MaterialName="碳钢" NozzleSpec="1.6sp" Thickness="20"/></CamParams>'
+                + (f'<MaterialName>{lib}</MaterialName>' if lib else '') + '</Channel>')
+    doc = ('<?xml version="1.0" encoding="utf-8"?><LXDDocument><Technical MaterialName="碳钢" Thickness="20"><Channels>'
+           + layer(1, '2mm1.5s2.0s.fsm', 300, 3) + layer(2, '8mm1.2d1.5d_D.fsm', 30, 2)
+           + layer(3, '20mm1.4sp1.6sp.fsm', 12, 2) + layer(4, None, 100, 0)
+           + '</Channels></Technical><Entities/></LXDDocument>')
+    laser = Machine(name='PG3015 QA', is_laser=True)
+    db.session.add(laser)
+    db.session.flush()
+    hall = HallMachine(name=laser.name, machine_id=laser.id)
+    grade = MaterialGrade(name='Черна стомана QA', density_kg_dm3=7.85)
+    db.session.add_all([hall, grade])
+    db.session.flush()
+    db.session.add(MachineThicknessRange(machine_id=laser.id, grade_id=None, max_thickness_mm=16))
+    db.session.commit()
+    c = _login('fn_admin')
+    url = f'/admin/hall/{hall.id}/cut-tech/import'
+    c.post(url, data={'grade_id': grade.id, 'file': (io.BytesIO(doc.encode()), 'cs copy.lxd')},
+           content_type='multipart/form-data')
+    db.session.expire_all()
+    rows = sorted((t.thickness_mm, t.gas, t.nozzle, t.cutting_speed_mm_per_min, t.grade_id)
+                  for t in MachineCutTechnology.query.filter_by(machine_id=laser.id))
+    assert rows == [(2, 'nitrogen', '1.5s/2.0s', 18000, grade.id), (8, 'oxygen', '1.2d/1.5d', 1800, grade.id)]
+    assert 'Извън границите на дебелината: слой 3 (20 мм)' in c.get(f'/admin/hall/{hall.id}/dossier').get_data(as_text=True)
+    t = MachineCutTechnology.query.filter_by(machine_id=laser.id, thickness_mm=8).one()
+    assert t.source == 'cs copy.lxd / 8mm1.2d1.5d_D.fsm' and t.gas_pressure_bar == 0.8 and t.params_json
+    c.post(url, data={'grade_id': grade.id, 'file': (io.BytesIO(doc.encode()), 'cs copy.lxd')},
+           content_type='multipart/form-data')                                       # again: overwritten, not added
+    db.session.expire_all()
+    assert MachineCutTechnology.query.filter_by(machine_id=laser.id).count() == 2
+    c.post(url, data={'grade_id': grade.id, 'file': (io.BytesIO(b'x'), 'a.dxf')}, content_type='multipart/form-data')
+    assert _login('fn_worker').post(url, data={}).status_code == 302
+    assert MachineCutTechnology.query.filter_by(machine_id=laser.id).count() == 2
+
+
 def test_fscut_download_for_machine(s, tmp_path):
     laser = Machine(name='Лазер стар', is_laser=True)
     db.session.add(laser)

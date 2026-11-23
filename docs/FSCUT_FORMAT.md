@@ -123,6 +123,12 @@ Other groups seen in our files (kept whole, not as fields): `LeadLineParam`, `La
 `Knot` points), `MaterialParams[MaterialName, NozzleSpec, Thickness]` (the nozzle). CamParams itself carries slow
 lead/end, flash-cut, cut gap, compensation and cool-down values.
 
+A layer loaded from a CypCut library technology keeps its file name as a `<MaterialName>` child of the `Channel`
+("8mm1.2d1.5d_D.fsm" - thickness, nozzles, after "_" the user's own suffix); CypCut overwrites the layer's own
+`MaterialParams` with the document's material / thickness / nozzle, so the library name is the only per-layer
+thickness (`fscut.library_name_parts()`, channel keys `library`, `library_thickness`, `library_nozzle`). The library
+`.fsm` files themselves are a password-protected ZIP and are not read.
+
 What a machine's technology stores (`MachineCutTechnology`, key Вид + thickness + gas + nozzle): speed, pierce time
 (sum of `TimeFollow + TimeStay` over the used pierce steps), the fields of `fscut.CUT_FIELDS` (pressure, peak power,
 current %, PWM frequency, duty % = `PwmRatio` x 100, focus, height, beam size, lift height), `PierceStepCount` and
