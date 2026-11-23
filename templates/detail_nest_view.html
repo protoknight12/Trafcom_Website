@@ -169,10 +169,9 @@
         {% if detail.width and detail.height and (detail.width - pm.size[0])|abs > 0.5 and (detail.width - pm.size[1])|abs > 0.5 %}
         <p class="alert alert-warning">Габаритът на детайла в каталога е {{ detail.width|num3 }} × {{ detail.height|num3 }} мм - различен от файла.</p>
         {% endif %}
-        {% if nest.format == 'lxds' %}
-        <p><a class="btn-secondary" href="{{ url_for('view_detail_nest_lxd', file_id=file.id) }}" style="padding: 8px 14px;">Изтегли като стар FSCUT (.lxd)</a>
-            <span class="text-muted text-small">чертежът + технологията от файла</span></p>
-        {% endif %}
+        {% set _to = 'lxd' if nest.format == 'lxds' else 'lxds' %}
+        <p><a class="btn-secondary" href="{{ url_for('view_detail_nest_lxd', file_id=file.id, fmt=_to) }}" style="padding: 8px 14px;">Изтегли като {{ 'стар FSCUT (.lxd)' if _to == 'lxd' else 'нов FSCUT (.lxds)' }}</a>
+            <span class="text-muted text-small">чертежът, технологията, lead-in, micro-joint-ите и компенсацията от файла</span></p>
         <div class="nest-canvas-wrap"><canvas id="nest-canvas-{{ nest.results|length + 1 }}"></canvas></div>
     </section>
     {% elif not nest.results %}

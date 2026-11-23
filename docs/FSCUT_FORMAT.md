@@ -84,7 +84,10 @@ Old `.lxd` - children of the `Circle` / `LwPolyline`, in this order:
   <Point .../>
 ```
 
-`Pos` = segment index + fraction along the polyline's own vertices (0 is left out); `PathStartParam` = the
+`IsFill="true"` on the contour (new format: the first u32 of `Curve` = 1) marks the OUTER contour; without it CypCut
+treats the outer contour as a hole and puts its lead-in and compensation on the wrong side (owner's test 2026-11-23).
+The writers keep it from the source; when no contour has it (a DXF) every closed contour whose box lies inside no other
+contour's box gets it. `Pos` = segment index + fraction along the polyline's own vertices (0 is left out); `PathStartParam` = the
 lead-in's `Pos`. A circle has no `Pos` - its start is the `StartAngle` attribute (radians). Older files have a short
 `<LeadIn Pos Angle>` with no length (CypCut then uses its defaults).
 
@@ -142,6 +145,22 @@ compensation. Since then a part file's contours (`parse()['model']['entities']`:
 stored, with its `LeadIn` / `ToolCompensation` / `MicroConnects`, `StartAngle`, `PathStartParam`) are written as they
 are; only the other shapes (`model['loose']`: lines, arcs, Beziers) are chained. Nothing is generated (owner's
 decision): a DXF still gets none - CypCut adds them. Checked: `цом.lxds` converted gives the same 27 elements as the
-`цом.lxd` CypCut saved from the same part.
+`цом.lxd` CypCut saved from the same part. The owner opened such a converted file in CypCut (2026-11-23): lead-ins,
+micro-joints and compensation are there.
 
-Not done: writing `.lxds` and converting nests (only parts). Lead-ins/micro-joints are not drawn or counted on the page.
+## Writing the new format (`fscut.write_lxds()`)
+
+Step 2 (2026-11-23, after the `.lxd` files worked): one part as a new-format part file, mirroring the part CypCutE
+6.4.2330.6 saved (`DocType="Model2D"`, the ZIP entries in the same order, stored, with directory entries). Each
+contour = one `Geometry2D/data.bin` record (Circle: point, r, u32 0, start angle, 0; LwPolyline: double
+PathStartParam, u32 closed, u32 count, vertices, u32 0) + one `Shapes2D/data.bin` record (`Object` = u32 handle,
+`Shape` = u32 1 + 56 zeros, u32 lead count, [`LeadParam`], u32 0, `Curve`). A sub-record's u64 size counts from its
+`c1` to its `c0`, a record's from `d1` to `d0`; both files start `BCMP`, u32 file length, u32 1, zeros to 4096.
+`Geometry2D/content.xml` and `Shapes2D/content.xml` carry the upper-case MD5 of their `data.bin`. Micro-joints go into
+`Shapes2D/content.xml` with an empty `<LeadIn/>` under each `MicroConnect`, as CypCut writes them. Written from
+CypCut's own part, both binary files came out byte for byte the same as CypCut's (only the handles differ).
+
+Not written: `thumbnail.emf`, `GalvoParams` / `TechFlags` in Technical (CypCut uses its defaults), nests.
+The owner opened `цом_от_lxd.lxds` and `osnova_от_dxf.lxds` in CypCut (2026-11-23, after the IsFill fix): they work.
+
+Not done: converting nests (only parts). Lead-ins/micro-joints are not drawn or counted on the page.

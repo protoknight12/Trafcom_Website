@@ -8,6 +8,7 @@ with the record layout documented in docs/FSCUT_FORMAT.md.
 Run with:
     pytest testing/test_fscut_nest.py -v
 """
+import hashlib
 import io
 import json
 import math
@@ -374,6 +375,8 @@ def test_write_lxd_round_trip(tmp_path):
     ch = fscut.parse(_write(tmp_path / 'e.lxd', fscut.write_lxd(shapes, edited)))['technology']['channels'][0]
     assert (ch['fields']['peak_power_w'], ch['fields']['p1_gas'], ch['speed_mm_min']) == (4000, 'air', 1200)
     assert fscut.parse(_write(tmp_path / 'n.lxd', fscut.write_lxd(shapes)))['model']['pierces'] == 2
+    outer = [e['kind'] for e in fscut.parse(str(p))['model']['entities'] if e['attrs'].get('IsFill') == 'true']
+    assert outer == ['poly']                                              # a DXF's outer contour, not the hole
     with pytest.raises(ValueError):
         fscut.write_lxd([])
 
@@ -411,6 +414,19 @@ def test_write_lxd_keeps_lead_in_micro_joints_compensation(tmp_path):
         assert (back['size'], back['pierces'], back['cut_length_mm']) == (m['size'], m['pierces'], m['cut_length_mm'])
         pts = [(p.get('X'), p.get('Y')) for p in ents.find('LwPolyline').findall('Point')]
         assert pts == [('10', '10'), ('110', '10'), ('110', '60'), ('10', '60')]    # vertex order kept
+        # the outer contour is marked IsFill (else CypCut cuts it as a hole), the hole is not
+        assert ents.find('LwPolyline').get('IsFill') == 'true' and ents.find('Circle').get('IsFill') is None
+        # the same part as a new-format .lxds: both data.bin files + their MD5, read back to the same contours
+        x = fscut.write_lxds(m['loose'], None, m['entities'], name='Планка')
+        with zipfile.ZipFile(io.BytesIO(x)) as z:
+            for part in ('Geometry2D', 'Shapes2D'):
+                md5 = ET.fromstring(z.read(f'{part}/content.xml')).findtext('MD5')
+                assert md5 == hashlib.md5(z.read(f'{part}/data.bin')).hexdigest().upper()
+        n = fscut.parse(_write(tmp_path / (name + '.lxds'), x))['model']
+        assert n['name'] == 'Планка' and (n['size'], n['pierces']) == (m['size'], m['pierces'])
+        assert [e['kind'] for e in n['entities'] if e['attrs'].get('IsFill') == 'true'] == ['poly']
+        strip = lambda es: [(e['kind'], e['attrs'], [c for c in e['cam'] if c[1] or c[2]]) for e in es]
+        assert strip(n['entities']) == strip(fscut.parse(_write(tmp_path / (name + '.2.lxd'), out))['model']['entities'])
     # a part with no such data: empty ToolCompensation / MicroConnects, no LeadIn (as before)
     m = fscut.parse(_write(tmp_path / 'plain.lxds', _lxds(part=True)))['model']
     ents = ET.fromstring(fscut.write_lxd(m['loose'], None, m['entities'])).find('Entities')
@@ -436,7 +452,11 @@ def test_fscut_download_for_machine(s, tmp_path):
     assert r.status_code == 302 and 'FSCUT' in c.get(r.headers['Location']).get_data(as_text=True)
     c.post(f'/admin/hall/{hall.id}/dossier/system', data={'status': 'idle', 'is_laser': '1', 'fscut_format': 'lxds'})
     assert db.session.get(Machine, laser.id).fscut_format == 'lxds'
-    assert c.get(url).status_code == 302                                 # new format: not written yet
+    r = c.get(url)                                                     # new format: a .lxds part file
+    assert r.status_code == 200 and '.lxds' in r.headers['Content-Disposition']
+    x = fscut.parse(_write(tmp_path / 'a.lxds', r.data))
+    assert x['format'] == 'lxds' and x['model']['size'] == (100, 50) and x['model']['cut_length_mm'] == 300
+    assert (x['technology']['channels'][0]['speed_mm_min'], x['technology']['thickness']) == (900, 8)
     c.post(f'/admin/hall/{hall.id}/dossier/system', data={'status': 'idle', 'is_laser': '1', 'fscut_format': 'lxd'})
     r = c.get(url)                                                     # no machine technology: the detail's speed + gas
     assert r.status_code == 200 and '.lxd' in r.headers['Content-Disposition'] and '/' not in r.headers['Content-Disposition']
@@ -460,6 +480,15 @@ def test_fscut_download_for_machine(s, tmp_path):
         m = fscut.parse(_write(tmp_path / 'p.lxd', r.data))['model']
         assert r.status_code == 200 and m['size'] == (300, 50)
         assert c.get(f'/details/files/{nest.id}/nest/lxd').status_code == 302
+        old, old_path = _attach(d, 'гггг.lxd', CAM_LXD.encode())            # old part -> new format, with leads
+        try:
+            assert 'Изтегли като нов FSCUT' in c.get(f'/details/files/{old.id}/nest').get_data(as_text=True)
+            r = c.get(f'/details/files/{old.id}/nest/lxds')
+            m = fscut.parse(_write(tmp_path / 'o.lxds', r.data))['model']
+            assert r.status_code == 200 and m['name'] == 'гггг' and len(m['entities']) == 2
+            assert {t for e in m['entities'] for t, a, k in e['cam'] if a or k} == {'LeadIn', 'ToolCompensation', 'MicroConnects'}
+        finally:
+            os.remove(old_path)
         assert _login('fn_worker').get(url).status_code == 302             # admin only
     finally:
         os.remove(part_path)

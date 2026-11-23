@@ -16215,18 +16215,16 @@ def _tech_channel(tech, detail=None):
 def admin_detail_fscut(detail_id):
     """"Изтегли FSCUT за машината": the detail's drawing (Detail.geometry_json, from its DXF) + the machine's
     technology for the detail's Вид + thickness + gas + nozzle (else the detail's own speed and gas), in the file
-    format the machine reads (Machine.fscut_format). Step 1 (owner's decision 2026-11-23): only the old .lxd is
-    written; a machine on the new .lxds gets a message."""
+    format the machine reads (Machine.fscut_format): old .lxd (fscut.write_lxd) or new .lxds (fscut.write_lxds)."""
     detail = Detail.query.get_or_404(detail_id)
     back = redirect(url_for('detail_dxf_dashboard', detail_id=detail.id))
     machine = db.session.get(Machine, request.args.get('machine_id', type=int) or 0)
     if machine is None or not machine.is_laser:
         flash('Изберете машина за лазерно рязане.', 'danger')
         return back
-    if machine.fscut_format != 'lxd':
-        flash(f'„{machine.name}“: ' + ('новият FSCUT формат (.lxds) още не се записва - засега само старият (.lxd).'
-                                     if machine.fscut_format == 'lxds'
-                                     else 'задайте FSCUT формата на машината в досието ѝ („Система“).'), 'warning')
+    fmt = machine.fscut_format
+    if fmt not in FSCUT_FORMATS:
+        flash(f'„{machine.name}“: задайте FSCUT формата на машината в досието ѝ („Система“).', 'warning')
         return back
     try:
         shapes = json.loads(detail.geometry_json) if detail.geometry_json else []
@@ -16238,20 +16236,22 @@ def admin_detail_fscut(detail_id):
     grade_id = detail.material.grade_id if detail.material else None
     tech = _cut_technology(machine.id, grade_id, detail.cut_thickness, detail.cutting_gas, detail.cutting_nozzle)
     try:
-        data = fscut.write_lxd(shapes, _tech_channel(tech, detail))
+        ch = _tech_channel(tech, detail)
+        data = (fscut.write_lxds(shapes, ch, name=detail.name, thickness=detail.cut_thickness) if fmt == 'lxds'
+                else fscut.write_lxd(shapes, ch))
     except (ValueError, KeyError, TypeError):
         flash('Чертежът на детайла не може да се запише във FSCUT.', 'danger')
         return back
-    log_action(f'FSCUT .lxd за "{machine.name}": детайл "{detail.name}"'
+    log_action(f'FSCUT .{fmt} за "{machine.name}": детайл "{detail.name}"'
                + (f', технология {_cut_tech_label(tech)}' if tech else ', без технология на машината'))
-    return _fscut_download(data, detail.name, '.lxd')
+    return _fscut_download(data, detail.name, '.' + fmt)
 
 
-@app.route('/details/files/<int:file_id>/nest/lxd')
+@app.route('/details/files/<int:file_id>/nest/<any(lxd, lxds):fmt>')
 @role_required('admin')
-def view_detail_nest_lxd(file_id):
-    """A part file of the new format (.lxds, one detail, no nest) rewritten as the old .lxd, with its own channel-1
-    technology (fscut.write_lxd()). Nests are not converted yet (step 1)."""
+def view_detail_nest_lxd(file_id, fmt):
+    """A part file (one detail, no nest) rewritten in the other FSCUT format (fmt), with its own channel-1 technology
+    and the contours' lead-in / micro-joints / compensation. Nests are not converted."""
     f = DetailDxfFile.query.get_or_404(file_id)
     nest = _detail_nest(f)
     if nest is None:
@@ -16259,10 +16259,14 @@ def view_detail_nest_lxd(file_id):
     if not nest['model']:
         flash('Засега се преобразуват само файлове с един детайл (парт), не разкрои.', 'warning')
         return redirect(url_for('view_detail_nest', file_id=f.id))
-    ch = nest['technology']['channels'][0] if nest['technology']['channels'] else None
-    data = fscut.write_lxd(nest['model']['loose'], ch, nest['model']['entities'])
-    log_action(f'FSCUT .lxd от "{f.original_filename}" (детайл "{f.detail.name}")')
-    return _fscut_download(data, os.path.splitext(f.original_filename)[0], '.lxd')
+    m, t = nest['model'], nest['technology']
+    ch = t['channels'][0] if t['channels'] else None
+    name = os.path.splitext(f.original_filename)[0]
+    data = (fscut.write_lxds(m['loose'], ch, m['entities'], name=m.get('name') or name, material=t['material'],
+                             thickness=t['thickness']) if fmt == 'lxds'
+            else fscut.write_lxd(m['loose'], ch, m['entities']))
+    log_action(f'FSCUT .{fmt} от "{f.original_filename}" (детайл "{f.detail.name}")')
+    return _fscut_download(data, name, '.' + fmt)
 
 
 @app.route('/details/files/<int:file_id>/delete', methods=['POST'])
