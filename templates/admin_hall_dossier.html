@@ -191,7 +191,7 @@
     {#- MachineCutTechnology rows (admin_hall_cut_tech_save / _delete): what a detail's "Технология на рязане"
         offers for this machine by Вид + thickness. Each row is its own small form. #}
     <div class="dz-panel">
-        <h2>Технологии на рязане ({{ cut_techs|length }})</h2>
+        <h2>Технологии на рязане ({{ cut_techs|length }}{% set _untested = cut_techs|selectattr('needs_test')|list|length %}{{ ', за тест: ' ~ _untested if _untested }})</h2>
         <p class="dz-muted" style="margin-top:0">Технологията по вид материал, дебелина, газ и дюза: скорост, пробиване и всички параметри от FSCUT. Попълват детайла при избор на тази машина; записват се от детайла („Запиши като технология на машината“) и от разкрой FSCUT на детайла.</p>
         {% if cut_techs %}
         <div style="overflow-x:auto;">
@@ -210,8 +210,16 @@
                 <td>{{ t.gas_pressure_bar|num3 if t.gas_pressure_bar is not none else '-' }}</td>
                 <td>{{ t.focus_mm|num3 if t.focus_mm is not none else '-' }}</td>
                 <td>{{ t.height_mm|num3 if t.height_mm is not none else '-' }}</td>
-                <td class="dz-muted">{{ t.source or 'ръчно' }}</td>
+                <td class="dz-muted">{{ t.source or 'ръчно' }}{% if t.needs_test %}
+                    <div class="alert alert-warning" style="margin:4px 0 0; padding:2px 6px; font-size:0.78rem;">За тест - не е потвърдена</div>{% endif %}</td>
                 <td style="white-space:nowrap;">
+                    {% if t.needs_test %}
+                    <form method="post" action="{{ url_for('admin_hall_cut_tech_tested', machine_id=m.id, tech_id=t.id) }}" style="display:inline; margin:0;"
+                          data-confirm="Тестовият рез с {{ t.grade.name if t.grade else 'без вид' }}, {{ t.thickness_mm|num3 }} мм е успешен?">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button class="btn" type="submit">Работи ✓</button>
+                    </form>
+                    {% endif %}
                     <button class="btn" type="button" data-dialog="ct-form-dialog" data-title="Технология: {{ t.grade.name if t.grade else 'без вид' }}, {{ t.thickness_mm|num3 }} мм"
                             data-action="{{ url_for('admin_hall_cut_tech_save', machine_id=m.id) }}" data-values='{{ tech_values[t.id]|tojson|forceescape }}'>Редактирай</button>
                     <form method="post" action="{{ url_for('admin_hall_cut_tech_delete', machine_id=m.id, tech_id=t.id) }}" style="display:inline; margin:0;"

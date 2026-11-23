@@ -205,7 +205,9 @@
             function gasName(g) {
                 return g ? gas.querySelector('option[value="' + g + '"]').textContent : 'без газ';
             }
-            function techName(t) { return gasName(t.gas) + (t.nozzle ? ', дюза ' + t.nozzle : ''); }
+            function techName(t) {
+                return gasName(t.gas) + (t.nozzle ? ', дюза ' + t.nozzle : '') + (t.test ? ', ЗА ТЕСТ - не е потвърдена' : '');
+            }
             // the row for the gas (and nozzle, when one is typed) shown in the form
             function matching(exact) {
                 const rows = (TECH[sel.value] || []).filter(function (x) { return x.gas === gas.value; });

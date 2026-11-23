@@ -2329,6 +2329,8 @@ class MachineCutTechnology(db.Model):
     pierce_time_sec = db.Column(db.Float, nullable=True)
     params_json = db.deferred(db.Column(db.Text, nullable=True))   # [[path, {attr: value}, text]] from the file
     source = db.Column(db.String(255), nullable=True)               # file the parameters came from, NULL = by hand
+    # a proposed technology not yet proven by a test cut (owner, 2026-11-24); "Работи" in the dossier clears it
+    needs_test = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     for _col, _label, _unit, _group in fscut.tech_columns():        # the FSCUT fields (migrate_add_cut_tech_fscut_fields)
         locals()[_col] = db.Column(db.String(10) if _col.endswith('_gas') else db.Float, nullable=True)
     del _col, _label, _unit, _group
@@ -10833,6 +10835,18 @@ def admin_hall_cut_tech_save(machine_id):
     return _dossier_back(hm.id, 'Технологията е записана.')
 
 
+@app.route('/admin/hall/<int:machine_id>/cut-tech/<int:tech_id>/tested', methods=['POST'])
+@role_required('admin')
+def admin_hall_cut_tech_tested(machine_id, tech_id):
+    """"Работи": a proposed technology (needs_test) passed its test cut - the flag is cleared."""
+    hm = HallMachine.query.get_or_404(machine_id)
+    tech = MachineCutTechnology.query.filter_by(id=tech_id, machine_id=hm.machine_id).first_or_404()
+    tech.needs_test = False
+    db.session.commit()
+    log_action(f'Технология на "{hm.name}" тествана - работи: {_cut_tech_label(tech)}')
+    return _dossier_back(hm.id, 'Отбелязано: технологията работи.')
+
+
 @app.route('/admin/hall/<int:machine_id>/cut-tech/<int:tech_id>/delete', methods=['POST'])
 @role_required('admin')
 def admin_hall_cut_tech_delete(machine_id, tech_id):
@@ -15918,7 +15932,7 @@ def detail_dxf_dashboard(detail_id):
                 for t in q:
                     cut_tech.setdefault(str(t.machine_id), []).append(
                         {'gas': t.gas or '', 'nozzle': t.nozzle or '', 'speed': t.cutting_speed_mm_per_min,
-                         'pierce': t.pierce_time_sec})
+                         'pierce': t.pierce_time_sec, 'test': bool(t.needs_test)})
             # a laser that cannot cut this Вид + thickness (MachineThicknessRange): shown disabled, refused on save
             ranges = {}
             for r in MachineThicknessRange.query.filter(MachineThicknessRange.machine_id.in_([m.id for m in machines])):

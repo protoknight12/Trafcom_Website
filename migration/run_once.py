@@ -44,6 +44,7 @@ ONCE = (
     'data_client_note_issue_kind',    # old 'return' client notes with detail/product lines become 'issue' (издаване); material-only stay 'return'
     'data_apply_standard_material_markup',  # owner's decision 2026-11-19: Details' stored material price gets the standard 20% markup (or the owner's Материали terms)
     'data_compose_material_names',    # owner's decision 2026-11-19: material names composed from Тип/Вид/Марка/размери/калибрация/забележка + note line snapshots
+    'data_pg3015_proposed_tech',      # owner, 2026-11-24: proposed technologies for PG3015 (every standard thickness, + copper to 6 mm), marked "за тест"
 )
 
 
