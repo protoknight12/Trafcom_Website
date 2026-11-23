@@ -16054,6 +16054,36 @@ def view_detail_step_mesh(file_id):
         return jsonify({'error': f'STEP файлът не може да се визуализира: {e}'}), 400
 
 
+FSCUT_EXTENSIONS = ('.lxd', '.lxds')     # FSCUT / CypCutE nesting files ("разкрой"), read by fscut.py
+
+
+@app.route('/details/files/<int:file_id>/nest')
+@role_required('admin')
+def view_detail_nest(file_id):
+    """An FSCUT nesting file (.lxd old XML / .lxds new ZIP) kept with a Detail: the sheet drawing, parts per sheet,
+    utilization, cut length, pierces, an estimated time and the cutting technology, plus buttons that copy the
+    technology / a part's count per sheet into the detail (the existing detail routes do the saving)."""
+    import fscut
+    f = DetailDxfFile.query.get_or_404(file_id)
+    if not f.original_filename.lower().endswith(FSCUT_EXTENSIONS):
+        abort(404)
+    try:
+        nest = fscut.parse(os.path.join(app.config['DETAIL_DXF_FOLDER'], f.filename))
+    except (ValueError, OSError) as e:
+        app.logger.warning('FSCUT file %s unreadable: %s', f.id, e)
+        flash('Файлът от разкроя не може да се прочете.', 'danger')
+        return redirect(url_for('detail_dxf_dashboard', detail_id=f.detail_id))
+    ch = nest['technology']['channels'][0] if nest['technology']['channels'] else {}
+    for r in nest['results']:
+        r['draw'] = r['plate_shapes'] + r['shapes']        # sheet outline + parts, one dxf_viewer.js call
+        # estimate only: cut at the channel-1 speed + every pierce, no rapid moves / lead-ins / slow-downs
+        r['minutes'] = (r['cut_length_mm'] / ch['speed_mm_min'] + r['pierces'] * (ch.get('pierce_time_sec') or 0) / 60) \
+            if ch.get('speed_mm_min') else None
+    return render_template('detail_nest_view.html', file=f, detail=f.detail, nest=nest, channel=ch,
+                           material=fscut.material_name(nest['technology']['material']), cut_gases=CUT_GASES,
+                           active_page='admin_details')
+
+
 @app.route('/details/files/<int:file_id>/delete', methods=['POST'])
 @role_required('admin')
 def delete_detail_dxf(file_id):

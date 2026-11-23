@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Разкрой - {{ file.original_filename }} - Trafcom</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .nest-canvas-wrap { height: 70vh; min-height: 360px; background: #1a1a1a; border-radius: 8px; }
+        .nest-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px 16px; margin: 0 0 14px; }
+        .nest-facts div span { display: block; font-size: 0.78rem; opacity: 0.7; }
+    </style>
+</head>
+<body>
+{% set subnav = 'catalog' %}{% set subnav_current = detail.name %}
+{% include 'partials/navbar.html' %}
+{% macro fmt_num(v, d=1) %}{{ ('%.' ~ d ~ 'f') % v if v is not none else '-' }}{% endmacro %}
+
+<main class="admin-container">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}<div class="flash-messages">{% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>{% endfor %}</div>{% endif %}
+    {% endwith %}
+
+    <section class="admin-card">
+        <h2>Разкрой FSCUT: {{ file.original_filename }}</h2>
+        <p class="text-muted text-small">
+            Детайл: <a href="{{ url_for('detail_dxf_dashboard', detail_id=detail.id) }}">{{ detail.name }}</a> ·
+            {{ 'нов формат (.lxds)' if nest.format == 'lxds' else 'стар формат (.lxd)' }}{% if nest.app_version %}, CypCutE {{ nest.app_version }}{% endif %}
+        </p>
+        {% if nest.skipped %}
+        <div class="alert alert-warning">Непознати елементи, не са начертани и не са в дължината:
+            {% for k, n in nest.skipped.items() %}{{ k }} ({{ n }}){{ ', ' if not loop.last }}{% endfor %}</div>
+        {% endif %}
+
+        <h3>Технология</h3>
+        <div class="nest-facts">
+            <div><span>Материал</span>{{ material or '-' }}</div>
+            <div><span>Дебелина</span>{{ (nest.technology.thickness|num3 ~ ' мм') if nest.technology.thickness else '-' }}</div>
+        </div>
+        {% if nest.technology.channels %}
+        <div class="table-responsive">
+        <table class="users-table" data-table-tools="off">
+            <thead><tr><th>Слой</th><th>Скорост мм/мин</th><th>Газ</th><th>Налягане bar</th><th>Мощност W</th>
+                <th>Фокус мм</th><th>Височина мм</th><th>Пробиване сек</th></tr></thead>
+            <tbody>
+            {% for c in nest.technology.channels %}
+            <tr><td>{{ c.port }}</td><td>{{ c.speed_mm_min|num3 if c.speed_mm_min else '-' }}</td>
+                <td>{{ cut_gases.get(c.gas, '-') }}</td><td>{{ c.gas_pressure_bar|num3 if c.gas_pressure_bar is not none else '-' }}</td>
+                <td>{{ c.power_w|num3 if c.power_w else '-' }}</td><td>{{ c.focus_mm|num3 if c.focus_mm is not none else '-' }}</td>
+                <td>{{ c.height_mm|num3 if c.height_mm is not none else '-' }}</td>
+                <td>{{ c.pierce_time_sec|num3 if c.pierce_time_sec else '-' }}</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% if detail.laser_cut and channel.speed_mm_min %}
+        {#- Same fields as the detail page's "Технология на рязане" form; the machine stays the detail's own. #}
+        <form action="{{ url_for('admin_update_detail_cut_technology', detail_id=detail.id) }}" method="POST" target="_top"
+              data-confirm="Скорост {{ channel.speed_mm_min|num3 }} мм/мин, пробиване {{ channel.pierce_time_sec|num3 if channel.pierce_time_sec else '-' }} сек и газ - в технологията на детайла?" style="margin-top: 10px;">
+            {% include 'partials/csrf_field.html' %}
+            <input type="hidden" name="machine_id" value="{{ detail.cutting_machine_id or '' }}">
+            <input type="hidden" name="cutting_speed_mm_per_min" value="{{ channel.speed_mm_min }}">
+            <input type="hidden" name="pierce_time_sec" value="{{ channel.pierce_time_sec or '' }}">
+            <input type="hidden" name="gas" value="{{ channel.gas or '' }}">
+            <button type="submit" class="btn-secondary">Вземи технологията (слой {{ channel.port }}) в детайла</button>
+        </form>
+        {% endif %}
+        {% endif %}
+    </section>
+
+    {% for r in nest.results %}
+    <section class="admin-card">
+        <h3>{{ r.name or 'Резултат' }}{% if nest.results|length > 1 %} ({{ loop.index }}){% endif %}</h3>
+        <div class="nest-facts">
+            <div><span>Лист</span>{{ (r.plate[0]|num3 ~ ' × ' ~ r.plate[1]|num3 ~ ' мм') if r.plate else '-' }}</div>
+            <div><span>Брой листове</span>{{ r.plate_amount }}</div>
+            <div><span>Използване</span>{{ fmt_num(r.utilization) }} %</div>
+            <div><span>Дължина на реза (на лист)</span>{{ fmt_num(r.cut_length_mm / 1000, 2) }} м</div>
+            <div><span>Пробивания (на лист)</span>{{ r.pierces }}</div>
+            <div><span>Време (на лист, приблизително)</span>{{ (fmt_num(r.minutes, 1) ~ ' мин') if r.minutes is not none else '-' }}</div>
+        </div>
+        <p class="text-muted text-small">Дължината и пробиванията са сметнати от чертежа (без входове и празни ходове);
+            времето = дължина / скорост на слой {{ channel.port or 1 }} + пробивания × време за пробиване. CypCut не ги записва във файла.</p>
+
+        {% if r.counts %}
+        <div class="table-responsive">
+        <table class="users-table" data-table-tools="off">
+            <thead><tr><th>Детайл в разкроя</th><th>На лист</th><th>Общо</th><th></th></tr></thead>
+            <tbody>
+            {% for name, n in r.counts.items() %}
+            <tr><td>{{ name }}</td><td>{{ n }}</td><td>{{ n * r.plate_amount }}</td>
+                <td class="text-right">
+                {% if detail.material and detail.width and detail.height %}
+                <form action="{{ url_for('admin_update_detail_pieces_per_unit', detail_id=detail.id) }}" method="POST" target="_top"
+                      data-confirm="Детайли от една единица = {{ n }} за &quot;{{ detail.name }}&quot;?" style="margin: 0;">
+                    {% include 'partials/csrf_field.html' %}
+                    <input type="hidden" name="pieces_per_unit" value="{{ n }}">
+                    <button type="submit" class="btn-secondary" style="padding: 6px 10px; font-size: 0.78rem;">{{ n }} = детайли от един лист</button>
+                </form>
+                {% endif %}
+                </td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% elif nest.format == 'lxd' %}
+        <p class="text-muted text-small">Старият формат не пази кой детайл къде е поставен - бройките по детайли не се виждат.</p>
+        {% endif %}
+        <div class="nest-canvas-wrap"><canvas id="nest-canvas-{{ loop.index }}"></canvas></div>
+    </section>
+    {% endfor %}
+    {% if not nest.results %}
+    <section class="admin-card"><p>Във файла няма резултат от разкрой (само чертеж/технология).</p></section>
+    {% endif %}
+</main>
+
+{#- dxf_viewer.js wires its modal on load; an empty stand-in keeps it quiet here. #}
+<div id="viewerOverlay" hidden></div>
+<script src="{{ url_for('static', filename='js/dxf_viewer.js') }}"></script>
+<script>
+    const NEST_SHAPES = {{ nest.results|map(attribute='draw')|list|tojson }};
+    function drawNests() {
+        NEST_SHAPES.forEach((shapes, i) => drawShapes(shapes, document.getElementById('nest-canvas-' + (i + 1))));
+    }
+    window.addEventListener('load', drawNests);
+    window.addEventListener('resize', drawNests);
+</script>
+</body>
+</html>
