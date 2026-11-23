@@ -18374,8 +18374,8 @@ def _cut_sheet_remnant(sheet, gap=CUT_NEST_GAP_MM):
         return None
     try:
         return fscut.nest_remnant(fscut.parse(_cut_nest_path(sheet.nest_file)), gap=gap)
-    except (ValueError, IndexError, KeyError, OSError) as e:
-        app.logger.warning('remnant of cut sheet %s: %s', sheet.id, e)
+    except Exception as e:      # any geometry error (shapely / GEOS too): no remnant, never a 500 on the report
+        app.logger.warning('remnant of cut sheet %s: %r', sheet.id, e)
         return None
 
 
