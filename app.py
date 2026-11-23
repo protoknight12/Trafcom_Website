@@ -12052,7 +12052,8 @@ def admin_material_history(material_id):
          'direction': 'in', 'quantity': item.quantity,
          'party': (item.delivery_note.client.name if item.delivery_note.client_id and item.delivery_note.client
                    else item.delivery_note.supplier.name if item.delivery_note.supplier else '-'),
-         'note_number': item.delivery_note.note_number, 'unit_price': item.unit_price, 'notes': item.notes}
+         'note_number': item.delivery_note.note_number, 'unit_price': item.unit_price, 'notes': item.notes,
+         'url': url_for('admin_delivery_note_print', note_id=item.delivery_note.id)}
         for item in incoming
     ] + [
         {'date': item.client_delivery_note.note_date or to_local(item.client_delivery_note.created_at).date(),
@@ -12060,7 +12061,8 @@ def admin_material_history(material_id):
          'kind': item.client_delivery_note.kind if item.client_delivery_note.kind in CLIENT_NOTE_KINDS else 'issue',
          'direction': 'out', 'quantity': item.quantity,
          'party': item.client_delivery_note.client.name if item.client_delivery_note.client else '-',
-         'note_number': item.client_delivery_note.note_number, 'unit_price': item.unit_price, 'notes': item.notes}
+         'note_number': item.client_delivery_note.note_number, 'unit_price': item.unit_price, 'notes': item.notes,
+         'url': url_for('admin_client_delivery_note_print', note_id=item.client_delivery_note.id)}
         for item in outgoing
     ] + [
         {'date': item.client_delivery_note.note_date or to_local(item.client_delivery_note.created_at).date(),
@@ -12068,17 +12070,19 @@ def admin_material_history(material_id):
          'kind': 'remnant', 'direction': 'in', 'quantity': item.remnant_qty,
          'party': item.client_delivery_note.client.name if item.client_delivery_note.client else '-',
          'note_number': item.client_delivery_note.note_number, 'unit_price': None,
-         'notes': f'остатък от "{item.description_snapshot}"'}
+         'notes': f'остатък от "{item.description_snapshot}"',
+         'url': url_for('admin_client_delivery_note_print', note_id=item.client_delivery_note.id)}
         for item in remnants
     ]
     for job in production_jobs:
+        job_url = url_for('admin_production_orders', _anchor=f'job-{job.id}')
         taken_qty = _material_stock_delta(material, job.actual_material_qty)
         completed_by = job.completed_by.username if job.completed_by else '-'
         movements.append({
             'date': to_local(job.completed_at).date(), 'created_at': job.completed_at,
             'kind': 'production_take', 'direction': 'out', 'quantity': taken_qty,
             'party': 'Производство', 'note_number': None, 'unit_price': None,
-            'notes': f'{job.quantity} бр. "{job.detail.name}" ({completed_by})',
+            'notes': f'{job.quantity} бр. "{job.detail.name}" ({completed_by})', 'url': job_url,
         })
         if job.reversed_at is not None:
             reversed_by = job.reversed_by.username if job.reversed_by else '-'
@@ -12086,10 +12090,13 @@ def admin_material_history(material_id):
                 'date': to_local(job.reversed_at).date(), 'created_at': job.reversed_at,
                 'kind': 'production_return', 'direction': 'in', 'quantity': taken_qty,
                 'party': 'Производство', 'note_number': None, 'unit_price': None,
-                'notes': f'изтрита задача - {job.quantity} бр. "{job.detail.name}" ({reversed_by})',
+                'notes': f'изтрита задача - {job.quantity} бр. "{job.detail.name}" ({reversed_by})', 'url': job_url,
             })
     def add_order_movement(order, movement):
-        """An order's movement, plus its reversal when the order was deleted (admin_delete_order())."""
+        """An order's movement, plus its reversal when the order was deleted (admin_delete_order()).
+        Linked to the order's card on the production report; a deleted order has no card there."""
+        movement['url'] = (url_for('admin_production_report', _anchor=f'order-{order.id}')
+                           if order.deleted_at is None else None)
         movements.append(movement)
         if order.deleted_at is not None:
             movements.append(dict(movement, date=to_local(order.deleted_at).date(), created_at=order.deleted_at,
@@ -12140,6 +12147,8 @@ def admin_material_history(material_id):
             'note_number': t.doc_number, 'unit_price': None,
             'notes': (f'Прехвърлен към {_owner_label(t.to_client)}' if out
                       else f'Прехвърлен от {_owner_label(t.from_client)}'),
+            # the protocol's print page is admin-only (admin_material_transfer_print())
+            'url': url_for('admin_material_transfer_print', note_id=t.id) if current_user.is_admin else None,
         })
     movements.sort(key=lambda m: m['created_at'], reverse=True)
 

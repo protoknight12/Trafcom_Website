@@ -43,7 +43,7 @@
                     <th>Дата</th>
                     <th>Тип</th>
                     <th>Контрагент</th>
-                    <th>№ на разписка</th>
+                    <th>Документ №</th>
                     <th>Количество</th>
                     <th>Ед. цена (€)</th>
                     <th>Бележки</th>
@@ -87,7 +87,7 @@
                         {% endif %}
                     </td>
                     <td>{{ m.party }}</td>
-                    <td>{{ m.note_number or '-' }}</td>
+                    <td>{% if m.url %}<a href="{{ m.url }}">{{ m.note_number or 'Документ' }}</a>{% else %}{{ m.note_number or '-' }}{% endif %}</td>
                     <td><span>{{ '+' if m.direction == 'in' else '-' }}{{ material_qty_text(material, m.quantity) }}</span><span class="text-muted">{{ material_stock_kg(material, m.quantity)|kg }}</span></td>
                     <td>{{ m.unit_price|price3 if m.unit_price is not none else "-" }}</td>
                     <td>{{ m.notes or '-' }}</td>
