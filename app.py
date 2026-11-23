@@ -1031,6 +1031,20 @@ class DetailDxfFile(db.Model):
     uploaded_by = db.relationship('User')
 
 
+class NestPartDetail(db.Model):
+    """A part of an FSCUT nest file (DetailDxfFile + the part's name in the file) bound to a catalog Detail (owner's
+    request 2026-11-23): picked in "Детайли в разкроя" or recorded when the Detail is made from the part. Without a
+    row the page matches a Detail by name. Goes with either side (ORM cascade). One row per (file, part name), kept
+    in code. New table from db.create_all()."""
+    id = db.Column(db.Integer, primary_key=True)
+    file_id = db.Column(db.Integer, db.ForeignKey('detail_dxf_file.id'), nullable=False, index=True)
+    part_name = db.Column(db.String(200), nullable=False)
+    detail_id = db.Column(db.Integer, db.ForeignKey('detail.id'), nullable=False, index=True)
+
+    file = db.relationship('DetailDxfFile', backref=db.backref('nest_links', cascade='all, delete-orphan'))
+    detail = db.relationship('Detail', backref=db.backref('nest_links', cascade='all, delete-orphan'))
+
+
 class Operation(db.Model):
     """
     An extra processing step attached to a Detail beyond its base laser cut
@@ -16220,7 +16234,7 @@ def view_detail_nest(file_id):
                            grades=MaterialGrade.query.order_by(MaterialGrade.sort_order, MaterialGrade.name).all(),
                            default_grade_id=detail.material.grade_id if detail.material else None,
                            default_thickness=nest['technology']['thickness'] or detail.cut_thickness,
-                           nest_parts=_nest_parts(nest),
+                           nest_parts=_nest_parts_with_details(f, nest), all_details=_detail_choices(),
                            materials=detail_materials_query(detail.owner_client_id)
                            .order_by(MaterialPrice.type, MaterialPrice.display_name).all(),
                            active_page='admin_details')
@@ -16231,6 +16245,65 @@ def _nest_parts(nest):
         return fscut.nest_parts(nest) if nest['results'] else []
     except ValueError:
         return []
+
+
+def _detail_choices():
+    """(id, name, erp_number, owner) of every Detail, by name - the binding drop-down and the name match."""
+    return (db.session.query(Detail.id, Detail.name, Detail.erp_number, Detail.owner_client_id)
+            .order_by(Detail.name, Detail.id).all())
+
+
+def _nest_parts_with_details(f, nest):
+    """_nest_parts() + each part's catalog Detail: 'detail' (id, name) and 'bound' - True for a NestPartDetail row,
+    False for a Detail found by the same name (case-insensitive, first by name order), None for none."""
+    parts = _nest_parts(nest)
+    links = {x.part_name: x.detail for x in f.nest_links}
+    by_name = {}
+    for row in _detail_choices():
+        by_name.setdefault((row.name or '').strip().casefold(), row)
+    for p in parts:
+        d = links.get(p['name'])
+        if d is not None:
+            p['detail'], p['bound'] = (d.id, d.name), True
+            continue
+        row = by_name.get((p['name'] or '').strip().casefold())
+        p['detail'], p['bound'] = ((row.id, row.name), False) if row else (None, None)
+    return parts
+
+
+def _bind_nest_part(f, part_name, detail):
+    """Binds (or, detail None, unbinds) a nest part to a Detail - one NestPartDetail per (file, part name)."""
+    row = NestPartDetail.query.filter_by(file_id=f.id, part_name=part_name).first()
+    if detail is None:
+        if row is not None:
+            db.session.delete(row)
+        return
+    if row is None:
+        row = NestPartDetail(file_id=f.id, part_name=part_name[:200])
+        db.session.add(row)
+    row.detail_id = detail.id
+
+
+@app.route('/details/files/<int:file_id>/nest/part/<int:n>/link', methods=['POST'])
+@role_required('admin')
+def view_detail_nest_part_link(file_id, n):
+    """"Обвържи" in "Детайли в разкроя": the part is the chosen catalog Detail (detail_id; blank = unbind)."""
+    f = DetailDxfFile.query.get_or_404(file_id)
+    got = _nest_part(f, n)
+    if got is None:
+        return redirect(url_for('detail_dxf_dashboard', detail_id=f.detail_id))
+    part = got[1]
+    raw = request.form.get('detail_id', '')
+    detail = db.session.get(Detail, int(raw)) if raw.isdigit() else None
+    if raw and detail is None:
+        flash('Няма такъв детайл.', 'danger')
+        return redirect(url_for('view_detail_nest', file_id=f.id))
+    _bind_nest_part(f, part['name'], detail)
+    db.session.commit()
+    log_action(f'Разкрой "{f.original_filename}": детайл "{part["name"]}" '
+               + (f'обвързан с "{detail.name}"' if detail else 'отвързан'))
+    flash(f'„{part["name"]}“ е обвързан с „{detail.name}“.' if detail else f'„{part["name"]}“ е отвързан.', 'success')
+    return redirect(url_for('view_detail_nest', file_id=f.id))
 
 
 def _nest_part(f, n):
@@ -16331,6 +16404,7 @@ def view_detail_nest_part_detail(file_id, n):
         for fname, shown in files:
             db.session.add(DetailDxfFile(detail_id=detail.id, filename=fname, original_filename=shown,
                                          uploaded_by_id=current_user.id))
+        _bind_nest_part(f, part['name'], detail)
         db.session.commit()
     except Exception as e:                                              # nothing stays half-made
         db.session.rollback()

@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+{% from 'partials/entity_link.html' import elink %}
 <html lang="bg">
 <head>
     <meta charset="UTF-8">
@@ -167,11 +168,21 @@
     <section class="admin-card">
         <h3>Детайли в разкроя</h3>
         <div class="table-responsive"><table class="data-table" data-table-tools="off">
-            <thead><tr><th>Детайл</th><th>Бройки</th><th>Габарит</th><th>Свали</th><th></th></tr></thead>
+            <thead><tr><th>Детайл</th><th>В каталога</th><th>Бройки</th><th>Габарит</th><th>Свали</th><th></th></tr></thead>
             <tbody>
             {% for p in nest_parts %}
             <tr>
                 <td>{{ p.name }}</td>
+                <td>
+                    {#- NestPartDetail (bound) or a Detail with the same name (found) - see _nest_parts_with_details() #}
+                    {% if p.detail %}
+                    <span class="text-small">{{ 'Обвързан с' if p.bound else 'Вече го има (същото име):' }}</span>
+                    {{ elink('detail', p.detail[0], p.detail[1]) }}
+                    {% else %}<span class="text-muted text-small">няма</span>{% endif %}
+                    <button type="button" class="btn-secondary" style="padding: 2px 8px; font-size: 0.75rem;"
+                            data-dialog="nestLinkDialog" data-action="{{ url_for('view_detail_nest_part_link', file_id=file.id, n=loop.index0) }}"
+                            data-values='{{ {"detail_id": p.detail[0] if p.detail else ""}|tojson|forceescape }}' data-title="Обвържи „{{ p.name }}“">Обвържи</button>
+                </td>
                 <td>{{ p.amount }}</td>
                 <td>{{ p.size[0]|num3 }} × {{ p.size[1]|num3 }} мм</td>
                 <td style="white-space: nowrap;">
@@ -188,6 +199,19 @@
             </tbody>
         </table></div>
     </section>
+    <dialog id="nestLinkDialog" class="form-dialog">
+        <form method="POST" class="admin-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <h3>Обвържи с детайл от каталога</h3>
+            <p class="text-muted text-small">Детайлът от разкроя се води като избрания детайл. Празно = отвързване (тогава се търси детайл със същото име).</p>
+            <label for="nl_detail">Детайл</label>
+            <select id="nl_detail" name="detail_id" data-picker="detail">
+                <option value="">— без детайл —</option>
+                {% for d in all_details %}<option value="{{ d.id }}">{{ d.name }}{{ (' · № ' ~ d.erp_number) if d.erp_number }}</option>{% endfor %}
+            </select>
+            <div style="margin-top: 12px;"><button type="submit" class="btn btn-primary">Запази</button></div>
+        </form>
+    </dialog>
     <dialog id="nestPartDialog" class="form-dialog">
         <form method="POST" class="admin-form" data-once>
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

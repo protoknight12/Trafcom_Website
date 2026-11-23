@@ -536,6 +536,50 @@ def test_nest_parts_download_and_create_detail(s, tmp_path):
                 os.remove(p)
 
 
+def test_nest_parts_bound_to_catalog_details(s, tmp_path):
+    """"Детайли в разкроя" shows the catalog Detail of each part: one bound to it (NestPartDetail - "Обвържи" or a
+    Detail made from the part), else one with the same name (case-insensitive); unbinding falls back to the name."""
+    from app import NestPartDetail
+    d = Detail(name='Разкрой 2', material_key='fn_steel', width=10, height=10, total_length=40, pierce_count=1,
+               calculated_price=1)
+    same = Detail(name='квадрат', material_key='fn_steel', width=40, height=40, total_length=160, pierce_count=1,
+                  calculated_price=1)
+    other = Detail(name='Друг', material_key='fn_steel', width=1, height=1, total_length=4, pierce_count=1,
+                   calculated_price=1)
+    db.session.add_all([d, same, other])
+    db.session.commit()
+    f, path = _attach(d, 'разкрой.lxd', _old_nest().encode())
+    made = []
+    try:
+        c = _login('fn_admin')
+        page = c.get(f'/details/files/{f.id}/nest').get_data(as_text=True)
+        assert 'Вече го има (същото име)' in page and f'/details/{same.id}/files' in page     # Квадрат = квадрат
+        assert 'id="nestLinkDialog"' in page and 'Друг' in page                               # the drop-down
+        link = f'/details/files/{f.id}/nest/part/1/link'
+        c.post(link, data={'detail_id': other.id})
+        c.post(link, data={'detail_id': other.id})                                            # again: still one row
+        assert [(x.part_name, x.detail_id) for x in NestPartDetail.query] == [('Квадрат', other.id)]
+        page = c.get(f'/details/files/{f.id}/nest').get_data(as_text=True)
+        assert 'Обвързан с' in page and f'/details/{other.id}/files' in page
+        c.post(link, data={'detail_id': '999999'})                                            # unknown: refused
+        assert NestPartDetail.query.one().detail_id == other.id
+        c.post(link, data={'detail_id': ''})                                                  # unbind
+        assert NestPartDetail.query.count() == 0
+        c.post(f'/details/files/{f.id}/nest/part/0/create-detail', data={'name': 'Нова планка', 'material': 'fn_steel'})
+        new = Detail.query.filter_by(name='Нова планка').one()
+        made = [os.path.join(flask_app.config['DETAIL_DXF_FOLDER'], x.filename) for x in new.dxf_files]
+        assert [(x.part_name, x.detail_id) for x in NestPartDetail.query] == [('Планка', new.id)]   # made = bound
+        db.session.delete(new)                                                                 # goes with the detail
+        db.session.commit()
+        assert NestPartDetail.query.count() == 0
+        assert _login('fn_worker').post(link, data={'detail_id': other.id}).status_code == 302
+        assert NestPartDetail.query.count() == 0
+    finally:
+        for p in [path] + made:
+            if os.path.exists(p):
+                os.remove(p)
+
+
 def test_fscut_download_for_machine(s, tmp_path):
     laser = Machine(name='Лазер стар', is_laser=True)
     db.session.add(laser)
