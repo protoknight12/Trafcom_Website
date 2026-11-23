@@ -167,3 +167,27 @@ def test_delete_request(worker_client, app):
         assert db.session.get(MaterialRequest, req_id) is None
         assert MaterialPrice.query.filter_by(key='qa_steel').first().stock_quantity == stock
     assert worker_client.post(f'/storage/requests/{req_id}/delete').status_code == 404
+
+
+def test_edit_request_material_quantity_note(worker_client, app):
+    """The request itself can be edited (owner's request 2026-11-23): material, quantity, note; bad values refused."""
+    with flask_app.app_context():
+        steel = MaterialPrice.query.filter_by(key='qa_steel').first()
+        other = MaterialPrice(key='qa_req_edit', display_name='QA Заявка Алуминий', cost_per_m2=0, type='sheets')
+        db.session.add(other)
+        req = MaterialRequest(material_id=steel.id, quantity=3)
+        db.session.add(req)
+        db.session.commit()
+        req_id, other_id = req.id, other.id
+    page = worker_client.get('/storage/requests').get_data(as_text=True)
+    assert 'Редактирай' in page and 'name="quantity"' in page
+    worker_client.post(f'/storage/requests/{req_id}/update', data={
+        'status': 'processing', 'material_id': other_id, 'quantity': '7,5', 'note': ' спешно '})
+    with flask_app.app_context():
+        req = db.session.get(MaterialRequest, req_id)
+        assert (req.material_id, req.quantity, req.note, req.status) == (other_id, 7.5, 'спешно', 'processing')
+    for bad in ({'quantity': '0'}, {'quantity': 'abc'}, {'material_id': '999999'}):
+        worker_client.post(f'/storage/requests/{req_id}/update', data={'status': 'new', **bad})
+    with flask_app.app_context():
+        req = db.session.get(MaterialRequest, req_id)
+        assert (req.material_id, req.quantity, req.status) == (other_id, 7.5, 'processing')

@@ -121,7 +121,7 @@
                         <button type="button" class="btn-secondary" data-dialog="requestStatusDialog"
                                 data-action="{{ url_for('update_material_request', request_id=req.id) }}"
                                 data-title="Заявка: {{ format_material_option(req.material) if req.material else 'Изтрит материал' }}"
-                                data-values='{{ {"status": req.status, "supplier_id": req.supplier_id or "", "quoted_unit_price": req.quoted_unit_price or "", "quote_unit": qu[0], "quote_div": qu[1], "quote_native": qu[2]}|tojson|forceescape }}'>Промени статус</button>
+                                data-values='{{ {"material_id": req.material_id, "quantity": req.quantity, "note": req.note or "", "status": req.status, "supplier_id": req.supplier_id or "", "quoted_unit_price": req.quoted_unit_price or "", "quote_unit": qu[0], "quote_div": qu[1], "quote_native": qu[2]}|tojson|forceescape }}'>Редактирай</button>
                         <form method="POST" action="{{ url_for('delete_material_request', request_id=req.id) }}" style="display: inline;"
                               data-confirm="Изтриване на заявката за &quot;{{ req.material.display_name if req.material else 'изтрит материал' }}&quot;?">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -138,9 +138,30 @@
     </section>
 
     <dialog id="requestStatusDialog" class="form-dialog">
-        <h3 data-dialog-title>Статус на заявката</h3>
+        <h3 data-dialog-title>Заявка</h3>
         <form method="POST" class="admin-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="form-group">
+                <label for="request_material_id">Материал</label>
+                <select name="material_id" id="request_material_id" data-picker="material" onchange="quoteUnitFromMaterial(this)">
+                    {% for type_key, group in materials|groupby('type') %}
+                    <optgroup label="{{ material_type_label(type_key) }}">
+                        {% for material in group %}{% set mq = material_quote_unit(material) %}
+                        <option value="{{ material.id }}" data-type="{{ material.type }}" data-grade="{{ material.grade.name if material.grade else 'Без вид' }}" data-brand="{{ material.brand or '' }}" data-t="{{ material.thickness_mm or '' }}" data-stock="{{ (material.stock_quantity or 0)|num3 }}" data-stock-text="{{ material_qty_text(material) }}"
+                                data-quote-unit="{{ mq[0] }}" data-quote-div="{{ mq[1] }}" data-quote-native="{{ mq[2] }}">{{ format_material_option(material) }}</option>
+                        {% endfor %}
+                    </optgroup>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="request_quantity">Количество (в единицата на склада: листа / м / бр.)</label>
+                <input type="number" name="quantity" id="request_quantity" min="0.001" step="0.001" required>
+            </div>
+            <div class="form-group">
+                <label for="request_note">Бележка</label>
+                <input type="text" name="note" id="request_note" maxlength="255">
+            </div>
             <div class="form-group">
                 <label>Статус</label>
                 <select name="status" class="request-status-select" onchange="toggleSupplier(this)">
@@ -173,6 +194,16 @@
         form.querySelector('.request-supplier-group').hidden = !withSupplier;
         form.querySelector('.request-quote-group').hidden = !withSupplier;
         form.quoted_unit_price.required = select.value === 'quoted';
+        quoteHint(form);
+    }
+
+    // Another material picked in the edit dialog: the quote's unit (sheet / bar / piece) follows it.
+    function quoteUnitFromMaterial(select) {
+        const opt = select.options[select.selectedIndex], form = select.form;
+        if (!opt) return;
+        form.quote_unit.value = opt.dataset.quoteUnit;
+        form.quote_div.value = opt.dataset.quoteDiv;
+        form.quote_native.value = opt.dataset.quoteNative;
         quoteHint(form);
     }
 

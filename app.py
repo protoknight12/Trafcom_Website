@@ -12370,18 +12370,43 @@ def update_material_request(request_id):
         if (price is not None and not (price > 0 and math.isfinite(price))) or (status == 'quoted' and price is None):
             flash('Въведете положителна цена по офертата (€ за бройка).', 'danger')
             return redirect(url_for('storage_requests'))
-    old = (material_request.quoted_unit_price, material_request.supplier_id, material_request.status)
+    # Editing the request itself (owner's request 2026-11-23): material, quantity, note - each only when posted.
+    old_material_id = material_request.material_id
+    if request.form.get('material_id'):
+        material = own_materials_query().filter_by(id=request.form.get('material_id', type=int)).first()
+        if not material:
+            flash('Изберете материал от нашия склад.', 'danger')
+            return redirect(url_for('storage_requests'))
+        material_request.material_id = material.id
+    if 'quantity' in request.form:
+        try:
+            quantity = round(float(request.form['quantity'].strip().replace(',', '.')), 3)
+        except ValueError:
+            quantity = 0
+        if not (quantity > 0 and math.isfinite(quantity)):
+            flash('Въведете положително количество.', 'danger')
+            return redirect(url_for('storage_requests'))
+        material_request.quantity = quantity
+    if 'note' in request.form:
+        material_request.note = request.form['note'].strip()[:255] or None
+    if material_request.material_id != old_material_id and material_request.quoted_unit_price:
+        _mark_quote_reprice(old_material_id)   # the quote no longer prices the old lot
+    old = (material_request.quoted_unit_price, material_request.supplier_id, material_request.status, old_material_id)
     material_request.status = status
     material_request.supplier_id = supplier_id if status in QUOTE_REQUEST_STATUSES else None
     if price != material_request.quoted_unit_price:
         material_request.quoted_at = datetime.utcnow() if price else None
     material_request.quoted_unit_price = price
-    new = (material_request.quoted_unit_price, material_request.supplier_id, material_request.status)
-    if old != new and material_request.material and (material_request.material.stock_quantity or 0) <= PRODUCTION_STOCK_TOLERANCE:
+    new = (material_request.quoted_unit_price, material_request.supplier_id, material_request.status,
+           material_request.material_id)
+    lot = db.session.get(MaterialPrice, material_request.material_id)
+    if old != new and lot and (lot.stock_quantity or 0) <= PRODUCTION_STOCK_TOLERANCE:
         _mark_quote_reprice(material_request.material_id)   # the lot's rate may have changed (material_cost_rate())
+    changes = describe_changes('заявка', material_request, {'material_id': 'материал', 'quantity': 'количество',
+                                                            'note': 'бележка'})
     db.session.commit()
     quote = f', оферта {price:g} €' if price else ''
-    log_action(f'Обновен статус на заявка #{material_request.id} на "{material_request.status_label}"{quote}')
+    log_action(f'Обновена заявка #{material_request.id}: "{material_request.status_label}"{quote}', details=changes)
     flash('Заявката беше обновена.', 'success')
     return redirect(url_for('storage_requests'))
 
