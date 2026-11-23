@@ -86,6 +86,18 @@
                     <label>FSCUT формат (какъв файл чете лазерът)</label>
                     <select name="fscut_format" data-picker="off"><option value="">- не е зададен -</option>
                         {% for k, v in fscut_formats.items() %}<option value="{{ k }}" {{ 'selected' if machine.fscut_format == k }}>{{ v }}</option>{% endfor %}</select>
+                    {% if machine.is_laser %}
+                    <label>Газове по канали (FSCUT файловете се генерират с канала, на който е газът)</label>
+                    {% set gmap = machine.gas_channel_map %}
+                    {% for g, glabel in cut_gases.items() %}
+                    <div style="display:flex; gap:8px; align-items:center; margin-bottom:4px;">
+                        <span style="min-width:110px;">{{ glabel }}</span>
+                        <select name="gas_channel_{{ g }}" data-picker="off">
+                            {% for c, clabel in cut_gases.items() %}<option value="{{ c }}" {{ 'selected' if gmap.get(g, g) == c }}>канал {{ clabel }}{{ ' (собствен)' if c == g }}</option>{% endfor %}
+                        </select>
+                    </div>
+                    {% endfor %}
+                    {% endif %}
                     <label class="dz-inline"><input type="checkbox" name="on_plan" value="1" {{ 'checked' if m.on_plan }}> Показва се в 3D халето</label>
                     <button class="btn btn-primary" type="submit" style="margin-top:12px">Запази</button>
                 </form>
@@ -259,6 +271,18 @@
                         {% for gr in grades %}<option value="{{ gr.id }}">{{ gr.name }}</option>{% endfor %}</select></div>
                 <div><label>Файл</label><input type="file" name="file" accept=".lxd,.lxds" required></div>
             </div>
+            {#- gases sharing a channel (Газове по канали): the file only says the channel, the user says the real gas #}
+            {% set gmap = machine.gas_channel_map if machine else {} %}
+            {% for c, clabel in cut_gases.items() %}
+            {% set shared = gmap|dictsort|selectattr('1', 'equalto', c)|map(attribute='0')|list %}
+            {% if shared %}
+            <div><label>Слоевете на канал {{ clabel }} във файла са реално</label>
+                <select name="real_gas_{{ c }}" data-picker="off">
+                    <option value="{{ c }}">{{ clabel }}</option>
+                    {% for g in shared %}<option value="{{ g }}">{{ cut_gases[g] }}</option>{% endfor %}
+                </select></div>
+            {% endif %}
+            {% endfor %}
             <button class="btn btn-primary" type="submit" style="margin-top:12px">Внеси</button>
         </form>
         </section>

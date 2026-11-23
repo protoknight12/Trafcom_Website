@@ -2285,6 +2285,19 @@ class Machine(db.Model):
     # FSCUT file format the laser's CypCutE reads (FSCUT_FORMATS key: 'lxd' old / 'lxds' new, NULL = not set) -
     # decides which file "Изтегли за машината" builds (owner's decision 2026-11-23).
     fscut_format = db.Column(db.String(5), nullable=True)
+    # Which gas channel of the laser each gas goes through (owner, 2026-11-24): JSON {gas: channel gas} of CUT_GASES
+    # keys, e.g. {"air": "nitrogen"} = compressed air on the N2 channel. FSCUT files for the machine are written with
+    # the channel's GasType (fscut.gas_codes()). NULL / a gas left out = on its own channel.
+    gas_channels = db.Column(db.Text, nullable=True)
+
+    @property
+    def gas_channel_map(self):
+        try:
+            got = json.loads(self.gas_channels) if self.gas_channels else {}
+        except ValueError:
+            return {}
+        return {g: c for g, c in got.items() if g in CUT_GASES and c in CUT_GASES and g != c} \
+            if isinstance(got, dict) else {}
     # Which Room this machine physically stands in - see Room's docstring.
     # Nullable: a machine not yet placed anywhere just doesn't show on any
     # room's map until assigned (see edit_machine_window()).
@@ -10765,6 +10778,10 @@ def admin_hall_dossier_system(machine_id):
     mc.machine_type = (request.form.get('machine_type') or '').strip()[:50] or None
     mc.is_laser = request.form.get('is_laser') == '1'
     mc.fscut_format = request.form.get('fscut_format') if request.form.get('fscut_format') in FSCUT_FORMATS else None
+    mc.gas_channels = json.dumps({g: c for g in CUT_GASES
+                                  if (c := request.form.get(f'gas_channel_{g}')) in CUT_GASES and c != g}) or None
+    if mc.gas_channels == '{}':
+        mc.gas_channels = None
     maint = (request.form.get('last_maintenance') or '').strip()
     if maint:
         try:
@@ -16532,7 +16549,12 @@ def view_detail_nest_save_tech(file_id):
     if refusal:
         flash(refusal + ' Технологията не е записана.', 'danger')
         return back
-    tech = _save_channel_technology(machine, grade_id, thickness, ch['nozzle'], ch, f.original_filename)
+    gas = _real_gas(machine, ch['gas'], request.form.get('real_gas'))
+    if gas is None:
+        flash(f'„{machine.name}“ не подава този газ през канала {CUT_GASES.get(ch["gas"], "-")} '
+              '(досие - „Газове по канали“).', 'danger')
+        return back
+    tech = _save_channel_technology(machine, grade_id, thickness, ch['nozzle'], ch, f.original_filename, gas)
     log_action(f'Технология на "{machine.name}" от разкрой "{f.original_filename}" (слой {port}): '
                f'{_cut_tech_label(tech)} - {tech.cutting_speed_mm_per_min or "-"} мм/мин')
     db.session.commit()
@@ -16540,18 +16562,30 @@ def view_detail_nest_save_tech(file_id):
     return back
 
 
-def _save_channel_technology(machine, grade_id, thickness, nozzle, ch, source):
+def _real_gas(machine, file_gas, choice):
+    """The gas a technology really uses when the file says `file_gas` (owner, 2026-11-24): a laser whose gases share
+    a channel (Machine.gas_channel_map, e.g. air on the N2 channel) writes the channel's gas into its files, so the
+    user says which it was. -> the gas, or None when `choice` is not one of the gases on that channel."""
+    if not choice:
+        return file_gas
+    on_channel = [file_gas] + [g for g, c in machine.gas_channel_map.items() if c == file_gas]
+    return choice if choice in on_channel else None
+
+
+def _save_channel_technology(machine, grade_id, thickness, nozzle, ch, source, gas=None):
     """One FSCUT channel (fscut.parse()['technology']['channels'][n]) as the machine's MachineCutTechnology for
-    (Вид, thickness, the channel's gas, nozzle) - added, or the same key overwritten: speed, pierce time, every
-    fscut.tech_columns() field, the whole tree (params_json) and the file name (source). Flushed, not committed."""
-    tech = _cut_technology(machine.id, grade_id, thickness, ch['gas'], nozzle)
+    (Вид, thickness, gas, nozzle) - added, or the same key overwritten: speed, pierce time, every fscut.tech_columns()
+    field, the whole tree (params_json) and the file name (source). `gas` = the real gas when it is not the file's
+    (_real_gas(); the pierce steps on the file's gas take it too). Flushed, not committed."""
+    gas = gas or ch['gas']
+    tech = _cut_technology(machine.id, grade_id, thickness, gas, nozzle)
     if tech is None:
-        tech = MachineCutTechnology(machine_id=machine.id, grade_id=grade_id, thickness_mm=thickness, gas=ch['gas'],
+        tech = MachineCutTechnology(machine_id=machine.id, grade_id=grade_id, thickness_mm=thickness, gas=gas,
                                     nozzle=nozzle)
         db.session.add(tech)
     tech.cutting_speed_mm_per_min, tech.pierce_time_sec = ch['speed_mm_min'], ch['pierce_time_sec']
     for col, v in ch['fields'].items():
-        setattr(tech, col, v)
+        setattr(tech, col, gas if col.endswith('_gas') and v == ch['gas'] else v)
     tech.params_json = json.dumps(ch['raw'], ensure_ascii=False)
     tech.source = (source or '')[:255] or None
     db.session.flush()
@@ -16595,7 +16629,9 @@ def admin_hall_cut_tech_import(machine_id):
         if refusal:
             refused.append(f'слой {ch["port"]} ({thickness:g} мм)')
             continue
-        tech = _save_channel_technology(mc, grade_id, thickness, nozzle, ch, f'{upload.filename} / {ch["library"]}')
+        gas = _real_gas(mc, ch['gas'], request.form.get(f'real_gas_{ch["gas"]}')) or ch['gas']
+        tech = _save_channel_technology(mc, grade_id, thickness, nozzle, ch, f'{upload.filename} / {ch["library"]}',
+                                        gas)
         saved.append(_cut_tech_label(tech))
     db.session.commit()
     if saved:
@@ -16654,6 +16690,7 @@ def admin_detail_fscut(detail_id):
     tech = _cut_technology(machine.id, grade_id, detail.cut_thickness, detail.cutting_gas, detail.cutting_nozzle)
     try:
         ch = _tech_channel(tech, detail)
+        ch['gas_map'] = machine.gas_channel_map
         data = (fscut.write_lxds(shapes, ch, name=detail.name, thickness=detail.cut_thickness) if fmt == 'lxds'
                 else fscut.write_lxd(shapes, ch))
     except (ValueError, KeyError, TypeError):

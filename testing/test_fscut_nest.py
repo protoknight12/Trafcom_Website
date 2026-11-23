@@ -630,6 +630,18 @@ def test_import_library_technologies(s, tmp_path):
     assert _login('fn_worker').post(url, data={}).status_code == 302
     assert MachineCutTechnology.query.filter_by(machine_id=laser.id).count() == 2
 
+    # air on the N2 channel: the dossier asks the real gas of the N2 layers; a gas not on that channel is ignored
+    laser = db.session.get(Machine, laser.id)
+    laser.gas_channels = json.dumps({'air': 'nitrogen'})
+    db.session.commit()
+    c = _login('fn_admin')
+    assert 'name="real_gas_nitrogen"' in c.get(f'/admin/hall/{hall.id}/dossier').get_data(as_text=True)
+    c.post(url, data={'grade_id': grade.id, 'real_gas_nitrogen': 'air', 'real_gas_oxygen': 'air',
+                      'file': (io.BytesIO(doc.encode()), 'cs copy.lxd')}, content_type='multipart/form-data')
+    db.session.expire_all()
+    rows = sorted((t.thickness_mm, t.gas) for t in MachineCutTechnology.query.filter_by(machine_id=laser.id))
+    assert rows == [(2, 'air'), (2, 'nitrogen'), (8, 'oxygen')]
+
 
 def test_fscut_download_for_machine(s, tmp_path):
     laser = Machine(name='Лазер стар', is_laser=True)
@@ -668,6 +680,24 @@ def test_fscut_download_for_machine(s, tmp_path):
     assert (ch['speed_mm_min'], ch['fields']['peak_power_w']) == (2500, 3000)   # the machine's row for this key
     m = fscut.parse(_write(tmp_path / 'c.lxd', c.get(url).data))['model']
     assert m['size'] == (100, 50) and m['cut_length_mm'] == 300 and m['pierces'] == 1
+
+    # gases per channel: air blown through the N2 channel -> the file carries the N2 GasType (high pressure too)
+    assert fscut.gas_codes({'air': 'nitrogen', 'oxygen': 'oxygen'}) == {'1': '3', '4': '6'}
+    c.post(f'/admin/hall/{hall.id}/dossier/system', data={'status': 'idle', 'is_laser': '1', 'fscut_format': 'lxd',
+                                                         'gas_channel_air': 'nitrogen', 'gas_channel_oxygen': 'oxygen'})
+    assert db.session.get(Machine, laser.id).gas_channel_map == {'air': 'nitrogen'}
+    assert 'name="gas_channel_air"' in c.get(f'/admin/hall/{hall.id}/dossier').get_data(as_text=True)
+    d.cutting_gas = 'air'                                              # no air technology: the detail's speed + air
+    db.session.commit()
+    ch = fscut.parse(_write(tmp_path / 'g.lxd', c.get(url).data))['technology']['channels'][0]
+    assert ch['gas'] == 'nitrogen'
+    c.post(f'/admin/hall/{hall.id}/dossier/system', data={'status': 'idle', 'is_laser': '1', 'fscut_format': 'lxd',
+                                                         'gas_channel_air': 'air'})
+    assert db.session.get(Machine, laser.id).gas_channels is None     # every gas on its own channel again
+    ch = fscut.parse(_write(tmp_path / 'h.lxd', c.get(url).data))['technology']['channels'][0]
+    assert ch['gas'] == 'air'
+    d.cutting_gas = 'nitrogen'
+    db.session.commit()
 
     # a new-format part file of the detail -> old .lxd; a nest file is not converted (step 1)
     part, part_path = _attach(d, 'Лицежа.lxds', _lxds(part=True))

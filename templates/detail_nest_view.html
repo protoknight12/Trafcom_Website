@@ -79,6 +79,13 @@
                     {% for m in lasers %}<option value="{{ m.id }}" {{ 'selected' if m.id == detail.cutting_machine_id }}>{{ m.name }}</option>{% endfor %}
                 </select>
             </div>
+            <div class="form-group" style="margin: 0; flex: 0 1 170px;">
+                <label for="nt_real_gas">Реален газ</label>
+                <select id="nt_real_gas" name="real_gas" data-picker="off" title="За машина с няколко газа на един канал (досие - „Газове по канали“)">
+                    <option value="">както е във файла</option>
+                    {% for g, glabel in cut_gases.items() %}<option value="{{ g }}">{{ glabel }}</option>{% endfor %}
+                </select>
+            </div>
             {% if nest.technology.channels|length > 1 %}
             <div class="form-group" style="margin: 0; flex: 0 1 100px;">
                 <label for="nt_port">Слой</label>

@@ -899,6 +899,17 @@ def parse(path):
 # into polylines with DXF bulges - CypCut cuts closed contours). The .lxds writer comes after the owner tried these.
 
 GAS_CODE = {'air': 1, 'oxygen': 2, 'nitrogen': 3}
+
+
+def gas_codes(gas_map):
+    """{gas: channel gas} (GAS_CODE keys, e.g. {'air': 'nitrogen'} = air blown through the N2 channel) -> GasType text
+    replacements, high pressure included (code + 3: 4/5/6 = air/O2/N2 high). Empty for none / identity."""
+    out = {}
+    for g, ch in (gas_map or {}).items():
+        if g in GAS_CODE and ch in GAS_CODE and g != ch:
+            out[str(GAS_CODE[g])] = str(GAS_CODE[ch])
+            out[str(GAS_CODE[g] + 3)] = str(GAS_CODE[ch] + 3)
+    return out
 LXD_EMPTY_PORTS = 15            # an old file lists Channel ports 1..15
 
 
@@ -964,7 +975,7 @@ def chain(shapes, tol=0.01):
     return out
 
 
-def _channel_el(port, raw=None, fields=None, speed_mm_min=None, gas=None):
+def _channel_el(port, raw=None, fields=None, speed_mm_min=None, gas=None, gas_map=None):
     """<Channel> with its CamParams: the stored parameter tree (fscut._raw() rows) rebuilt as it was, then the speed,
     gas and every known field written on top (values edited in the dossier win). A field with no value is left as
     the tree has it."""
@@ -999,6 +1010,11 @@ def _channel_el(port, raw=None, fields=None, speed_mm_min=None, gas=None):
             if v is None or (key == 'gas' and v not in GAS_CODE):
                 continue
             child(f'Pierce{n}').set(attr, str(GAS_CODE[v]) if key == 'gas' else _num(v / k))
+    codes = gas_codes(gas_map)          # the machine's gas -> channel wiring (Machine.gas_channels)
+    if codes:
+        for el in cam.iter():
+            if el.get('GasType') in codes:
+                el.set('GasType', codes[el.get('GasType')])
     return ch
 
 
@@ -1105,7 +1121,8 @@ def _lxd_doc(box, channel, h):
     chans = ET.SubElement(ET.SubElement(doc, 'Technical'), 'Channels')
     ET.SubElement(chans, 'Channel', {'ParamFlag': '256'})
     c = channel or {}
-    chans.append(_channel_el(1, c.get('raw'), c.get('fields'), c.get('speed_mm_min'), c.get('gas')))
+    chans.append(_channel_el(1, c.get('raw'), c.get('fields'), c.get('speed_mm_min'), c.get('gas'),
+                             c.get('gas_map')))
     for port in range(2, LXD_EMPTY_PORTS + 1):
         ET.SubElement(chans, 'Channel', {'ChannelPort': str(port)})
     vp = ET.SubElement(ET.SubElement(doc, 'Viewports', {'Handle': '3'}), 'VPort', {'Handle': str(h())})
@@ -1417,7 +1434,8 @@ def _lxds_technical(channel, material, thickness):
     chans = ET.SubElement(tech, 'Channels')
     ET.SubElement(chans, 'Channel', {'ParamFlag': '256'})
     c = channel or {}
-    chans.append(_channel_el(1, c.get('raw'), c.get('fields'), c.get('speed_mm_min'), c.get('gas')))
+    chans.append(_channel_el(1, c.get('raw'), c.get('fields'), c.get('speed_mm_min'), c.get('gas'),
+                             c.get('gas_map')))
     for port in range(2, LXD_EMPTY_PORTS + 1):
         ET.SubElement(chans, 'Channel', {'ChannelPort': str(port)})
     return tech
