@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 {% from 'partials/entity_link.html' import elink %}
+{% from 'partials/fscut_stats.html' import cut_stats_facts %}
 <html lang="bg">
 <head>
     <meta charset="UTF-8">
@@ -122,12 +123,8 @@
             <div><span>Лист</span>{{ (r.plate[0]|num3 ~ ' × ' ~ r.plate[1]|num3 ~ ' мм') if r.plate else '-' }}</div>
             <div><span>Брой листове</span>{{ r.plate_amount }}</div>
             <div><span>Използване</span>{{ fmt_num(r.utilization) }} %</div>
-            <div><span>Дължина на реза (на лист)</span>{{ fmt_num(r.cut_length_mm / 1000, 2) }} м</div>
-            <div><span>Пробивания (на лист)</span>{{ r.pierces }}</div>
-            <div><span>Време (на лист, приблизително)</span>{{ (fmt_num(r.minutes, 1) ~ ' мин') if r.minutes is not none else '-' }}</div>
         </div>
-        <p class="text-muted text-small">Дължината и пробиванията са сметнати от чертежа (без входове и празни ходове);
-            времето = дължина / скорост на слой {{ channel.port or 1 }} + пробивания × време за пробиване. CypCut не ги записва във файла.</p>
+        {{ cut_stats_facts(r.stats, ' (на лист)') }}
 
         {% if r.counts %}
         <div class="table-responsive">
@@ -240,10 +237,8 @@
         <h3>Детайл във файла{% if pm.name %}: {{ pm.name }}{% endif %}</h3>
         <div class="nest-facts">
             <div><span>Габарит</span>{{ pm.size[0]|num3 }} × {{ pm.size[1]|num3 }} мм</div>
-            <div><span>Дължина на реза</span>{{ fmt_num(pm.cut_length_mm / 1000, 3) }} м</div>
-            <div><span>Пробивания</span>{{ pm.pierces }}</div>
-            <div><span>Време (приблизително)</span>{{ (fmt_num(pm.minutes, 2) ~ ' мин') if pm.minutes is not none else '-' }}</div>
         </div>
+        {{ cut_stats_facts(pm.stats) }}
         {% if detail.width and detail.height and (detail.width - pm.size[0])|abs > 0.5 and (detail.width - pm.size[1])|abs > 0.5 %}
         <p class="alert alert-warning">Габаритът на детайла в каталога е {{ detail.width|num3 }} × {{ detail.height|num3 }} мм - различен от файла.</p>
         {% endif %}

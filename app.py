@@ -15950,13 +15950,15 @@ def detail_dxf_dashboard(detail_id):
                'sheet_w': m.sheet_width_mm, 'sheet_l': m.sheet_length_mm,
                'w': detail.effective_width, 'h': detail.effective_height,
                'rate': 0.0 if m.owner_client_id else _material_terms(material_cost_rate(m), detail.owner_client)}
+    fscut_stats = None
     if current_user.is_admin:
         has_geometry = (db.session.query(db.func.length(Detail.geometry_json)).filter(Detail.id == detail.id)
                         .scalar() or 0) > 2
+        fscut_stats = _detail_fscut_stats(detail, files)
     return render_template('detail_dxf_dashboard.html', detail=detail, files=files, services=services,
                             materials=materials, services_data=services_data, alt_materials=alt_materials,
                             machines=machines, cut_tech=cut_tech, cut_gases=CUT_GASES, ppu=ppu,
-                            machine_refusal=machine_refusal,
+                            machine_refusal=machine_refusal, fscut_stats=fscut_stats,
                             fscut_formats=FSCUT_FORMATS,
                             has_geometry=has_geometry, active_page='admin_details')
 
@@ -16259,9 +16261,7 @@ def view_detail_nest(file_id):
         nest['model'].update(draw=nest['model']['shapes'], plate_shapes=[])
     for r in nest['results'] + ([nest['model']] if nest['model'] else []):
         r['draw'] = r['plate_shapes'] + r['shapes']        # sheet outline + parts, one dxf_viewer.js call
-        # estimate only: cut at the channel-1 speed + every pierce, no rapid moves / lead-ins / slow-downs
-        r['minutes'] = (r['cut_length_mm'] / ch['speed_mm_min'] + r['pierces'] * (ch.get('pierce_time_sec') or 0) / 60) \
-            if ch.get('speed_mm_min') else None
+        r['stats'] = fscut.cut_stats(_nest_result_pieces(r), nest['technology']['channels'])
     detail = f.detail
     return render_template('detail_nest_view.html', file=f, detail=detail, nest=nest, channel=ch,
                            material=fscut.material_name(nest['technology']['material']), cut_gases=CUT_GASES,
@@ -16276,6 +16276,36 @@ def view_detail_nest(file_id):
                            materials=detail_materials_query(detail.owner_client_id)
                            .order_by(MaterialPrice.type, MaterialPrice.display_name).all(),
                            active_page='admin_details')
+
+
+def _nest_result_pieces(r):
+    """[(entity|None, shapes)] of a nest result (its placed parts + loose pieces) or of a part file's model."""
+    if 'placed' not in r:
+        return r['pieces']
+    return [pc for pl in r['placed'] for pc in pl['pieces']] + list(r['extra'])
+
+
+def _detail_fscut_stats(detail, files):
+    """fscut.cut_stats() of the detail as its newest FSCUT file cuts it (owner, 2026-11-24) - a part file's drawing,
+    or the nest part bound to (NestPartDetail) / named like this detail - + 'file' (the DetailDxfFile); None without
+    such a file. An unreadable file is skipped."""
+    folder = app.config['DETAIL_DXF_FOLDER']
+    name = (detail.name or '').strip().casefold()
+    for f in files:                                        # newest first
+        if not f.original_filename.lower().endswith(FSCUT_EXTENSIONS):
+            continue
+        try:
+            nest = fscut.parse(os.path.join(folder, f.filename))
+        except (ValueError, OSError):
+            continue
+        channels = nest['technology']['channels']
+        if nest['model']:
+            return {**fscut.cut_stats(nest['model']['pieces'], channels), 'file': f}
+        bound = {x.part_name for x in f.nest_links if x.detail_id == detail.id}
+        for p in nest['parts']:
+            if p['pieces'] and (p['name'] in bound or (not bound and (p['name'] or '').strip().casefold() == name)):
+                return {**fscut.cut_stats(p['pieces'], channels), 'file': f}
+    return None
 
 
 def _nest_parts(nest):

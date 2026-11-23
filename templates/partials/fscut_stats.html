@@ -1,0 +1,28 @@
+{#- fscut.cut_stats() of a part / a sheet: cut length with lead-ins and micro-joints, pierces, time per layer.
+    Needs the page's fmt_num() or falls back to |num3. #}
+{% macro cut_stats_facts(st, per='') %}
+<div class="nest-facts">
+    <div><span>Рязане{{ per }}</span>{{ (st.cut_mm / 1000)|num3 }} м</div>
+    <div><span>Влизания{{ per }}</span>{{ (st.lead_mm / 1000)|num3 }} м</div>
+    <div><span>Пробивания{{ per }}</span>{{ st.pierces }}</div>
+    {% if st.micro_joints %}<div><span>Микроджойнти</span>{{ st.micro_joints }} ({{ st.gap_mm|num3 }} мм без рязане)</div>{% endif %}
+    <div><span>Време{{ per }} (приблизително)</span>{{ (st.minutes|num3 ~ ' мин') if st.minutes is not none else '-' }}</div>
+</div>
+{% if st.layers|length > 1 %}
+<div class="table-responsive">
+<table class="users-table" data-table-tools="off">
+    <thead><tr><th>Слой</th><th>Рязане, м</th><th>Влизания, м</th><th>Пробивания</th><th>Скорост, мм/мин</th><th>Пробиване, сек</th><th>Време, мин</th></tr></thead>
+    <tbody>
+    {% for l in st.layers %}
+    <tr><td>{{ l.port }}</td><td>{{ (l.cut_mm / 1000)|num3 }}</td><td>{{ (l.lead_mm / 1000)|num3 }}</td><td>{{ l.pierces }}</td>
+        <td>{{ l.speed_mm_min|num3 if l.speed_mm_min else '-' }}</td><td>{{ l.pierce_time_sec|num3 if l.pierce_time_sec else '-' }}</td>
+        <td>{{ l.minutes|num3 if l.minutes is not none else '-' }}</td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endif %}
+<p class="text-muted text-small">От файла: контурите с компенсацията, + влизанията, − празните участъци на микроджойнтите;
+    пробив на всеки контур и на всеки микроджойнт с ново влизане. Време = (рязане + влизания) / скоростта на слоя +
+    пробивания × времето за пробиване на слоя. Без празни ходове и забавяния.</p>
+{% endmacro %}

@@ -69,16 +69,25 @@ def _cam_xml(e):
     return [(c.tag, dict(c.attrib), [(g.tag, dict(g.attrib)) for g in c]) for c in e if c.tag in CAM_TAGS]
 
 
+def _joint_leads(e):
+    """Lead-in length of each micro-joint of a shape (new format: a MicroConnect may carry its own LeadIn = the head
+    pierces again after the gap); 0 = none (cutting just resumes)."""
+    return [_f(mc.find('LeadIn').get('Length')) if mc.find('LeadIn') is not None else 0.0
+            for mc in e.iterfind('MicroConnects/MicroConnect')]
+
+
 def _xml_entity(e):
     """Old-format Circle / LwPolyline -> entity, or None for anything else."""
     attrs = {k: e.get(k) for k in ('StartAngle', 'IsFill', 'PathStartParam') if e.get(k) is not None}
+    port = int(e.get('ChannelPort')) if (e.get('ChannelPort') or '').isdigit() else 1     # the layer it is cut with
     if e.tag == 'Circle':
         c = _xy(e.find('Center'))
-        return {'kind': 'circle', 'cx': c[0], 'cy': c[1], 'r': _f(e.get('Radius')), 'attrs': attrs, 'cam': _cam_xml(e)}
+        return {'kind': 'circle', 'cx': c[0], 'cy': c[1], 'r': _f(e.get('Radius')), 'attrs': attrs, 'cam': _cam_xml(e),
+                'port': port, 'joint_leads': _joint_leads(e)}
     if e.tag == 'LwPolyline':
         pts = [(_f(p.get('X')), _f(p.get('Y')), _f(p.get('Bulge'))) for p in e.findall('Point')]
         return {'kind': 'poly', 'pts': pts, 'closed': bool(int(_f(e.get('PolyFlag'))) & 1), 'attrs': attrs,
-                'cam': _cam_xml(e)}
+                'cam': _cam_xml(e), 'port': port, 'joint_leads': _joint_leads(e)}
     return None
 
 
@@ -101,12 +110,15 @@ def _sub_payload(rec, name):
 def _bin_cam(data, xml_el, kind):
     """Lead-in (LeadParam) and compensation (Curve) of a new-format shape from Shapes2D/data.bin, + its XML
     micro-joints. Layout checked against the same part saved by CypCut as .lxd and .lxds (docs/FSCUT_FORMAT.md)."""
-    cam, attrs = [], {}
+    cam, attrs, port = [], {}, 1
     addr = xml_el.get('DataAddr')
     rec = b''
     if addr is not None and data[int(addr):int(addr) + 4] == b'\xd1\xd1\xd1\xd1':
         a = int(addr)
         rec = data[a:a + 16 + struct.unpack_from('<Q', data, a + 8)[0]]
+    o = _sub_payload(rec, 'Shape')                          # its first u32 = the layer (ChannelPort)
+    if o is not None and o + 4 <= len(rec):
+        port = struct.unpack_from('<I', rec, o)[0] or 1
     o = _sub_payload(rec, 'LeadParam')
     if o is not None:
         typ = struct.unpack_from('<I', rec, o)[0]
@@ -127,7 +139,7 @@ def _bin_cam(data, xml_el, kind):
             comp = {'Style': str(style), 'Size': _num(struct.unpack_from('<d', rec, o + 16)[0])}
     cam.append(('ToolCompensation', comp, []))
     cam += [c for c in _cam_xml(xml_el) if c[0] == 'MicroConnects']
-    return cam, attrs
+    return cam, attrs, port
 
 
 # ---------- shapes ----------
@@ -423,9 +435,62 @@ def _model(name, shapes, entities=(), loose=None):
     if not shapes:
         return None
     b = bbox(shapes)
+    loose = shapes if loose is None else loose
     return {'name': name, 'shapes': shapes, 'entities': list(entities),
-            'loose': shapes if loose is None else loose, 'size': (round(b[2] - b[0], 3), round(b[3] - b[1], 3)),
+            'pieces': [(e, _entity_shapes(e)) for e in entities] + ([(None, loose)] if loose else []),
+            'loose': loose, 'size': (round(b[2] - b[0], 3), round(b[3] - b[1], 3)),
             'cut_length_mm': round(sum(shape_length(s) for s in shapes), 1), 'pierces': count_contours(shapes)}
+
+
+def cut_stats(pieces, channels=()):
+    """Cut length, pierces and time of [(entity|None, shapes)] as the file has them cut (owner, 2026-11-24):
+    a contour + its lead-in (`Length`) - its micro-joint gaps (`Size` each); compensation (`Style` != 0) moves a closed
+    contour by `Size` - outward for the outer one (IsFill), inward for a hole: +-2*pi*Size. One pierce per contour, plus
+    one per micro-joint with its own lead-in (new format; its lead length is cut too). Shapes with no cutting attributes
+    (lines/arcs, a moved block) count as drawn. Time per layer (the entity's ChannelPort) = length / that layer's speed
+    + pierces x its pierce time; a layer the technology does not list takes the first channel's values.
+    ponytail: no rapid moves, slow lead/end, corner slow-downs or lead-outs - an estimate, CypCut's own is the real one.
+    -> {'cut_mm', 'lead_mm', 'gap_mm', 'pierces', 'micro_joints', 'minutes' (None when a used layer has no speed),
+    'layers': [{'port', 'cut_mm', 'lead_mm', 'pierces', 'speed_mm_min', 'pierce_time_sec', 'minutes'}]}"""
+    chans = {c['port']: c for c in channels}
+    first = channels[0] if channels else {}
+    layers, gap, joints = {}, 0.0, 0
+    for ent, shapes in pieces:
+        length = sum(shape_length(sh) for sh in shapes)
+        if ent is None:
+            port, lead, n = 1, 0.0, count_contours(shapes) if shapes else 0
+        else:
+            cam = {tag: (attrs, kids) for tag, attrs, kids in ent.get('cam') or []}
+            port, n = ent.get('port') or 1, 1
+            lead = _f(cam.get('LeadIn', ({}, []))[0].get('Length'))
+            comp = cam.get('ToolCompensation', ({}, []))[0]
+            if _f(comp.get('Style')) and (ent['kind'] == 'circle' or ent.get('closed')):
+                sign = 1 if ent['attrs'].get('IsFill') == 'true' else -1
+                length = max(length + sign * 2 * math.pi * _f(comp.get('Size')), 0.0)
+            kids = cam.get('MicroConnects', ({}, []))[1]
+            g = sum(_f(a.get('Size')) for _, a in kids)
+            gap += g
+            joints += len(kids)
+            length = max(length - g, 0.0)
+            joint_leads = [x for x in ent.get('joint_leads') or [] if x > 0]
+            n += len(joint_leads)
+            lead += sum(joint_leads)
+        row = layers.setdefault(port, {'port': port, 'cut_mm': 0.0, 'lead_mm': 0.0, 'pierces': 0})
+        row['cut_mm'] += length
+        row['lead_mm'] += lead
+        row['pierces'] += n
+    total_min = 0.0
+    for row in layers.values():
+        ch = chans.get(row['port']) or first
+        row['speed_mm_min'], row['pierce_time_sec'] = ch.get('speed_mm_min'), ch.get('pierce_time_sec')
+        row['minutes'] = ((row['cut_mm'] + row['lead_mm']) / row['speed_mm_min']
+                          + row['pierces'] * (row['pierce_time_sec'] or 0) / 60) if row['speed_mm_min'] else None
+        total_min = None if total_min is None or row['minutes'] is None else total_min + row['minutes']
+        row['cut_mm'], row['lead_mm'] = round(row['cut_mm'], 1), round(row['lead_mm'], 1)
+    rows = sorted(layers.values(), key=lambda r: r['port'])
+    return {'cut_mm': round(sum(r['cut_mm'] for r in rows), 1), 'lead_mm': round(sum(r['lead_mm'] for r in rows), 1),
+            'gap_mm': round(gap, 1), 'pierces': sum(r['pierces'] for r in rows), 'micro_joints': joints,
+            'minutes': round(total_min, 2) if total_min is not None and rows else None, 'layers': rows}
 
 
 def _sig(shapes):
@@ -633,7 +698,7 @@ def _bin_entity(geo, data, xml_el):
         return None
     cls, rec, base = _read_record(geo, int(xml_el.get('GeoAddr')))
     kind = 'circle' if cls == 'Circle' else 'poly'
-    cam, attrs = _bin_cam(data, xml_el, kind)
+    cam, attrs, port = _bin_cam(data, xml_el, kind)
     if kind == 'circle':
         if rec[base:base + 4] != POINT_TAG:
             return None
@@ -641,7 +706,8 @@ def _bin_entity(geo, data, xml_el):
         start = struct.unpack_from('<d', rec, base + 32)[0]       # point, r, u32 0, start angle (rad)
         if start:
             attrs['StartAngle'] = _num(start)
-        return {'kind': 'circle', 'cx': cx, 'cy': cy, 'r': r, 'attrs': attrs, 'cam': cam}
+        return {'kind': 'circle', 'cx': cx, 'cy': cy, 'r': r, 'attrs': attrs, 'cam': cam, 'port': port,
+                'joint_leads': _joint_leads(xml_el)}
     path_start, closed, count = struct.unpack_from('<dII', rec, base)
     if path_start:
         attrs['PathStartParam'] = _num(path_start)
@@ -649,7 +715,8 @@ def _bin_entity(geo, data, xml_el):
         raise ValueError('polyline too long')
     pts = [struct.unpack_from('<3d', rec, base + 16 + 32 * i + 4) for i in range(count)]
     return {'kind': 'poly', 'pts': pts, 'closed': bool(closed & 1 or int(_f(xml_el.get('PolyFlag'))) & 1),
-            'attrs': attrs, 'cam': cam}
+            'attrs': attrs, 'cam': cam, 'port': port,
+                'joint_leads': _joint_leads(xml_el)}
 
 
 def _read_record(geo, addr):

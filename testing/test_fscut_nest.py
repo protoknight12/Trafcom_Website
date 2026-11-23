@@ -262,7 +262,10 @@ def test_nest_page(s):
         try:
             page = c.get(f'/details/files/{part.id}/nest').get_data(as_text=True)
             assert 'Детайл FSCUT' in page and 'Детайл във файла: liceva' in page and '300 × 50 мм' in page
-            assert 'nest-canvas-1' in page and 'Вземи технологията' in page
+            assert 'nest-canvas-1' in page and 'Вземи технологията' in page and 'Влизания' in page
+            # the detail page takes length / pierces / time from the newest FSCUT file
+            page = c.get(f'/details/{d.id}/files').get_data(as_text=True)
+            assert 'По FSCUT файла' in page and 'const OP_FSCUT = {' in page
         finally:
             os.remove(part_path)
 
@@ -692,3 +695,35 @@ def test_fscut_download_for_machine(s, tmp_path):
     finally:
         os.remove(part_path)
         os.remove(nest_path)
+
+
+def test_cut_stats_lead_in_micro_joints_compensation(tmp_path):
+    """Length / pierces / time as the file cuts it: + lead-ins, - micro-joint gaps, compensation outward on the outer
+    contour (IsFill) and inward on a hole, a layer per ChannelPort, a micro-joint with its own lead-in re-pierces."""
+    src = CAM_LXD.replace('<LwPolyline PathStartParam', '<LwPolyline IsFill="true" PathStartParam') \
+        .replace('<Circle Radius', '<Circle ChannelPort="2" Radius')
+    nest = fscut.parse(_write(tmp_path / 'p.lxd', src.encode()))
+    channels = [{'port': 1, 'speed_mm_min': 3000.0, 'pierce_time_sec': 0.6},
+                {'port': 2, 'speed_mm_min': 1000.0, 'pierce_time_sec': 1.2}]
+    st = fscut.cut_stats(nest['model']['pieces'], channels)
+    comp = 2 * math.pi * 0.4
+    outer, hole = 300 + comp - 0.8, 2 * math.pi * 5 - comp
+    assert (st['pierces'], st['micro_joints'], st['gap_mm'], st['lead_mm']) == (2, 2, 0.8, 8.0)
+    assert st['cut_mm'] == round(round(outer, 1) + round(hole, 1), 1)
+    l1, l2 = st['layers']
+    assert (l1['port'], l1['pierces'], l2['port'], l2['pierces']) == (1, 1, 2, 1)
+    assert st['minutes'] == round((outer + 4) / 3000 + 0.6 / 60 + (hole + 4) / 1000 + 1.2 / 60, 2)
+    # a layer the technology does not list takes the first channel's; no speed at all = no time
+    assert fscut.cut_stats(nest['model']['pieces'], channels[:1])['layers'][1]['speed_mm_min'] == 3000.0
+    assert fscut.cut_stats(nest['model']['pieces'])['minutes'] is None
+    # a micro-joint carrying its own lead-in (new format) is one more pierce + its lead
+    sq = fscut._poly_shapes([(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)], True)
+    ent = {'kind': 'poly', 'closed': True, 'attrs': {}, 'port': 1, 'joint_leads': [3.0, 0.0],
+           'cam': [('MicroConnects', {}, [('MicroConnect', {'Size': '.5'}), ('MicroConnect', {'Size': '.5'})])]}
+    st = fscut.cut_stats([(ent, sq), (None, [{'type': 'line', 'x1': 0, 'y1': 0, 'x2': 5, 'y2': 0}])])
+    assert (st['pierces'], st['cut_mm'], st['lead_mm']) == (3, 44.0, 3.0)
+    # both formats read the layer and the joint leads
+    new = fscut.parse(_write(tmp_path / 'p.lxds', _lxds(part=True, cam=True)))
+    ents = new['model']['entities']
+    assert [e['port'] for e in ents] == [1, 1] and ents[0]['joint_leads'] == [0.0, 0.0]
+    assert fscut.cut_stats(new['model']['pieces'])['micro_joints'] == 2

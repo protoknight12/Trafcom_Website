@@ -94,7 +94,8 @@ lead-in's `Pos`. A circle has no `Pos` - its start is the `StartAngle` attribute
 New `.lxds` - the shape's record in `Shapes2D/data.bin` (same `d1`/`c1`/`c0`/`d0` framing as Geometry2D, padding
 relative to the record start) holds sub-records `Object`, `Shape`, `LeadParam` (only when there is a lead-in) and
 `Curve`. `LeadParam` payload: u32 LeadType, 12 bytes, 5 doubles Pos, Angle, Length, ArcRadius, LeadHoleR. `Curve`
-payload: 8 bytes, u32 (1 = filled), u32 compensation Style (0 = none), double Size. Micro-joints stay in XML
+payload: 8 bytes, u32 (1 = filled), u32 compensation Style (0 = none), double Size. The `Shape` sub-record's first u32 is the
+layer (`ChannelPort`; old format: the `ChannelPort` attribute). Micro-joints stay in XML
 (`Shapes2D/content.xml`, `MicroConnects` under the shape; each `MicroConnect` may hold its own `LeadIn`, which the old
 format does not have and is not written). A circle's start angle is the double after its radius in Geometry2D.
 
@@ -200,4 +201,15 @@ by 0.1 mm slits so it is one contour; written as a document whose only content i
 `LwPolyline` (or a DXF with one closed LWPOLYLINE - how the owner loads plates). Needs shapely. Not yet opened in CypCut.
 
 Not written: CypCut's own remnant outlines (`LayerName="Remnant"`), thumbnails. An old short lead-in (`<LeadIn Pos Angle>` with no
-length) goes into the new format as LeadType 0 / length 0. Lead-ins/micro-joints are not drawn or counted on the page.
+length) goes into the new format as LeadType 0 / length 0. Lead-ins/micro-joints are not drawn; they are counted by `fscut.cut_stats()` (below).
+
+## Cut length, pierces and time from the file
+
+`fscut.cut_stats(pieces, channels)` (owner, 2026-11-24) - what the nest page and the detail page ("По FSCUT файла",
+"⏱ От DXF") show: each contour's length, compensation (`Style` != 0) moving a closed contour by `Size` (outer =
+IsFill outward, holes inward: +-2*pi*Size), + its lead-in `Length`, - each micro-joint's `Size`. One pierce per
+contour + one per micro-joint whose own `LeadIn` has a length (new format; that lead is cut too - an empty `<LeadIn/>`
+= cutting just resumes). Time per layer = (cut + leads) / the layer's speed + pierces x its pierce time; a layer not
+in the technology takes the first channel's. Not counted: rapid moves, slow lead/end, corner slow-downs, lead-outs,
+the lead hole (`LeadHoleR` - not known whether CypCut cuts it). The `Size` of a compensation is taken as the offset
+distance (not half of it) - unverified against CypCut's own time.
