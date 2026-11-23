@@ -20,7 +20,7 @@ GAS = {1: 'air', 2: 'oxygen', 3: 'nitrogen', 4: 'air', 5: 'oxygen', 6: 'nitrogen
 MATERIAL_NAMES = {'碳钢': 'Черна стомана', '不锈钢': 'Неръждаема стомана', '铝': 'Алуминий', '铝板': 'Алуминий',
                   '黄铜': 'Месинг', '铜': 'Мед', '紫铜': 'Мед', '镀锌板': 'Поцинкована ламарина',
                   '镀锌': 'Поцинкована ламарина', '钛': 'Титан'}
-MAX_SHAPES = 200_000
+MAX_SHAPES = 200_000          # shapes + entity visits per file (nested Inserts multiply, so counted everywhere)
 
 
 def material_name(name):
@@ -35,6 +35,13 @@ def _fromstring(data):
     if b'<!DOCTYPE' in data or b'<!ENTITY' in data:
         raise ValueError('DTD not allowed')
     return ET.fromstring(data)
+
+
+def _spend(budget, n):
+    """One running count per file of entity visits + shapes produced; ValueError past MAX_SHAPES."""
+    budget[0] += n
+    if budget[0] > MAX_SHAPES:
+        raise ValueError('too many shapes')
 
 
 def _f(v, default=0.0):
@@ -238,7 +245,15 @@ def _finish_result(res, cut_shapes, plate_shapes, remnant_shapes):
 
 # ---------- old format (.lxd) ----------
 
-def _xml_entity_shapes(e, blocks, skipped, depth=0):
+def _xml_entity_shapes(e, blocks, skipped, budget, depth=0):
+    _spend(budget, 1)
+    shapes = _xml_entity_raw(e, blocks, skipped, budget, depth)
+    if e.tag != 'Insert':                     # an Insert's shapes were counted at its leaves
+        _spend(budget, len(shapes))
+    return shapes
+
+
+def _xml_entity_raw(e, blocks, skipped, budget, depth):
     tag = e.tag
     if tag == 'Circle':
         c = _xy(e.find('Center'))
@@ -263,7 +278,7 @@ def _xml_entity_shapes(e, blocks, skipped, depth=0):
         shapes = []
         ents = block.find('Entities')
         for c in (ents if ents is not None else []):
-            shapes += _xml_entity_shapes(c, blocks, skipped, depth + 1)
+            shapes += _xml_entity_shapes(c, blocks, skipped, budget, depth + 1)
         return _transform(shapes, _xy(block.find('BasePoint')), _xy(e.find('InsertPoint')),
                           _f(e.get('Angle') or e.findtext('Angle')),
                           _f(e.findtext('XScale'), 1.0), _f(e.findtext('YScale'), 1.0))
@@ -287,6 +302,7 @@ def _parse_lxd(data):
         plates[p.get('Handle')] = size
         out['plates'].append({'size': size, 'amount': int(_f(p.get('Amount'))), 'used': int(_f(p.get('AmountUsed')))})
     used_plates = [pl['size'] for pl in out['plates'] if pl['used']] or [pl['size'] for pl in out['plates']]
+    budget = [0]
     for r in root.iter('NestResult'):
         res = {'name': r.get('Name'), 'utilization': _f(r.get('Utilization'), None),
                'plate_amount': int(_f(r.get('PlateAmount'), 1)) or 1, 'plate': used_plates[0] if used_plates else None,
@@ -294,15 +310,13 @@ def _parse_lxd(data):
         cut, plate, remnant = [], [], []
         ents = r.find('Entities')
         for e in (ents if ents is not None else []):
-            shapes = _xml_entity_shapes(e, blocks, out['skipped'])
+            shapes = _xml_entity_shapes(e, blocks, out['skipped'], budget)
             if e.get('NestPlate'):
                 plate += shapes
             elif e.get('LayerName') == 'Remnant':
                 remnant += shapes
             else:
                 cut += shapes
-            if len(cut) > MAX_SHAPES:
-                raise ValueError('too many shapes')
         if plate:                                    # the result's own sheet outline wins over the plate list
             res['plate'] = None
         out['results'].append(_finish_result(res, cut, plate, remnant))
@@ -381,8 +395,10 @@ def _parse_lxds(zf):
     blocks_el = xml('Blocks/content.xml')
     blocks = {b.get('Name'): b for b in (blocks_el.iter('Block') if blocks_el is not None else [])}
     skipped = out['skipped']
+    budget = [0]
 
     def handle_shapes(handle, depth=0):
+        _spend(budget, 1)
         e = shape_xml.get(handle)
         if e is None:
             return []
@@ -396,6 +412,7 @@ def _parse_lxds(zf):
         if got is None:
             skipped[cls] = skipped.get(cls, 0) + 1
             return []
+        _spend(budget, len(got))
         return got
 
     def insert_shapes(e, depth=0):
@@ -405,8 +422,6 @@ def _parse_lxds(zf):
         shapes = []
         for s in block.iter('Shape'):
             shapes += handle_shapes(s.get('Handle'), depth + 1)
-            if len(shapes) > MAX_SHAPES:
-                raise ValueError('too many shapes')
         return _transform(shapes, _xy(block.find('BasePoint')), _xy(e.find('InsertPoint')),
                           _f(e.get('Angle') or e.findtext('Angle')),
                           _f(e.findtext('XScale'), 1.0), _f(e.findtext('YScale'), 1.0))
@@ -444,8 +459,6 @@ def _parse_lxds(zf):
                 e = shape_xml.get(sh.get('Handle'))
                 (remnant if e is not None and e.get('LayerName') == 'Remnant' else cut).extend(
                     handle_shapes(sh.get('Handle')))
-            if len(cut) > MAX_SHAPES:
-                raise ValueError('too many shapes')
         out['results'].append(_finish_result(res, cut, plate, remnant))
     return out
 
