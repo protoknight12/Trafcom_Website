@@ -102,7 +102,17 @@ current %, PWM frequency, duty % = `PwmRatio` x 100, focus, height, beam size, l
 (`fscut._raw()`, `params_json`). A field the file does not carry stays empty (older CypCut versions lack
 `PeakPower`, `BeamSize`, ...), never 0.
 
-## Not done yet
+## Writing (`fscut.write_lxd()`)
 
-A converter between the two formats (owner, 2026-11-23: later). Lead-ins/micro-joints are read by CypCut but not drawn
-or counted here.
+Step 1 (owner's decision 2026-11-23): one part as an old `.lxd`, mirroring a real old part file - `DocHeader`
+(ExtMin/ExtMax/HomeRef, HandleSeed), `Technical/Channels` (an empty `Channel ParamFlag="256"`, port 1 with the
+technology, empty ports 2..15), Viewports, empty TextStyles/Layers/Blocks, `Entities`, empty Nest* lists; CRLF line
+ends. Geometry: `Circle` and closed `LwPolyline` only (the two entity forms seen in real old files) - lines/arcs are
+chained end to start (`fscut.chain()`, 0.01 mm) with DXF bulges. Technology: the stored tree (`params_json`) rebuilt,
+then the speed, gas and every field written over it. Round trip checked on our files (parts, a nest's geometry, a
+DXF through `analyze_dxf_geometry()`): same size, cut length, pierces and technology fields.
+
+**Not yet verified in CypCut** - the owner opens the first files on the laser PC. Not done: writing `.lxds` (needs
+the binary parts, incl. `Shapes2D/data.bin`, not decoded) and converting nests (only parts).
+
+Lead-ins/micro-joints are read by CypCut but not drawn or counted here, and not written (CypCut adds its own).

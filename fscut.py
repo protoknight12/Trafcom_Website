@@ -234,6 +234,12 @@ def tech_columns():
     return cols
 
 
+def _gas(raw):
+    """CypCut GasType -> CUT_GASES key; anything unknown (or not a number) -> None."""
+    v = _f(raw, 0.0)
+    return GAS.get(int(v)) if math.isfinite(v) and v == int(v) else None
+
+
 def _attr(el, name, factor=1):
     """None when the element or the attribute is missing: CypCut drops zeros, but older versions also lack newer
     fields (PeakPower, BeamSize), so a missing value is shown as unknown rather than guessed as 0."""
@@ -241,17 +247,27 @@ def _attr(el, name, factor=1):
     return None if v is None else round(v * factor, 6)
 
 
-def _raw(el, path=''):
+RAW_MAX_ROWS, RAW_MAX_DEPTH = 5000, 12      # a channel has ~40 rows, 3 levels
+
+
+def _raw(el, path='', out=None, depth=0):
     """Every element under a channel as [path, attributes, text] - nothing of the technology is lost (a converter
-    can write it back)."""
-    out, seen = [], {}
+    can write it back). ValueError past RAW_MAX_ROWS / RAW_MAX_DEPTH."""
+    out = [] if out is None else out
+    if depth > RAW_MAX_DEPTH:
+        raise ValueError('technology nested too deep')
+    total, seen = {}, {}
+    for c in el:
+        total[c.tag] = total.get(c.tag, 0) + 1
     for c in el:
         seen[c.tag] = seen.get(c.tag, 0) + 1
         p = f'{path}/{c.tag}' if path else c.tag
-        if sum(1 for x in el if x.tag == c.tag) > 1:
+        if total[c.tag] > 1:
             p += f'[{seen[c.tag]}]'
         out.append([p, dict(c.attrib), (c.text or '').strip()])
-        out += _raw(c, p)
+        if len(out) > RAW_MAX_ROWS:
+            raise ValueError('technology too large')
+        _raw(c, p, out, depth + 1)
     return out
 
 
@@ -270,12 +286,13 @@ def _technology(tech_el):
             continue
         speed = _f(cam.get('WorkSpeed'), None)
         fields = {c: _attr(cam if el is None else cam.find(el), attr, k) for c, el, attr, _, _, k in CUT_FIELDS}
-        steps = int(_f(cam.get('PierceStepCount'), 1)) or 1
+        steps = _f(cam.get('PierceStepCount'), 1)
+        steps = int(steps) if math.isfinite(steps) and 1 <= steps <= 9 else 1       # CypCut has Pierce1..9
         fields['pierce_steps'] = steps
         for n in range(1, PIERCE_STEPS + 1):
             p = cam.find(f'Pierce{n}')
             for key, attr, _, _, k in STEP_FIELDS:
-                fields[f'p{n}_{key}'] = (GAS.get(int(_f(p.get(attr), 0))) if p is not None else None) \
+                fields[f'p{n}_{key}'] = (_gas(p.get(attr)) if p is not None else None) \
                     if key == 'gas' else _attr(p, attr, k)
         pierce_ms = sum(_f(p.get('TimeFollow')) + _f(p.get('TimeStay'))          # every used step
                         for p in (cam.find(f'Pierce{n}') for n in range(1, steps + 1)) if p is not None)
@@ -284,7 +301,7 @@ def _technology(tech_el):
         out['channels'].append({
             'port': int(port), 'name': ch.get('MaterialName') or ch.get('Name'),
             'speed_mm_min': round(speed * 60, 1) if speed else None,
-            'gas': GAS.get(int(_f(cut.get('GasType'), 0))) if cut is not None else None,
+            'gas': _gas(cut.get('GasType')) if cut is not None else None,
             'gas_pressure_bar': fields['gas_pressure_bar'], 'power_w': fields['peak_power_w'],
             'focus_mm': fields['focus_mm'], 'height_mm': fields['height_mm'],
             'pierce_time_sec': round(pierce_ms / 1000, 3) if pierce_ms else None,
@@ -571,5 +588,176 @@ def parse(path):
                 return _parse_lxds(zf)
         with open(path, 'rb') as fh:
             return _parse_lxd(fh.read())
-    except (ET.ParseError, struct.error, KeyError, zipfile.BadZipFile, UnicodeDecodeError, IndexError) as e:
+    except (ET.ParseError, struct.error, KeyError, zipfile.BadZipFile, UnicodeDecodeError, IndexError,
+            OverflowError, RecursionError) as e:
         raise ValueError(f'unreadable nesting file: {e}') from e
+
+
+# ---------- writing the old format (.lxd) ----------
+# Step 1 of the converters (owner's decision 2026-11-23): one part (a detail's drawing) + its technology as an old
+# CypCutE .lxd. Only entity syntax seen in real old files is written: Circle and LwPolyline (lines/arcs are chained
+# into polylines with DXF bulges - CypCut cuts closed contours). The .lxds writer comes after the owner tried these.
+
+GAS_CODE = {'air': 1, 'oxygen': 2, 'nitrogen': 3}
+LXD_EMPTY_PORTS = 15            # an old file lists Channel ports 1..15
+
+
+def _num(v):
+    """CypCut style number text: shortest form, '.5' for 0.5, '-.5' for -0.5, never '-0'."""
+    s = f'{round(float(v), 9):.9g}'
+    if 'e' in s:
+        s = f'{float(v):.9f}'.rstrip('0').rstrip('.')
+    if s in ('-0', ''):
+        return '0'
+    if s.startswith('0.'):
+        return s[1:]
+    if s.startswith('-0.'):
+        return '-' + s[2:]
+    return s
+
+
+def chain(shapes, tol=0.01):
+    """Lines/arcs joined end to start into polylines -> [('circle', cx, cy, r) | ('poly', [(x, y, bulge)], closed)].
+    Open chains are walked from a free end; a piece may be walked backwards (its bulge changes sign)."""
+    def key(p):
+        return round(p[0] / tol), round(p[1] / tol)
+    segs, out = [], []
+    for sh in shapes:
+        if sh['type'] == 'circle':
+            out.append(('circle', sh['cx'], sh['cy'], sh['r']))
+            continue
+        a, b = _ends(sh)
+        if sh['type'] == 'line' and math.dist(a, b) < tol:
+            continue
+        sweep = ((sh['end_angle'] - sh['start_angle']) % 360 or 360) if sh['type'] == 'arc' else 0
+        segs.append((a, b, math.tan(math.radians(sweep) / 4)))          # bulge of the CCW arc start -> end
+    by_end = {}
+    for i, (a, b, _) in enumerate(segs):
+        by_end.setdefault(key(a), []).append(i)
+        by_end.setdefault(key(b), []).append(i)
+
+    def free(i):
+        return len(by_end[key(segs[i][0])]) == 1 or len(by_end[key(segs[i][1])]) == 1
+    used = [False] * len(segs)
+    for start in [i for i in range(len(segs)) if free(i)] + list(range(len(segs))):
+        if used[start]:
+            continue
+        a, b, bulge = segs[start]
+        if len(by_end[key(b)]) == 1 and len(by_end[key(a)]) != 1:       # walk away from the free end
+            a, b, bulge = b, a, -bulge
+        used[start] = True
+        pts, cur = [(a[0], a[1], bulge)], b
+        while True:
+            nxt = next((j for j in by_end.get(key(cur), []) if not used[j]), None)
+            if nxt is None:
+                break
+            used[nxt] = True
+            na, nb, nbulge = segs[nxt]
+            if key(na) != key(cur):
+                na, nb, nbulge = nb, na, -nbulge
+            pts.append((na[0], na[1], nbulge))
+            cur = nb
+        closed = key(cur) == key(pts[0][:2])
+        if not closed:
+            pts.append((cur[0], cur[1], 0.0))
+        out.append(('poly', pts, closed))
+    return out
+
+
+def _channel_el(port, raw=None, fields=None, speed_mm_min=None, gas=None):
+    """<Channel> with its CamParams: the stored parameter tree (fscut._raw() rows) rebuilt as it was, then the speed,
+    gas and every known field written on top (values edited in the dossier win). A field with no value is left as
+    the tree has it."""
+    ch = ET.Element('Channel', {'ChannelPort': str(port), 'ParamFlag': '768', 'OEM': '1'})
+    made = {}
+    for path, attrs, text in raw or []:
+        parent_path, _, last = path.rpartition('/')
+        el = ET.SubElement(made.get(parent_path, ch), last.split('[')[0], {k: str(v) for k, v in attrs.items()})
+        if text:
+            el.text = text
+        made[path] = el
+    cam = made.get('CamParams')
+    if cam is None:
+        cam = ET.SubElement(ch, 'CamParams')
+
+    def child(tag):
+        el = cam.find(tag)
+        return el if el is not None else ET.SubElement(cam, tag)
+    fields = fields or {}
+    if speed_mm_min:
+        cam.set('WorkSpeed', _num(speed_mm_min / 60))
+    if gas in GAS_CODE:
+        child('Cut').set('GasType', str(GAS_CODE[gas]))
+    for col, el, attr, _, _, k in CUT_FIELDS:
+        if fields.get(col) is not None:
+            (cam if el is None else child(el)).set(attr, _num(fields[col] / k))
+    if fields.get('pierce_steps'):
+        cam.set('PierceStepCount', str(int(fields['pierce_steps'])))
+    for n in range(1, PIERCE_STEPS + 1):
+        for key, attr, _, _, k in STEP_FIELDS:
+            v = fields.get(f'p{n}_{key}')
+            if v is None or (key == 'gas' and v not in GAS_CODE):
+                continue
+            child(f'Pierce{n}').set(attr, str(GAS_CODE[v]) if key == 'gas' else _num(v / k))
+    return ch
+
+
+def write_lxd(shapes, channel=None):
+    """One part as an old-format .lxd (bytes, CRLF like CypCut). `channel` = {'raw', 'fields', 'speed_mm_min', 'gas'}
+    (any may be missing) or None = an empty technology (CypCut uses its own). ValueError without geometry."""
+    import uuid
+    items = chain(shapes)
+    if not items:
+        raise ValueError('no geometry')
+    handle = [1000]
+
+    def h():
+        handle[0] += 1
+        return str(handle[0])
+    b = bbox(shapes)
+    doc = ET.Element('LXDDocument')
+    head = ET.SubElement(doc, 'DocHeader', {'DefaultChannel': '1', 'HandleSeed': '0',
+                                             'ID': '{' + str(uuid.uuid4()).upper() + '}'})
+    ET.SubElement(head, 'ExtMin', {'X': _num(b[0]), 'Y': _num(b[1])})
+    ET.SubElement(head, 'ExtMax', {'X': _num(b[2]), 'Y': _num(b[3])})
+    ET.SubElement(head, 'InsertBase')
+    ET.SubElement(head, 'HomeRef', {'Enabled': 'true', 'RefType': '3', 'X': _num(b[0]), 'Y': _num(b[1])})
+    chans = ET.SubElement(ET.SubElement(doc, 'Technical'), 'Channels')
+    ET.SubElement(chans, 'Channel', {'ParamFlag': '256'})
+    c = channel or {}
+    chans.append(_channel_el(1, c.get('raw'), c.get('fields'), c.get('speed_mm_min'), c.get('gas')))
+    for port in range(2, LXD_EMPTY_PORTS + 1):
+        ET.SubElement(chans, 'Channel', {'ChannelPort': str(port)})
+    vp = ET.SubElement(ET.SubElement(doc, 'Viewports', {'Handle': '3'}), 'VPort', {'Handle': h()})
+    ET.SubElement(vp, 'ViewCenter')
+    ET.SubElement(vp, 'ViewHeight').text = '100'
+    ET.SubElement(vp, 'AspectRatio').text = '1'
+    rect = ET.SubElement(vp, 'DisplayRect')
+    ET.SubElement(rect, 'Right').text = '1024'
+    ET.SubElement(rect, 'Bottom').text = '768'
+    for tag, hd in (('TextStyles', '6'), ('Layers', '5'), ('Blocks', '4')):
+        ET.SubElement(doc, tag, {'Handle': hd})
+    ents = ET.SubElement(doc, 'Entities', {'Handle': '2'})
+    for it in items:
+        common = {'Handle': h(), 'ChannelPort': '1', 'LayerName': '0'}
+        if it[0] == 'circle':
+            el = ET.SubElement(ents, 'Circle', {**common, 'Radius': _num(it[3])})
+            ET.SubElement(el, 'ToolCompensation')
+            ET.SubElement(el, 'MicroConnects')
+            ET.SubElement(el, 'Center', {'X': _num(it[1]), 'Y': _num(it[2])})
+            continue
+        pts, closed = it[1], it[2]
+        el = ET.SubElement(ents, 'LwPolyline', {**common, 'PointCount': str(len(pts)), 'PolyFlag': '1' if closed else '0'})
+        ET.SubElement(el, 'ToolCompensation')
+        ET.SubElement(el, 'MicroConnects')
+        for x, y, bulge in pts:
+            a = {'X': _num(x), 'Y': _num(y)}
+            if abs(bulge) > 1e-12:
+                a['Bulge'] = _num(bulge)
+            ET.SubElement(el, 'Point', a)
+    for tag, hd in (('NestParts', '7'), ('NestPlates', '8'), ('NestGroups', '9'), ('NestResults', '10')):
+        ET.SubElement(doc, tag, {'Handle': hd})
+    head.set('HandleSeed', str(handle[0] + 1))
+    ET.indent(doc, '\t')
+    text = '<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(doc, encoding='unicode') + '\n'
+    return text.replace('\n', '\r\n').encode('utf-8')

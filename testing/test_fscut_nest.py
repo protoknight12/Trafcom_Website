@@ -151,6 +151,16 @@ def test_parse_both_formats(tmp_path):
                    '</NestResults></LXDDocument>', encoding='utf-8')
     with pytest.raises(ValueError):
         fscut.parse(str(bad))
+    # absurd values from the file: no endless loop / crash
+    bad.write_text(LXD.replace('LiftHeight="30"', 'LiftHeight="30" PierceStepCount="1e300"')
+                   .replace('GasType="2"', 'GasType="1e400"'), encoding='utf-8')
+    ch = fscut.parse(str(bad))['technology']['channels'][0]
+    assert ch['fields']['pierce_steps'] == 1
+    deep = '<CamParams WorkSpeed="1">' + '<X>' * 40 + '</X>' * 40 + '</CamParams>'
+    bad.write_text(LXD.replace('<Channel ChannelPort="101"><CamParams WorkSpeed="9"/>',
+                               '<Channel ChannelPort="2">' + deep), encoding='utf-8')
+    with pytest.raises(ValueError):                                      # technology nested too deep
+        fscut.parse(str(bad))
 
 
 def test_bulge_is_dxf_bulge():
@@ -313,3 +323,86 @@ def test_machine_technology_from_nest_and_dossier(s):
         assert MachineCutTechnology.query.count() == 2
     finally:
         os.remove(path)
+
+
+def test_write_lxd_round_trip(tmp_path):
+    # a 100 x 50 plate with one rounded corner, drawn as loose lines/arc in mixed directions, + a hole
+    shapes = [{'type': 'line', 'x1': 0, 'y1': 0, 'x2': 100, 'y2': 0},
+              {'type': 'line', 'x1': 100, 'y1': 40, 'x2': 100, 'y2': 0},                      # reversed piece
+              {'type': 'arc', 'cx': 90, 'cy': 40, 'r': 10, 'start_angle': 0, 'end_angle': 90},
+              {'type': 'line', 'x1': 90, 'y1': 50, 'x2': 0, 'y2': 50},
+              {'type': 'line', 'x1': 0, 'y1': 50, 'x2': 0, 'y2': 0},
+              {'type': 'circle', 'cx': 30, 'cy': 25, 'r': 5}]
+    polys = [i for i in fscut.chain(shapes) if i[0] == 'poly']
+    assert len(polys) == 1 and polys[0][2] is True                       # one closed contour
+    tech = fscut.parse(str(_write(tmp_path / 't.lxds', _lxds(part=True))))['technology']['channels'][0]
+    p = tmp_path / 'out.lxd'
+    p.write_bytes(fscut.write_lxd(shapes, tech))
+    assert p.read_bytes().startswith(b'<?xml') and b'\r\n' in p.read_bytes()
+    d = fscut.parse(str(p))
+    m, ch = d['model'], d['technology']['channels'][0]
+    assert d['format'] == 'lxd' and m['size'] == (100, 50) and m['pierces'] == 2
+    assert m['cut_length_mm'] == round(100 + 40 + math.pi * 5 + 90 + 50 + 2 * math.pi * 5, 1)
+    assert ch['fields'] == tech['fields'] and ch['speed_mm_min'] == tech['speed_mm_min'] and ch['nozzle'] == 'S2.0/3.0'
+    assert any(r[0].endswith('SmartEndTech') for r in ch['raw'])          # the whole tree went along
+    # edited values win over the stored tree; no technology = an empty channel
+    edited = dict(tech, fields={**tech['fields'], 'peak_power_w': 4000, 'p1_gas': 'air'}, speed_mm_min=1200)
+    ch = fscut.parse(_write(tmp_path / 'e.lxd', fscut.write_lxd(shapes, edited)))['technology']['channels'][0]
+    assert (ch['fields']['peak_power_w'], ch['fields']['p1_gas'], ch['speed_mm_min']) == (4000, 'air', 1200)
+    assert fscut.parse(_write(tmp_path / 'n.lxd', fscut.write_lxd(shapes)))['model']['pierces'] == 2
+    with pytest.raises(ValueError):
+        fscut.write_lxd([])
+
+
+def _write(path, data):
+    path.write_bytes(data)
+    return str(path)
+
+
+def test_fscut_download_for_machine(s, tmp_path):
+    laser = Machine(name='Лазер стар', is_laser=True)
+    db.session.add(laser)
+    db.session.flush()
+    hall = HallMachine(name='Лазер стар', machine_id=laser.id)
+    db.session.add(hall)
+    shapes = [{'type': 'line', 'x1': 0, 'y1': 0, 'x2': 100, 'y2': 0}, {'type': 'line', 'x1': 100, 'y1': 0, 'x2': 100, 'y2': 50},
+              {'type': 'line', 'x1': 100, 'y1': 50, 'x2': 0, 'y2': 50}, {'type': 'line', 'x1': 0, 'y1': 50, 'x2': 0, 'y2': 0}]
+    d = Detail(name='Планка/1', material_key='fn_steel', width=100, height=50, total_length=300, pierce_count=1,
+               calculated_price=1, geometry_json=json.dumps(shapes), cutting_gas='nitrogen', cutting_nozzle='1.5',
+               cutting_speed_mm_per_min=900)
+    db.session.add(d)
+    db.session.commit()
+    c = _login('fn_admin')
+    url = f'/admin/details/{d.id}/fscut?machine_id={laser.id}'
+    r = c.get(url)                                                     # format not set: a message, no file
+    assert r.status_code == 302 and 'FSCUT' in c.get(r.headers['Location']).get_data(as_text=True)
+    c.post(f'/admin/hall/{hall.id}/dossier/system', data={'status': 'idle', 'is_laser': '1', 'fscut_format': 'lxds'})
+    assert db.session.get(Machine, laser.id).fscut_format == 'lxds'
+    assert c.get(url).status_code == 302                                 # new format: not written yet
+    c.post(f'/admin/hall/{hall.id}/dossier/system', data={'status': 'idle', 'is_laser': '1', 'fscut_format': 'lxd'})
+    r = c.get(url)                                                     # no machine technology: the detail's speed + gas
+    assert r.status_code == 200 and '.lxd' in r.headers['Content-Disposition'] and '/' not in r.headers['Content-Disposition']
+    ch = fscut.parse(_write(tmp_path / 'a.lxd', r.data))['technology']['channels'][0]
+    assert (ch['speed_mm_min'], ch['gas']) == (900, 'nitrogen')
+    assert d.cut_thickness == 8
+    db.session.add(MachineCutTechnology(machine_id=laser.id, grade_id=None, thickness_mm=8, gas='nitrogen',
+                                        nozzle='1.5', cutting_speed_mm_per_min=2500, peak_power_w=3000))
+    db.session.commit()
+    ch = fscut.parse(_write(tmp_path / 'b.lxd', c.get(url).data))['technology']['channels'][0]
+    assert (ch['speed_mm_min'], ch['fields']['peak_power_w']) == (2500, 3000)   # the machine's row for this key
+    m = fscut.parse(_write(tmp_path / 'c.lxd', c.get(url).data))['model']
+    assert m['size'] == (100, 50) and m['cut_length_mm'] == 300 and m['pierces'] == 1
+
+    # a new-format part file of the detail -> old .lxd; a nest file is not converted (step 1)
+    part, part_path = _attach(d, 'Лицежа.lxds', _lxds(part=True))
+    nest, nest_path = _attach(d, 'разкрой.lxds', _lxds())
+    try:
+        assert 'Изтегли като стар FSCUT' in c.get(f'/details/files/{part.id}/nest').get_data(as_text=True)
+        r = c.get(f'/details/files/{part.id}/nest/lxd')
+        m = fscut.parse(_write(tmp_path / 'p.lxd', r.data))['model']
+        assert r.status_code == 200 and m['size'] == (300, 50)
+        assert c.get(f'/details/files/{nest.id}/nest/lxd').status_code == 302
+        assert _login('fn_worker').get(url).status_code == 302             # admin only
+    finally:
+        os.remove(part_path)
+        os.remove(nest_path)

@@ -2251,6 +2251,9 @@ class Machine(db.Model):
     # A laser-cutting machine (owner's decision 2026-11-20): only these are offered as a Detail's cutting machine,
     # and only their dossier shows "Технологии на рязане" (MachineCutTechnology).
     is_laser = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    # FSCUT file format the laser's CypCutE reads (FSCUT_FORMATS key: 'lxd' old / 'lxds' new, NULL = not set) -
+    # decides which file "Изтегли за машината" builds (owner's decision 2026-11-23).
+    fscut_format = db.Column(db.String(5), nullable=True)
     # Which Room this machine physically stands in - see Room's docstring.
     # Nullable: a machine not yet placed anywhere just doesn't show on any
     # room's map until assigned (see edit_machine_window()).
@@ -2274,6 +2277,7 @@ class Machine(db.Model):
 
 
 CUT_GASES = {'oxygen': 'Кислород', 'nitrogen': 'Азот', 'air': 'Сгъстен въздух'}   # laser assist gas
+FSCUT_FORMATS = {'lxd': 'стар FSCUT (.lxd)', 'lxds': 'нов FSCUT (.lxds)'}   # Machine.fscut_format
 
 
 class MachineCutTechnology(db.Model):
@@ -10639,6 +10643,7 @@ def admin_hall_dossier(machine_id):
                            services=Service.query.order_by(Service.name).all(), known_machine_types=_known_machine_types(),
                            grades=MaterialGrade.query.order_by(MaterialGrade.sort_order, MaterialGrade.name).all(),
                            cut_techs=cut_techs, cut_gases=CUT_GASES, tech_cols=tech_cols, tech_values=tech_values,
+                           fscut_formats=FSCUT_FORMATS,
                            tech_raw=tech_raw,
                            free_machines=[x for x in Machine.query.order_by(Machine.name) if x.hall_record is None])
 
@@ -10694,6 +10699,7 @@ def admin_hall_dossier_system(machine_id):
     mc.status = status
     mc.machine_type = (request.form.get('machine_type') or '').strip()[:50] or None
     mc.is_laser = request.form.get('is_laser') == '1'
+    mc.fscut_format = request.form.get('fscut_format') if request.form.get('fscut_format') in FSCUT_FORMATS else None
     maint = (request.form.get('last_maintenance') or '').strip()
     if maint:
         try:
@@ -15304,6 +15310,9 @@ def edit_machine_window(id):
              'value': machine.machine_type or '', 'type': 'datalist', 'options': _known_machine_types()},
             {'name': 'is_laser', 'label': 'Машина за лазерно рязане (технологии, избор в детайла)',
              'value': machine.is_laser, 'type': 'checkbox'},
+            {'name': 'fscut_format', 'label': 'FSCUT формат (за лазер)', 'value': machine.fscut_format or '',
+             'type': 'select', 'options': [{'value': '', 'label': '-- не е зададен --'}]
+                + [{'value': k, 'label': v} for k, v in FSCUT_FORMATS.items()]},
             {'name': 'room_id', 'label': 'Помещение', 'value': machine.room_id or '', 'type': 'select', 'options': [
                 {'value': '', 'label': '-- няма --'}
             ] + [{'value': r.id, 'label': f'{r.building.name} / {r.name}'} for r in rooms]},
@@ -15330,6 +15339,7 @@ def rename_machine(id):
     machine.name = name
     machine.machine_type = request.form.get('machine_type', '').strip() or None
     machine.is_laser = request.form.get('is_laser') == '1'
+    machine.fscut_format = request.form.get('fscut_format') if request.form.get('fscut_format') in FSCUT_FORMATS else None
     room_id_raw = request.form.get('room_id', '')
     panel_id_raw = request.form.get('panel_id', '')
     machine.room_id = int(room_id_raw) if room_id_raw.isdigit() else None
@@ -15804,6 +15814,7 @@ def detail_dxf_dashboard(detail_id):
     return render_template('detail_dxf_dashboard.html', detail=detail, files=files, services=services,
                             materials=materials, services_data=services_data, alt_materials=alt_materials,
                             machines=machines, cut_tech=cut_tech, cut_gases=CUT_GASES, ppu=ppu,
+                            fscut_formats=FSCUT_FORMATS,
                             has_geometry=has_geometry, active_page='admin_details')
 
 
@@ -16178,6 +16189,80 @@ def view_detail_nest_save_tech(file_id):
     db.session.commit()
     flash(f'Технологията е записана в машината "{machine.name}".', 'success')
     return back
+
+
+def _fscut_download(data, name, ext):
+    safe = re.sub(r'[\\/:*?"<>|]+', '_', name or 'detail').strip() or 'detail'
+    return send_file(io.BytesIO(data), as_attachment=True, download_name=f'{safe}{ext}',
+                     mimetype='application/octet-stream')
+
+
+def _tech_channel(tech, detail=None):
+    """A MachineCutTechnology (or, without one, the detail's own speed + gas) as fscut.write_lxd()'s channel."""
+    if tech is None:
+        return {'speed_mm_min': detail.cutting_speed_mm_per_min, 'gas': detail.cutting_gas,
+                'fields': {}} if detail else None
+    try:
+        raw = json.loads(tech.params_json) if tech.params_json else []
+    except ValueError:
+        raw = []
+    return {'raw': raw, 'speed_mm_min': tech.cutting_speed_mm_per_min, 'gas': tech.gas,
+            'fields': {c: getattr(tech, c) for c, *_ in fscut.tech_columns()}}
+
+
+@app.route('/admin/details/<int:detail_id>/fscut')
+@role_required('admin')
+def admin_detail_fscut(detail_id):
+    """"Изтегли FSCUT за машината": the detail's drawing (Detail.geometry_json, from its DXF) + the machine's
+    technology for the detail's Вид + thickness + gas + nozzle (else the detail's own speed and gas), in the file
+    format the machine reads (Machine.fscut_format). Step 1 (owner's decision 2026-11-23): only the old .lxd is
+    written; a machine on the new .lxds gets a message."""
+    detail = Detail.query.get_or_404(detail_id)
+    back = redirect(url_for('detail_dxf_dashboard', detail_id=detail.id))
+    machine = db.session.get(Machine, request.args.get('machine_id', type=int) or 0)
+    if machine is None or not machine.is_laser:
+        flash('Изберете машина за лазерно рязане.', 'danger')
+        return back
+    if machine.fscut_format != 'lxd':
+        flash(f'„{machine.name}“: ' + ('новият FSCUT формат (.lxds) още не се записва - засега само старият (.lxd).'
+                                     if machine.fscut_format == 'lxds'
+                                     else 'задайте FSCUT формата на машината в досието ѝ („Система“).'), 'warning')
+        return back
+    try:
+        shapes = json.loads(detail.geometry_json) if detail.geometry_json else []
+    except ValueError:
+        shapes = []
+    if not shapes:
+        flash('Детайлът няма чертеж (качете DXF).', 'danger')
+        return back
+    grade_id = detail.material.grade_id if detail.material else None
+    tech = _cut_technology(machine.id, grade_id, detail.cut_thickness, detail.cutting_gas, detail.cutting_nozzle)
+    try:
+        data = fscut.write_lxd(shapes, _tech_channel(tech, detail))
+    except (ValueError, KeyError, TypeError):
+        flash('Чертежът на детайла не може да се запише във FSCUT.', 'danger')
+        return back
+    log_action(f'FSCUT .lxd за "{machine.name}": детайл "{detail.name}"'
+               + (f', технология {_cut_tech_label(tech)}' if tech else ', без технология на машината'))
+    return _fscut_download(data, detail.name, '.lxd')
+
+
+@app.route('/details/files/<int:file_id>/nest/lxd')
+@role_required('admin')
+def view_detail_nest_lxd(file_id):
+    """A part file of the new format (.lxds, one detail, no nest) rewritten as the old .lxd, with its own channel-1
+    technology (fscut.write_lxd()). Nests are not converted yet (step 1)."""
+    f = DetailDxfFile.query.get_or_404(file_id)
+    nest = _detail_nest(f)
+    if nest is None:
+        return redirect(url_for('detail_dxf_dashboard', detail_id=f.detail_id))
+    if not nest['model']:
+        flash('Засега се преобразуват само файлове с един детайл (парт), не разкрои.', 'warning')
+        return redirect(url_for('view_detail_nest', file_id=f.id))
+    ch = nest['technology']['channels'][0] if nest['technology']['channels'] else None
+    data = fscut.write_lxd(nest['model']['shapes'], ch)
+    log_action(f'FSCUT .lxd от "{f.original_filename}" (детайл "{f.detail.name}")')
+    return _fscut_download(data, os.path.splitext(f.original_filename)[0], '.lxd')
 
 
 @app.route('/details/files/<int:file_id>/delete', methods=['POST'])

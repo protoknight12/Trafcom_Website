@@ -171,6 +171,21 @@
             <div id="ct_hint" class="text-small text-muted" style="flex-basis: 100%;"></div>
             <div id="ct_others" class="text-small" style="flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;"></div>
         </form>
+        {% if _laser %}
+        {#- admin_detail_fscut: the drawing + the machine's technology in the machine's FSCUT format #}
+        <form action="{{ url_for('admin_detail_fscut', detail_id=detail.id) }}" method="GET" class="admin-form"
+              style="display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin: 10px 0 0;">
+            <div class="form-group" style="margin: 0; flex: 1 1 220px;">
+                <label for="fs_machine">Файл за FSCUT (чертеж + технология на машината)</label>
+                <select id="fs_machine" name="machine_id" required data-picker="off">
+                    {% for m in machines if m.is_laser %}
+                    <option value="{{ m.id }}" {{ 'selected' if m.id == detail.cutting_machine_id }}>{{ m.name }} - {{ fscut_formats.get(m.fscut_format, 'форматът не е зададен') }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="btn-secondary" style="padding: 10px 16px;">Изтегли FSCUT за машината</button>
+        </form>
+        {% endif %}
     </section>
     {% if _laser %}
     <script>
