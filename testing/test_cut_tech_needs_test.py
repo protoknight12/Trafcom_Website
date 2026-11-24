@@ -193,3 +193,38 @@ def test_library_fix_changes_only_untouched_proposals(env):
     assert (by_mm[22].focus_mm, by_mm[22].cutting_speed_mm_per_min) == (15, 500)
     assert by_mm[18].focus_mm == 12.8 and by_mm[18].cutting_speed_mm_per_min == 750      # edited: untouched
     assert fix()[0] == 0
+
+
+def test_o2_focus_fix_and_gas_copies(env):
+    """data_pg3015_o2_focus_and_gas_copies: steel O2 8 mm (focus +5) -> library (+13, 2600, tested), 10 mm far off ->
+    library + "за тест", 12 mm close enough untouched, stainless never; N2 <-> air copies only where missing."""
+    from migration.data_pg3015_o2_focus_and_gas_copies import apply as fix
+    m, _ = _laser()
+    g = _grades()
+    steel, ss = g['Стомана'], g['Неръждаема стомана']
+    t8 = _tech(m, steel, 8, nozzle='1.2d', focus_mm=5, cutting_speed_mm_per_min=2600)
+    t8.gas = 'oxygen'
+    t10 = _tech(m, steel, 10, nozzle='1.2d', focus_mm=4, cutting_speed_mm_per_min=2100)
+    t10.gas = 'oxygen'
+    t12 = _tech(m, steel, 12, nozzle='1.2d', focus_mm=12.8, cutting_speed_mm_per_min=1700)
+    t12.gas = 'oxygen'
+    _tech(m, ss, 8, nozzle='3.5s', focus_mm=-4, cutting_speed_mm_per_min=4000)          # N2 -> air copy
+    _tech(m, steel, 2, nozzle='1.5s', focus_mm=-1, cutting_speed_mm_per_min=35000).gas = 'air'    # air -> N2 copy
+    _tech(m, steel, 3, nozzle='2.0s', focus_mm=-1.5, cutting_speed_mm_per_min=20000)    # N2 ...
+    _tech(m, steel, 3, nozzle='2.0s', focus_mm=-1.5, cutting_speed_mm_per_min=18000).gas = 'air'  # ... air exists
+    db.session.commit()
+    fixed, copied, _ = fix()
+    db.session.commit()
+    assert fixed == 2 and copied == 2
+    t8 = MachineCutTechnology.query.get(t8.id)
+    assert (t8.focus_mm, t8.cutting_speed_mm_per_min, t8.nozzle, t8.needs_test) == (13, 2600, '1.2d', False)
+    assert 'преди: фокус 5' in t8.note and t8.pierce_steps == 2
+    t10 = MachineCutTechnology.query.get(t10.id)
+    assert (t10.focus_mm, t10.cutting_speed_mm_per_min, t10.needs_test) == (11, 2000, True)
+    assert MachineCutTechnology.query.get(t12.id).focus_mm == 12.8
+    air_ss = MachineCutTechnology.query.filter_by(grade_id=ss.id, gas='air').one()
+    assert air_ss.focus_mm == -4 and air_ss.needs_test and air_ss.nozzle == '3.5s'
+    n2 = MachineCutTechnology.query.filter_by(grade_id=steel.id, thickness_mm=2, gas='nitrogen').one()
+    assert n2.cutting_speed_mm_per_min == 35000 and n2.needs_test
+    assert MachineCutTechnology.query.filter_by(grade_id=steel.id, thickness_mm=3).count() == 2
+    assert fix()[:2] == (0, 0)
