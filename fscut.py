@@ -1027,14 +1027,15 @@ def _channel_el(port, raw=None, fields=None, speed_mm_min=None, gas=None, gas_ma
 
 
 # CypCut's speed curves (owner, 2026-11-25): <PwmRatioFunc> = "Power curve", <PwmFreqFunc> = "Frequency curve";
-# X = speed %, Y = power / frequency %, the first and last knot written 4 times (a clamped cubic spline), the
-# <Material> attribute Def<tag> = "false" while the curve is used.
+# X = speed %, Y = power / frequency %, the first and last knot written 4 times (a clamped cubic spline). The
+# <Material> attribute Def<tag> = "false" = the layer has its OWN curve; "true" = CypCut's global default curve.
+# Whether a curve is used at all is the "Power curve" / "Frequency curve" tick - a PierceFlags bit, not this.
 CURVES = ('PwmRatioFunc', 'PwmFreqFunc')
 CURVE_KNOT_PAD = 4
 
 
 def curve_points(raw, tag):
-    """(used, [[x, y], ...]) of a speed curve in a stored tree - the knots without the end padding."""
+    """(own, [[x, y], ...]) of a speed curve in a stored tree - the knots without the end padding."""
     root = next((a for p, a, _ in raw or [] if p == '@'), None) or FSM_ROOT_ATTRS
     pts = []
     for p, a, _ in raw or []:
@@ -1045,9 +1046,10 @@ def curve_points(raw, tag):
     return str(root.get(f'Def{tag}', 'true')).lower() == 'false', pts
 
 
-def raw_with_curve(raw, tag, used, points):
-    """The tree with a speed curve replaced: `points` [[x, y]] (sorted by x) written as CypCut does, its use flag on
-    the <Material> row ('@', added from FSM_ROOT_ATTRS when the tree has none). No points = an empty element."""
+def raw_with_curve(raw, tag, points):
+    """The tree with a speed curve replaced: `points` [[x, y]] (sorted by x) written as CypCut does, Def<tag> on the
+    <Material> row ('@', added from FSM_ROOT_ATTRS when the tree has none). No points = an empty element and the
+    global default curve."""
     out, at = [], None
     for row in raw or []:
         if row[0] == tag:
@@ -1073,7 +1075,7 @@ def raw_with_curve(raw, tag, used, points):
         out.insert(0, ['@', dict(FSM_ROOT_ATTRS), ''])
     for r in out:
         if r[0] == '@':
-            r[1] = {**r[1], f'Def{tag}': 'false' if used and points else 'true'}
+            r[1] = {**r[1], f'Def{tag}': 'false' if points else 'true'}
     return out
 
 
@@ -1940,7 +1942,7 @@ def fsm_xml(channel, name=None, thickness=None, nozzle=None, material=None, path
     el.tag = 'Material'
     el.attrib.clear()
     el.attrib.update({k: str(v) for k, v in attrs.items()})
-    el.set('ChannelPort', '1')
+    el.set('ChannelPort', str(attrs.get('ChannelPort') or '1'))     # 1 = a layer; Defilm 101, Recool 102
     for tag in FSM_ORDER:
         if el.find(tag) is None:
             ET.SubElement(el, tag)

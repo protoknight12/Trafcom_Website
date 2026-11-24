@@ -16,6 +16,10 @@
         .cc-layer { display: flex; gap: 2px; padding: 4px 4px 0; background: #f3f3f3; }
         .cc-layer span { padding: 3px 8px; border: 1px solid #c8c8c8; border-bottom: 0; background: #e9e9e9; color: #888; }
         .cc-layer span.on { background: #fff; color: #222; }
+        .cc-layer a.cc-ltab { text-decoration: none; }
+        .cc-layer a.cc-ltab span:hover { background: #f7f7f7; color: #222; }
+        .cc-layer b { margin-right: 4px; font-weight: normal; }
+        .cc-layer .ic-recool { color: #1a6fd6; } .cc-layer .ic-defilm { color: #c0392b; }
         .cc-layer i { display: inline-block; width: 14px; height: 14px; background: #19e619; vertical-align: -2px; margin-right: 4px; }
         .cc-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 5px 6px;
                    border-top: 3px solid #39d339; border-bottom: 3px solid #39d339; }
@@ -128,7 +132,16 @@
     <input type="hidden" name="changes" id="tpChanges" value="[]">
     <input type="hidden" name="curves" id="tpCurves" value="{}">
     <div class="cc-title">Layer Parameter Settings - {{ label }}</div>
-    <div class="cc-layer"><span>Global Parameter</span><span class="on"><i></i>Layer1</span></div>
+    <div class="cc-layer">
+        <span>Global Parameter</span>
+        {% if kind == 'layer' %}<span class="on"><i></i>Layer1</span>
+        {% else %}<a href="{{ url_for('admin_hall_dossier', machine_id=m.id) }}" class="cc-ltab" title="Технологиите в досието"><span><i></i>Layer1</span></a>{% endif %}
+        {% for k, name, icon in [('defilm', 'Defilm', '▧'), ('recool', 'Recool', '❄')] %}
+        {% if kind == k %}<span class="on"><b class="ic-{{ k }}">{{ icon }}</b>{{ name }}</span>
+        {% else %}<a href="{{ url_for('admin_hall_tech_service', machine_id=m.id, kind=k) }}" class="cc-ltab"><span><b class="ic-{{ k }}">{{ icon }}</b>{{ name }}</span></a>{% endif %}
+        {% endfor %}
+    </div>
+    {% if kind == 'layer' %}
     <div class="cc-head">
         <b>Material</b><output>{{ grade_name or '—' }}</output>
         <b>Thickness</b><output style="min-width:70px">{{ '%g'|format(tech.thickness_mm) }}mm</output>
@@ -203,9 +216,8 @@
                 </fieldset>
                 <div class="cc-chart">
                     <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center">
-                        <label><input type="checkbox" data-curve-use="PwmRatioFunc"> Power curve</label>
-                        <label><input type="checkbox" data-curve-use="PwmFreqFunc"> Frequency curve</label>
-                        {{ unknown('Absolute value') }}
+                        {{ unknown('Power curve') }} {{ unknown('Frequency curve') }} {{ unknown('Absolute value') }}
+                        <span id="curveOwn" style="font-size:11px"></span>
                         <button type="button" class="cc-btn" id="curveEdit" style="margin-left:auto; min-width:78px">Edit</button>
                     </div>
                     <svg id="curveMain" viewBox="0 0 470 250" style="width:100%; display:block" aria-label="Power / frequency curve"></svg>
@@ -321,6 +333,58 @@
         </div>
     </div>
 
+    {% else %}
+    {# ---------- the machine's Defilm (channel 101) / Recool (channel 102) ---------- #}
+    <div class="cc-flags" style="gap:8px">
+        <button type="submit" class="cc-btn" formaction="{{ url_for('admin_hall_tech_service_sync', machine_id=m.id, kind=kind, direction='pull') }}"
+                data-confirm="Да се внесе {{ file_label }} от папката на машината? Записаното тук се заменя.">📂 Внеси от папката</button>
+        <button type="submit" class="cc-btn" formaction="{{ url_for('admin_hall_tech_service_sync', machine_id=m.id, kind=kind, direction='push') }}"
+                data-confirm="Да се запише в {{ file_label }} в папката на машината?" {{ 'disabled' if not has_tree }}>💾 Запиши в папката</button>
+        <span style="color:#777; font-size:12px; align-self:center">{{ file_label }} - една за машината</span>
+    </div>
+    <div class="cc-tabs" role="tablist">
+        <button type="button" data-tab="cut" class="on">{{ 'Technique Params' if kind == 'defilm' else 'Technique' }}</button>
+        <button type="button" data-tab="all">Всички (XML)</button>
+    </div>
+    <div class="cc-page" data-page="cut">
+        {% if not has_tree %}
+        <p style="color:#777">Още няма данни. Запишете {{ 'Defilm' if kind == 'defilm' else 'Recool' }} в CypCut като {{ file_label }} и натиснете "Внеси от папката".</p>
+        {% elif kind == 'defilm' %}
+        <fieldset class="cc"><legend>Technique Params</legend>
+            <div class="cc-grid2">
+                <div>
+                    {% set p = pv('CamParams', 'PierceStyle') %}
+                    <div class="cc-row"><label>Cut Mode:</label>
+                        <select {% if p %}data-row="{{ p[0] }}" data-attr="PierceStyle" data-k="1" data-orig="{{ p[2] }}"{% else %}disabled{% endif %}>
+                            {% for code, name in [('0', '0'), ('1', 'Fixed Height')] %}<option value="{{ code }}" {{ 'selected' if p and p[2] == code }}>{{ name }}</option>{% endfor %}
+                            {% if p and p[2] not in ['0', '1'] %}<option value="{{ p[2] }}" selected>{{ p[2] }}</option>{% endif %}
+                        </select><span></span></div>
+                    {{ row('Cut Speed', 'CamParams', 'WorkSpeed', 'mm/min', 60) }}
+                    {{ row('Cut Height', 'CamParams/Cut', 'Height', 'mm') }}
+                    <div class="cc-row"><label>Cut Gas:</label>{{ gas('CamParams/Cut') }}<span></span></div>
+                    {{ row('Cut Pressure', 'CamParams/Cut', 'GasPressure', 'BAR') }}
+                </div>
+                <div>
+                    {{ row('Peak power', 'CamParams/Cut', 'LaserCurrent', '%') }}
+                    {{ row('Pulse freq', 'CamParams/Cut', 'PwmFreq', 'Hz') }}
+                    {{ row('Duty cycle', 'CamParams/Cut', 'PwmRatio', '%', 100) }}
+                    {{ row('Beam width', 'CamParams/Cut', 'BeamSize', 'x') }}
+                    {{ row('Focus pos', 'CamParams/Cut', 'Focus', 'mm') }}
+                    {{ row('LaserOn delay', 'CamParams/Cut', 'TimeStay', 'ms') }}
+                </div>
+            </div>
+        </fieldset>
+        {% else %}
+        <fieldset class="cc" style="max-width:420px"><legend>Technique</legend>
+            {{ row('Speed', 'CamParams', 'WorkSpeed', 'mm/min', 60) }}
+            {{ row('Nozzle height', 'CamParams/Cut', 'Height', 'mm') }}
+            <div class="cc-row"><label>Gas type:</label>{{ gas('CamParams/Cut') }}<span></span></div>
+            {{ row('Pressure', 'CamParams/Cut', 'GasPressure', 'BAR') }}
+        </fieldset>
+        {% endif %}
+    </div>
+    {% endif %}
+
     {# ---------- every attribute of the file ---------- #}
     <div class="cc-page" data-page="all" hidden>
         <p style="margin:0 0 6px; color:#666">Всеки параметър от файла на технологията.{% if not has_tree %} Технологията е въведена ръчно - показани са параметрите, които полетата ѝ дават.{% endif %}</p>
@@ -348,7 +412,7 @@
 
     <div class="cc-notes">
         <div>User Notes <span class="fn">{{ file_label }}</span></div>
-        <textarea name="note" maxlength="2000">{{ tech.note or '' }}</textarea>
+        <textarea name="note" maxlength="2000">{{ note }}</textarea>
     </div>
     <div class="cc-foot">
         <span id="tpCount" style="color:#666; margin-right:auto">няма промени</span>
@@ -407,9 +471,8 @@
             if (ch && !seen[key(el)]) { seen[key(el)] = 1; n++; }
         });
         n += curveDirty().length;
-        form.querySelectorAll('[data-curve-use]').forEach(function (cb) {
-            cb.parentElement.classList.toggle('changed', curveDirty().indexOf(cb.dataset.curveUse) !== -1);
-        });
+        const own = document.getElementById('curveOwn');
+        if (own) own.classList.toggle('changed', curveDirty().length > 0);
         const note = form.querySelector('textarea[name=note]');
         note.classList.toggle('changed', note.value !== note.defaultValue);
         if (note.value !== note.defaultValue) n++;
@@ -481,7 +544,8 @@
         document.getElementById('tpChanges').value = JSON.stringify(out);
     });
     // ---------- speed curves (Power = PwmRatioFunc, Pulse freq = PwmFreqFunc) ----------
-    const CURVES = {{ curves|tojson }};          // {tag: [used, [[speed %, value %], ...]]}
+    // {tag: [own, [[speed %, value %], ...]]}; no points = CypCut's global default curve (Def<tag>="true")
+    const CURVES = {{ curves|tojson }};
     const ORIG_BY = {};
     Object.keys(CURVES).forEach(function (t) { ORIG_BY[t] = JSON.stringify(CURVES[t]); });
     const COLOR = {PwmRatioFunc: '#f08c00', PwmFreqFunc: '#1a3fd6'};
@@ -534,13 +598,13 @@
     }
     const main = document.getElementById('curveMain');
     function drawMain() {
-        drawChart(main, Object.keys(CURVES).filter(function (t) { return CURVES[t][0]; }), '', 20);
+        if (!main) return;              // Defilm / Recool: no curve chart
+        const own =Object.keys(CURVES).filter(function (t) { return CURVES[t][1].length; });
+        drawChart(main, own, '', 20);
+        document.getElementById('curveOwn').textContent = own.length
+            ? 'собствена крива: ' + own.map(function (t) { return t === 'PwmRatioFunc' ? 'мощност' : 'честота'; }).join(', ')
+            : 'глобалната крива на CypCut';
     }
-    form.querySelectorAll('[data-curve-use]').forEach(function (cb) {
-        const t = cb.dataset.curveUse;
-        cb.checked = !!CURVES[t][0];
-        cb.addEventListener('change', function () { CURVES[t][0] = cb.checked; drawMain(); refresh(); });
-    });
     drawMain();
     // the editor works on a copy; OK takes it, Cancel drops it
     const dlg = document.getElementById('curveDlg'), body = document.getElementById('curveBody');
@@ -577,7 +641,7 @@
         drawChart(big, [tab], NAME[tab] + '(%)', 10, function (x, y) { work[tab].push([x, y]); sortWork(); render(); });
         CURVES[tab] = saved;
     }
-    document.getElementById('curveEdit').addEventListener('click', function () {
+    if (main) document.getElementById('curveEdit').addEventListener('click', function () {
         work = {};
         Object.keys(CURVES).forEach(function (t) { work[t] = CURVES[t][1].map(function (p) { return p.slice(); }); });
         sel = -1;
@@ -599,17 +663,13 @@
         work[other] = work[tab].map(function (p) { return p.slice(); });
     });
     document.getElementById('cOk').addEventListener('click', function () {
-        Object.keys(work).forEach(function (t) {
-            CURVES[t][1] = work[t];
-            if (!work[t].length) CURVES[t][0] = false;
-        });
-        form.querySelectorAll('[data-curve-use]').forEach(function (cb) { cb.checked = !!CURVES[cb.dataset.curveUse][0]; });
+        Object.keys(work).forEach(function (t) { CURVES[t] = [work[t].length > 0, work[t]]; });
         dlg.close(); drawMain(); refresh();
     });
     dlg.querySelectorAll('[data-curve-cancel]').forEach(function (b) { b.addEventListener('click', function () { dlg.close(); }); });
     form.addEventListener('submit', function () {
         const out = {};
-        curveDirty().forEach(function (t) { out[t] = CURVES[t]; });
+        curveDirty().forEach(function (t) { out[t] = CURVES[t][1]; });
         document.getElementById('tpCurves').value = JSON.stringify(out);
     });
     const q = document.getElementById('tpSearch');

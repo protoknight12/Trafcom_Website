@@ -404,16 +404,17 @@ def test_all_params_editable(s):
 
 
 def test_curve_round_trip():
-    """Speed curves: knots padded x4 at the ends like CypCut, read back without the padding, use flag on <Material>."""
+    """Speed curves: knots padded x4 at the ends like CypCut, read back without the padding; Def<tag>="false" =
+    the layer's own curve, no points = the global one."""
     raw = [['@', dict(fscut.FSM_ROOT_ATTRS), ''], ['CamParams', {'WorkSpeed': '45'}, ''], ['PwmFreqFunc', {}, ''],
            ['PwmRatioFunc', {}, '']]
     assert fscut.curve_points(raw, 'PwmRatioFunc') == (False, [])
-    raw = fscut.raw_with_curve(raw, 'PwmRatioFunc', True, [[80, 100], [10, 80]])
+    raw = fscut.raw_with_curve(raw, 'PwmRatioFunc', [[80, 100], [10, 80]])
     assert fscut.curve_points(raw, 'PwmRatioFunc') == (True, [[10, 80], [80, 100]])
     xml = fscut.fsm_xml({'raw': raw}).decode()
     assert 'DefPwmRatioFunc="false"' in xml and '<PwmRatioFunc KnotCount="8" SmoothType="0">' in xml
     assert xml.count('<Knot X="10" Y="80"/>') == 4 and '<PwmFreqFunc/>' in xml
-    raw = fscut.raw_with_curve(raw, 'PwmRatioFunc', False, [])
+    raw = fscut.raw_with_curve(raw, 'PwmRatioFunc', [])
     assert fscut.curve_points(raw, 'PwmRatioFunc') == (False, []) and not any('Knot' in r[0] for r in raw)
 
 
@@ -436,7 +437,7 @@ def test_params_page_cypcut_tabs_curves_and_note(s):
     assert 'data-tab="pierce"' in page and 'data-tab="corner"' in page and 'Layer Parameter Settings' in page
     assert f'value="{t.cutting_speed_mm_per_min:g}"' in page          # Cut speed in mm/min (WorkSpeed x 60)
     r = c.post(url, data={'changes': '[]', 'note': 'Тест бележка',
-                          'curves': _json.dumps({'PwmFreqFunc': [True, [[10, 50], [80, 100]]]})}, follow_redirects=True)
+                          'curves': _json.dumps({'PwmFreqFunc': [[10, 50], [80, 100]]})}, follow_redirects=True)
     assert 'Параметрите са записани (2 промени)' in r.get_data(as_text=True)
     db.session.expire_all()
     t = db.session.get(MachineCutTechnology, t.id)
@@ -445,7 +446,7 @@ def test_params_page_cypcut_tabs_curves_and_note(s):
     xml = zipfile.ZipFile(io.BytesIO(c.get(f'/admin/hall/{hall.id}/cut-tech/{t.id}/fsm').data)).read(
         'material.lcm', pwd=PW.encode()).decode()
     assert 'DefPwmFreqFunc="false"' in xml and '<Knot X="80" Y="100"/>' in xml and 'Тест бележка' in xml
-    c.post(url, data={'changes': '[]', 'curves': _json.dumps({'PwmFreqFunc': [True, [[10, 500]]]})})
+    c.post(url, data={'changes': '[]', 'curves': _json.dumps({'PwmFreqFunc': [[10, 500]]})})
     db.session.expire_all()
     assert fscut.curve_points(_json.loads(db.session.get(MachineCutTechnology, t.id).params_json),
                               'PwmFreqFunc') == (True, [[10, 50], [80, 100]])
@@ -669,3 +670,48 @@ def test_our_file_without_nozzle_gets_renamed():
     assert _tech_target_file(t) == r'Trafcom\Алуминий Азот\3mmAL-S2.0-N2.fsm'
     t.folder_file = r'al\3mgern.fsm'
     assert _tech_target_file(t) == r'Trafcom\Алуминий Азот\3mmAL-S2.0-N2.fsm'
+
+
+DEFILM = ('<?xml version="1.0" encoding="utf-8"?>\r\n'
+          '<Material ChannelPort="101" ParamFlag="768" OEM="0" OEMCode="42">'
+          '<CamParams WorkSpeed="416.666667" PierceStepCount="0" PierceStyle="1">'
+          '<Cut Focus="0" GasPressure="5" GasType="3" Height="15" LaserCurrent="30" PeakPower="1800" PwmFreq="1000"'
+          ' PwmRatio=".1" BeamSize="0" TimeStay="200"/></CamParams>'
+          '<PwmFreqFunc/><PwmRatioFunc/><MaterialParams MaterialID="0" MaterialName="" NozzleSpec="" Thickness="3"/>'
+          '<Note/></Material>')
+
+
+def test_machine_defilm_recool(s, monkeypatch):
+    """Defilm / Recool (owner, 2026-11-25): one per machine, taken from <folder>\Trafcom\defilm.fsm, edited on the
+    CypCut-style page (shown x factor), written back encrypted on channel 101."""
+    import json as _json
+    from cryptography.fernet import Fernet
+    fernet = Fernet(Fernet.generate_key())
+    monkeypatch.setattr(app_module, '_network_api_fernet', lambda: fernet)
+    disk = {'Trafcom': {'defilm.fsm': fscut._zipcrypto(fscut.FSM_MEMBER, DEFILM.encode(), PW)}}
+    monkeypatch.setattr(app_module, '_tech_folder_read', lambda mc, rel, name: disk[rel][name])
+    monkeypatch.setattr(app_module, '_tech_folder_write', lambda mc, rel, name, data: disk.setdefault(rel, {}).update({name: data}))
+    laser = Machine(name='PG3015 DEFILM', is_laser=True, tech_folder=UNC)
+    db.session.add(laser)
+    db.session.flush()
+    hall = HallMachine(name=laser.name, machine_id=laser.id)
+    db.session.add(hall)
+    db.session.commit()
+    c = _login('fsm_admin')
+    url = f'/admin/hall/{hall.id}/tech-service/defilm'
+    assert 'Внеси от папката' in c.get(url).get_data(as_text=True)
+    assert c.get(f'/admin/hall/{hall.id}/tech-service/other').status_code == 404
+    c.post(url + '/pull')
+    page = c.get(url).get_data(as_text=True)
+    assert 'value="25000"' in page and 'Fixed Height' in page              # WorkSpeed x 60, PierceStyle 1
+    raw = _json.loads(db.session.get(Machine, laser.id).defilm_json)
+    i_cut = next(i for i, r in enumerate(raw) if r[0] == 'CamParams/Cut')
+    c.post(url, data={'changes': _json.dumps([[i_cut, 'LaserCurrent', '40']]), 'note': 'филм'})
+    c.post(url + '/push')
+    xml = fscut.fsm_xml_of(disk['Trafcom']['defilm.fsm'], PW).decode()
+    assert 'ChannelPort="101"' in xml and 'LaserCurrent="40"' in xml and '<Note>филм</Note>' in xml
+    assert '<MaterialName>defilm.fsm</MaterialName>' in xml
+    # nothing stored yet: push refused, the page says so
+    page = c.get(f'/admin/hall/{hall.id}/tech-service/recool').get_data(as_text=True)
+    assert 'Още няма данни' in page
+    assert _login('fsm_worker').get(url).status_code == 302

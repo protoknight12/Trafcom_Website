@@ -375,6 +375,8 @@
         <p style="margin:8px 0 0; display:flex; gap:8px; flex-wrap:wrap;">
         {% if fsm_enabled %}<a class="btn" href="{{ url_for('admin_hall_cut_tech_fsm_all', machine_id=m.id) }}">Изтегли всички като .fsm (ZIP)</a>{% endif %}
         {% if fsm_enabled and machine.tech_folder %}<a class="btn" href="{{ url_for('admin_hall_tech_folder', machine_id=m.id) }}">Папка с технологии на машината</a>{% endif %}
+        <a class="btn" data-frame="stay" href="{{ url_for('admin_hall_tech_service', machine_id=m.id, kind='defilm') }}">Defilm</a>
+        <a class="btn" data-frame="stay" href="{{ url_for('admin_hall_tech_service', machine_id=m.id, kind='recool') }}">Recool</a>
         </p>
         {% else %}
         <p class="dz-muted">Няма записани технологии.</p>

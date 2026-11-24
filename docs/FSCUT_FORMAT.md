@@ -144,6 +144,18 @@ CypCut's "Layer Parameter Settings" dialog -> the file (checked against the prog
 | Corner QCW: enable, speed, duty, freq, angle, dis before / after | `CornerParams[Enable, Speed x 60, PwmRatio x 100, PwmFreq, Angle, CornerLen, CornerLen1]` |
 | Use MJ Length: MicroJoint | `CamParams[MicroLen]` |
 
+Test files from the machine (2026-11-25, everything ticked at once, so bits are not yet matched to ticks one by one):
+the top row + Slow start / stop + the three curve ticks -> `CamParams[PierceFlags]` 0 -> 91678 (bits 1-4, 9, 10, 13,
+14, 16), `SlowLeadExt` / `SlowEndExt[Enable]` = Refinemen, `<Material ParamFlag>` 768 -> 256; the Corner tab ->
+`LeadLineParam[Flags]` 0 -> 14 (bits 2, 4, 8 = Use Leadline / Lead Down / Lead Circle), `PierceFlags` 0 -> 1310720
+(bits 18, 20), `CamParams[NanoMicro]` 0 -> 1, `UseShakeRes` true -> false, `CornerParams[Enable]`. `DefPwmRatioFunc` /
+`DefPwmFreqFunc` stay "true" with the curve ticks on = the global default curve.
+
+Defilm and Recool are separate technologies (owner keeps one per machine, `Machine.defilm_json` / `recool_json`):
+an .fsm with `<Material ChannelPort="101">` (Defilm) / `"102"` (Recool) and the same CamParams tree. Defilm: Cut Mode
+= `CamParams[PierceStyle]` (1 = Fixed Height), Cut Speed / Height / Gas / Pressure / Peak power / Pulse freq / Duty /
+Beam / Focus / LaserOn delay = the same attributes as a layer's Cut tab. Recool: Speed, Nozzle height, Gas, Pressure.
+
 Not located yet: the top flags (Smooth Pierce, Pre-pierce, Defilm, Recool, Blow, Not cut, Not follow, Mode), the Slow
 start / Slow stop / Leadline / Lead Down / Lead Circle / Use MJ Length switches (probably bits of `PierceFlags` /
 `LeadLineParam[Flags]`), Self / Custom config, Smooth MicroJoint and its root ratio.

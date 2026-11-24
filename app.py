@@ -2295,6 +2295,10 @@ class Machine(db.Model):
     tech_folder = db.Column(db.String(255), nullable=True)
     tech_folder_user = db.Column(db.String(100), nullable=True)
     tech_folder_password_encrypted = db.Column(db.Text, nullable=True)
+    # CypCut's Defilm (channel 101) and Recool (channel 102) technologies, one per machine (owner, 2026-11-25):
+    # the .fsm's whole tree (fscut._raw() rows + the '@' Material row) as JSON, NULL = not taken yet
+    defilm_json = db.Column(db.Text, nullable=True)
+    recool_json = db.Column(db.Text, nullable=True)
 
     @property
     def gas_channel_map(self):
@@ -10980,53 +10984,69 @@ for _n in range(1, fscut.PIERCE_STEPS + 1):
         _TECH_PARAM_LABELS[(f'Pierce{_n}', _attr)] = (f'Пробиване {_n}: {_label}', _unit)
 
 
+def _apply_param_changes(raw):
+    """The CypCut-style page's POST on a stored tree: `changes` = JSON [[row, attr | '#text', value]] (only existing
+    attributes, a number stays a number) and `curves` = the layer's own speed curves {tag: [[speed %, value %]]}.
+    -> (tree, [[row | -1, what, value]] for the log); ValueError with the message to show."""
+    try:
+        changes = [[int(i), a, v] for i, a, v in json.loads(request.form.get('changes') or '[]')]
+        if len(changes) > 5000:
+            raise ValueError
+        for i, attr, value in changes:
+            if i < 0:
+                raise ValueError
+            row = raw[i]
+            value = str(value).strip()
+            if len(value) > TECH_PARAM_MAX_LEN or any(ord(ch) < 32 for ch in value):
+                raise ValueError(f'{row[0]} {attr}: твърде дълга стойност или непозволен знак')
+            if attr == '#text':
+                row[2] = value
+                continue
+            if attr not in row[1]:
+                raise ValueError(f'{row[0]}: няма параметър {attr}')
+            old = str(row[1][attr])
+            if fscut._f(old, None) is not None and fscut._f(value, None) is None:
+                raise ValueError(f'{row[0]} {attr}: трябва да е число')
+            row[1][attr] = value
+    except (TypeError, IndexError):
+        raise ValueError('Невалидни промени.') from None
+    except ValueError as e:
+        raise ValueError(str(e) or 'Невалидни промени.') from None
+    try:
+        curves = json.loads(request.form.get('curves') or '{}')
+        for tag, points in curves.items():
+            pts = [[float(x), float(y)] for x, y in points]
+            if tag not in fscut.CURVES or len(pts) > 50 or any(not (0 <= x <= 100 and 0 <= y <= 100) for x, y in pts):
+                raise ValueError
+            raw = fscut.raw_with_curve(raw, tag, pts)
+            changes.append([-1, tag, ' '.join(f'{x:g}:{y:g}' for x, y in sorted(pts)) or 'глобалната крива'])
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError('Невалидна крива.') from None
+    return raw, changes
+
+
+def _param_changes_text(raw_before, changes):
+    return '\n'.join(f'{raw_before[i][0] if 0 <= i < len(raw_before) else ""} {a} = {v}' for i, a, v in changes)[:4000]
+
+
 @app.route('/admin/hall/<int:machine_id>/cut-tech/<int:tech_id>/params', methods=['GET', 'POST'])
 @role_required('admin')
 def admin_hall_cut_tech_params(machine_id, tech_id):
     """"Всички параметри" (owner, 2026-11-24): every parameter of the technology's file (the stored tree,
-    params_json - every element and attribute of the CypCut channel / .fsm) editable. A technology made by hand gets
-    the tree its fields make. Saving (POST `changes` = JSON [[row, attr | '#text', value]]) changes only existing
-    attributes (a number stays a number), then reads speed, pierce time and every field column back from the tree
+    params_json - every element and attribute of the CypCut channel / .fsm) editable, laid out like CypCut's "Layer
+    Parameter Settings" (owner, 2026-11-25). A technology made by hand gets the tree its fields make. Saving
+    (_apply_param_changes) then reads speed, pierce time and every field column back from the tree
     (fscut.channel_from_raw) - the technology's Вид, thickness, gas and nozzle (its key) do not change here."""
     hm = HallMachine.query.get_or_404(machine_id)
     tech = MachineCutTechnology.query.filter_by(id=tech_id, machine_id=hm.machine_id).first_or_404()
     # the columns written into the tree first: a column changed without the tree (a data step, an old edit) wins
     raw = _tech_tree(tech, _tech_full_raw(tech))
     if request.method == 'POST':
+        before = copy.deepcopy(raw)
         try:
-            changes = json.loads(request.form.get('changes') or '[]')
-            if not isinstance(changes, list) or len(changes) > 5000:
-                raise ValueError
-            for i, attr, value in changes:
-                row = raw[int(i)]
-                value = str(value).strip()
-                if len(value) > TECH_PARAM_MAX_LEN or any(ord(ch) < 32 for ch in value):
-                    raise ValueError(f'{row[0]} {attr}: твърде дълга стойност или непозволен знак')
-                if attr == '#text':
-                    row[2] = value
-                    continue
-                if attr not in row[1]:
-                    raise ValueError(f'{row[0]}: няма параметър {attr}')
-                old = str(row[1][attr])
-                if fscut._f(old, None) is not None and fscut._f(value, None) is None:
-                    raise ValueError(f'{row[0]} {attr}: трябва да е число')
-                row[1][attr] = value
+            raw, changes = _apply_param_changes(raw)
         except ValueError as e:
-            flash(str(e) if str(e) else 'Невалидни промени.', 'danger')
-            return redirect(url_for('admin_hall_cut_tech_params', machine_id=hm.id, tech_id=tech.id))
-        except (TypeError, IndexError):
-            flash('Невалидни промени.', 'danger')
-            return redirect(url_for('admin_hall_cut_tech_params', machine_id=hm.id, tech_id=tech.id))
-        try:                            # Power / Frequency curve: {tag: [used, [[speed %, value %], ...]]}, changed only
-            curves = json.loads(request.form.get('curves') or '{}')
-            for tag, (used, points) in curves.items():
-                pts = [[float(x), float(y)] for x, y in points]
-                if tag not in fscut.CURVES or len(pts) > 50 or any(not (0 <= x <= 100 and 0 <= y <= 100) for x, y in pts):
-                    raise ValueError
-                raw = fscut.raw_with_curve(raw, tag, bool(used), pts)
-                changes.append([-1, tag, ('вкл. ' if used else 'изкл. ') + ' '.join(f'{x:g}:{y:g}' for x, y in sorted(pts))])
-        except (ValueError, TypeError, AttributeError):
-            flash('Невалидна крива.', 'danger')
+            flash(str(e), 'danger')
             return redirect(url_for('admin_hall_cut_tech_params', machine_id=hm.id, tech_id=tech.id))
         note = request.form.get('note')
         if note is not None and note.strip() != (tech.note or '').strip():      # "User Notes" = the file's <Note>
@@ -11042,8 +11062,16 @@ def admin_hall_cut_tech_params(machine_id, tech_id):
         tech.params_json = json.dumps(_tech_tree(tech, raw), ensure_ascii=False)
         db.session.commit()
         log_action(f'Технология на "{hm.name}" - параметри от файла: {_cut_tech_label(tech)}',
-                   details='\n'.join(f'{raw[int(i)][0] if int(i) >= 0 else ""} {a} = {v}' for i, a, v in changes)[:4000])
+                   details=_param_changes_text(before, changes))
         return _dossier_back(hm.id, f'Параметрите са записани ({len(changes)} промени).')
+    return _param_page(raw, m=hm, tech=tech, kind='layer', label=_cut_tech_label(tech),
+                       has_tree=bool(_tech_raw(tech)), note=tech.note or '', file_label=_fsm_name(tech)[:-4],
+                       grade_name=tech.grade.name if tech.grade else '')
+
+
+def _param_page(raw, **ctx):
+    """Renders the CypCut-style page for a stored tree: the raw groups ("Всички (XML)"), pv() for the tabs' fields and
+    the speed curves."""
     groups = []
     for i, (path, attrs, text) in enumerate(raw):
         if path == '@':
@@ -11063,9 +11091,97 @@ def admin_hall_cut_tech_params(machine_id, tech_id):
         f = fscut._f(v, None)
         return i, v, (v if f is None else f'{round(f * k, 6):g}')
     curves = {tag: fscut.curve_points(raw, tag) for tag in fscut.CURVES}
-    return render_template('admin_hall_cut_tech_params.html', m=hm, tech=tech, groups=groups, pv=pv, curves=curves,
-                           label=_cut_tech_label(tech), has_tree=bool(_tech_raw(tech)),
-                           file_label=_fsm_name(tech)[:-4], grade_name=tech.grade.name if tech.grade else '')
+    return render_template('admin_hall_cut_tech_params.html', groups=groups, pv=pv, curves=curves, **ctx)
+
+
+# CypCut's Defilm / Recool technologies (owner, 2026-11-25): one per machine, kept as the .fsm's tree in
+# Machine.<kind>_json, read from / written to <folder>\Trafcom\<kind>.fsm
+TECH_SERVICE_KINDS = {'defilm': 'Defilm', 'recool': 'Recool'}
+
+
+def _tech_service(machine_id, kind):
+    if kind not in TECH_SERVICE_KINDS:
+        abort(404)
+    hm = HallMachine.query.get_or_404(machine_id)
+    mc = hm.machine
+    if mc is None or not mc.is_laser:
+        abort(404)
+    return hm, mc, json.loads(getattr(mc, f'{kind}_json') or 'null')
+
+
+@app.route('/admin/hall/<int:machine_id>/tech-service/<kind>', methods=['GET', 'POST'])
+@role_required('admin')
+def admin_hall_tech_service(machine_id, kind):
+    """The machine's Defilm / Recool technology in the same CypCut-style page (its own tab); saving edits the stored
+    tree like "Всички параметри" (_apply_param_changes), User Notes = its <Note>."""
+    hm, mc, raw = _tech_service(machine_id, kind)
+    back = redirect(url_for('admin_hall_tech_service', machine_id=hm.id, kind=kind))
+    if request.method == 'POST':
+        if raw is None:
+            return back
+        before = copy.deepcopy(raw)
+        try:
+            raw, changes = _apply_param_changes(raw)
+        except ValueError as e:
+            flash(str(e), 'danger')
+            return back
+        note = (request.form.get('note') or '').strip()[:2000]
+        note_row = next((r for r in raw if r[0] == 'Note'), None)
+        if note_row is None:
+            note_row = ['Note', {}, '']
+            raw.append(note_row)
+        if note != (note_row[2] or '').strip():
+            note_row[2] = note
+            changes.append([-1, 'Note', note])
+        setattr(mc, f'{kind}_json', json.dumps(raw, ensure_ascii=False))
+        db.session.commit()
+        log_action(f'{TECH_SERVICE_KINDS[kind]} на "{hm.name}": {len(changes)} промени',
+                   details=_param_changes_text(before, changes))
+        flash(f'{TECH_SERVICE_KINDS[kind]}: записано ({len(changes)} промени). "Запиши в папката" го пише във файла.',
+              'success')
+        return back
+    return _param_page(raw or [], m=hm, tech=None, kind=kind, label=f'{TECH_SERVICE_KINDS[kind]} - {hm.name}',
+                       has_tree=raw is not None, note=next((r[2] for r in raw or [] if r[0] == 'Note'), ''),
+                       file_label=f'{TECH_FOLDER_EXPORT}\\{kind}.fsm', grade_name='')
+
+
+@app.route('/admin/hall/<int:machine_id>/tech-service/<kind>/<direction>', methods=['POST'])
+@role_required('admin')
+def admin_hall_tech_service_sync(machine_id, kind, direction):
+    """"Внеси от папката" (pull: <folder>\\Trafcom\\<kind>.fsm -> the machine) / "Запиши в папката" (push, encrypted
+    like CypCut's; the gas codes are kept as they are - they come from the machine's own file)."""
+    if direction not in ('pull', 'push'):
+        abort(404)
+    hm, mc, refusal = _laser_with_folder(machine_id)
+    if refusal:
+        return refusal
+    raw = _tech_service(machine_id, kind)[2]
+    back = redirect(url_for('admin_hall_tech_service', machine_id=hm.id, kind=kind))
+    name = f'{kind}.fsm'
+    try:
+        if direction == 'pull':
+            ch = fscut.read_fsm(_tech_folder_read(mc, TECH_FOLDER_EXPORT, name), FSCUT_FSM_PASSWORD)
+            setattr(mc, f'{kind}_json', json.dumps(fscut.raw_no_chinese(ch['raw']), ensure_ascii=False))
+        else:
+            if raw is None:
+                flash('Още няма данни - внесете ги от папката.', 'warning')
+                return back
+            path = mc.tech_folder.rstrip('\\') + '\\' + TECH_FOLDER_EXPORT + '\\'
+            xml = fscut.fsm_xml({'raw': raw}, name=name, path=path)
+            _tech_folder_write(mc, TECH_FOLDER_EXPORT, name, fscut._zipcrypto(fscut.FSM_MEMBER, xml, FSCUT_FSM_PASSWORD))
+    except ValueError:
+        db.session.rollback()
+        flash(f'{TECH_FOLDER_EXPORT}\\{name} не може да се прочете.', 'danger')
+        return back
+    except Exception as e:
+        db.session.rollback()
+        flash(_tech_folder_error(e), 'danger')
+        return back
+    db.session.commit()
+    what = 'внесен от' if direction == 'pull' else 'записан в'
+    log_action(f'{TECH_SERVICE_KINDS[kind]} на "{hm.name}" {what} {TECH_FOLDER_EXPORT}\\{name}')
+    flash(f'{TECH_SERVICE_KINDS[kind]} е {what} {TECH_FOLDER_EXPORT}\\{name}.', 'success')
+    return back
 
 
 @app.route('/admin/hall/<int:machine_id>/cut-tech/<int:tech_id>/tested', methods=['POST'])
