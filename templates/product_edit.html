@@ -255,7 +255,17 @@
                 </tbody>
             </table>
         </div>
-        <a href="{{ url_for('admin_product_offer', product_id=product.id) }}" class="btn-submit" style="display: inline-block; margin-top: 1.5rem; text-decoration: none; padding: 12px 24px;">Генерирай оферта</a>
+        <form action="{{ url_for('admin_product_offer_create', product_id=product.id) }}" method="POST" target="_top" data-once
+              data-dialog-section="Създай оферта" data-dialog-heading="Нова оферта в Продажби / Оферти">
+            {% include 'partials/csrf_field.html' %}
+            <label for="offerCreateClient">Клиент (цената е с неговите условия)</label>
+            <select id="offerCreateClient" name="client_id">
+                <option value="">-- Без клиент (списъчна цена) --</option>
+                {% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+            </select>
+            <button type="submit" class="btn-submit" style="margin-top: 12px;">Създай оферта</button>
+        </form>
+        <a href="{{ url_for('admin_product_offer', product_id=product.id) }}" class="btn-secondary" style="display: inline-block; margin-top: 1.5rem; margin-left: 10px; text-decoration: none; padding: 12px 24px;">Оферта само за печат</a>
         <a href="{{ url_for('admin_product_protocol', product_id=product.id) }}" class="btn-secondary" style="display: inline-block; margin-top: 1.5rem; margin-left: 10px; text-decoration: none; padding: 12px 24px; background-color: #6c757d; color: #fff; border: none; border-radius: var(--border-radius-sm); font-weight: 600;">Генерирай Протокол (ППП)</a>
         <a href="{{ url_for('admin_product_certificates', product_id=product.id) }}" class="btn-secondary" style="display: inline-block; margin-top: 1.5rem; margin-left: 10px; text-decoration: none; padding: 12px 24px; background-color: #17a2b8; color: #fff; border: none; border-radius: var(--border-radius-sm); font-weight: 600;">Генерирай Декларация / Сертификат</a>
     </section>

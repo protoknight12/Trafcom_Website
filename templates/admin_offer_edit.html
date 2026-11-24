@@ -73,7 +73,7 @@
             <div class="form-group">
                 <label for="object_title">Обект / заглавие (незадължително)</label>
                 <input type="text" id="object_title" name="object_title" placeholder="напр. ЦТП - Зона за отдих 1.2"
-                       value="{{ offer.object_title if offer else '' }}">
+                       value="{{ (offer.object_title or '') if offer else '' }}">
             </div>
             <div class="form-group">
                 <label for="client_id">Клиент (незадължително)</label>
@@ -87,7 +87,7 @@
             <div class="form-group">
                 <label for="signed_by">Подписал (незадължително)</label>
                 <input type="text" id="signed_by" name="signed_by" placeholder=""
-                       value="{{ offer.signed_by if offer else '' }}">
+                       value="{{ (offer.signed_by or '') if offer else '' }}">
             </div>
             <div class="form-group">
                 <label for="valid_until">Валидна до (незадължително)</label>

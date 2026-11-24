@@ -41,7 +41,12 @@
         <input type="text" id="customerNameInput" placeholder="Име на клиента..." value="{{ customer_name }}">
     </div>
     <label style="display: inline-flex; align-items: center; gap: 8px; color: var(--text-main); white-space: nowrap; cursor: pointer;"><input type="checkbox" data-print-prices="product-offer" checked> Показвай цените</label>
-    <button class="btn-submit" style="padding: 12px 24px;" onclick="window.print()">Печат / PDF</button>
+    <form action="{{ url_for('admin_product_offer_create', product_id=product.id) }}" method="POST" target="_top" data-once style="display: inline;">
+        {% include 'partials/csrf_field.html' %}
+        <input type="hidden" name="client_id" id="offerCreateClientId" value="">
+        <button type="submit" class="btn-secondary" style="padding: 12px 24px;" title="Записва офертата в Продажби / Оферти">Създай оферта</button>
+    </form>
+    <button class="btn-submit" style="padding: 12px 24px;" onclick="window.print()">Само за печат / PDF</button>
 </div>
 
 <div class="doc-sheet">
@@ -200,6 +205,7 @@
     document.getElementById('offerClientSelect').addEventListener('change', function () {
         const opt = this.options[this.selectedIndex];
         recomputeOfferPricing(opt.value ? parseInt(opt.value, 10) : null);
+        document.getElementById('offerCreateClientId').value = opt.value;
         if (!opt.value) return;
         customerInput.value = opt.dataset.name || opt.textContent;
         customerDisplay.textContent = customerInput.value;

@@ -17561,6 +17561,21 @@ def admin_product_offer(product_id):
                             clients=clients, client_pricing=client_pricing)
 
 
+@app.route('/admin/products/<int:product_id>/offer/create', methods=['POST'])
+@role_required('admin')
+def admin_product_offer_create(product_id):
+    """"Създай оферта" from a product: a real Offer (Продажби/Оферти) with one line for this product at the
+    price the print view shows for the picked client (calculate_product_pricing(), like _offer_product_json()),
+    saved by _save_offer() - which takes the number under _lock_numbering() and logs it - then opened in the list."""
+    product = Product.query.get_or_404(product_id)
+    client_id = request.form.get('client_id', '')
+    client = db.session.get(Client, int(client_id)) if client_id.isdigit() else None
+    line = {'type': 'product', 'product_id': product.id, 'name': product.name, 'code': product.code_number or '',
+            'quantity': 1, 'unit': 'бр', 'unit_price': round(calculate_product_pricing(product, client)['sell_price'], 2)}
+    form = {'items_json': json.dumps([line]), 'client_id': str(client.id) if client else '', 'object_title': product.name}
+    return _save_offer(None, form=form, done_url=lambda offer: url_for('admin_offers', open=offer.id))
+
+
 @app.route('/admin/products/<int:product_id>/protocol')
 @login_required
 def admin_product_protocol(product_id):
@@ -29717,14 +29732,18 @@ def _resolve_staged_offer_image(filename):
     return stored_filename
 
 
-def _save_offer(offer):
-    """Creates (offer=None) or overwrites (offer=<existing Offer>) an Offer
+def _save_offer(offer, form=None, done_url=None):
+    """`form` (default request.form) and `done_url(offer)` (default: the editor) let
+    admin_product_offer_create() reuse it with a server-built form.
+
+    Creates (offer=None) or overwrites (offer=<existing Offer>) an Offer
     and its OfferItems from the submitted form - see admin_offer_edit.html's
     `cart` JS array serialized into items_json, same pattern as
     create_delivery_note()'s items_json. Editing replaces every item rather
     than diffing, since the whole cart is always resubmitted in full."""
+    form = request.form if form is None else form
     try:
-        items = json.loads(request.form.get('items_json', ''))
+        items = json.loads(form.get('items_json', ''))
         if not isinstance(items, list):
             items = []
     except (TypeError, ValueError):
@@ -29734,12 +29753,12 @@ def _save_offer(offer):
         flash('Добавете поне един артикул или текстов ред към офертата.', 'danger')
         return redirect(request.url)
 
-    object_title = request.form.get('object_title', '').strip() or None
-    client_id_raw = request.form.get('client_id', '')
+    object_title = form.get('object_title', '').strip() or None
+    client_id_raw = form.get('client_id', '')
     client_id = int(client_id_raw) if client_id_raw.isdigit() else None
-    footer_notes = request.form.get('footer_notes', '').strip() or None
-    signed_by = request.form.get('signed_by', '').strip() or None
-    valid_until_raw = request.form.get('valid_until', '').strip()
+    footer_notes = form.get('footer_notes', '').strip() or None
+    signed_by = form.get('signed_by', '').strip() or None
+    valid_until_raw = form.get('valid_until', '').strip()
     try:
         valid_until = datetime.strptime(valid_until_raw, '%Y-%m-%d').date() if valid_until_raw else None
     except ValueError:
@@ -29747,7 +29766,7 @@ def _save_offer(offer):
         return redirect(request.url)
 
     try:
-        discount_percent = _parse_optional_float(request.form, 'discount_percent')
+        discount_percent = _parse_optional_float(form, 'discount_percent')
     except ValueError:
         flash('Невалидна отстъпка.', 'danger')
         return redirect(request.url)
@@ -29846,7 +29865,7 @@ def _save_offer(offer):
     log_action(f'{"Създадена" if is_new else "Обновена"} оферта № {offer.number} ("{offer.object_title or "-"}", {len(items)} артикул(и))',
                details=f'Оферта № {offer.number} ("{offer.object_title or "-"}")' + ('\n' + '\n'.join(item_lines) if item_lines else ''))
     flash(f'Офертата № {offer.number} беше запазена успешно.', 'success')
-    return redirect(url_for('admin_offer_edit', offer_id=offer.id))
+    return redirect(done_url(offer) if done_url else url_for('admin_offer_edit', offer_id=offer.id))
 
 
 @app.route('/admin/offers/new', methods=['GET', 'POST'])
