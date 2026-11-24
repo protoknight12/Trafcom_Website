@@ -22,6 +22,7 @@
             35%, 75% { transform: translateX(10px); }
         }
         @media (prefers-reduced-motion: reduce) { .login-error { animation: none; } }
+        .caps-warning { margin-top: 6px; color: #e6a700; font-weight: 700; font-size: 0.9rem; }
     </style>
 </head>
 <body>
@@ -72,6 +73,7 @@
             <div class="form-group">
                 <label for="password">{{ _('Парола') }}</label>
                 <input type="password" id="password" name="password" placeholder="{{ _('Въведете вашата парола...') }}" required autocomplete="current-password" {{ 'autofocus' if login_failed }}>
+                <div id="capsWarning" class="caps-warning" role="status" hidden>⇪ {{ _('Caps Lock е включен') }}</div>
             </div>
             <button type="submit" class="btn-submit" style="width: 100%; margin-top: 12px; padding: 14px;">
                 {{ _('Влез в системата') }}
@@ -86,5 +88,15 @@
         </div>
     </div>
 </div>
+<script>
+(function () {
+    var pw = document.getElementById('password'), warn = document.getElementById('capsWarning');
+    function check(e) { if (e.getModifierState) warn.hidden = !e.getModifierState('CapsLock'); }
+    pw.addEventListener('keydown', check);
+    pw.addEventListener('keyup', check);
+    pw.addEventListener('click', check);
+    pw.addEventListener('blur', function () { warn.hidden = true; });
+})();
+</script>
 </body>
 </html>
