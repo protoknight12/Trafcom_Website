@@ -45,6 +45,7 @@ ONCE = (
     'data_apply_standard_material_markup',  # owner's decision 2026-11-19: Details' stored material price gets the standard 20% markup (or the owner's Материали terms)
     'data_compose_material_names',    # owner's decision 2026-11-19: material names composed from Тип/Вид/Марка/размери/калибрация/забележка + note line snapshots
     'data_pg3015_proposed_tech',      # owner, 2026-11-24: proposed technologies for PG3015 (every standard thickness, + copper to 6 mm), marked "за тест"
+    'data_pg3015_tech_from_library',  # owner, 2026-11-24: steel O2 14/18/22/25 mm proposals corrected by the machine's own CypCut library
 )
 
 

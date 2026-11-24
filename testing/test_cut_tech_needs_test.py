@@ -164,3 +164,32 @@ def test_apply_respects_thickness_range(env):
                                                  MachineCutTechnology.thickness_mm.in_((22, 25))).count()
     assert any('22' in s for s in skipped) and any('25' in s for s in skipped)
     assert any(p[0] == 'Стомана' and p[1] == 22 for p in PROPOSALS)
+
+
+def test_library_fix_changes_only_untouched_proposals(env):
+    """data_pg3015_tech_from_library: steel O2 14/18/22/25 mm proposals take the machine's own CypCut library values;
+    an edited proposal is left alone; still "за тест"; a second run changes nothing."""
+    from migration.data_pg3015_tech_from_library import apply as fix
+    m, _ = _laser()
+    steel = _grades()['Стомана']
+    for mm in (16, 20):
+        _tech(m, steel, mm, p1_gas='oxygen', pierce_steps=2)
+    db.session.commit()
+    apply()
+    db.session.commit()
+    t18 = MachineCutTechnology.query.filter_by(grade_id=steel.id, thickness_mm=18).one()
+    t18.focus_mm = 12.8                                             # the owner edited this one
+    db.session.commit()
+
+    changed, notes = fix()
+    db.session.commit()
+    assert changed == 3 and any('18' in n for n in notes)
+    by_mm = {t.thickness_mm: t for t in MachineCutTechnology.query.filter_by(grade_id=steel.id, gas='oxygen')}
+    t25 = by_mm[25]
+    assert (t25.nozzle, t25.cutting_speed_mm_per_min, t25.focus_mm, t25.gas_pressure_bar) == ('1.4sp/1.6sp', 300, 19, 1.2)
+    assert t25.pierce_steps == 3 and t25.p1_stay_ms == 2000 and t25.p3_height_mm == 19 and t25.needs_test
+    t14 = by_mm[14]
+    assert (t14.nozzle, t14.cutting_speed_mm_per_min, t14.focus_mm, t14.p2_freq_hz) == ('1.2sp/1.4sp', 1400, 11, 200)
+    assert (by_mm[22].focus_mm, by_mm[22].cutting_speed_mm_per_min) == (15, 500)
+    assert by_mm[18].focus_mm == 12.8 and by_mm[18].cutting_speed_mm_per_min == 750      # edited: untouched
+    assert fix()[0] == 0
