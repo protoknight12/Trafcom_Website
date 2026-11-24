@@ -24052,10 +24052,12 @@ def inject_flash_once():
     (under the main menu) takes them, so a page's own flash block - rendered later - prints nothing a second time."""
     from flask import get_flashed_messages as real
 
+    # The flag lives on the request, not on g: g belongs to the app context, which outlives one request when a caller keeps
+    # an app context open (the tests' fixtures do) - the second request then lost every flash.
     def once(with_categories=False, category_filter=()):
-        if g.get('_flash_taken'):
+        if getattr(request, '_flash_taken', False):
             return []
-        g._flash_taken = True
+        request._flash_taken = True
         return real(with_categories=with_categories, category_filter=category_filter)
     return {'get_flashed_messages': once}
 
