@@ -11017,6 +11017,21 @@ def admin_hall_cut_tech_params(machine_id, tech_id):
         except (TypeError, IndexError):
             flash('Невалидни промени.', 'danger')
             return redirect(url_for('admin_hall_cut_tech_params', machine_id=hm.id, tech_id=tech.id))
+        try:                            # Power / Frequency curve: {tag: [used, [[speed %, value %], ...]]}, changed only
+            curves = json.loads(request.form.get('curves') or '{}')
+            for tag, (used, points) in curves.items():
+                pts = [[float(x), float(y)] for x, y in points]
+                if tag not in fscut.CURVES or len(pts) > 50 or any(not (0 <= x <= 100 and 0 <= y <= 100) for x, y in pts):
+                    raise ValueError
+                raw = fscut.raw_with_curve(raw, tag, bool(used), pts)
+                changes.append([-1, tag, ('вкл. ' if used else 'изкл. ') + ' '.join(f'{x:g}:{y:g}' for x, y in sorted(pts))])
+        except (ValueError, TypeError, AttributeError):
+            flash('Невалидна крива.', 'danger')
+            return redirect(url_for('admin_hall_cut_tech_params', machine_id=hm.id, tech_id=tech.id))
+        note = request.form.get('note')
+        if note is not None and note.strip() != (tech.note or '').strip():      # "User Notes" = the file's <Note>
+            tech.note = note.strip()[:2000] or None
+            changes.append([-1, 'Note', tech.note or ''])
         ch = fscut.channel_from_raw(raw)
         if ch is None:
             flash('Параметрите нямат CamParams - не са записани.', 'danger')
@@ -11027,7 +11042,7 @@ def admin_hall_cut_tech_params(machine_id, tech_id):
         tech.params_json = json.dumps(_tech_tree(tech, raw), ensure_ascii=False)
         db.session.commit()
         log_action(f'Технология на "{hm.name}" - параметри от файла: {_cut_tech_label(tech)}',
-                   details='\n'.join(f'{raw[int(i)][0]} {a} = {v}' for i, a, v in changes)[:4000])
+                   details='\n'.join(f'{raw[int(i)][0] if int(i) >= 0 else ""} {a} = {v}' for i, a, v in changes)[:4000])
         return _dossier_back(hm.id, f'Параметрите са записани ({len(changes)} промени).')
     groups = []
     for i, (path, attrs, text) in enumerate(raw):
@@ -11037,8 +11052,20 @@ def admin_hall_cut_tech_params(machine_id, tech_id):
         groups.append({'i': i, 'path': path, 'text': text,
                        'attrs': [(a, v, _TECH_PARAM_LABELS.get((el, a)) if el is not None else None)
                                  for a, v in attrs.items()]})
-    return render_template('admin_hall_cut_tech_params.html', m=hm, tech=tech, groups=groups,
-                           label=_cut_tech_label(tech), has_tree=bool(_tech_raw(tech)))
+    rows = {path: (i, attrs) for i, (path, attrs, _t) in enumerate(raw)}
+
+    def pv(path, attr, k=1):
+        """The CypCut-style tabs' field: (row, stored value, shown value = stored x k) or None (not in the file)."""
+        i, attrs = rows.get(path, (None, {}))
+        if i is None or attr not in attrs:
+            return None
+        v = str(attrs[attr])
+        f = fscut._f(v, None)
+        return i, v, (v if f is None else f'{round(f * k, 6):g}')
+    curves = {tag: fscut.curve_points(raw, tag) for tag in fscut.CURVES}
+    return render_template('admin_hall_cut_tech_params.html', m=hm, tech=tech, groups=groups, pv=pv, curves=curves,
+                           label=_cut_tech_label(tech), has_tree=bool(_tech_raw(tech)),
+                           file_label=_fsm_name(tech)[:-4], grade_name=tech.grade.name if tech.grade else '')
 
 
 @app.route('/admin/hall/<int:machine_id>/cut-tech/<int:tech_id>/tested', methods=['POST'])

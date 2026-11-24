@@ -1026,6 +1026,57 @@ def _channel_el(port, raw=None, fields=None, speed_mm_min=None, gas=None, gas_ma
     return ch
 
 
+# CypCut's speed curves (owner, 2026-11-25): <PwmRatioFunc> = "Power curve", <PwmFreqFunc> = "Frequency curve";
+# X = speed %, Y = power / frequency %, the first and last knot written 4 times (a clamped cubic spline), the
+# <Material> attribute Def<tag> = "false" while the curve is used.
+CURVES = ('PwmRatioFunc', 'PwmFreqFunc')
+CURVE_KNOT_PAD = 4
+
+
+def curve_points(raw, tag):
+    """(used, [[x, y], ...]) of a speed curve in a stored tree - the knots without the end padding."""
+    root = next((a for p, a, _ in raw or [] if p == '@'), None) or FSM_ROOT_ATTRS
+    pts = []
+    for p, a, _ in raw or []:
+        if p.split('[')[0] == f'{tag}/Knot':
+            pt = [_f(a.get('X'), 0.0), _f(a.get('Y'), 0.0)]
+            if not pts or pts[-1] != pt:
+                pts.append(pt)
+    return str(root.get(f'Def{tag}', 'true')).lower() == 'false', pts
+
+
+def raw_with_curve(raw, tag, used, points):
+    """The tree with a speed curve replaced: `points` [[x, y]] (sorted by x) written as CypCut does, its use flag on
+    the <Material> row ('@', added from FSM_ROOT_ATTRS when the tree has none). No points = an empty element."""
+    out, at = [], None
+    for row in raw or []:
+        if row[0] == tag:
+            at = len(out)
+        elif row[0].startswith(tag + '/'):
+            continue
+        out.append(row)
+    rows = []
+    if points:
+        pts = sorted([float(x), float(y)] for x, y in points)
+        knots = [pts[0]] * (CURVE_KNOT_PAD - 1) + pts + [pts[-1]] * (CURVE_KNOT_PAD - 1)
+        rows = [[f'{tag}/NormalS', {'X': '1', 'Y': '0'}, ''], [f'{tag}/NormalE', {'X': '1', 'Y': '0'}, ''],
+                [f'{tag}/Bound', {'Left': '0', 'Top': '1', 'Right': '100', 'Bottom': '100'}, '']]
+        rows += [[f'{tag}/Knot[{i}]', {'X': _num(x), 'Y': _num(y)}, ''] for i, (x, y) in enumerate(knots, 1)]
+    head = [tag, {'KnotCount': str(len(rows) - 3), 'SmoothType': '0'} if rows else {}, '']
+    if at is None:
+        out.append(head)
+        at = len(out) - 1
+    else:
+        out[at] = head
+    out[at + 1:at + 1] = rows
+    if not any(r[0] == '@' for r in out):
+        out.insert(0, ['@', dict(FSM_ROOT_ATTRS), ''])
+    for r in out:
+        if r[0] == '@':
+            r[1] = {**r[1], f'Def{tag}': 'false' if used and points else 'true'}
+    return out
+
+
 def channel_from_raw(raw):
     """A stored parameter tree (_raw() rows, an .fsm's '@' row allowed) read back as parse()'s channel dict - so the
     fields / speed / pierce time always come from the tree when the tree is edited. None without a CamParams."""

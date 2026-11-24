@@ -7,31 +7,324 @@
     <title>Параметри - {{ label }} - Trafcom</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <style>
-        .tp-group { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 10px 14px; margin-bottom: 10px; }
-        .tp-group h3 { margin: 0 0 8px; font-size: 0.95rem; font-family: monospace; }
-        .tp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px 12px; }
-        .tp-grid label { display: block; font-size: 0.75rem; color: var(--text-muted); font-family: monospace; }
-        .tp-grid label b { font-family: inherit; font-weight: 600; color: var(--text-main); }
-        .tp-grid input { width: 100%; box-sizing: border-box; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-main); padding: 3px 6px; border-radius: 4px; font: inherit; }
-        .tp-grid input.changed { border-color: #f59e0b; box-shadow: 0 0 0 1px #f59e0b; }
-        .tp-bar { position: sticky; top: 0; z-index: 5; background: var(--bg-main, var(--bg-surface)); padding: 8px 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        /* the layout of CypCut's "Layer Parameter Settings" (owner, 2026-11-25): same tabs, order and colours, light
+           like the program in both themes */
+        .cc-win { max-width: 800px; margin: 0 auto; background: #fff; color: #222; border: 1px solid #9a9a9a;
+                  font: 13px "Segoe UI", Tahoma, Arial, sans-serif; box-shadow: 0 2px 10px rgba(0,0,0,.25); }
+        .cc-win * { box-sizing: border-box; }
+        .cc-title { padding: 6px 10px; font-size: 13px; background: #f3f3f3; border-bottom: 1px solid #ddd; }
+        .cc-layer { display: flex; gap: 2px; padding: 4px 4px 0; background: #f3f3f3; }
+        .cc-layer span { padding: 3px 8px; border: 1px solid #c8c8c8; border-bottom: 0; background: #e9e9e9; color: #888; }
+        .cc-layer span.on { background: #fff; color: #222; }
+        .cc-layer i { display: inline-block; width: 14px; height: 14px; background: #19e619; vertical-align: -2px; margin-right: 4px; }
+        .cc-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 5px 6px;
+                   border-top: 3px solid #39d339; border-bottom: 3px solid #39d339; }
+        .cc-head b { color: #1e8c1e; font-weight: normal; }
+        .cc-head output { display: inline-block; min-width: 110px; border: 1px solid #aaa; padding: 2px 6px; background: #fff; }
+        .cc-flags { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 6px 8px; border-bottom: 1px solid #ddd; }
+        .cc-tabs { display: flex; gap: 0; padding: 6px 6px 0; border-bottom: 1px solid #c8c8c8; }
+        .cc-tabs button { border: 1px solid #c8c8c8; border-bottom: 0; background: #ececec; padding: 3px 10px; margin-right: 1px;
+                          font: inherit; color: #222; cursor: pointer; }
+        .cc-tabs button.on { background: #fff; position: relative; top: 1px; }
+        .cc-page { padding: 8px; min-height: 480px; }
+        .cc-page[hidden] { display: none; }
+        .cc-win select, .cc-win input[type=text], .cc-dlg input[type=text] {
+            height: auto; min-height: 0; margin: 0; border-radius: 0; box-shadow: none; font: inherit; line-height: 1.3; }
+        .cc-win select, .cc-dlg select { appearance: auto; height: auto; margin: 0; border-radius: 0; font: inherit; -webkit-appearance: menulist; background: #fff; color: #222;
+                         border: 1px solid #a9a9a9; padding: 1px 2px; width: auto; }
+        .cc-win select:disabled, .cc-dlg select:disabled { background: #eee; color: #999; }
+        .cc-win input[type=checkbox], .cc-win input[type=radio] { width: auto; height: auto; margin: 0 2px 0 0; vertical-align: -2px; }
+        .cc-win label { white-space: nowrap; margin: 0; font-weight: normal; }
+        .cc-cols { display: grid; grid-template-columns: 250px 1fr; gap: 10px; }
+        fieldset.cc { border: 1px solid #d0d0d0; margin: 0 0 8px; padding: 4px 8px 6px; }
+        fieldset.cc legend { padding: 0 3px; }
+        .cc-row { display: grid; grid-template-columns: 1fr 70px 48px; align-items: center; gap: 4px; margin: 4px 0; }
+        .cc-row > label { text-align: right; }
+        .cc-grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }
+        .cc input[type=text], .cc select, .cc-pierce input[type=text], .cc-pierce select {
+            width: 100%; border: 1px solid #a9a9a9; padding: 2px 4px; background: #fff; color: #222; font: inherit; text-align: right; }
+        .cc select, .cc-pierce select { text-align: left; }
+        .cc input:disabled, .cc select:disabled, .cc-pierce input:disabled, .cc-pierce select:disabled { background: #eee; color: #999; }
+        /* a changed value: red and bold, like CypCut (owner, 2026-11-25) */
+        .cc-win .changed { color: #e00000 !important; font-weight: 700 !important; }
+        .cc-win label:has(> input.changed) { color: #e00000; font-weight: 700; }
+        .g { color: #1e8c1e; } .b { color: #1a4fd6; } .o { color: #e08a00; } .r { color: #d40000; }
+        input.ig { background: #b5dcb0 !important; } input.ib { background: #a9c9f0 !important; } input.io { background: #fde4d0 !important; }
+        .cc-off { color: #999; }
+        .cc-pierce { display: grid; grid-template-columns: 110px repeat(3, 80px) 46px; gap: 4px 44px; align-items: center; }
+        .cc-pierce > label { text-align: right; }
+        .cc-pierce .stage-off { opacity: .45; }
+        .cc-copy { display: flex; flex-direction: column; gap: 2px; }
+        .cc-copy button { font: 11px monospace; padding: 0 6px; border: 1px solid #999; background: #f2f2f2; cursor: pointer; }
+        .cc-notes { border-top: 1px solid #ccc; padding: 6px 8px; }
+        .cc-notes textarea { width: 100%; min-height: 70px; background: #fffde0; border: 1px solid #bbb; color: #222; font: inherit; padding: 4px 6px; }
+        .cc-notes .fn { color: #f07c00; font-weight: 600; margin-left: 10px; }
+        .cc-foot { display: flex; align-items: center; gap: 10px; justify-content: flex-end; padding: 8px 10px;
+                   border-top: 3px solid #39d339; background: #f3f3f3; }
+        .cc-foot .ok { display: inline-flex; align-items: center; gap: 8px; padding: 6px 22px; border: 1px solid #999;
+                       background: #f7f7f7; font: inherit; cursor: pointer; color: #222; }
+        .cc-foot .ok::before { content: "✔"; color: #1aa31a; font-size: 18px; }
+        .cc-foot a { color: #333; }
+        .cc-chart { border: 1px solid #d0d0d0; padding: 4px 8px; }
+        .tp-group { border: 1px solid #ddd; padding: 6px 10px; margin-bottom: 8px; }
+        .tp-group h3 { margin: 0 0 6px; font: 600 12px monospace; }
+        .tp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 4px 10px; }
+        .tp-grid label { display: block; font: 11px monospace; color: #666; }
+        .tp-grid label b { font-family: "Segoe UI", sans-serif; color: #222; }
+        .tp-grid input { width: 100%; border: 1px solid #aaa; padding: 2px 4px; font: inherit; background: #fff; color: #222; }
+        .cc-btn { border: 1px solid #999; background: #f2f2f2; color: #222; font: inherit; padding: 4px 14px; cursor: pointer; }
+        .cc-dlg { width: min(780px, 96vw); padding: 0; border: 1px solid #888; background: #fff; color: #222;
+                  font: 13px "Segoe UI", Tahoma, Arial, sans-serif; }
+        .cc-dlg::backdrop { background: rgba(0,0,0,.3); }
+        .cc-dlg .cc-tabs button.on { border-top: 3px solid var(--tc); }
+        .cc-dlg-body { display: grid; grid-template-columns: 200px 1fr; gap: 6px; padding: 6px; border-top: 3px solid #f08c00; }
+        .cc-dlg-body.freq { border-top-color: #1a3fd6; }
+        .cc-dlg-tools { display: flex; gap: 4px; margin-bottom: 4px; }
+        .cc-dlg-tools button { border: 0; background: none; font: inherit; cursor: pointer; color: #222; padding: 2px 4px; }
+        .cc-pts-box { height: 210px; overflow-y: auto; border: 1px solid #aaa; background: #fff; }
+        .cc-pts { width: 100%; border-collapse: collapse; }
+        .cc-dlg .cc-tabs button.on[data-ctab=PwmRatioFunc] { background: #fde4c8; }
+        .cc-dlg .cc-tabs button.on[data-ctab=PwmFreqFunc] { background: #d6e4ff; }
+        .cc-pts th, .cc-pts td { border-bottom: 1px solid #e3e3e3; padding: 1px 4px; text-align: left; font-weight: normal; width: 50%; }
+        .cc-pts th { border-bottom: 1px solid #aaa; }
+        .cc-pts td input { width: 100%; border: 0; background: transparent; font: inherit; color: #222; padding: 0;
+                           height: auto; min-height: 0; margin: 0; border-radius: 0; box-shadow: none; }
+        .cc-pts td, .cc-pts th { line-height: 1.3; }
+        .cc-pts tr.sel td { background: #a8d8ff; }
+        .cc-dlg-foot { display: flex; gap: 10px; padding: 8px; border-top: 1px solid #ddd; background: #f3f3f3; }
+        @media (max-width: 760px) { .cc-cols, .cc-grid2 { grid-template-columns: 1fr; } .cc-pierce { gap: 4px 8px; overflow-x: auto; } }
     </style>
 </head>
 <body>
 {% include 'partials/navbar.html' %}
-<main class="container" style="max-width: 1200px; margin: 16px auto; padding: 0 16px;">
-    <h1 style="font-size: 1.2rem; margin-bottom: 4px;">Всички параметри - {{ label }}</h1>
-    <p class="text-muted" style="margin-top:0">Всеки параметър от файла на технологията (CypCut). Скоростта, пробиването и полетата в досието се взимат наново от тези стойности при запис; видът, дебелината, газът и дюзата не се сменят оттук.{% if not has_tree %} Технологията е въведена ръчно - показани са параметрите, които полетата ѝ дават.{% endif %}</p>
-    {#- admin_hall_cut_tech_params: only the changed inputs are posted, as JSON (a tree has hundreds of attributes) #}
-    <form method="post" id="tpForm">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <input type="hidden" name="changes" id="tpChanges" value="[]">
-        <div class="tp-bar">
-            <input type="search" id="tpSearch" placeholder="Търсене на параметър" style="flex: 1 1 200px;">
-            <span id="tpCount" class="text-muted">няма промени</span>
-            <button class="btn btn-primary" type="submit">Запази</button>
-            <a class="btn" href="{{ url_for('admin_hall_dossier', machine_id=m.id) }}">Отказ</a>
+{#- every editable field: data-row (index in the stored tree) + data-attr, shown as stored x data-k; only the changed
+    ones are posted, as JSON [[row, attr, stored value]] (admin_hall_cut_tech_params) -#}
+{% macro num(path, attr, k=1, cls='') -%}
+{%- set p = pv(path, attr, k) -%}
+<input type="text" inputmode="decimal" class="{{ cls }}" {% if p %}value="{{ p[2] }}" data-row="{{ p[0] }}" data-attr="{{ attr }}" data-k="{{ k }}" data-orig="{{ p[2] }}"{% else %}disabled title="Няма го във файла"{% endif %} {{ kwargs.get('extra', '')|safe }}>
+{%- endmacro %}
+{% macro row(text, path, attr, unit='', k=1, lc='', ic='') -%}
+<div class="cc-row"><label class="{{ lc }}">{{ text }}:</label>{{ num(path, attr, k, ic) }}<span>{{ unit }}</span></div>
+{%- endmacro %}
+{% macro gas(path, attr='GasType') -%}
+{%- set p = pv(path, attr) -%}
+<select {% if p %}data-row="{{ p[0] }}" data-attr="{{ attr }}" data-k="1" data-orig="{{ p[2] }}"{% else %}disabled{% endif %}>
+    {% for code, name in [('0', '—'), ('1', 'Air'), ('2', 'O2'), ('3', 'N2'), ('4', 'High Air'), ('5', 'High O2'), ('6', 'High N2')] %}
+    <option value="{{ code }}" {{ 'selected' if p and p[2] == code }}>{{ name }}</option>
+    {% endfor %}
+    {% if p and p[2] not in ['0','1','2','3','4','5','6'] %}<option value="{{ p[2] }}" selected>{{ p[2] }}</option>{% endif %}
+</select>
+{%- endmacro %}
+{% macro flag(path, attr, text) -%}
+{%- set p = pv(path, attr) -%}
+<label class="{{ '' if p else 'cc-off' }}"><input type="checkbox" {% if p %}data-row="{{ p[0] }}" data-attr="{{ attr }}" data-bool data-orig="{{ p[1]|lower }}" {{ 'checked' if p[1]|lower == 'true' }}{% else %}disabled{% endif %}> {{ text }}</label>
+{%- endmacro %}
+{% macro unknown(text) -%}
+<label class="cc-off" title="Мястото на тази отметка във файла още не е разпознато"><input type="checkbox" disabled> {{ text }}</label>
+{%- endmacro %}
+<main style="margin: 16px auto; padding: 0 16px;">
+<form method="post" id="tpForm" class="cc-win">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="changes" id="tpChanges" value="[]">
+    <input type="hidden" name="curves" id="tpCurves" value="{}">
+    <div class="cc-title">Layer Parameter Settings - {{ label }}</div>
+    <div class="cc-layer"><span>Global Parameter</span><span class="on"><i></i>Layer1</span></div>
+    <div class="cc-head">
+        <b>Material</b><output>{{ grade_name or '—' }}</output>
+        <b>Thickness</b><output style="min-width:70px">{{ '%g'|format(tech.thickness_mm) }}mm</output>
+        <b>nozzle:</b><output>{{ tech.nozzle or '—' }}</output>
+        <span class="text-muted" style="font-size:11px; color:#777">видът, дебелината, газът и дюзата не се сменят оттук</span>
+    </div>
+    <div class="cc-flags">
+        {{ unknown('Smooth Pierce') }} {{ unknown('Pre-pierce') }} {{ unknown('Defilm') }} {{ unknown('Recool') }}
+        {{ unknown('Blow') }} {{ unknown('Not cut') }} {{ unknown('Not follow') }}
+        <span class="cc-off">Mode: <select disabled><option>Standard</option></select></span>
+    </div>
+    <div class="cc-tabs" role="tablist">
+        <button type="button" data-tab="cut" class="on">Cut</button>
+        <button type="button" data-tab="pierce">Pierce</button>
+        <button type="button" data-tab="corner">Corner</button>
+        <button type="button" data-tab="all">Всички (XML)</button>
+    </div>
+
+    {# ---------- Cut ---------- #}
+    <div class="cc-page" data-page="cut">
+        <div class="cc-cols">
+            <div>
+                <fieldset class="cc"><legend>Cutting parameter</legend>
+                    {{ row('Cut speed', 'CamParams', 'WorkSpeed', 'mm/min', 60) }}
+                    {{ row('Nozzle height', 'CamParams/Cut', 'Height', 'mm', 1, 'g', 'ig') }}
+                    <div class="cc-row"><label class="b">Gas type:</label>{{ gas('CamParams/Cut') }}<span></span></div>
+                    {{ row('Gas pressure', 'CamParams/Cut', 'GasPressure', 'BAR', 1, 'b', 'ib') }}
+                    {{ row('Peak power', 'CamParams/Cut', 'LaserCurrent', '%', 1, 'o', 'io') }}
+                    <div class="cc-row"><label class="o">Actual power:</label>{{ num('CamParams/Cut', 'PeakPower', 1, '', extra='readonly data-power') }}<span>W</span></div>
+                    {{ row('Duty cycle', 'CamParams/Cut', 'PwmRatio', '%', 100, 'o', 'io') }}
+                    {{ row('Pulse freq', 'CamParams/Cut', 'PwmFreq', 'Hz', 1, 'o', 'io') }}
+                    {{ row('Beam width', 'CamParams/Cut', 'BeamSize', 'x') }}
+                    {{ row('Focus pos', 'CamParams/Cut', 'Focus', 'mm') }}
+                    {{ row('LaserOn delay', 'CamParams/Cut', 'TimeStay', 'ms') }}
+                    {{ row('Laser off delay', 'CamParams', 'DelayBeforeLaserOff', 'ms') }}
+                </fieldset>
+                <fieldset class="cc"><legend>{{ flag('CamParams/LayerCutParams', 'Enable', 'Enable precision') }}</legend>
+                    {{ row('LPF', 'CamParams/LayerCutParams', 'FirFreq', 'Hz') }}
+                    {{ row('Cutting acc', 'CamParams/LayerCutParams', 'WorkAcc', 'G', 0.0001) }}
+                    {{ row('Curve precision', 'CamParams/LayerCutParams', 'ArcTolerance', 'mm') }}
+                    {{ row('Corner precision', 'CamParams/LayerCutParams', 'CornerTolerance', 'mm') }}
+                </fieldset>
+            </div>
+            <div>
+                <fieldset class="cc"><legend>{{ unknown('Slow start') }}</legend>
+                    <div class="cc-grid2">
+                        <div>
+                            <div class="cc-row" style="visibility:hidden"><label>.</label><span></span><span></span></div>
+                            {{ row('Length', 'CamParams', 'SlowLeadLength', 'mm') }}
+                            {{ row('Speed', 'CamParams', 'SlowLeadSpeed', 'mm/min', 60) }}
+                        </div>
+                        <div>
+                            <div class="cc-row" style="grid-template-columns:1fr">{{ flag('CamParams/SlowLeadExt', 'Enable', 'Refinemen') }}</div>
+                            {{ row('Duty cycle', 'CamParams/SlowLeadExt', 'Ratio', '%', 100, 'o') }}
+                            {{ row('Frequency', 'CamParams/SlowLeadExt', 'Freq', 'Hz', 1, 'o') }}
+                        </div>
+                    </div>
+                </fieldset>
+                <fieldset class="cc"><legend>{{ unknown('Slow stop') }}</legend>
+                    <div class="cc-grid2">
+                        <div>
+                            <div class="cc-row" style="grid-template-columns:1fr">{{ flag('CamParams/SmartEndTech', 'SmartEndEn', 'Smart Lase') }}</div>
+                            {{ row('Distance', 'CamParams', 'SlowEndLength', 'mm') }}
+                            {{ row('Speed', 'CamParams', 'SlowEndSpeed', 'mm/min', 60) }}
+                        </div>
+                        <div>
+                            <div class="cc-row" style="grid-template-columns:1fr">{{ flag('CamParams/SlowEndExt', 'Enable', 'Refinemen') }}</div>
+                            {{ row('Duty cycle', 'CamParams/SlowEndExt', 'Ratio', '%', 100, 'o') }}
+                            {{ row('Pulse frequency', 'CamParams/SlowEndExt', 'Freq', 'Hz', 1, 'o') }}
+                        </div>
+                    </div>
+                </fieldset>
+                <div class="cc-chart">
+                    <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center">
+                        <label><input type="checkbox" data-curve-use="PwmRatioFunc"> Power curve</label>
+                        <label><input type="checkbox" data-curve-use="PwmFreqFunc"> Frequency curve</label>
+                        {{ unknown('Absolute value') }}
+                        <button type="button" class="cc-btn" id="curveEdit" style="margin-left:auto; min-width:78px">Edit</button>
+                    </div>
+                    <svg id="curveMain" viewBox="0 0 470 250" style="width:100%; display:block" aria-label="Power / frequency curve"></svg>
+                </div>
+            </div>
         </div>
+    </div>
+
+    {# ---------- Pierce ---------- #}
+    {% set sc = pv('CamParams', 'PierceStepCount') %}
+    <div class="cc-page" data-page="pierce" hidden>
+        <div class="cc-pierce">
+            <span></span>
+            {% for n in [0, 1, 2, 3] %}{% if n %}
+            <span style="display:flex; align-items:center; gap:6px">
+                <label><input type="radio" name="stages" value="{{ n }}" {{ 'checked' if sc and sc[2] == n|string }} {{ 'disabled' if not sc }}> {{ n }}-Stage</label>
+                {% if n < 3 %}<span class="cc-copy" style="margin-left:auto; margin-right:-40px"><button type="button" data-copy="{{ n }}>{{ n + 1 }}" title="Копирай в {{ n + 1 }}">---&gt;</button><button type="button" data-copy="{{ n + 1 }}>{{ n }}" title="Копирай в {{ n }}">&lt;----</button></span>{% endif %}
+            </span>
+            {% endif %}{% endfor %}
+            <span></span>
+            <label style="grid-column:1 / span 5; text-align:left; margin:-26px 0 4px 40px"><input type="radio" name="stages" value="0" {{ 'checked' if sc and sc[2] == '0' }} {{ 'disabled' if not sc }}> No Pierce</label>
+            {% if sc %}<input type="hidden" id="stepCount" data-row="{{ sc[0] }}" data-attr="PierceStepCount" data-k="1" data-orig="{{ sc[2] }}" value="{{ sc[2] }}">{% endif %}
+            {% set rows = [
+                ('Pierce mode', 'PierceMode', '', 1, '', '', 'mode'),
+                ('Pierce time', 'TimeFollow', 'ms', 1, 'g', '', ''),
+                ('Pierce height', 'Height', 'mm', 1, 'g', 'ig', ''),
+                ('Pierce gas', 'GasType', '', 1, 'b', '', 'gas'),
+                ('Gas pressure', 'GasPressure', 'BAR', 1, 'b', 'ib', ''),
+                ('Peak power', 'LaserCurrent', '%', 1, 'o', 'io', ''),
+                ('Actual power', 'PeakPower', 'W', 1, 'o', '', 'power'),
+                ('Duty cycle', 'PwmRatio', '%', 100, 'o', 'io', ''),
+                ('Pulse freq', 'PwmFreq', 'Hz', 1, 'o', 'io', ''),
+                ('Beam width', 'BeamSize', 'x', 1, '', '', ''),
+                ('Focus pos', 'Focus', 'mm', 1, '', '', ''),
+                ('EndPt focus', 'FocusEnd', 'mm', 1, '', '', ''),
+                ('Pierce time', 'TimeStay', 'ms', 1, '', '', ''),
+                ('Gas blow', 'TimeBlow', 'ms', 1, '', '', ''),
+                ('Gas type', 'BlowGasType', '', 1, '', '', 'gas'),
+                ('Pressure', 'BlowGasPressure', 'BAR', 1, '', 'ib', ''),
+            ] %}
+            {% for text, attr, unit, k, lc, ic, kind in rows %}
+            <label class="{{ lc }}">{{ text }}:</label>
+            {% for n in [1, 2, 3] %}{% set path = 'CamParams/Pierce' ~ n %}
+            <span data-stage="{{ n }}">
+                {%- if kind == 'gas' %}{{ gas(path, attr) }}
+                {%- elif kind == 'mode' %}{% set p = pv(path, attr) %}
+                <select {% if p %}data-row="{{ p[0] }}" data-attr="{{ attr }}" data-k="1" data-orig="{{ p[2] }}"{% else %}disabled{% endif %}>
+                    {% for code, name in [('0', 'Segment pierce'), ('1', 'Progressive pierce')] %}<option value="{{ code }}" {{ 'selected' if p and p[2] == code }}>{{ name }}</option>{% endfor %}
+                    {% if p and p[2] not in ['0', '1'] %}<option value="{{ p[2] }}" selected>{{ p[2] }}</option>{% endif %}
+                </select>
+                {%- elif kind == 'power' %}{{ num(path, attr, 1, '', extra='readonly data-power') }}
+                {%- else %}{{ num(path, attr, k, ic) }}{% endif -%}
+            </span>
+            {% endfor %}
+            <span>{{ unit }}</span>
+            {% endfor %}
+        </div>
+    </div>
+
+    {# ---------- Corner ---------- #}
+    <div class="cc-page" data-page="corner" hidden>
+        <fieldset class="cc"><legend>{{ flag('CamParams', 'UseShakeRes', 'Vibration suppress') }}</legend>
+            <div class="cc-grid2">
+                <div style="padding-left:24px">
+                    <div class="cc-off"><input type="radio" disabled> Self</div>
+                    <div class="cc-off" style="margin-top:6px"><input type="radio" disabled> Custom config</div>
+                </div>
+                <div>
+                    {{ row('Thin sheet suppress', 'CamParams', 'ShaleResMs', 'ms') }}
+                    {{ row('Thick sheet suppress', 'CamParams', 'ShakeResLv') }}
+                </div>
+            </div>
+        </fieldset>
+        <fieldset class="cc"><legend>{{ unknown('Use Leadline Technique') }}</legend>
+            <div style="display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 14px">
+                <div>
+                    <div class="cc-row" style="visibility:hidden"><label>.</label><span></span><span></span></div>
+                    {{ row('Cut speed', 'CamParams/LeadLineParam', 'LeadDecSpd', 'mm/min', 60) }}
+                    {{ row('Duty cycle', 'CamParams/LeadLineParam', 'PwmRatio', '%', 100) }}
+                    {{ row('Pulse freq', 'CamParams/LeadLineParam', 'PwmFreq', 'Hz') }}
+                </div>
+                <div>
+                    <div class="cc-row" style="grid-template-columns:1fr">{{ unknown('Lead Down') }}</div>
+                    {{ row('Lead height', 'CamParams/LeadLineParam', 'LeadCutH', 'mm') }}
+                    {{ row('Stable distance', 'CamParams/LeadLineParam', 'LeadDecLen', 'mm') }}
+                </div>
+                <div>
+                    <div class="cc-row" style="grid-template-columns:1fr">{{ unknown('Lead Circle') }}</div>
+                    {{ row('Speed', 'CamParams/LeadLineParam', 'LeadHoleSpd', 'mm/min', 60) }}
+                </div>
+            </div>
+            <div class="cc-off" style="font-size:12px; margin-left:220px">(Slow down from the start point to the end point)</div>
+        </fieldset>
+        <div style="display:grid; grid-template-columns: 2fr 1fr; gap: 8px">
+            <fieldset class="cc"><legend>{{ flag('CamParams/CornerParams', 'Enable', 'Corner QCW') }}</legend>
+                <div class="cc-grid2">
+                    <div>
+                        {{ row('Cut speed', 'CamParams/CornerParams', 'Speed', 'mm/min', 60) }}
+                        {{ row('Duty cycle', 'CamParams/CornerParams', 'PwmRatio', '%', 100) }}
+                        {{ row('Pulse freq', 'CamParams/CornerParams', 'PwmFreq', 'Hz') }}
+                    </div>
+                    <div>
+                        {{ row('Corner', 'CamParams/CornerParams', 'Angle', '°') }}
+                        {{ row('Dis before', 'CamParams/CornerParams', 'CornerLen', 'mm') }}
+                        {{ row('Dis after', 'CamParams/CornerParams', 'CornerLen1', 'mm') }}
+                    </div>
+                </div>
+            </fieldset>
+            <fieldset class="cc"><legend>{{ unknown('Use MJ Length') }}</legend>
+                {{ row('MicroJoint', 'CamParams', 'MicroLen', 'mm') }}
+                <div class="cc-row" style="grid-template-columns:1fr">{{ unknown('Smooth MicroJoint') }}</div>
+            </fieldset>
+        </div>
+    </div>
+
+    {# ---------- every attribute of the file ---------- #}
+    <div class="cc-page" data-page="all" hidden>
+        <p style="margin:0 0 6px; color:#666">Всеки параметър от файла на технологията.{% if not has_tree %} Технологията е въведена ръчно - показани са параметрите, които полетата ѝ дават.{% endif %}</p>
+        <input type="search" id="tpSearch" placeholder="Търсене на параметър" style="width:100%; margin-bottom:8px; padding:3px 6px; border:1px solid #aaa; background:#fff; color:#222">
         {% for g in groups %}
         <div class="tp-group" data-group>
             <h3>{{ g.path }}</h3>
@@ -39,36 +332,285 @@
                 {% for a, v, known in g.attrs %}
                 <div data-param="{{ (g.path ~ ' ' ~ a ~ ' ' ~ (known[0] if known else ''))|lower }}">
                     <label>{% if known %}<b>{{ known[0] }}</b>{{ ' (' ~ known[1] ~ ')' if known[1] }} · {% endif %}{{ a }}</label>
-                    <input type="text" value="{{ v }}" data-row="{{ g.i }}" data-attr="{{ a }}" data-orig="{{ v }}" maxlength="100">
+                    <input type="text" value="{{ v }}" data-row="{{ g.i }}" data-attr="{{ a }}" data-orig="{{ v }}" data-k="1" data-raw maxlength="100">
                 </div>
                 {% endfor %}
-                {% if g.text %}
+                {% if g.text and g.path != 'Note' %}
                 <div data-param="{{ (g.path ~ ' текст')|lower }}">
                     <label>текст</label>
-                    <input type="text" value="{{ g.text }}" data-row="{{ g.i }}" data-attr="#text" data-orig="{{ g.text }}" maxlength="100">
+                    <input type="text" value="{{ g.text }}" data-row="{{ g.i }}" data-attr="#text" data-k="1" data-orig="{{ g.text }}" data-raw maxlength="100">
                 </div>
                 {% endif %}
             </div>
         </div>
         {% endfor %}
-    </form>
+    </div>
+
+    <div class="cc-notes">
+        <div>User Notes <span class="fn">{{ file_label }}</span></div>
+        <textarea name="note" maxlength="2000">{{ tech.note or '' }}</textarea>
+    </div>
+    <div class="cc-foot">
+        <span id="tpCount" style="color:#666; margin-right:auto">няма промени</span>
+        <a href="{{ url_for('admin_hall_dossier', machine_id=m.id) }}">Отказ</a>
+        <button class="ok" type="submit">OK</button>
+    </div>
+</form>
+{# CypCut's "Power Curve Editor": Power (orange) / Pulse freq (blue), speed % -> value % #}
+<dialog id="curveDlg" class="cc-dlg">
+    <div class="cc-title" style="display:flex">Power Curve Editor<button type="button" data-curve-cancel style="margin-left:auto; border:0; background:none; font-size:16px; cursor:pointer; color:#333">✕</button></div>
+    <div class="cc-tabs" style="padding-top:4px">
+        <button type="button" data-ctab="PwmRatioFunc" class="on" style="--tc:#f08c00">Power</button>
+        <button type="button" data-ctab="PwmFreqFunc" style="--tc:#1a3fd6">Pulse freq</button>
+    </div>
+    <div class="cc-dlg-body" id="curveBody">
+        <div class="cc-dlg-left">
+            <div class="cc-dlg-tools">
+                <button type="button" id="cAdd"><b style="color:#1a4fd6">✚</b> Add</button>
+                <button type="button" id="cDel"><b style="color:#1a4fd6">▬</b> Delete</button>
+                <button type="button" id="cClear"><b style="color:#d4a000">✎</b> Clear</button>
+            </div>
+            <div class="cc-pts-box"><table class="cc-pts"><thead><tr><th>Speed</th><th id="cValHead">Power</th></tr></thead><tbody id="cRows"></tbody></table></div>
+            <label class="cc-off" style="display:block; margin-top:6px"><input type="checkbox" disabled> Show Absolutes</label>
+            <div class="cc-off" style="margin-top:4px">Pattern: <select disabled><option>Default</option></select></div>
+        </div>
+        <svg id="curveBig" viewBox="0 0 520 290" style="width:100%; background:#f0f0f0; display:block"></svg>
+    </div>
+    <div class="cc-dlg-foot">
+        <button type="button" id="cCopy" class="cc-btn">➡ <span id="cCopyText">Copy to frequency</span></button>
+        <span style="flex:1"></span>
+        <button type="button" id="cOk" class="cc-btn"><b style="color:#1aa31a">✔</b> OK</button>
+        <button type="button" data-curve-cancel class="cc-btn"><b style="color:#d40000">✖</b> Cancel</button>
+    </div>
+</dialog>
 </main>
 <script>
 (function () {
-    const inputs = Array.from(document.querySelectorAll('input[data-row]'));
+    const form = document.getElementById('tpForm');
     const count = document.getElementById('tpCount');
-    function changed() { return inputs.filter(function (el) { return el.value !== el.dataset.orig; }); }
-    inputs.forEach(function (el) {
-        el.addEventListener('input', function () {
-            el.classList.toggle('changed', el.value !== el.dataset.orig);
-            const n = changed().length;
-            count.textContent = n ? n + ' промени' : 'няма промени';
+    const fields = Array.from(form.querySelectorAll('[data-row]'));
+    function val(el) { return el.hasAttribute('data-bool') ? (el.checked ? 'true' : 'false') : el.value; }
+    function key(el) { return el.dataset.row + '|' + el.dataset.attr; }
+    // the same attribute can be on a tab and in "Всички (XML)": keep both in step
+    function twins(el) { return fields.filter(function (o) { return o !== el && key(o) === key(el); }); }
+    function stored(el) {                       // shown value -> the file's value (shown = stored x k)
+        const k = parseFloat(el.dataset.k || '1'), v = val(el);
+        if (el.hasAttribute('data-bool') || k === 1 || v.trim() === '' || isNaN(Number(v))) return v;
+        return String(Math.round(Number(v) / k * 1e6) / 1e6);
+    }
+    function refresh() {
+        const seen = {};
+        let n = 0;
+        fields.forEach(function (el) {
+            const ch = val(el) !== el.dataset.orig;
+            el.classList.toggle('changed', ch);
+            if (ch && !seen[key(el)]) { seen[key(el)] = 1; n++; }
+        });
+        n += curveDirty().length;
+        form.querySelectorAll('[data-curve-use]').forEach(function (cb) {
+            cb.parentElement.classList.toggle('changed', curveDirty().indexOf(cb.dataset.curveUse) !== -1);
+        });
+        const note = form.querySelector('textarea[name=note]');
+        note.classList.toggle('changed', note.value !== note.defaultValue);
+        if (note.value !== note.defaultValue) n++;
+        count.textContent = n ? n + ' промени' : 'няма промени';
+    }
+    function sync(el) {
+        const k = parseFloat(el.dataset.k || '1'), s = stored(el);
+        twins(el).forEach(function (o) {
+            const ko = parseFloat(o.dataset.k || '1');
+            if (o.hasAttribute('data-bool')) o.checked = s === 'true';
+            else o.value = (ko === k || isNaN(Number(s)) || s.trim() === '') ? val(el) : String(Math.round(Number(s) * ko * 1e6) / 1e6);
+        });
+    }
+    // "Actual power" (W) follows "Peak power" (%) like in CypCut: the laser's full power = PeakPower / LaserCurrent
+    form.querySelectorAll('input[data-power]').forEach(function (w) {
+        const cur = form.querySelector('[data-row="' + w.dataset.row + '"][data-attr="LaserCurrent"]:not([data-raw])');
+        const full = parseFloat(w.dataset.orig) / (parseFloat(cur && cur.dataset.orig) / 100);
+        if (!cur || !isFinite(full)) return;
+        cur.addEventListener('input', function () {
+            const p = parseFloat(cur.value);
+            if (isFinite(p)) { w.value = String(Math.round(full * p / 100)); sync(w); }
         });
     });
-    document.getElementById('tpForm').addEventListener('submit', function () {
-        document.getElementById('tpChanges').value = JSON.stringify(changed().map(function (el) {
-            return [parseInt(el.dataset.row, 10), el.dataset.attr, el.value];
-        }));
+    fields.forEach(function (el) {
+        el.addEventListener(el.tagName === 'INPUT' && el.type === 'text' ? 'input' : 'change', function () { sync(el); refresh(); });
+    });
+    // pierce stages: the radios set PierceStepCount, stages past it are greyed like in CypCut
+    const step = document.getElementById('stepCount');
+    function stages() {
+        const c = step ? parseInt(step.value, 10) : 3;
+        form.querySelectorAll('[data-stage]').forEach(function (s) { s.classList.toggle('stage-off', parseInt(s.dataset.stage, 10) > c); });
+    }
+    form.querySelectorAll('input[name=stages]').forEach(function (r) {
+        r.addEventListener('change', function () { if (step) { step.value = r.value; sync(step); refresh(); stages(); } });
+    });
+    stages();
+    // ---> / <---- copy one stage's column into the next / previous
+    form.querySelector('textarea[name=note]').addEventListener('input', function () { refresh(); });
+    form.querySelectorAll('[data-copy]').forEach(function (b) {
+        b.addEventListener('click', function () {
+            const ft = b.dataset.copy.split('>');
+            const from = form.querySelectorAll('[data-stage="' + ft[0] + '"] [data-row]');
+            const to = form.querySelectorAll('[data-stage="' + ft[1] + '"] [data-row]');
+            from.forEach(function (f, i) {
+                const t = to[i];
+                if (!t || t.dataset.attr !== f.dataset.attr) return;
+                t.value = f.value;
+                sync(t);
+            });
+            refresh();
+        });
+    });
+    // tabs (the last one kept for this browser tab)
+    const tabs = form.querySelectorAll('[data-tab]');
+    function show(name) {
+        tabs.forEach(function (t) { t.classList.toggle('on', t.dataset.tab === name); });
+        form.querySelectorAll('[data-page]').forEach(function (p) { p.hidden = p.dataset.page !== name; });
+        try { sessionStorage.setItem('ctParamsTab', name); } catch (e) {}
+    }
+    tabs.forEach(function (t) { t.addEventListener('click', function () { show(t.dataset.tab); }); });
+    try { const s = sessionStorage.getItem('ctParamsTab'); if (s && form.querySelector('[data-tab="' + s + '"]')) show(s); } catch (e) {}
+    form.addEventListener('submit', function () {
+        const seen = {}, out = [];
+        fields.forEach(function (el) {
+            if (val(el) === el.dataset.orig || seen[key(el)]) return;
+            seen[key(el)] = 1;
+            out.push([parseInt(el.dataset.row, 10), el.dataset.attr, stored(el)]);
+        });
+        document.getElementById('tpChanges').value = JSON.stringify(out);
+    });
+    // ---------- speed curves (Power = PwmRatioFunc, Pulse freq = PwmFreqFunc) ----------
+    const CURVES = {{ curves|tojson }};          // {tag: [used, [[speed %, value %], ...]]}
+    const ORIG_BY = {};
+    Object.keys(CURVES).forEach(function (t) { ORIG_BY[t] = JSON.stringify(CURVES[t]); });
+    const COLOR = {PwmRatioFunc: '#f08c00', PwmFreqFunc: '#1a3fd6'};
+    function curveDirty() {
+        return Object.keys(CURVES).filter(function (t) { return JSON.stringify(CURVES[t]) !== ORIG_BY[t]; });
+    }
+    const SVGNS = 'http://www.w3.org/2000/svg';
+    function svgEl(svg, tag, attrs, text) {
+        const e = document.createElementNS(SVGNS, tag);
+        Object.keys(attrs).forEach(function (k) { e.setAttribute(k, attrs[k]); });
+        if (text !== undefined) e.textContent = text;
+        svg.appendChild(e);
+        return e;
+    }
+    // axes like CypCut's: 0..100 speed %, value % in steps of `ystep`; tags = the curves to draw
+    function drawChart(svg, tags, yLabel, ystep, onClick) {
+        const vb = svg.viewBox.baseVal, L = 34, T = 22, R = vb.width - 12, B = vb.height - 26;
+        while (svg.firstChild) svg.removeChild(svg.firstChild);
+        const X = function (x) { return L + (R - L) * x / 100; }, Y = function (y) { return B - (B - T) * y / 100; };
+        for (let i = 10; i <= 100; i += 10) {
+            svgEl(svg, 'line', {x1: X(i), y1: T, x2: X(i), y2: B, stroke: '#aaa', 'stroke-dasharray': '4 3'});
+            svgEl(svg, 'text', {x: X(i), y: B + 15, 'font-size': 11, 'text-anchor': 'middle', fill: '#333'}, i);
+        }
+        for (let i = ystep; i <= 100; i += ystep) {
+            svgEl(svg, 'line', {x1: L, y1: Y(i), x2: R, y2: Y(i), stroke: '#aaa', 'stroke-dasharray': '4 3'});
+            svgEl(svg, 'text', {x: L - 6, y: Y(i) + 4, 'font-size': 11, 'text-anchor': 'end', fill: '#333'}, i);
+        }
+        svgEl(svg, 'text', {x: L - 6, y: B + 15, 'font-size': 11, 'text-anchor': 'end', fill: '#333'}, 0);
+        svgEl(svg, 'line', {x1: L, y1: B, x2: R + 6, y2: B, stroke: '#000', 'stroke-width': 2});
+        svgEl(svg, 'line', {x1: L, y1: B, x2: L, y2: T - 10, stroke: '#000', 'stroke-width': 2});
+        svgEl(svg, 'text', {x: R, y: B - 6, 'font-size': 11, 'text-anchor': 'end', fill: '#000'}, 'Speed(%)');
+        if (yLabel) svgEl(svg, 'text', {x: L + 4, y: T - 8, 'font-size': 11, fill: '#000'}, yLabel);
+        tags.forEach(function (t) {
+            const pts = CURVES[t][1];
+            if (!pts.length) return;
+            const all = [[0, pts[0][1]]].concat(pts, [[100, pts[pts.length - 1][1]]]);
+            svgEl(svg, 'polyline', {points: all.map(function (p) { return X(p[0]) + ',' + Y(p[1]); }).join(' '),
+                                    fill: 'none', stroke: COLOR[t], 'stroke-width': 1.5});
+            pts.forEach(function (p) { svgEl(svg, 'circle', {cx: X(p[0]), cy: Y(p[1]), r: 3.5, fill: '#fff', stroke: '#1a3fd6'}); });
+        });
+        if (onClick) {
+            svg.onclick = function (ev) {
+                const pt = svg.createSVGPoint();
+                pt.x = ev.clientX; pt.y = ev.clientY;
+                const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+                const x = (p.x - L) / (R - L) * 100, y = (B - p.y) / (B - T) * 100;
+                if (x >= 0 && x <= 100 && y >= 0 && y <= 100) onClick(Math.round(x * 100) / 100, Math.round(y * 100) / 100);
+            };
+        }
+    }
+    const main = document.getElementById('curveMain');
+    function drawMain() {
+        drawChart(main, Object.keys(CURVES).filter(function (t) { return CURVES[t][0]; }), '', 20);
+    }
+    form.querySelectorAll('[data-curve-use]').forEach(function (cb) {
+        const t = cb.dataset.curveUse;
+        cb.checked = !!CURVES[t][0];
+        cb.addEventListener('change', function () { CURVES[t][0] = cb.checked; drawMain(); refresh(); });
+    });
+    drawMain();
+    // the editor works on a copy; OK takes it, Cancel drops it
+    const dlg = document.getElementById('curveDlg'), body = document.getElementById('curveBody');
+    const big = document.getElementById('curveBig'), rowsEl = document.getElementById('cRows');
+    let work = null, tab = 'PwmRatioFunc', sel = -1;
+    const NAME = {PwmRatioFunc: 'Power', PwmFreqFunc: 'Frequency'};
+    function sortWork() { work[tab].sort(function (a, b) { return a[0] - b[0]; }); }
+    function render() {
+        document.querySelectorAll('[data-ctab]').forEach(function (b) { b.classList.toggle('on', b.dataset.ctab === tab); });
+        body.classList.toggle('freq', tab === 'PwmFreqFunc');
+        document.getElementById('cValHead').textContent = NAME[tab];
+        document.getElementById('cCopyText').textContent = tab === 'PwmRatioFunc' ? 'Copy to frequency' : 'Copy to power';
+        rowsEl.innerHTML = '';
+        work[tab].forEach(function (p, i) {
+            const tr = document.createElement('tr');
+            if (i === sel) tr.className = 'sel';
+            [0, 1].forEach(function (j) {
+                const td = document.createElement('td'), inp = document.createElement('input');
+                inp.type = 'text';
+                inp.value = p[j].toFixed(2) + '%';
+                inp.addEventListener('focus', function () { sel = i; rowsEl.querySelectorAll('tr').forEach(function (r, k) { r.classList.toggle('sel', k === i); }); });
+                inp.addEventListener('change', function () {
+                    const v = parseFloat(inp.value);
+                    if (isFinite(v) && v >= 0 && v <= 100) p[j] = v;
+                    sortWork(); render();
+                });
+                td.appendChild(inp);
+                tr.appendChild(td);
+            });
+            rowsEl.appendChild(tr);
+        });
+        const saved = CURVES[tab];
+        CURVES[tab] = [true, work[tab]];
+        drawChart(big, [tab], NAME[tab] + '(%)', 10, function (x, y) { work[tab].push([x, y]); sortWork(); render(); });
+        CURVES[tab] = saved;
+    }
+    document.getElementById('curveEdit').addEventListener('click', function () {
+        work = {};
+        Object.keys(CURVES).forEach(function (t) { work[t] = CURVES[t][1].map(function (p) { return p.slice(); }); });
+        sel = -1;
+        render();
+        dlg.showModal();
+    });
+    document.querySelectorAll('[data-ctab]').forEach(function (b) { b.addEventListener('click', function () { tab = b.dataset.ctab; sel = -1; render(); }); });
+    document.getElementById('cAdd').addEventListener('click', function () {
+        const pts = work[tab], last = pts.length ? pts[pts.length - 1] : [0, 100];
+        pts.push([Math.min(100, last[0] + 10), last[1]]);
+        sortWork(); render();
+    });
+    document.getElementById('cDel').addEventListener('click', function () {
+        if (sel >= 0) { work[tab].splice(sel, 1); sel = -1; render(); }
+    });
+    document.getElementById('cClear').addEventListener('click', function () { work[tab] = []; sel = -1; render(); });
+    document.getElementById('cCopy').addEventListener('click', function () {
+        const other = tab === 'PwmRatioFunc' ? 'PwmFreqFunc' : 'PwmRatioFunc';
+        work[other] = work[tab].map(function (p) { return p.slice(); });
+    });
+    document.getElementById('cOk').addEventListener('click', function () {
+        Object.keys(work).forEach(function (t) {
+            CURVES[t][1] = work[t];
+            if (!work[t].length) CURVES[t][0] = false;
+        });
+        form.querySelectorAll('[data-curve-use]').forEach(function (cb) { cb.checked = !!CURVES[cb.dataset.curveUse][0]; });
+        dlg.close(); drawMain(); refresh();
+    });
+    dlg.querySelectorAll('[data-curve-cancel]').forEach(function (b) { b.addEventListener('click', function () { dlg.close(); }); });
+    form.addEventListener('submit', function () {
+        const out = {};
+        curveDirty().forEach(function (t) { out[t] = CURVES[t]; });
+        document.getElementById('tpCurves').value = JSON.stringify(out);
     });
     const q = document.getElementById('tpSearch');
     q.addEventListener('input', function () {
@@ -76,9 +618,9 @@
         document.querySelectorAll('[data-group]').forEach(function (g) {
             let any = false;
             g.querySelectorAll('[data-param]').forEach(function (p) {
-                const show = !t || p.dataset.param.indexOf(t) !== -1;
-                p.hidden = !show;
-                any = any || show;
+                const showIt = !t || p.dataset.param.indexOf(t) !== -1;
+                p.hidden = !showIt;
+                any = any || showIt;
             });
             g.hidden = !any;
         });

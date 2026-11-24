@@ -124,6 +124,30 @@ Other groups seen in our files (kept whole, not as fields): `LeadLineParam`, `La
 `Knot` points), `MaterialParams[MaterialName, NozzleSpec, Thickness]` (the nozzle). CamParams itself carries slow
 lead/end, flash-cut, cut gap, compensation and cool-down values.
 
+CypCut's "Layer Parameter Settings" dialog -> the file (checked against the program, 2026-11-25):
+
+| Tab / field | Attribute |
+|---|---|
+| Cut: Cut speed (mm/min) | `CamParams[WorkSpeed]` x 60 |
+| Nozzle height, Gas type, Gas pressure, Focus pos, Beam width | `Cut[Height, GasType, GasPressure, Focus, BeamSize]` |
+| Peak power (%), Actual power (W) | `Cut[LaserCurrent]`, `Cut[PeakPower]` (= full power x %) |
+| Duty cycle (%), Pulse freq | `Cut[PwmRatio]` x 100, `Cut[PwmFreq]` |
+| LaserOn delay / Laser off delay (ms) | `Cut[TimeStay]` / `CamParams[DelayBeforeLaserOff]` |
+| Slow start Length / Speed; Refinemen duty / freq | `CamParams[SlowLeadLength, SlowLeadSpeed x 60]`; `SlowLeadExt[Enable, Ratio x 100, Freq]` |
+| Slow stop Distance / Speed; Refinemen; Smart Lase | `CamParams[SlowEndLength, SlowEndSpeed x 60]`; `SlowEndExt[...]`; `SmartEndTech[SmartEndEn]` |
+| Enable precision, LPF, Cutting acc (G), Curve / Corner precision | `LayerCutParams[Enable, FirFreq, WorkAcc x 0.0001, ArcTolerance, CornerTolerance]` |
+| Power curve / Frequency curve | `PwmRatioFunc` / `PwmFreqFunc`: `Knot[X = speed %, Y = %]`, first and last knot written 4 times, `NormalS`, `NormalE`, `Bound`; used while `<Material DefPwmRatioFunc / DefPwmFreqFunc="false">` |
+| Pierce: No Pierce / 1-3 Stage | `CamParams[PierceStepCount]` |
+| Pierce mode, Pierce time (top), height, gas, pressure, power, duty, freq, beam, focus, EndPt focus, Pierce time (lower), Gas blow, Gas type, Pressure | `PierceN[PierceMode, TimeFollow, Height, GasType, GasPressure, LaserCurrent / PeakPower, PwmRatio x 100, PwmFreq, BeamSize, Focus, FocusEnd, TimeStay, TimeBlow, BlowGasType, BlowGasPressure]` |
+| Corner: Vibration suppress, Thin / Thick sheet suppress | `CamParams[UseShakeRes, ShaleResMs, ShakeResLv]` |
+| Leadline: Cut speed, Duty, Freq, Lead height, Stable distance, Lead circle speed | `LeadLineParam[LeadDecSpd x 60, PwmRatio x 100, PwmFreq, LeadCutH, LeadDecLen, LeadHoleSpd x 60]` |
+| Corner QCW: enable, speed, duty, freq, angle, dis before / after | `CornerParams[Enable, Speed x 60, PwmRatio x 100, PwmFreq, Angle, CornerLen, CornerLen1]` |
+| Use MJ Length: MicroJoint | `CamParams[MicroLen]` |
+
+Not located yet: the top flags (Smooth Pierce, Pre-pierce, Defilm, Recool, Blow, Not cut, Not follow, Mode), the Slow
+start / Slow stop / Leadline / Lead Down / Lead Circle / Use MJ Length switches (probably bits of `PierceFlags` /
+`LeadLineParam[Flags]`), Self / Custom config, Smooth MicroJoint and its root ratio.
+
 A layer loaded from a CypCut library technology keeps its file name as a `<MaterialName>` child of the `Channel`
 ("8mm1.2d1.5d_D.fsm" - thickness, nozzles, after "_" the user's own suffix); CypCut overwrites the layer's own
 `MaterialParams` with the document's material / thickness / nozzle, so the library name is the only per-layer

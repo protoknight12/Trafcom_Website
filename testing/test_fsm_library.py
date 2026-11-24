@@ -403,6 +403,54 @@ def test_all_params_editable(s):
     assert _login('fsm_worker').get(url).status_code == 302
 
 
+def test_curve_round_trip():
+    """Speed curves: knots padded x4 at the ends like CypCut, read back without the padding, use flag on <Material>."""
+    raw = [['@', dict(fscut.FSM_ROOT_ATTRS), ''], ['CamParams', {'WorkSpeed': '45'}, ''], ['PwmFreqFunc', {}, ''],
+           ['PwmRatioFunc', {}, '']]
+    assert fscut.curve_points(raw, 'PwmRatioFunc') == (False, [])
+    raw = fscut.raw_with_curve(raw, 'PwmRatioFunc', True, [[80, 100], [10, 80]])
+    assert fscut.curve_points(raw, 'PwmRatioFunc') == (True, [[10, 80], [80, 100]])
+    xml = fscut.fsm_xml({'raw': raw}).decode()
+    assert 'DefPwmRatioFunc="false"' in xml and '<PwmRatioFunc KnotCount="8" SmoothType="0">' in xml
+    assert xml.count('<Knot X="10" Y="80"/>') == 4 and '<PwmFreqFunc/>' in xml
+    raw = fscut.raw_with_curve(raw, 'PwmRatioFunc', False, [])
+    assert fscut.curve_points(raw, 'PwmRatioFunc') == (False, []) and not any('Knot' in r[0] for r in raw)
+
+
+def test_params_page_cypcut_tabs_curves_and_note(s):
+    """The CypCut-style page: Cut / Pierce / Corner tabs on the file's attributes (shown x factor), a curve and the
+    note are saved."""
+    import json as _json
+    laser = Machine(name='PG3015 TABS', is_laser=True)
+    db.session.add(laser)
+    db.session.flush()
+    hall = HallMachine(name=laser.name, machine_id=laser.id)
+    db.session.add_all([hall, MaterialGrade(name='Стомана')])
+    db.session.commit()
+    c = _login('fsm_admin')
+    c.post(f'/admin/hall/{hall.id}/cut-tech/import', data={'file': [(io.BytesIO(_fsm()), '8mmCS-D1.2-O2.fsm')]},
+           content_type='multipart/form-data')
+    t = MachineCutTechnology.query.filter_by(machine_id=laser.id).one()
+    url = f'/admin/hall/{hall.id}/cut-tech/{t.id}/params'
+    page = c.get(url).get_data(as_text=True)
+    assert 'data-tab="pierce"' in page and 'data-tab="corner"' in page and 'Layer Parameter Settings' in page
+    assert f'value="{t.cutting_speed_mm_per_min:g}"' in page          # Cut speed in mm/min (WorkSpeed x 60)
+    r = c.post(url, data={'changes': '[]', 'note': 'Тест бележка',
+                          'curves': _json.dumps({'PwmFreqFunc': [True, [[10, 50], [80, 100]]]})}, follow_redirects=True)
+    assert 'Параметрите са записани (2 промени)' in r.get_data(as_text=True)
+    db.session.expire_all()
+    t = db.session.get(MachineCutTechnology, t.id)
+    assert t.note == 'Тест бележка'
+    assert fscut.curve_points(_json.loads(t.params_json), 'PwmFreqFunc') == (True, [[10, 50], [80, 100]])
+    xml = zipfile.ZipFile(io.BytesIO(c.get(f'/admin/hall/{hall.id}/cut-tech/{t.id}/fsm').data)).read(
+        'material.lcm', pwd=PW.encode()).decode()
+    assert 'DefPwmFreqFunc="false"' in xml and '<Knot X="80" Y="100"/>' in xml and 'Тест бележка' in xml
+    c.post(url, data={'changes': '[]', 'curves': _json.dumps({'PwmFreqFunc': [True, [[10, 500]]]})})
+    db.session.expire_all()
+    assert fscut.curve_points(_json.loads(db.session.get(MachineCutTechnology, t.id).params_json),
+                              'PwmFreqFunc') == (True, [[10, 50], [80, 100]])
+
+
 def test_params_page_keeps_columns_changed_without_the_tree(s):
     """A column changed without the tree (a data step) wins: the page shows it and saving keeps it."""
     import json as _json
