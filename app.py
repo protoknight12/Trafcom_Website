@@ -10922,13 +10922,30 @@ def _tech_full_raw(tech):
     return _tech_raw(tech) or _tech_template_raw(tech)
 
 
+def _tech_tree(tech, raw):
+    """The tree as we keep it: the technology's fields written in (fscut.raw_with_fields), nothing Chinese, and
+    MaterialParams = the technology's own Вид name, nozzle and thickness (owner, 2026-11-25: a copied file kept the
+    source's) - so the stored tree, the columns and an exported file agree."""
+    rows = fscut.raw_no_chinese(fscut.raw_with_fields(raw, _tech_columns_dict(tech), tech.cutting_speed_mm_per_min,
+                                                      tech.gas))
+    mp = next((r for r in rows if r[0] == 'MaterialParams'), None)
+    if mp is None:
+        mp = ['MaterialParams', {'MaterialID': '0'}, '']
+        rows.append(mp)
+    grade = tech.grade or (db.session.get(MaterialGrade, tech.grade_id) if tech.grade_id else None)   # new row: not loaded
+    if grade:
+        mp[1]['MaterialName'] = grade.name
+    mp[1]['NozzleSpec'] = tech.nozzle or ''
+    mp[1]['Thickness'] = fscut._num(tech.thickness_mm)
+    return rows
+
+
 def _tech_raw_from_columns(tech):
-    """After the fields were edited: write them into the stored parameter tree too (fscut.raw_with_fields), so the
-    tree - every parameter of the file - and the columns agree. A technology without a tree gets a template's."""
+    """After the fields were edited: write them into the stored parameter tree too (_tech_tree), so the tree -
+    every parameter of the file - and the columns agree. A technology without a tree gets a template's."""
     raw = _tech_full_raw(tech)
     if raw:
-        tech.params_json = json.dumps(fscut.raw_no_chinese(fscut.raw_with_fields(
-            raw, _tech_columns_dict(tech), tech.cutting_speed_mm_per_min, tech.gas)), ensure_ascii=False)
+        tech.params_json = json.dumps(_tech_tree(tech, raw), ensure_ascii=False)
 
 
 # The first line of a technology's note says where it comes from (owner, 2026-11-24)
@@ -10974,8 +10991,7 @@ def admin_hall_cut_tech_params(machine_id, tech_id):
     hm = HallMachine.query.get_or_404(machine_id)
     tech = MachineCutTechnology.query.filter_by(id=tech_id, machine_id=hm.machine_id).first_or_404()
     # the columns written into the tree first: a column changed without the tree (a data step, an old edit) wins
-    raw = fscut.raw_no_chinese(fscut.raw_with_fields(_tech_full_raw(tech), _tech_columns_dict(tech),
-                                                     tech.cutting_speed_mm_per_min, tech.gas))
+    raw = _tech_tree(tech, _tech_full_raw(tech))
     if request.method == 'POST':
         try:
             changes = json.loads(request.form.get('changes') or '[]')
@@ -11005,10 +11021,10 @@ def admin_hall_cut_tech_params(machine_id, tech_id):
         if ch is None:
             flash('Параметрите нямат CamParams - не са записани.', 'danger')
             return redirect(url_for('admin_hall_cut_tech_params', machine_id=hm.id, tech_id=tech.id))
-        tech.params_json = json.dumps(raw, ensure_ascii=False)
         tech.cutting_speed_mm_per_min, tech.pierce_time_sec = ch['speed_mm_min'], ch['pierce_time_sec']
         for col, v in ch['fields'].items():
             setattr(tech, col, tech.gas if col.endswith('_gas') and v == ch['gas'] else v)
+        tech.params_json = json.dumps(_tech_tree(tech, raw), ensure_ascii=False)
         db.session.commit()
         log_action(f'Технология на "{hm.name}" - параметри от файла: {_cut_tech_label(tech)}',
                    details='\n'.join(f'{raw[int(i)][0]} {a} = {v}' for i, a, v in changes)[:4000])
@@ -16764,7 +16780,7 @@ def _save_channel_technology(machine, grade_id, thickness, nozzle, ch, source, g
     tech.cutting_speed_mm_per_min, tech.pierce_time_sec = ch['speed_mm_min'], ch['pierce_time_sec']
     for col, v in ch['fields'].items():
         setattr(tech, col, gas if col.endswith('_gas') and v == ch['gas'] else v)
-    tech.params_json = json.dumps(fscut.raw_no_chinese(ch['raw']), ensure_ascii=False)
+    tech.params_json = json.dumps(_tech_tree(tech, ch['raw']), ensure_ascii=False)
     tech.source = (source or '')[:255] or None
     if ch.get('note'):                  # the file's <Note>; a file without one keeps the note written here
         tech.note = fscut._no_chinese(ch['note'])[:2000] or None

@@ -514,3 +514,33 @@ def test_full_trees_no_chinese_and_origin_step(s):
     apply()
     db.session.commit()
     assert db.session.get(MachineCutTechnology, prop.id).note.count('[Генерирана') == 1
+
+
+def test_material_params_follow_the_technology(s):
+    """The stored tree's MaterialParams = the technology's Вид name, nozzle, thickness: on import (the file says
+    "硅钢", "默认", 3) and by data_tech_material_params for trees that kept a source's values."""
+    import json as _json
+    from migration.data_tech_material_params import apply
+    laser = Machine(name='PG3015 MP', is_laser=True)
+    db.session.add(laser)
+    db.session.flush()
+    hall = HallMachine(name=laser.name, machine_id=laser.id)
+    steel = MaterialGrade(name='Стомана')
+    db.session.add_all([hall, steel])
+    db.session.commit()
+    c = _login('fsm_admin')
+    c.post(f'/admin/hall/{hall.id}/cut-tech/import', data={'grade_id': steel.id, 'file': [
+        (io.BytesIO(_fsm()), '8mmCS-D1.2-O2.fsm')]}, content_type='multipart/form-data')
+    t = MachineCutTechnology.query.filter_by(machine_id=laser.id).one()
+
+    def mp(tech):
+        return next(a for p, a, _ in _json.loads(tech.params_json) if p == 'MaterialParams')
+    assert (mp(t)['MaterialName'], mp(t)['NozzleSpec'], mp(t)['Thickness']) == ('Стомана', '1.2d', '8')
+    raw = _json.loads(t.params_json)
+    next(a for p, a, _ in raw if p == 'MaterialParams').update({'NozzleSpec': '1.6sp', 'Thickness': '20'})
+    t.params_json = _json.dumps(raw, ensure_ascii=False)
+    db.session.commit()
+    assert apply() == 1
+    db.session.commit()
+    t = db.session.get(MachineCutTechnology, t.id)
+    assert (mp(t)['NozzleSpec'], mp(t)['Thickness']) == ('1.2d', '8') and apply() == 0
