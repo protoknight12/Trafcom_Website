@@ -17151,35 +17151,19 @@ def _tech_target_file(tech):
     if not tech.folder_file:
         return None
     rel, _, name = tech.folder_file.rpartition('\\')
-    new = _fsm_name_with_nozzle(name, tech.nozzle)
-    return f'{rel}\\{new}' if rel else new
+    if rel.split('\\')[0] == TECH_FOLDER_EXPORT:      # our own file: named by our rule, nozzle included
+        return f'{rel}\\{_fsm_name(tech)}'
+    # the machine's original files are never written (owner, 2026-11-25): ours goes into Trafcom\<Вид> <газ>\
+    return f'{TECH_FOLDER_EXPORT}\\{_tech_export_folder(tech)}\\{_fsm_name(tech)}'
 
 
-def _fsm_name_with_nozzle(name, nozzle):
-    """The file name with only its nozzle part replaced (owner, 2026-11-24: the rest of the name stays the file's):
-    "8mm1.2d1.5d.fsm" + "1.4d" -> "8mm1.4d.fsm", "8mmCS-D1.2-O2.fsm" + "1.4d" -> "8mmCS-D1.4-O2.fsm". The name
-    unchanged when it already carries that nozzle or its nozzle part is not found."""
-    _mm, old = fscut.library_name_parts(name)
-    if not old or (old or '').lower() == (nozzle or '').lower():
-        return name
-    olds = old.split('/')
-    news = [p for p in (nozzle or '').split('/') if p]
-    parts = [re.fullmatch(r'(\d+(?:\.\d+)?)([A-Za-z]+)', p) for p in olds]
-    if not news or not all(parts):
-        return name
-    styles = (('', lambda n, t: n + t),                       # our own library: "1.2d1.5d"
-              ('-', lambda n, t: t.upper() + n))              # the maker's: "D1.2-D1.5"
-    for sep, fmt in styles:
-        old_txt = sep.join(fmt(m.group(1), m.group(2)) for m in parts)
-        at = name.lower().find(old_txt.lower())
-        if at == -1:
-            continue
-        new_parts = [re.fullmatch(r'(\d+(?:\.\d+)?)([A-Za-z]+)', p) for p in news]
-        if not all(new_parts):
-            return name
-        new_txt = sep.join(fmt(m.group(1), m.group(2) if sep == '' else m.group(2)) for m in new_parts)
-        return name[:at] + new_txt + name[at + len(old_txt):]
-    return name
+def _tech_export_folder(tech):
+    return re.sub(r'[\\/:*?"<>|]+', '_', f'{tech.grade.name if tech.grade else "без вид"} '
+                                         f'{CUT_GASES.get(tech.gas, "без газ")}')
+
+
+def _in_export_folder(rel_file):
+    return (rel_file or '').split('\\')[0] == TECH_FOLDER_EXPORT
 
 
 def _tech_app_xml(tech, mc):
@@ -17265,7 +17249,8 @@ def _tech_push(tech, mc):
     _tech_folder_write(mc, t_rel, t_name, fscut._zipcrypto(fscut.FSM_MEMBER, xml, FSCUT_FSM_PASSWORD))
     old = None
     if target != tech.folder_file:
-        _tech_folder_remove(mc, rel, name)
+        if _in_export_folder(tech.folder_file):       # only our own old file is removed, never the machine's
+            _tech_folder_remove(mc, rel, name)
         old = tech.folder_file
     _tech_folder_link(tech, mc, target, xml)
     return old
@@ -17286,7 +17271,8 @@ def tech_folder_push_all(mc):
         if state == 'same':
             out['same'] += 1
             continue
-        out['renamed'] += bool(_tech_push(t, mc))
+        old = _tech_push(t, mc)
+        out['renamed'] += bool(old and _in_export_folder(old))     # moved off a machine original: not a rename
         db.session.commit()
         out['written'] += 1
     return out

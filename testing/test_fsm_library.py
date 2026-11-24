@@ -320,15 +320,18 @@ def test_folder_sync_both_ways(s, monkeypatch):
     db.session.commit()
     assert c.get(status).get_json() == {str(t.id): 'app'}
     c.post(f'/admin/hall/{hall.id}/cut-tech/{t.id}/folder/push')
-    assert fscut.read_fsm(disk['steel']['8mm1.2d1.5d.fsm'], PW, 'x.fsm')['focus_mm'] == 13.5
+    # the machine's original is never written: ours goes into Trafcom\ and the technology follows it
+    assert fscut.read_fsm(disk['steel']['8mm1.2d1.5d.fsm'], PW, 'x.fsm')['focus_mm'] == 12
+    ours = disk['Trafcom\\Стомана Кислород']['8mmCS-D1.2-D1.5-O2.fsm']
+    assert fscut.read_fsm(ours, PW, 'x.fsm')['focus_mm'] == 13.5
     assert c.get(status).get_json() == {str(t.id): 'same'}
 
     t = db.session.get(MachineCutTechnology, t.id)
     t.focus_mm = 14
     db.session.commit()
-    disk['steel']['8mm1.2d1.5d.fsm'] = _fsm(speed=40, focus=11)
+    disk['Trafcom\\Стомана Кислород']['8mmCS-D1.2-D1.5-O2.fsm'] = _fsm(speed=40, focus=11)
     assert c.get(status).get_json() == {str(t.id): 'both'}
-    del disk['steel']['8mm1.2d1.5d.fsm']
+    del disk['Trafcom\\Стомана Кислород']['8mmCS-D1.2-D1.5-O2.fsm']
     assert c.get(status).get_json() == {str(t.id): 'missing'}
     assert c.get(status + f'?tech={t.id + 99}').get_json() == {}
 
@@ -339,7 +342,7 @@ def test_folder_sync_both_ways(s, monkeypatch):
     db.session.commit()
     c.post(f'/admin/hall/{hall.id}/cut-tech/folder/export')
     db.session.expire_all()
-    assert 'Trafcom\\Стомана Кислород' in disk and '8mm1.2d1.5d.fsm' not in disk['steel']
+    assert 'Trafcom\\Стомана Кислород' in disk and '8mm1.2d1.5d.fsm' in disk['steel']        # original untouched
     assert db.session.get(MachineCutTechnology, other.id).folder_file == 'Trafcom\\Стомана Кислород\\10mmCS-D1.2-O2.fsm'
     assert c.get(status).get_json()[str(other.id)] == 'same'
 
@@ -425,15 +428,10 @@ def test_params_page_keeps_columns_changed_without_the_tree(s):
 
 def test_our_file_settings_and_nozzle_in_name(s, monkeypatch):
     """Our .fsm: MaterialName = the file name, MaterialPath = the folder it goes to ('' for a download),
-    MaterialParams = our Вид name + the nozzle + thickness, nothing Chinese; a changed nozzle changes only the nozzle
-    part of the name and "Обнови файла" renames the file in the folder."""
+    MaterialParams = our Вид name + the nozzle + thickness, nothing Chinese. The machine's original files are never
+    written: "Обнови файла" writes ours into Trafcom\\<Вид> <газ>\\, named by our rule; a changed nozzle there renames
+    our file (the old one of ours removed)."""
     import re as _re
-    from app import _fsm_name_with_nozzle
-    assert _fsm_name_with_nozzle('8mm1.2d1.5d.fsm', '1.4d') == '8mm1.4d.fsm'
-    assert _fsm_name_with_nozzle('8mmCS-D1.2-O2.fsm', '1.4d') == '8mmCS-D1.4-O2.fsm'
-    assert _fsm_name_with_nozzle('10mm SS-N2 S4.fsm', '5s') == '10mm SS-N2 S5.fsm'
-    assert _fsm_name_with_nozzle('8mm1.2d1.5d_D.fsm', '1.2d/1.5d') == '8mm1.2d1.5d_D.fsm'
-    assert _fsm_name_with_nozzle('custom.fsm', '1.4d') == 'custom.fsm'
     from cryptography.fernet import Fernet
     fernet = Fernet(Fernet.generate_key())
     monkeypatch.setattr(app_module, '_network_api_fernet', lambda: fernet)
@@ -457,19 +455,26 @@ def test_our_file_settings_and_nozzle_in_name(s, monkeypatch):
     assert '<MaterialName>8mmCS-D1.2-D1.5-O2.fsm</MaterialName>' in xml and '<MaterialPath/>' in xml and ' />' not in xml
     assert 'MaterialName="Стомана"' in xml and 'NozzleSpec="1.2d/1.5d"' in xml and 'Thickness="8"' in xml
     assert not _re.search(r'[一-鿿]', xml)
-    # nozzle changed here -> "Обнови файла" writes 8mm1.4d.fsm and removes the old one
+    # nozzle changed here -> ours written into Trafcom\, the machine's original untouched
+    ours = 'Trafcom\\Стомана Кислород'
     t.nozzle = '1.4d'
     db.session.commit()
     assert c.get(f'/admin/hall/{hall.id}/cut-tech/folder/status').get_json() == {str(t.id): 'app'}
     c.post(f'/admin/hall/{hall.id}/cut-tech/{t.id}/folder/push')
-    assert sorted(disk['steel']) == ['8mm1.4d.fsm']
+    assert sorted(disk['steel']) == ['8mm1.2d1.5d.fsm'] and sorted(disk[ours]) == ['8mmCS-D1.4-O2.fsm']
     db.session.expire_all()
     t = db.session.get(MachineCutTechnology, t.id)
-    assert t.folder_file == 'steel\8mm1.4d.fsm'
-    xml = fscut.fsm_xml_of(disk['steel']['8mm1.4d.fsm'], PW).decode()
-    assert '<MaterialName>8mm1.4d.fsm</MaterialName>' in xml and ('<MaterialPath>' + UNC + '\steel\</MaterialPath>') in xml
+    assert t.folder_file == ours + '\\8mmCS-D1.4-O2.fsm'
+    xml = fscut.fsm_xml_of(disk[ours]['8mmCS-D1.4-O2.fsm'], PW).decode()
+    assert '<MaterialName>8mmCS-D1.4-O2.fsm</MaterialName>' in xml
+    assert ('<MaterialPath>' + UNC + '\\' + ours + '\\</MaterialPath>') in xml
     assert 'NozzleSpec="1.4d"' in xml and not _re.search(r'[一-鿿]', xml)
     assert c.get(f'/admin/hall/{hall.id}/cut-tech/folder/status').get_json() == {str(t.id): 'same'}
+    # nozzle changed again: our own file is renamed, the old one of ours removed
+    t.nozzle = '1.6d'
+    db.session.commit()
+    c.post(f'/admin/hall/{hall.id}/cut-tech/{t.id}/folder/push')
+    assert sorted(disk[ours]) == ['8mmCS-D1.6-O2.fsm'] and sorted(disk['steel']) == ['8mm1.2d1.5d.fsm']
 
 
 def test_full_trees_no_chinese_and_origin_step(s):
@@ -573,15 +578,30 @@ def test_push_all_files(s, monkeypatch):
     c = _login('fsm_admin')
     c.post(f'/admin/hall/{hall.id}/cut-tech/folder/import', data={'use_1': '1', 'rel_1': 'steel', 'grade_1': steel.id})
     by = {t.thickness_mm: t for t in MachineCutTechnology.query.filter_by(machine_id=laser.id)}
-    by[8].nozzle = '1.4d'                                          # changed here, renamed
+    by[8].nozzle = '1.4d'                                          # changed here
     by[10].focus_mm = 10.5                                         # changed here
     db.session.commit()
     disk['steel']['12mm1.2d1.5d.fsm'] = _fsm(speed=29, focus=13)   # changed on the machine
     r = c.post(f'/admin/hall/{hall.id}/cut-tech/folder/push-all', follow_redirects=True)
     page = r.get_data(as_text=True)
-    assert 'Обновени файлове: 2 (преименувани 1)' in page and '12mm1.2d1.5d.fsm' in page
-    assert sorted(disk['steel']) == ['10mm1.2d1.5d.fsm', '12mm1.2d1.5d.fsm', '8mm1.4d.fsm']
-    assert fscut.read_fsm(disk['steel']['10mm1.2d1.5d.fsm'], PW, 'x.fsm')['focus_mm'] == 10.5
+    assert 'Обновени файлове: 2 (преименувани 0)' in page and '12mm1.2d1.5d.fsm' in page
+    # the machine's originals untouched; ours in Trafcom\
+    assert sorted(disk['steel']) == ['10mm1.2d1.5d.fsm', '12mm1.2d1.5d.fsm', '8mm1.2d1.5d.fsm']
+    ours = disk['Trafcom\\Стомана Кислород']
+    assert sorted(ours) == ['10mmCS-D1.2-D1.5-O2.fsm', '8mmCS-D1.4-O2.fsm']
+    assert fscut.read_fsm(ours['10mmCS-D1.2-D1.5-O2.fsm'], PW, 'x.fsm')['focus_mm'] == 10.5
     assert fscut.read_fsm(disk['steel']['12mm1.2d1.5d.fsm'], PW, 'x.fsm')['focus_mm'] == 13      # machine's kept
     st = c.get(f'/admin/hall/{hall.id}/cut-tech/folder/status').get_json()
     assert sorted(st.values()) == ['file', 'same', 'same']
+
+
+def test_our_file_without_nozzle_gets_renamed():
+    """A file in our Trafcom\ folder is named by our rule: "3mmAL-N2.fsm" (no nozzle) + nozzle 2.0s -> the name
+    with the nozzle; a technology linked to a machine original belongs in Trafcom\\ (the original is never written)."""
+    from types import SimpleNamespace as NS
+    from app import _tech_target_file
+    t = NS(folder_file=r'Trafcom\Алуминий Азот\3mmAL-N2.fsm', nozzle='2.0s', thickness_mm=3, gas='nitrogen',
+           grade=NS(name='Алуминий'))
+    assert _tech_target_file(t) == r'Trafcom\Алуминий Азот\3mmAL-S2.0-N2.fsm'
+    t.folder_file = r'al\3mgern.fsm'
+    assert _tech_target_file(t) == r'Trafcom\Алуминий Азот\3mmAL-S2.0-N2.fsm'
