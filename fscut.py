@@ -415,6 +415,7 @@ def _technology(tech_el):
             'gas_pressure_bar': fields['gas_pressure_bar'], 'power_w': fields['peak_power_w'],
             'focus_mm': fields['focus_mm'], 'height_mm': fields['height_mm'],
             'pierce_time_sec': round(pierce_ms / 1000, 3) if pierce_ms else None,
+            'note': (ch.findtext('Note') or '').strip() or None,       # .fsm <Note>: the technology's particulars
             'nozzle': (None if (mp.get('NozzleSpec') or '').strip() in NOZZLE_DEFAULT
                        else (mp.get('NozzleSpec') or '').strip() or None) if mp is not None else None,
             'fields': fields, 'raw': _raw(ch)})
@@ -1841,6 +1842,8 @@ def write_fsm(channel, password, name=None, thickness=None):
             ET.SubElement(el, tag)
     if name:
         el.find('MaterialName').text = name
+    if 'note' in c:                     # the technology's note -> <Note> (empty clears the file's old one)
+        el.find('Note').text = c['note'] or None
     mp = el.find('MaterialParams')
     for k, v in (('MaterialID', '0'), ('MaterialName', ''), ('NozzleSpec', NOZZLE_DEFAULT[0])):
         if mp.get(k) is None:

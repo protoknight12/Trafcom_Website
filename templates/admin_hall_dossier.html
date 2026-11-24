@@ -241,9 +241,10 @@
             {% for gas, techs in by_gas %}{% set gas_node = mm_node ~ 'g' ~ loop.index %}
             <tr class="tree-head tree-l2" data-node="{{ gas_node }}" data-parent="{{ mm_node }}"><td colspan="9"><span class="tree-chevron">▶</span>{{ cut_gases.get(gas, 'без газ') }}<span class="tree-meta">(<span data-sum="n" data-dec="0"></span>)</span></td></tr>
             {% for t in techs %}
-            {% set ct_attrs %}data-parent="{{ gas_node }}" data-grade="{{ g_name }}" data-mm="{{ t.thickness_mm }}" data-gas="{{ t.gas or '-' }}" data-test="{{ 1 if t.needs_test else 0 }}" data-out="{{ 1 if tech_outside[t.id] else 0 }}" data-search="{{ ((t.nozzle or '') ~ ' ' ~ (t.source or 'ръчно'))|lower }}"{% endset %}
+            {% set ct_attrs %}data-parent="{{ gas_node }}" data-grade="{{ g_name }}" data-mm="{{ t.thickness_mm }}" data-gas="{{ t.gas or '-' }}" data-test="{{ 1 if t.needs_test else 0 }}" data-out="{{ 1 if tech_outside[t.id] else 0 }}" data-search="{{ ((t.nozzle or '') ~ ' ' ~ (t.source or 'ръчно') ~ ' ' ~ (t.note or ''))|lower }}"{% endset %}
             <tr class="tree-indent-3" {{ ct_attrs }} data-n="1">
-                <td>{{ t.nozzle or '-' }}{% if tech_outside[t.id] %}
+                <td>{{ t.nozzle or '-' }}{% if t.note %}
+                    <div class="dz-muted" style="white-space:pre-line; max-width:260px;" title="Бележка">📝 {{ t.note }}</div>{% endif %}{% if tech_outside[t.id] %}
                     <div class="alert alert-warning" style="margin:4px 0 0; padding:2px 6px; font-size:0.78rem;" title="{{ tech_outside[t.id] }}">извън границата</div>{% endif %}</td>
                 <td>{{ t.cutting_speed_mm_per_min|num3 if t.cutting_speed_mm_per_min else '-' }}</td>
                 <td>{{ t.pierce_time_sec|num3 if t.pierce_time_sec else '-' }}</td>
@@ -363,6 +364,8 @@
                 <div><label>Скорост (мм/мин)</label><input type="number" name="cutting_speed_mm_per_min" step="0.001" min="0.001"></div>
                 <div><label>Пробиване (сек)</label><input type="number" name="pierce_time_sec" step="0.001" min="0.001"></div>
             </div>
+            <label>Бележка (особености; записва се и в Note на .fsm файла)</label>
+            <textarea name="note" rows="2" maxlength="2000"></textarea>
             {% set ns = namespace(group=None) %}
             {% for col, label, unit, group in tech_cols %}
                 {% if group != ns.group %}{% if ns.group %}</div>{% endif %}<h3 style="margin:14px 0 0; font-size:0.95rem;">{{ group }}</h3><div class="dz-row" style="grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));">{% set ns.group = group %}{% endif %}

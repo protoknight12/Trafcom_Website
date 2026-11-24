@@ -238,3 +238,36 @@ def test_machine_tech_folder(s, monkeypatch):
     r = c.get(f'/admin/hall/{hall.id}/cut-tech/folder', follow_redirects=True)
     assert r.status_code == 200 and 'не е достъпна' in r.get_data(as_text=True)
     assert _login('fsm_worker').get(f'/admin/hall/{hall.id}/cut-tech/folder').status_code == 302
+
+
+def test_note_round_trip(s):
+    """A technology's note = the .fsm <Note>: read on import, edited in the dossier, written on export; a file
+    without a note keeps the one written in the app."""
+    with_note = fscut._zipcrypto(fscut.FSM_MEMBER, MATERIAL.format(speed=45, focus=11, gas=2).replace(
+        '<Note/>', '<Note>бавно в ъглите</Note>').encode(), PW)
+    assert fscut.read_fsm(with_note, PW, '8mmCS-D1.2-O2.fsm')['note'] == 'бавно в ъглите'
+    assert fscut.read_fsm(_fsm(), PW, '8mmCS-D1.2-O2.fsm')['note'] is None
+    laser = Machine(name='PG3015 NOTE', is_laser=True)
+    db.session.add(laser)
+    db.session.flush()
+    hall = HallMachine(name=laser.name, machine_id=laser.id)
+    db.session.add_all([hall, MaterialGrade(name='Стомана')])
+    db.session.commit()
+    c = _login('fsm_admin')
+    url = f'/admin/hall/{hall.id}/cut-tech/import'
+    c.post(url, data={'file': [(io.BytesIO(with_note), '8mmCS-D1.2-O2.fsm')]}, content_type='multipart/form-data')
+    t = MachineCutTechnology.query.filter_by(machine_id=laser.id).one()
+    assert t.note == 'бавно в ъглите'
+    c.post(url, data={'file': [(io.BytesIO(_fsm()), '8mmCS-D1.2-O2.fsm')]}, content_type='multipart/form-data')
+    db.session.expire_all()
+    assert db.session.get(MachineCutTechnology, t.id).note == 'бавно в ъглите'           # empty <Note> keeps ours
+    c.post(f'/admin/hall/{hall.id}/cut-tech', data={'tech_id': t.id, 'thickness_mm': 8, 'gas': 'oxygen',
+                                                   'nozzle': '1.2d', 'cutting_speed_mm_per_min': 2700,
+                                                   'note': 'фокус +13 работи'})
+    db.session.expire_all()
+    t = db.session.get(MachineCutTechnology, t.id)
+    assert t.note == 'фокус +13 работи'
+    assert 'фокус +13 работи' in c.get(f'/admin/hall/{hall.id}/dossier').get_data(as_text=True)
+    out = c.get(f'/admin/hall/{hall.id}/cut-tech/{t.id}/fsm').data
+    xml = zipfile.ZipFile(io.BytesIO(out)).read('material.lcm', pwd=PW.encode()).decode()
+    assert '<Note>фокус +13 работи</Note>' in xml

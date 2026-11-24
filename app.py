@@ -2350,6 +2350,8 @@ class MachineCutTechnology(db.Model):
     source = db.Column(db.String(255), nullable=True)               # file the parameters came from, NULL = by hand
     # a proposed technology not yet proven by a test cut (owner, 2026-11-24); "Работи" in the dossier clears it
     needs_test = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    # particulars of this technology (owner, 2026-11-24) = the <Note> of a CypCut .fsm: read on import, written on export
+    note = db.Column(db.Text, nullable=True)
     for _col, _label, _unit, _group in fscut.tech_columns():        # the FSCUT fields (migrate_add_cut_tech_fscut_fields)
         locals()[_col] = db.Column(db.String(10) if _col.endswith('_gas') else db.Float, nullable=True)
     del _col, _label, _unit, _group
@@ -10704,6 +10706,7 @@ def admin_hall_dossier(machine_id):
     tech_cols = fscut.tech_columns()
     # "Редактирай" fills the technology dialog from these (form_dialog.js data-values); raw = the file's parameters
     tech_values = {t.id: {'tech_id': t.id, 'grade_id': t.grade_id or '', 'gas': t.gas or '', 'nozzle': t.nozzle or '',
+                          'note': t.note or '',
                           'thickness_mm': t.thickness_mm, 'cutting_speed_mm_per_min': t.cutting_speed_mm_per_min or '',
                           'pierce_time_sec': t.pierce_time_sec or '',
                           **{c: ('' if getattr(t, c) is None else getattr(t, c)) for c, *_ in tech_cols}}
@@ -10872,6 +10875,7 @@ def admin_hall_cut_tech_save(machine_id):
     tech.cutting_speed_mm_per_min, tech.pierce_time_sec = values
     for col, v in fields.items():
         setattr(tech, col, v)
+    tech.note = (request.form.get('note') or '').strip()[:2000] or None
     db.session.flush()
     log_action(f'Технология на "{mc.name}": {_cut_tech_label(tech)} - {values[0] or "-"} мм/мин, '
                f'{values[1] or "-"} сек пробиване')
@@ -16620,6 +16624,8 @@ def _save_channel_technology(machine, grade_id, thickness, nozzle, ch, source, g
         setattr(tech, col, gas if col.endswith('_gas') and v == ch['gas'] else v)
     tech.params_json = json.dumps(ch['raw'], ensure_ascii=False)
     tech.source = (source or '')[:255] or None
+    if ch.get('note'):                  # the file's <Note>; a file without one keeps the note written here
+        tech.note = ch['note'][:2000]
     db.session.flush()
     return tech
 
@@ -16957,7 +16963,7 @@ def _tech_channel(tech, detail=None):
         raw = json.loads(tech.params_json) if tech.params_json else []
     except ValueError:
         raw = []
-    return {'raw': raw, 'speed_mm_min': tech.cutting_speed_mm_per_min, 'gas': tech.gas,
+    return {'raw': raw, 'speed_mm_min': tech.cutting_speed_mm_per_min, 'gas': tech.gas, 'note': tech.note or '',
             'fields': {c: getattr(tech, c) for c, *_ in fscut.tech_columns()}}
 
 
