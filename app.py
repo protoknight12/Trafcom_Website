@@ -10902,14 +10902,56 @@ def _tech_columns_dict(tech):
     return {c: getattr(tech, c) for c, *_ in fscut.tech_columns()}
 
 
+def _tech_template_raw(tech):
+    """The full parameter tree for a technology that has none (a proposal, a hand-made one - owner, 2026-11-24:
+    every technology carries all the data of a file): the tree of the machine's nearest real technology - same Вид
+    and gas first, then same gas, then any - nearest thickness. [] when the machine has no tree at all."""
+    rows = [t for t in MachineCutTechnology.query.filter(MachineCutTechnology.machine_id == tech.machine_id,
+                                                         MachineCutTechnology.params_json.isnot(None))
+            if t.id != tech.id and _tech_raw(t)]
+    if not rows:
+        return []
+    best = min(rows, key=lambda t: (not (t.grade_id == tech.grade_id and t.gas == tech.gas), t.gas != tech.gas,
+                                    abs((t.thickness_mm or 0) - (tech.thickness_mm or 0)), t.id))
+    return _tech_raw(best)
+
+
+def _tech_full_raw(tech):
+    """The technology's own tree, else a template's (_tech_template_raw) - so an export or the parameters page
+    always has every parameter of a file; the technology's fields are written on top by the callers."""
+    return _tech_raw(tech) or _tech_template_raw(tech)
+
+
 def _tech_raw_from_columns(tech):
     """After the fields were edited: write them into the stored parameter tree too (fscut.raw_with_fields), so the
-    tree - every parameter of the file - and the columns agree. A technology without a tree keeps none."""
-    raw = _tech_raw(tech)
+    tree - every parameter of the file - and the columns agree. A technology without a tree gets a template's."""
+    raw = _tech_full_raw(tech)
     if raw:
-        tech.params_json = json.dumps(fscut.raw_with_fields(raw, _tech_columns_dict(tech),
-                                                            tech.cutting_speed_mm_per_min, tech.gas),
-                                      ensure_ascii=False)
+        tech.params_json = json.dumps(fscut.raw_no_chinese(fscut.raw_with_fields(
+            raw, _tech_columns_dict(tech), tech.cutting_speed_mm_per_min, tech.gas)), ensure_ascii=False)
+
+
+# The first line of a technology's note says where it comes from (owner, 2026-11-24)
+TECH_ORIGIN_MARKS = ('[Оригинална', '[Генерирана от нас', '[Въведена ръчно')
+
+
+def _tech_origin_line(tech):
+    s, note = tech.source or '', tech.note or ''
+    if s.startswith('Копие от'):
+        return f'[Генерирана от нас] {s}'
+    if s.startswith('Предложение') or s.startswith('Библиотека PG3015'):
+        return f'[Генерирана от нас] {s}'
+    if not s:
+        return '[Въведена ръчно]'
+    if 'по библиотеката на машината' in note:
+        return f'[Оригинална, коригирана от нас] {s}'
+    return f'[Оригинална] {s}'
+
+
+def _mark_tech_origin(tech):
+    """Puts the origin line first in the note, once."""
+    if not (tech.note or '').startswith(TECH_ORIGIN_MARKS):
+        tech.note = (_tech_origin_line(tech) + ('\n' + tech.note if tech.note else ''))[:2000]
 
 
 TECH_PARAM_MAX_LEN = 100
@@ -10932,7 +10974,8 @@ def admin_hall_cut_tech_params(machine_id, tech_id):
     hm = HallMachine.query.get_or_404(machine_id)
     tech = MachineCutTechnology.query.filter_by(id=tech_id, machine_id=hm.machine_id).first_or_404()
     # the columns written into the tree first: a column changed without the tree (a data step, an old edit) wins
-    raw = fscut.raw_with_fields(_tech_raw(tech), _tech_columns_dict(tech), tech.cutting_speed_mm_per_min, tech.gas)
+    raw = fscut.raw_no_chinese(fscut.raw_with_fields(_tech_full_raw(tech), _tech_columns_dict(tech),
+                                                     tech.cutting_speed_mm_per_min, tech.gas))
     if request.method == 'POST':
         try:
             changes = json.loads(request.form.get('changes') or '[]')
@@ -16721,10 +16764,11 @@ def _save_channel_technology(machine, grade_id, thickness, nozzle, ch, source, g
     tech.cutting_speed_mm_per_min, tech.pierce_time_sec = ch['speed_mm_min'], ch['pierce_time_sec']
     for col, v in ch['fields'].items():
         setattr(tech, col, gas if col.endswith('_gas') and v == ch['gas'] else v)
-    tech.params_json = json.dumps(ch['raw'], ensure_ascii=False)
+    tech.params_json = json.dumps(fscut.raw_no_chinese(ch['raw']), ensure_ascii=False)
     tech.source = (source or '')[:255] or None
     if ch.get('note'):                  # the file's <Note>; a file without one keeps the note written here
-        tech.note = ch['note'][:2000]
+        tech.note = fscut._no_chinese(ch['note'])[:2000] or None
+    _mark_tech_origin(tech)
     db.session.flush()
     return tech
 
@@ -16837,10 +16881,18 @@ def _fsm_name(tech):
     return f'{tech.thickness_mm:g}mm{code}-' + '-'.join(p for p in nozzles + [gas] if p) + '.fsm'
 
 
+def _fsm_params(tech, path=None):
+    """MaterialParams / MaterialPath of our .fsm for a technology (fscut.fsm_xml): nozzle, the folder it is written to
+    (None = a download) and the material = our own Вид name ("Стомана", owner, 2026-11-24). Nothing Chinese goes into
+    our files: fscut.fsm_xml() translates what is left of the source file's."""
+    return {'nozzle': tech.nozzle, 'path': path, 'material': tech.grade.name if tech.grade else None}
+
+
 def _fsm_bytes(tech, machine):
     ch = _tech_channel(tech)
     ch['gas_map'] = machine.gas_channel_map
-    return fscut.write_fsm(ch, FSCUT_FSM_PASSWORD, name=_fsm_name(tech), thickness=tech.thickness_mm)
+    return fscut.write_fsm(ch, FSCUT_FSM_PASSWORD, name=_fsm_name(tech), thickness=tech.thickness_mm,
+                           **_fsm_params(tech))
 
 
 @app.route('/admin/hall/<int:machine_id>/cut-tech/<int:tech_id>/fsm')
@@ -16944,6 +16996,11 @@ def _tech_folder_write(mc, rel, name, data):
     smb.makedirs(_tech_folder_path(mc, rel), exist_ok=True)
     with smb.open_file(_tech_folder_path(mc, rel, name), mode='wb') as f:
         f.write(data)
+
+
+def _tech_folder_remove(mc, rel, name):
+    """Removes the old name after "Обнови файла" wrote the renamed file (a changed nozzle)."""
+    _tech_folder_smb(mc).remove(_tech_folder_path(mc, rel, name))
 
 
 def _tech_folder_error(e):
@@ -17067,13 +17124,54 @@ def _sha256(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def _tech_target_file(tech):
+    """Where the technology's .fsm belongs in the folder: its linked file, unless the nozzle in that name is no
+    longer the technology's (owner, 2026-11-24: a changed nozzle shows in the name) - then the same folder with
+    _fsm_name(). None for a technology without a file."""
+    if not tech.folder_file:
+        return None
+    rel, _, name = tech.folder_file.rpartition('\\')
+    new = _fsm_name_with_nozzle(name, tech.nozzle)
+    return f'{rel}\\{new}' if rel else new
+
+
+def _fsm_name_with_nozzle(name, nozzle):
+    """The file name with only its nozzle part replaced (owner, 2026-11-24: the rest of the name stays the file's):
+    "8mm1.2d1.5d.fsm" + "1.4d" -> "8mm1.4d.fsm", "8mmCS-D1.2-O2.fsm" + "1.4d" -> "8mmCS-D1.4-O2.fsm". The name
+    unchanged when it already carries that nozzle or its nozzle part is not found."""
+    _mm, old = fscut.library_name_parts(name)
+    if not old or (old or '').lower() == (nozzle or '').lower():
+        return name
+    olds = old.split('/')
+    news = [p for p in (nozzle or '').split('/') if p]
+    parts = [re.fullmatch(r'(\d+(?:\.\d+)?)([A-Za-z]+)', p) for p in olds]
+    if not news or not all(parts):
+        return name
+    styles = (('', lambda n, t: n + t),                       # our own library: "1.2d1.5d"
+              ('-', lambda n, t: t.upper() + n))              # the maker's: "D1.2-D1.5"
+    for sep, fmt in styles:
+        old_txt = sep.join(fmt(m.group(1), m.group(2)) for m in parts)
+        at = name.lower().find(old_txt.lower())
+        if at == -1:
+            continue
+        new_parts = [re.fullmatch(r'(\d+(?:\.\d+)?)([A-Za-z]+)', p) for p in news]
+        if not all(new_parts):
+            return name
+        new_txt = sep.join(fmt(m.group(1), m.group(2) if sep == '' else m.group(2)) for m in new_parts)
+        return name[:at] + new_txt + name[at + len(old_txt):]
+    return name
+
+
 def _tech_app_xml(tech, mc):
-    """Our .fsm XML for a technology, named after its file in the folder (else _fsm_name()), gases on the machine's
-    channels - what "Обнови файла" writes and what folder_app_hash is taken of."""
+    """Our .fsm XML for a technology, named after the file it belongs to (_tech_target_file(), else _fsm_name()),
+    MaterialPath = that file's folder, gases on the machine's channels - what "Обнови файла" writes and what
+    folder_app_hash is taken of."""
     ch = _tech_channel(tech)
     ch['gas_map'] = mc.gas_channel_map
-    name = (tech.folder_file or '').rsplit('\\', 1)[-1] or _fsm_name(tech)
-    return fscut.fsm_xml(ch, name=name, thickness=tech.thickness_mm)
+    target = _tech_target_file(tech)
+    rel, _, name = (target or '').rpartition('\\')
+    path = '\\'.join(p for p in (mc.tech_folder, rel) if p) + '\\' if target and mc.tech_folder else None
+    return fscut.fsm_xml(ch, name=name or _fsm_name(tech), thickness=tech.thickness_mm, **_fsm_params(tech, path))
 
 
 def _tech_folder_link(tech, mc, rel_file, file_xml):
@@ -17157,8 +17255,13 @@ def admin_hall_tech_folder_sync(machine_id, tech_id, direction):
             _tech_folder_link(tech, mc, tech.folder_file, fscut.fsm_xml_of(data, FSCUT_FSM_PASSWORD))
         else:
             xml = _tech_app_xml(tech, mc)
-            _tech_folder_write(mc, rel, name, fscut._zipcrypto(fscut.FSM_MEMBER, xml, FSCUT_FSM_PASSWORD))
-            _tech_folder_link(tech, mc, tech.folder_file, xml)
+            target = _tech_target_file(tech)          # a changed nozzle renames the file (nozzle part only)
+            t_rel, _, t_name = target.rpartition('\\')
+            _tech_folder_write(mc, t_rel, t_name, fscut._zipcrypto(fscut.FSM_MEMBER, xml, FSCUT_FSM_PASSWORD))
+            if target != tech.folder_file:
+                _tech_folder_remove(mc, rel, name)
+                flash(f'Файлът е преименуван: {tech.folder_file} -> {target}.', 'info')
+            _tech_folder_link(tech, mc, target, xml)
     except ValueError:
         db.session.rollback()
         return _dossier_back(hm.id, f'Файлът {tech.folder_file} не може да се прочете.', 'danger')
@@ -17182,10 +17285,7 @@ def _tech_channel(tech, detail=None):
     if tech is None:
         return {'speed_mm_min': detail.cutting_speed_mm_per_min, 'gas': detail.cutting_gas,
                 'fields': {}} if detail else None
-    try:
-        raw = json.loads(tech.params_json) if tech.params_json else []
-    except ValueError:
-        raw = []
+    raw = _tech_full_raw(tech)
     return {'raw': raw, 'speed_mm_min': tech.cutting_speed_mm_per_min, 'gas': tech.gas, 'note': tech.note or '',
             'fields': {c: getattr(tech, c) for c, *_ in fscut.tech_columns()}}
 

@@ -47,6 +47,7 @@ ONCE = (
     'data_pg3015_proposed_tech',      # owner, 2026-11-24: proposed technologies for PG3015 (every standard thickness, + copper to 6 mm), marked "за тест"
     'data_pg3015_tech_from_library',  # owner, 2026-11-24: steel O2 14/18/22/25 mm proposals corrected by the machine's own CypCut library
     'data_pg3015_o2_focus_and_gas_copies',  # owner, 2026-11-24: steel O2 focus by the machine's library (8 mm +13), N2 <-> air copies
+    'data_tech_full_files_and_origin',  # owner, 2026-11-24: every technology a full parameter tree, nothing Chinese, origin in the note
 )
 
 

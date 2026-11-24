@@ -1847,14 +1847,41 @@ def read_fsm(data, password, name=None):
     return ch
 
 
-def write_fsm(channel, password, name=None, thickness=None):
+def write_fsm(channel, password, name=None, thickness=None, **params):
     """A technology (the channel dict app.py's _tech_channel() gives: raw / fields / speed / gas / gas_map) as an
-    encrypted CypCut .fsm, bytes. `name` goes into MaterialName, `thickness` into MaterialParams."""
-    return _zipcrypto(FSM_MEMBER, fsm_xml(channel, name, thickness), password)
+    encrypted CypCut .fsm, bytes. `name` goes into MaterialName, `thickness` into MaterialParams; `params` = fsm_xml()'s
+    nozzle / material / path."""
+    return _zipcrypto(FSM_MEMBER, fsm_xml(channel, name, thickness, **params), password)
 
 
-def fsm_xml(channel, name=None, thickness=None):
-    """The material.lcm XML write_fsm() encrypts - deterministic, so its hash tells whether a technology changed."""
+_CJK = None
+
+
+def _no_chinese(text):
+    """Nothing Chinese in our files (owner, 2026-11-24): known material words translated (MATERIAL_NAMES), "默认"
+    (default) dropped, any other Chinese character removed."""
+    global _CJK
+    import re
+    if _CJK is None:
+        _CJK = re.compile(r'[　-〿㐀-鿿＀-￯]')
+    if not text or not _CJK.search(text):
+        return text
+    for zh in sorted(MATERIAL_NAMES, key=len, reverse=True):
+        text = text.replace(zh, MATERIAL_NAMES[zh])
+    return _CJK.sub('', text.replace(NOZZLE_DEFAULT[0], '')).strip()
+
+
+def raw_no_chinese(raw):
+    """A stored tree (_raw() rows) with every text / attribute through _no_chinese() - what we keep in the database."""
+    return [[p, {k: _no_chinese(str(v)) for k, v in (a or {}).items()}, _no_chinese(t) or ''] for p, a, t in raw or []]
+
+
+def fsm_xml(channel, name=None, thickness=None, nozzle=None, material=None, path=None):
+    """The material.lcm XML write_fsm() encrypts - deterministic, so its hash tells whether a technology changed.
+    Our file never keeps what the source file was copied from (owner, 2026-11-24): MaterialName = `name` (the file
+    name), MaterialPath = `path` (the folder it is written to, '' for a download), MaterialParams MaterialName =
+    `material` (our Вид name), NozzleSpec = `nozzle` ('' without one), Thickness = `thickness`; and nothing Chinese
+    anywhere (_no_chinese)."""
     c = channel or {}
     raw = c.get('raw') or []
     attrs = next((a for p, a, _ in raw if p == '@'), None) or FSM_ROOT_ATTRS
@@ -1870,15 +1897,21 @@ def fsm_xml(channel, name=None, thickness=None):
         el.find('MaterialName').text = name
     if 'note' in c:                     # the technology's note -> <Note> (empty clears the file's old one)
         el.find('Note').text = c['note'] or None
+    el.find('MaterialPath').text = path or None
     mp = el.find('MaterialParams')
-    for k, v in (('MaterialID', '0'), ('MaterialName', ''), ('NozzleSpec', NOZZLE_DEFAULT[0])):
-        if mp.get(k) is None:
-            mp.set(k, v)
+    if mp.get('MaterialID') is None:
+        mp.set('MaterialID', '0')
+    mp.set('MaterialName', material or mp.get('MaterialName') or '')
+    mp.set('NozzleSpec', nozzle or '')
     if thickness:
         mp.set('Thickness', _num(thickness))
+    for e in el.iter():
+        e.text = _no_chinese(e.text)
+        for k, v in list(e.attrib.items()):
+            e.set(k, _no_chinese(v))
     kids = list(el)
     el[:] = sorted(kids, key=lambda k: FSM_ORDER.index(k.tag) if k.tag in FSM_ORDER else len(FSM_ORDER))
-    return _xml_bytes(el)
+    return _xml_bytes(el).replace(b' />', b'/>')          # CypCut writes empty elements as <Tag .../>, like the original
 
 
 def _crc_table():

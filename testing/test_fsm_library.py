@@ -41,7 +41,8 @@ def test_zipcrypto_is_what_zipfile_decrypts():
     info = zf.getinfo('material.lcm')
     assert info.flag_bits & 1 and info.compress_type == zipfile.ZIP_DEFLATED
     assert zf.read('material.lcm', pwd=PW.encode()).startswith(b'<?xml')
-    with pytest.raises(RuntimeError):
+    import zlib
+    with pytest.raises((RuntimeError, zlib.error)):     # 1 in 256 wrong passwords pass ZipCrypto's check byte
         zipfile.ZipFile(io.BytesIO(data)).read('material.lcm', pwd=b'wrong')
 
 
@@ -262,10 +263,10 @@ def test_note_round_trip(s):
     url = f'/admin/hall/{hall.id}/cut-tech/import'
     c.post(url, data={'file': [(io.BytesIO(with_note), '8mmCS-D1.2-O2.fsm')]}, content_type='multipart/form-data')
     t = MachineCutTechnology.query.filter_by(machine_id=laser.id).one()
-    assert t.note == 'бавно в ъглите'
+    assert t.note == '[Оригинална] 8mmCS-D1.2-O2.fsm\nбавно в ъглите'                    # origin line first
     c.post(url, data={'file': [(io.BytesIO(_fsm()), '8mmCS-D1.2-O2.fsm')]}, content_type='multipart/form-data')
     db.session.expire_all()
-    assert db.session.get(MachineCutTechnology, t.id).note == 'бавно в ъглите'           # empty <Note> keeps ours
+    assert db.session.get(MachineCutTechnology, t.id).note.endswith('бавно в ъглите')     # empty <Note> keeps ours
     c.post(f'/admin/hall/{hall.id}/cut-tech', data={'tech_id': t.id, 'thickness_mm': 8, 'gas': 'oxygen',
                                                    'nozzle': '1.2d', 'cutting_speed_mm_per_min': 2700,
                                                    'note': 'фокус +13 работи'})
@@ -420,3 +421,96 @@ def test_params_page_keeps_columns_changed_without_the_tree(s):
     db.session.expire_all()
     t = db.session.get(MachineCutTechnology, t.id)
     assert t.focus_mm == 13 and any(r[0] == 'CamParams/Cut' and r[1]['Focus'] == '13' for r in _json.loads(t.params_json))
+
+
+def test_our_file_settings_and_nozzle_in_name(s, monkeypatch):
+    """Our .fsm: MaterialName = the file name, MaterialPath = the folder it goes to ('' for a download),
+    MaterialParams = our Вид name + the nozzle + thickness, nothing Chinese; a changed nozzle changes only the nozzle
+    part of the name and "Обнови файла" renames the file in the folder."""
+    import re as _re
+    from app import _fsm_name_with_nozzle
+    assert _fsm_name_with_nozzle('8mm1.2d1.5d.fsm', '1.4d') == '8mm1.4d.fsm'
+    assert _fsm_name_with_nozzle('8mmCS-D1.2-O2.fsm', '1.4d') == '8mmCS-D1.4-O2.fsm'
+    assert _fsm_name_with_nozzle('10mm SS-N2 S4.fsm', '5s') == '10mm SS-N2 S5.fsm'
+    assert _fsm_name_with_nozzle('8mm1.2d1.5d_D.fsm', '1.2d/1.5d') == '8mm1.2d1.5d_D.fsm'
+    assert _fsm_name_with_nozzle('custom.fsm', '1.4d') == 'custom.fsm'
+    from cryptography.fernet import Fernet
+    fernet = Fernet(Fernet.generate_key())
+    monkeypatch.setattr(app_module, '_network_api_fernet', lambda: fernet)
+    disk = {'steel': {'8mm1.2d1.5d.fsm': _fsm(speed=45, focus=13)}}
+    monkeypatch.setattr(app_module, '_tech_folder_files', lambda mc: {k: sorted(v) for k, v in disk.items()})
+    monkeypatch.setattr(app_module, '_tech_folder_read', lambda mc, rel, name: disk[rel][name])
+    monkeypatch.setattr(app_module, '_tech_folder_write', lambda mc, rel, name, data: disk.setdefault(rel, {}).update({name: data}))
+    monkeypatch.setattr(app_module, '_tech_folder_remove', lambda mc, rel, name: disk[rel].pop(name))
+    laser = Machine(name='PG3015 NAMES', is_laser=True, tech_folder=UNC)
+    db.session.add(laser)
+    db.session.flush()
+    hall = HallMachine(name=laser.name, machine_id=laser.id)
+    steel = MaterialGrade(name='Стомана')
+    db.session.add_all([hall, steel])
+    db.session.commit()
+    c = _login('fsm_admin')
+    c.post(f'/admin/hall/{hall.id}/cut-tech/folder/import', data={'use_1': '1', 'rel_1': 'steel', 'grade_1': steel.id})
+    t = MachineCutTechnology.query.filter_by(machine_id=laser.id).one()
+    xml = zipfile.ZipFile(io.BytesIO(c.get(f'/admin/hall/{hall.id}/cut-tech/{t.id}/fsm').data)).read(
+        'material.lcm', pwd=PW.encode()).decode()
+    assert '<MaterialName>8mmCS-D1.2-D1.5-O2.fsm</MaterialName>' in xml and '<MaterialPath/>' in xml and ' />' not in xml
+    assert 'MaterialName="Стомана"' in xml and 'NozzleSpec="1.2d/1.5d"' in xml and 'Thickness="8"' in xml
+    assert not _re.search(r'[一-鿿]', xml)
+    # nozzle changed here -> "Обнови файла" writes 8mm1.4d.fsm and removes the old one
+    t.nozzle = '1.4d'
+    db.session.commit()
+    assert c.get(f'/admin/hall/{hall.id}/cut-tech/folder/status').get_json() == {str(t.id): 'app'}
+    c.post(f'/admin/hall/{hall.id}/cut-tech/{t.id}/folder/push')
+    assert sorted(disk['steel']) == ['8mm1.4d.fsm']
+    db.session.expire_all()
+    t = db.session.get(MachineCutTechnology, t.id)
+    assert t.folder_file == 'steel\8mm1.4d.fsm'
+    xml = fscut.fsm_xml_of(disk['steel']['8mm1.4d.fsm'], PW).decode()
+    assert '<MaterialName>8mm1.4d.fsm</MaterialName>' in xml and ('<MaterialPath>' + UNC + '\steel\</MaterialPath>') in xml
+    assert 'NozzleSpec="1.4d"' in xml and not _re.search(r'[一-鿿]', xml)
+    assert c.get(f'/admin/hall/{hall.id}/cut-tech/folder/status').get_json() == {str(t.id): 'same'}
+
+
+def test_full_trees_no_chinese_and_origin_step(s):
+    """data_tech_full_files_and_origin: a proposal without a tree gets the nearest real one with its own fields
+    written in, nothing Chinese stays in the database, the note says original / generated / hand-made."""
+    import json as _json
+    import re as _re
+    from migration.data_tech_full_files_and_origin import apply
+    laser = Machine(name='PG3015 FULL', is_laser=True)
+    db.session.add(laser)
+    db.session.flush()
+    hall = HallMachine(name=laser.name, machine_id=laser.id)
+    steel = MaterialGrade(name='Стомана')
+    db.session.add_all([hall, steel])
+    db.session.commit()
+    c = _login('fsm_admin')
+    c.post(f'/admin/hall/{hall.id}/cut-tech/import', data={'grade_id': steel.id, 'file': [
+        (io.BytesIO(_fsm()), '8mmCS-D1.2-O2.fsm')]}, content_type='multipart/form-data')
+    real = MachineCutTechnology.query.filter_by(machine_id=laser.id).one()
+    real.params_json = _json.dumps(fscut.read_fsm(_fsm(), PW, 'x.fsm')['raw'], ensure_ascii=False)   # as before: Chinese
+    real.note = None
+    prop = MachineCutTechnology(machine_id=laser.id, grade_id=steel.id, thickness_mm=10, gas='oxygen', nozzle='1.2d',
+                                cutting_speed_mm_per_min=2000, focus_mm=11, needs_test=True,
+                                source='Предложение 2026-11-24: интерполация - за тест')
+    hand = MachineCutTechnology(machine_id=laser.id, grade_id=steel.id, thickness_mm=12, gas='oxygen',
+                                cutting_speed_mm_per_min=1700, focus_mm=12)
+    db.session.add_all([prop, hand])
+    db.session.commit()
+    filled, done = apply()
+    db.session.commit()
+    assert (filled, done) == (2, 3)
+    for t in MachineCutTechnology.query.filter_by(machine_id=laser.id):
+        assert not _re.search(r'[一-鿿]', t.params_json + (t.note or ''))
+    prop = db.session.get(MachineCutTechnology, prop.id)
+    raw = _json.loads(prop.params_json)
+    cut = next(r for r in raw if r[0] == 'CamParams/Cut')[1]
+    p1 = next(r for r in raw if r[0] == 'CamParams/Pierce1')[1]                          # the real one's whole tree
+    assert cut['Focus'] == '11' and p1['Focus'] == '-6' and any(r[0] == '@' for r in raw)
+    assert prop.note.startswith('[Генерирана от нас] Предложение')
+    assert db.session.get(MachineCutTechnology, real.id).note == '[Оригинална] 8mmCS-D1.2-O2.fsm'
+    assert db.session.get(MachineCutTechnology, hand.id).note == '[Въведена ръчно]'
+    apply()
+    db.session.commit()
+    assert db.session.get(MachineCutTechnology, prop.id).note.count('[Генерирана') == 1
