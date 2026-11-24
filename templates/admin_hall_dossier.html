@@ -215,6 +215,7 @@
         <h2>Технологии на рязане ({{ cut_techs|length }}{% set _untested = cut_techs|selectattr('needs_test')|list|length %}{{ ', за тест: ' ~ _untested if _untested }})</h2>
         <p class="dz-muted" style="margin-top:0">Технологията по вид материал, дебелина, газ и дюза: скорост, пробиване и всички параметри от FSCUT. Попълват детайла при избор на тази машина; записват се от детайла („Запиши като технология на машината“) и от разкрой FSCUT на детайла.</p>
         {% if cut_techs %}
+        <div id="ctSyncSummary" class="alert alert-warning" hidden style="margin-bottom:8px;"></div>
         {#- filters over the tree below (remember_filters.js keeps them per page) #}
         <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px;">
             <input type="search" id="ctSearch" placeholder="Търсене (дюза, източник...)" style="flex:1 1 180px;">
@@ -225,7 +226,8 @@
             <select id="filterCtGas" data-picker="off"><option value="">Всички газове</option>
                 {% for g, glabel in cut_gases.items() %}<option value="{{ g }}">{{ glabel }}</option>{% endfor %}<option value="-">без газ</option></select>
             <select id="filterCtStatus" data-picker="off"><option value="">Всички</option><option value="test">За тест</option>
-                <option value="ok">Потвърдени</option><option value="out">Извън границата</option></select>
+                <option value="ok">Потвърдени</option><option value="out">Извън границата</option>
+                <option value="sync">Различни от файла на машината</option></select>
             <button type="button" class="btn" data-tree-all="expand">Разгъни</button>
             <button type="button" class="btn" data-tree-all="collapse">Сгъни</button>
         </div>
@@ -253,7 +255,22 @@
                 <td>{{ t.focus_mm|num3 if t.focus_mm is not none else '-' }}</td>
                 <td>{{ t.height_mm|num3 if t.height_mm is not none else '-' }}</td>
                 <td class="dz-muted">{{ t.source or 'ръчно' }}{% if t.needs_test %}
-                    <div class="alert alert-warning" style="margin:4px 0 0; padding:2px 6px; font-size:0.78rem;">За тест - не е потвърдена</div>{% endif %}</td>
+                    <div class="alert alert-warning" style="margin:4px 0 0; padding:2px 6px; font-size:0.78rem;">За тест - не е потвърдена</div>{% endif %}
+                    {% if t.folder_file and fsm_enabled and machine.tech_folder %}
+                    {#- shown by the status check below when the file in the machine's folder and this row differ #}
+                    <div class="alert alert-warning ct-sync" data-sync-tech="{{ t.id }}" hidden style="margin:4px 0 0; padding:4px 6px; font-size:0.8rem;">
+                        <div class="ct-sync-msg"></div>
+                        <form method="post" action="{{ url_for('admin_hall_tech_folder_sync', machine_id=m.id, tech_id=t.id, direction='pull') }}" style="display:inline; margin:0;"
+                              data-confirm="Да се внесе технологията от {{ t.folder_file }}? Промените тук ще се загубят.">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button class="btn ct-pull" type="submit">Внеси от файла</button></form>
+                        <form method="post" action="{{ url_for('admin_hall_tech_folder_sync', machine_id=m.id, tech_id=t.id, direction='push') }}" style="display:inline; margin:0;"
+                              data-confirm="Да се обнови файлът {{ t.folder_file }} на машината с технологията оттук?">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button class="btn ct-push" type="submit">Обнови файла</button></form>
+                    </div>
+                    <div style="font-size:0.75rem;" title="Файл в папката на машината">📁 {{ t.folder_file }}</div>
+                    {% endif %}</td>
                 <td style="white-space:nowrap;">
                     {% if fsm_enabled %}<a class="btn" href="{{ url_for('admin_hall_cut_tech_fsm', machine_id=m.id, tech_id=t.id) }}" title="Технология за библиотеката на CypCut">.fsm</a>{% endif %}
                     {% if t.needs_test %}
@@ -306,12 +323,43 @@
                     if (fS.value === 'test' && r.dataset.test !== '1') return false;
                     if (fS.value === 'ok' && r.dataset.test !== '0') return false;
                     if (fS.value === 'out' && r.dataset.out !== '1') return false;
+                    if (fS.value === 'sync' && !r.dataset.sync) return false;
                     return true;
                 }, on);
             }
             initTrees();
             [q, fG, fT, fGas, fS].forEach(function (el) { el.addEventListener('input', apply); el.addEventListener('change', apply); });
             apply();
+            // compare each technology with its file in the machine's folder (admin_hall_tech_folder_status)
+            const boxes = document.querySelectorAll('[data-sync-tech]');
+            if (!boxes.length) return;
+            const MSG = {file: 'Файлът в папката на машината е променен - да се внесе ли?',
+                         app: 'Технологията е променена тук - да се обнови ли файлът?',
+                         both: 'Променени са и файлът, и технологията тук - изберете коя да остане.',
+                         missing: 'Файлът вече го няма в папката - „Обнови файла“ ще го запише отново.'};
+            fetch('{{ url_for('admin_hall_tech_folder_status', machine_id=m.id) }}', {credentials: 'same-origin'})
+                .then(function (r) { return r.json(); })
+                .then(function (st) {
+                    if (st.error) { console.warn(st.error); return; }
+                    boxes.forEach(function (b) {
+                        const s = st[b.dataset.syncTech];
+                        if (!s || s === 'same') return;
+                        b.querySelector('.ct-sync-msg').textContent = MSG[s] || s;
+                        b.querySelector('.ct-pull').hidden = !(s === 'file' || s === 'both');
+                        b.querySelector('.ct-push').hidden = !(s === 'app' || s === 'both' || s === 'missing');
+                        b.hidden = false;
+                        const row = b.closest('tr');
+                        if (row) row.dataset.sync = s;
+                    });
+                    const n = document.querySelectorAll('tr[data-sync]').length;
+                    const sum = document.getElementById('ctSyncSummary');
+                    if (n && sum) {
+                        sum.textContent = n + ' технологии се различават от файловете в папката на машината - филтър „Различни от файла на машината“.';
+                        sum.hidden = false;
+                    }
+                    apply();
+                })
+                .catch(function () { /* the folder check is a hint only */ });
         })();
         </script>
         <p style="margin:8px 0 0; display:flex; gap:8px; flex-wrap:wrap;">

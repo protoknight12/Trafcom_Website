@@ -226,6 +226,11 @@ def test_machine_tech_folder(s, monkeypatch):
     page = c.get(f'/admin/hall/{hall.id}/dossier').get_data(as_text=True)
     assert 'Папка с технологии на машината' in page and 'id="ctTree"' in page and 'data-grade="Стомана"' in page
 
+    # both came from the folder (linked to their files): "Запиши в папката" leaves them to "Обнови файла"
+    r = c.post(f'/admin/hall/{hall.id}/cut-tech/folder/export', follow_redirects=True)
+    assert written == {} and '2 вече имат файл' in r.get_data(as_text=True)
+    MachineCutTechnology.query.update({'folder_file': None})
+    db.session.commit()
     c.post(f'/admin/hall/{hall.id}/cut-tech/folder/export')
     assert sorted(written) == ['Trafcom\\Стомана Кислород\\10mmCS-D1.2-D1.5-O2.fsm',
                                'Trafcom\\Стомана Кислород\\8mmCS-D1.2-D1.5-O2.fsm']
@@ -271,3 +276,68 @@ def test_note_round_trip(s):
     out = c.get(f'/admin/hall/{hall.id}/cut-tech/{t.id}/fsm').data
     xml = zipfile.ZipFile(io.BytesIO(out)).read('material.lcm', pwd=PW.encode()).decode()
     assert '<Note>фокус +13 работи</Note>' in xml
+
+
+def test_folder_sync_both_ways(s, monkeypatch):
+    """A technology linked to its file in the machine's folder: changed file -> "file" (Внеси от файла), changed
+    here -> "app" (Обнови файла), both -> "both", gone -> "missing"; pull / push bring them in sync again."""
+    from cryptography.fernet import Fernet
+    fernet = Fernet(Fernet.generate_key())
+    monkeypatch.setattr(app_module, '_network_api_fernet', lambda: fernet)
+    disk = {'steel': {'8mm1.2d1.5d.fsm': _fsm(speed=45, focus=13)}}
+    monkeypatch.setattr(app_module, '_tech_folder_files', lambda mc: {k: sorted(v) for k, v in disk.items()})
+
+    def read(mc, rel, name):
+        if name not in disk.get(rel, {}):
+            raise FileNotFoundError(name)
+        return disk[rel][name]
+    monkeypatch.setattr(app_module, '_tech_folder_read', read)
+    monkeypatch.setattr(app_module, '_tech_folder_write', lambda mc, rel, name, data: disk.setdefault(rel, {}).update({name: data}))
+    laser = Machine(name='PG3015 SYNC', is_laser=True, tech_folder=UNC)
+    db.session.add(laser)
+    db.session.flush()
+    hall = HallMachine(name=laser.name, machine_id=laser.id)
+    steel = MaterialGrade(name='Стомана')
+    db.session.add_all([hall, steel])
+    db.session.commit()
+    c = _login('fsm_admin')
+    c.post(f'/admin/hall/{hall.id}/cut-tech/folder/import', data={'use_1': '1', 'rel_1': 'steel', 'grade_1': steel.id})
+    t = MachineCutTechnology.query.filter_by(machine_id=laser.id).one()
+    assert t.folder_file == 'steel\\8mm1.2d1.5d.fsm' and t.folder_file_hash and t.folder_app_hash
+    status = f'/admin/hall/{hall.id}/cut-tech/folder/status'
+    assert c.get(status).get_json() == {str(t.id): 'same'}
+
+    disk['steel']['8mm1.2d1.5d.fsm'] = _fsm(speed=45, focus=12)                         # changed on the machine
+    assert c.get(status).get_json() == {str(t.id): 'file'}
+    assert 'data-sync-tech="%d"' % t.id in c.get(f'/admin/hall/{hall.id}/dossier').get_data(as_text=True)
+    c.post(f'/admin/hall/{hall.id}/cut-tech/{t.id}/folder/pull')
+    db.session.expire_all()
+    t = db.session.get(MachineCutTechnology, t.id)
+    assert t.focus_mm == 12 and c.get(status).get_json() == {str(t.id): 'same'}
+
+    t.focus_mm = 13.5                                                                    # changed here
+    db.session.commit()
+    assert c.get(status).get_json() == {str(t.id): 'app'}
+    c.post(f'/admin/hall/{hall.id}/cut-tech/{t.id}/folder/push')
+    assert fscut.read_fsm(disk['steel']['8mm1.2d1.5d.fsm'], PW, 'x.fsm')['focus_mm'] == 13.5
+    assert c.get(status).get_json() == {str(t.id): 'same'}
+
+    t = db.session.get(MachineCutTechnology, t.id)
+    t.focus_mm = 14
+    db.session.commit()
+    disk['steel']['8mm1.2d1.5d.fsm'] = _fsm(speed=40, focus=11)
+    assert c.get(status).get_json() == {str(t.id): 'both'}
+    del disk['steel']['8mm1.2d1.5d.fsm']
+    assert c.get(status).get_json() == {str(t.id): 'missing'}
+    assert c.get(status + f'?tech={t.id + 99}').get_json() == {}
+
+    # "Запиши в папката" leaves a linked technology to its own file; an unlinked one goes to Trafcom\ and is linked
+    other = MachineCutTechnology(machine_id=laser.id, grade_id=steel.id, thickness_mm=10, gas='oxygen',
+                                 nozzle='1.2d', cutting_speed_mm_per_min=2000, focus_mm=11)
+    db.session.add(other)
+    db.session.commit()
+    c.post(f'/admin/hall/{hall.id}/cut-tech/folder/export')
+    db.session.expire_all()
+    assert 'Trafcom\\Стомана Кислород' in disk and '8mm1.2d1.5d.fsm' not in disk['steel']
+    assert db.session.get(MachineCutTechnology, other.id).folder_file == 'Trafcom\\Стомана Кислород\\10mmCS-D1.2-O2.fsm'
+    assert c.get(status).get_json()[str(other.id)] == 'same'

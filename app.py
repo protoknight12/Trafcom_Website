@@ -2352,6 +2352,12 @@ class MachineCutTechnology(db.Model):
     needs_test = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     # particulars of this technology (owner, 2026-11-24) = the <Note> of a CypCut .fsm: read on import, written on export
     note = db.Column(db.Text, nullable=True)
+    # its .fsm in the machine's technology folder (owner, 2026-11-24): path relative to Machine.tech_folder, and the
+    # sha256 of that file's XML and of our own generated XML at the last sync - a difference on either side means the
+    # file was changed on the machine / the technology was changed here (_tech_sync_state())
+    folder_file = db.Column(db.String(500), nullable=True)
+    folder_file_hash = db.Column(db.String(64), nullable=True)
+    folder_app_hash = db.Column(db.String(64), nullable=True)
     for _col, _label, _unit, _group in fscut.tech_columns():        # the FSCUT fields (migrate_add_cut_tech_fscut_fields)
         locals()[_col] = db.Column(db.String(10) if _col.endswith('_gas') else db.Float, nullable=True)
     del _col, _label, _unit, _group
@@ -15982,7 +15988,7 @@ def detail_dxf_dashboard(detail_id):
                 for t in q:
                     cut_tech.setdefault(str(t.machine_id), []).append(
                         {'gas': t.gas or '', 'nozzle': t.nozzle or '', 'speed': t.cutting_speed_mm_per_min,
-                         'pierce': t.pierce_time_sec, 'test': bool(t.needs_test)})
+                         'pierce': t.pierce_time_sec, 'test': bool(t.needs_test), **_tech_sync_urls(t)})
             # a laser that cannot cut this Вид + thickness (MachineThicknessRange): shown disabled, refused on save
             ranges = {}
             for r in MachineThicknessRange.query.filter(MachineThicknessRange.machine_id.in_([m.id for m in machines])):
@@ -16686,12 +16692,14 @@ def _import_tech_channel(mc, grade_id, ch, label, source, res):
     thickness, nozzle = ch['library_thickness'], ch['library_nozzle'] or ch['nozzle']
     if not ch['library'] or thickness is None or not ch['gas'] or not ch['speed_mm_min']:
         res['skipped'].append(label)
-        return
+        return None
     if _thickness_refusal(mc, grade_id, thickness):
         res['refused'].append(f'{label} ({thickness:g} мм)')
-        return
+        return None
     gas = _real_gas(mc, ch['gas'], request.form.get(f'real_gas_{ch["gas"]}')) or ch['gas']
-    res['saved'].append(_cut_tech_label(_save_channel_technology(mc, grade_id, thickness, nozzle, ch, source, gas)))
+    tech = _save_channel_technology(mc, grade_id, thickness, nozzle, ch, source, gas)
+    res['saved'].append(_cut_tech_label(tech))
+    return tech
 
 
 def _tech_import_done(hm, mc, names, res):
@@ -16906,11 +16914,14 @@ def admin_hall_tech_folder_import(machine_id):
             for name in files.get(rel, []):
                 label = f'{rel}\\{name}' if rel else name
                 try:
-                    ch = fscut.read_fsm(_tech_folder_read(mc, rel, name), FSCUT_FSM_PASSWORD, name)
+                    data = _tech_folder_read(mc, rel, name)
+                    ch = fscut.read_fsm(data, FSCUT_FSM_PASSWORD, name)
                 except ValueError:
                     res['unreadable'].append(label)
                     continue
-                _import_tech_channel(mc, grade_id, ch, label, f'{mc.tech_folder}\\{label}'[-255:], res)
+                tech = _import_tech_channel(mc, grade_id, ch, label, f'{mc.tech_folder}\\{label}'[-255:], res)
+                if tech is not None:
+                    _tech_folder_link(tech, mc, label, fscut.fsm_xml_of(data, FSCUT_FSM_PASSWORD))
     except Exception as e:
         db.session.rollback()
         return _dossier_back(hm.id, _tech_folder_error(e), 'danger')
@@ -16921,18 +16932,20 @@ def admin_hall_tech_folder_import(machine_id):
 @app.route('/admin/hall/<int:machine_id>/cut-tech/folder/export', methods=['POST'])
 @role_required('admin')
 def admin_hall_tech_folder_export(machine_id):
-    """Writes every technology of the machine as .fsm into <folder>\\Trafcom\\<Вид> <газ>\\ (TECH_FOLDER_EXPORT) -
-    encrypted like CypCut's, gases on the machine's channels; a file of the same name there is replaced, nothing
-    outside that sub-folder is touched."""
+    """Writes every technology of the machine that has no file in the folder yet as .fsm into
+    <folder>\\Trafcom\\<Вид> <газ>\\ (TECH_FOLDER_EXPORT) - encrypted like CypCut's, gases on the machine's channels -
+    and links it to that file. A technology that already has its file is not written here: its row asks "Обнови
+    файла" when it was changed (_tech_sync_state). Nothing outside Trafcom\\ is touched by this."""
     hm, mc, refusal = _laser_with_folder(machine_id)
     if refusal:
         return refusal
     techs = MachineCutTechnology.query.filter_by(machine_id=mc.id).all()
     if not techs:
         return _dossier_back(hm.id, 'Машината няма технологии.', 'warning')
+    todo = [t for t in techs if not t.folder_file]
     written, used = 0, set()
     try:
-        for t in techs:
+        for t in todo:
             folder = re.sub(r'[\\/:*?"<>|]+', '_',
                             f'{t.grade.name if t.grade else "без вид"} {CUT_GASES.get(t.gas, "без газ")}')
             name, n = _fsm_name(t), 1
@@ -16940,12 +16953,129 @@ def admin_hall_tech_folder_export(machine_id):
                 n += 1
                 name = f'{_fsm_name(t)[:-4]}_{n}.fsm'
             used.add((folder, name))
-            _tech_folder_write(mc, f'{TECH_FOLDER_EXPORT}\\{folder}', name, _fsm_bytes(t, mc))
+            rel = f'{TECH_FOLDER_EXPORT}\\{folder}'
+            t.folder_file = f'{rel}\\{name}'
+            xml = _tech_app_xml(t, mc)
+            _tech_folder_write(mc, rel, name, fscut._zipcrypto(fscut.FSM_MEMBER, xml, FSCUT_FSM_PASSWORD))
+            _tech_folder_link(t, mc, t.folder_file, xml)
+            db.session.commit()
             written += 1
     except Exception as e:
-        return _dossier_back(hm.id, f'Записани {written} от {len(techs)}. ' + _tech_folder_error(e), 'danger')
+        db.session.rollback()
+        return _dossier_back(hm.id, f'Записани {written} от {len(todo)}. ' + _tech_folder_error(e), 'danger')
     log_action(f'Технологии .fsm на "{hm.name}" записани в {mc.tech_folder}\\{TECH_FOLDER_EXPORT}: {written}')
-    return _dossier_back(hm.id, f'Записани {written} технологии в {mc.tech_folder}\\{TECH_FOLDER_EXPORT}.')
+    message = f'Записани {written} технологии в {mc.tech_folder}\\{TECH_FOLDER_EXPORT}.'
+    if len(techs) > len(todo):
+        message += f' {len(techs) - len(todo)} вече имат файл в папката - те се обновяват от реда си („Обнови файла“).'
+    return _dossier_back(hm.id, message)
+
+
+def _sha256(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def _tech_app_xml(tech, mc):
+    """Our .fsm XML for a technology, named after its file in the folder (else _fsm_name()), gases on the machine's
+    channels - what "Обнови файла" writes and what folder_app_hash is taken of."""
+    ch = _tech_channel(tech)
+    ch['gas_map'] = mc.gas_channel_map
+    name = (tech.folder_file or '').rsplit('\\', 1)[-1] or _fsm_name(tech)
+    return fscut.fsm_xml(ch, name=name, thickness=tech.thickness_mm)
+
+
+def _tech_folder_link(tech, mc, rel_file, file_xml):
+    """Links a technology to its .fsm in the folder as synced now: the file's XML hash and our XML hash."""
+    db.session.flush()
+    tech.folder_file = rel_file[:500]
+    tech.folder_file_hash = _sha256(file_xml)
+    tech.folder_app_hash = _sha256(_tech_app_xml(tech, mc))
+
+
+def _tech_sync_state(tech, mc, file_xml):
+    """'same' | 'file' (changed on the machine) | 'app' (changed here) | 'both' | 'missing' (the file is gone)."""
+    if file_xml is None:
+        return 'missing'
+    f = _sha256(file_xml) != tech.folder_file_hash
+    a = _sha256(_tech_app_xml(tech, mc)) != tech.folder_app_hash
+    return 'both' if f and a else 'file' if f else 'app' if a else 'same'
+
+
+def _tech_sync_urls(tech):
+    """For a page that offers a technology (the detail page): where to check it against its file in the machine's
+    folder and the dossier where it is synced - {} when it has no file / the feature is off."""
+    mc = tech.machine
+    hm = mc.hall_record if mc else None
+    if not (tech.folder_file and hm and mc.tech_folder and FSCUT_FSM_PASSWORD):
+        return {}
+    return {'check': url_for('admin_hall_tech_folder_status', machine_id=hm.id, tech=tech.id),
+            'dossier': url_for('admin_hall_dossier', machine_id=hm.id), 'id': tech.id}
+
+
+def _tech_file_xml(mc, tech):
+    """The decrypted XML of the technology's file in the folder, None when it is not there / not an .fsm."""
+    rel, _, name = tech.folder_file.rpartition('\\')
+    try:
+        return fscut.fsm_xml_of(_tech_folder_read(mc, rel, name), FSCUT_FSM_PASSWORD)
+    except (ValueError, FileNotFoundError):
+        return None
+    except OSError as e:                     # smbclient: SMBOSError for a missing file, other OSErrors re-raised
+        if getattr(e, 'errno', None) == 2:
+            return None
+        raise
+
+
+@app.route('/admin/hall/<int:machine_id>/cut-tech/folder/status')
+@role_required('admin')
+def admin_hall_tech_folder_status(machine_id):
+    """{tech id: state} (_tech_sync_state) for the machine's technologies that have a file in the folder - asked by
+    the dossier and the detail page when they show a technology (?tech=<id> = only that one). {"error": text} when
+    the folder cannot be reached."""
+    hm = HallMachine.query.get_or_404(machine_id)
+    mc = hm.machine
+    if mc is None or not mc.tech_folder or not FSCUT_FSM_PASSWORD:
+        return jsonify({})
+    q = MachineCutTechnology.query.filter(MachineCutTechnology.machine_id == mc.id,
+                                          MachineCutTechnology.folder_file.isnot(None))
+    if request.args.get('tech', type=int):
+        q = q.filter(MachineCutTechnology.id == request.args.get('tech', type=int))
+    try:
+        return jsonify({t.id: _tech_sync_state(t, mc, _tech_file_xml(mc, t)) for t in q})
+    except Exception as e:
+        return jsonify({'error': _tech_folder_error(e)})
+
+
+@app.route('/admin/hall/<int:machine_id>/cut-tech/<int:tech_id>/folder/<any(pull, push):direction>', methods=['POST'])
+@role_required('admin')
+def admin_hall_tech_folder_sync(machine_id, tech_id, direction):
+    """"Внеси от файла" (pull: the file in the folder -> this technology, same Вид / thickness / gas / nozzle) or
+    "Обнови файла" (push: this technology -> its file, encrypted like CypCut's). Either way the two are in sync after."""
+    hm, mc, refusal = _laser_with_folder(machine_id)
+    if refusal:
+        return refusal
+    tech = MachineCutTechnology.query.filter_by(id=tech_id, machine_id=mc.id).first_or_404()
+    if not tech.folder_file:
+        return _dossier_back(hm.id, 'Технологията няма файл в папката.', 'warning')
+    rel, _, name = tech.folder_file.rpartition('\\')
+    try:
+        if direction == 'pull':
+            data = _tech_folder_read(mc, rel, name)
+            ch = fscut.read_fsm(data, FSCUT_FSM_PASSWORD, name)
+            _save_channel_technology(mc, tech.grade_id, tech.thickness_mm, tech.nozzle, ch, tech.source, tech.gas)
+            _tech_folder_link(tech, mc, tech.folder_file, fscut.fsm_xml_of(data, FSCUT_FSM_PASSWORD))
+        else:
+            xml = _tech_app_xml(tech, mc)
+            _tech_folder_write(mc, rel, name, fscut._zipcrypto(fscut.FSM_MEMBER, xml, FSCUT_FSM_PASSWORD))
+            _tech_folder_link(tech, mc, tech.folder_file, xml)
+    except ValueError:
+        db.session.rollback()
+        return _dossier_back(hm.id, f'Файлът {tech.folder_file} не може да се прочете.', 'danger')
+    except Exception as e:
+        db.session.rollback()
+        return _dossier_back(hm.id, _tech_folder_error(e), 'danger')
+    db.session.commit()
+    what = 'внесена от файла' if direction == 'pull' else 'записана във файла'
+    log_action(f'Технология на "{hm.name}" {what} {tech.folder_file}: {_cut_tech_label(tech)}')
+    return _dossier_back(hm.id, f'Технологията е {what} {tech.folder_file}.')
 
 
 def _fscut_download(data, name, ext):

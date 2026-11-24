@@ -1787,23 +1787,27 @@ NOZZLE_DEFAULT = ('默认',)          # MaterialParams NozzleSpec "default" = no
 _FSM_GAS_WORDS = (('O2', 'oxygen'), ('N2', 'nitrogen'), ('AIR', 'air'))
 
 
+def fsm_xml_of(data, password):
+    """The decrypted material.lcm (XML bytes) of an .fsm. ValueError for a file that is not one / a wrong password."""
+    import io
+    import zlib
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+        if zf.getinfo(FSM_MEMBER).file_size > FSM_MAX_BYTES:
+            raise ValueError('member too large')
+        return zf.read(FSM_MEMBER, pwd=(password or '').encode('utf-8'))
+    except (zipfile.BadZipFile, KeyError, RuntimeError, NotImplementedError, OSError, EOFError, zlib.error) as e:
+        raise ValueError(f'not an .fsm: {e}') from None
+
+
 def read_fsm(data, password, name=None):
     """One CypCut library technology (.fsm bytes) -> the same channel dict as parse()['technology']['channels'][n],
     with the <Material> attributes kept as the raw row ['@', attrs, '']. `name` (the file name) gives the library
     name, thickness and nozzle ("8mmCS-D1.2-O2.fsm" -> 8 mm, 1.2d) - the file's own MaterialName / MaterialParams
     are often left from the technology it was copied from - and the gas when the file has none ("...-O2", "N2",
     "AIR"). ValueError for a file that is not one, or a wrong password."""
-    import io
     import re
-    import zlib
-    try:
-        zf = zipfile.ZipFile(io.BytesIO(data))
-        if zf.getinfo(FSM_MEMBER).file_size > FSM_MAX_BYTES:
-            raise ValueError('member too large')
-        xml = zf.read(FSM_MEMBER, pwd=(password or '').encode('utf-8'))
-    except (zipfile.BadZipFile, KeyError, RuntimeError, NotImplementedError, OSError, EOFError, zlib.error) as e:
-        raise ValueError(f'not an .fsm: {e}') from None
-    root = _fromstring(xml)
+    root = _fromstring(fsm_xml_of(data, password))
     if root.tag != 'Material' or root.find('CamParams') is None:
         raise ValueError('no <Material>')
     attrs = dict(root.attrib)
@@ -1829,6 +1833,11 @@ def read_fsm(data, password, name=None):
 def write_fsm(channel, password, name=None, thickness=None):
     """A technology (the channel dict app.py's _tech_channel() gives: raw / fields / speed / gas / gas_map) as an
     encrypted CypCut .fsm, bytes. `name` goes into MaterialName, `thickness` into MaterialParams."""
+    return _zipcrypto(FSM_MEMBER, fsm_xml(channel, name, thickness), password)
+
+
+def fsm_xml(channel, name=None, thickness=None):
+    """The material.lcm XML write_fsm() encrypts - deterministic, so its hash tells whether a technology changed."""
     c = channel or {}
     raw = c.get('raw') or []
     attrs = next((a for p, a, _ in raw if p == '@'), None) or FSM_ROOT_ATTRS
@@ -1852,7 +1861,7 @@ def write_fsm(channel, password, name=None, thickness=None):
         mp.set('Thickness', _num(thickness))
     kids = list(el)
     el[:] = sorted(kids, key=lambda k: FSM_ORDER.index(k.tag) if k.tag in FSM_ORDER else len(FSM_ORDER))
-    return _zipcrypto(FSM_MEMBER, _xml_bytes(el), password)
+    return _xml_bytes(el)
 
 
 def _crc_table():

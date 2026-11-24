@@ -244,6 +244,26 @@
                 hint.textContent = t ? 'Попълнено от технологията на машината (' + techName(t) + '). Натиснете „Запази технологията“.'
                     : 'Машината няма записана технология за този вид, дебелина, газ и дюза - въведете я и отметнете „Запиши като технология на машината“.';
                 list(t);
+                if (t) checkFile(t);
+            }
+            // a technology with a file in the machine's folder: ask whether that file differs (admin_hall_tech_folder_status)
+            const SYNC_MSG = {file: 'файлът в папката на машината е променен', app: 'технологията е променена тук, файлът - не',
+                              both: 'променени са и файлът, и технологията тук', missing: 'файлът го няма в папката'};
+            function checkFile(t) {
+                if (!t.check) return;
+                fetch(t.check, {credentials: 'same-origin'}).then(function (r) { return r.json(); }).then(function (st) {
+                    const s = st && st[t.id];
+                    if (!s || s === 'same') return;
+                    const note = document.createElement('div');
+                    note.className = 'alert alert-warning';
+                    note.style.margin = '6px 0 0';
+                    note.appendChild(document.createTextNode('⚠ ' + SYNC_MSG[s] + ' - внесете или обновете от '));
+                    const a = document.createElement('a');
+                    a.href = t.dossier;
+                    a.textContent = 'досието на машината';
+                    note.appendChild(a);
+                    hint.appendChild(note);
+                }).catch(function () { /* hint only */ });
             }
             // machine picked: fill everything from its first recorded technology
             sel.addEventListener('change', function () {
@@ -262,7 +282,7 @@
                 });
             });
             // on load: list the saved machine's technologies (fields keep the detail's own values)
-            if (sel.value) list(matching(true));
+            if (sel.value) { const cur = matching(true); list(cur); if (cur) checkFile(cur); }
         })();
     </script>
     {% endif %}
