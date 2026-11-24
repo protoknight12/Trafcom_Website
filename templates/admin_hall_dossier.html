@@ -225,6 +225,7 @@
                 <td class="dz-muted">{{ t.source or 'ръчно' }}{% if t.needs_test %}
                     <div class="alert alert-warning" style="margin:4px 0 0; padding:2px 6px; font-size:0.78rem;">За тест - не е потвърдена</div>{% endif %}</td>
                 <td style="white-space:nowrap;">
+                    {% if fsm_enabled %}<a class="btn" href="{{ url_for('admin_hall_cut_tech_fsm', machine_id=m.id, tech_id=t.id) }}" title="Технология за библиотеката на CypCut">.fsm</a>{% endif %}
                     {% if t.needs_test %}
                     <form method="post" action="{{ url_for('admin_hall_cut_tech_tested', machine_id=m.id, tech_id=t.id) }}" style="display:inline; margin:0;"
                           data-confirm="Тестовият рез с {{ t.grade.name if t.grade else 'без вид' }}, {{ t.thickness_mm|num3 }} мм е успешен?">
@@ -257,6 +258,7 @@
             </tbody>
         </table>
         </div>
+        {% if fsm_enabled %}<p style="margin:8px 0 0;"><a class="btn" href="{{ url_for('admin_hall_cut_tech_fsm_all', machine_id=m.id) }}">Изтегли всички като .fsm (ZIP)</a></p>{% endif %}
         {% else %}
         <p class="dz-muted">Няма записани технологии.</p>
         {% endif %}
@@ -264,12 +266,12 @@
         <section id="cti-form" data-dialog-section="Импорт от FSCUT файл">
         <form method="post" action="{{ url_for('admin_hall_cut_tech_import', machine_id=m.id) }}" class="dz-form" enctype="multipart/form-data" data-once>
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <p class="dz-muted" style="margin-top:0">Всеки слой на файла (.lxd / .lxds), зареден в CypCut от технология от библиотеката (напр. „8mm1.2d1.5d_D.fsm“), става технология на машината: дебелината и дюзата се вземат от името на технологията, газът и всички параметри - от слоя. Слой без технология от библиотеката се пропуска; същият вид, дебелина, газ и дюза се презаписват.</p>
+            <p class="dz-muted" style="margin-top:0">Всеки слой на файла (.lxd / .lxds), зареден в CypCut от технология от библиотеката (напр. „8mm1.2d1.5d_D.fsm“), става технология на машината: дебелината и дюзата се вземат от името на технологията, газът и всички параметри - от слоя. Слой без технология от библиотеката се пропуска; същият вид, дебелина, газ и дюза се презаписват.{% if fsm_enabled %} Могат да се изберат и много технологии от библиотеката на CypCut (.fsm) наведнъж: дебелината, дюзата и газът се вземат от името на файла (напр. „8mmCS-D1.2-O2.fsm“).{% endif %}</p>
             <div class="dz-row">
                 <div><label>Вид материал на технологиите</label>
                     <select name="grade_id" data-picker="off"><option value="">- без вид -</option>
                         {% for gr in grades %}<option value="{{ gr.id }}">{{ gr.name }}</option>{% endfor %}</select></div>
-                <div><label>Файл</label><input type="file" name="file" accept=".lxd,.lxds" required></div>
+                <div><label>Файл</label><input type="file" name="file" accept=".lxd,.lxds{{ ',.fsm' if fsm_enabled }}" multiple required></div>
             </div>
             {#- gases sharing a channel (Газове по канали): the file only says the channel, the user says the real gas #}
             {% set gmap = machine.gas_channel_map if machine else {} %}

@@ -360,8 +360,9 @@ def _raw(el, path='', out=None, depth=0):
 
 def library_name_parts(name):
     """A CypCut library file name -> (thickness mm, nozzle): "8mm1.2d1.5d_D.fsm" -> (8.0, "1.2d/1.5d"),
-    "16mm1.4E.fsm" -> (16.0, "1.4E"), "1mm1.5s2.0s_0.6_n2_D.fsm" -> (1.0, "1.5s/2.0s"). (None, None) when the name
-    does not start with "<number>mm"; text after the first "_" is the user's own suffix."""
+    "16mm1.4E.fsm" -> (16.0, "1.4E"), "1mm1.5s2.0s_0.6_n2_D.fsm" -> (1.0, "1.5s/2.0s"); the machine maker's library
+    puts the type letter first: "8mmCS-D1.2-O2.fsm" -> (8.0, "1.2d"), "10mm SS-N2 S4.fsm" -> (10.0, "4s").
+    (None, None) when the name does not start with "<number>mm"; text after the first "_" is the user's own suffix."""
     import re
     m = re.match(r'\s*(\d+(?:[.,]\d+)?)\s*mm([^_]*)', name or '', re.I)
     if not m:
@@ -369,6 +370,9 @@ def library_name_parts(name):
     thickness = float(m.group(1).replace(',', '.'))
     rest = re.sub(r'\.fsm$', '', m.group(2), flags=re.I)
     nozzles = re.findall(r'\d+(?:\.\d+)?[A-Za-z]+', rest)
+    if not nozzles:                     # "CS-D1.2-O2", "SS-N2 S4": S(ingle) / D(ouble) / E before the size
+        nozzles = [n + (t.lower() if t.lower() in 'sd' else t.upper())
+                   for t, n in re.findall(r'(?<![A-Za-z])([SDE])(\d+(?:\.\d+)?)', rest, re.I)]
     return (thickness if 0 < thickness < 1000 else None), ('/'.join(nozzles)[:30] or None)
 
 
@@ -411,7 +415,8 @@ def _technology(tech_el):
             'gas_pressure_bar': fields['gas_pressure_bar'], 'power_w': fields['peak_power_w'],
             'focus_mm': fields['focus_mm'], 'height_mm': fields['height_mm'],
             'pierce_time_sec': round(pierce_ms / 1000, 3) if pierce_ms else None,
-            'nozzle': ((mp.get('NozzleSpec') or '').strip() or None) if mp is not None else None,
+            'nozzle': (None if (mp.get('NozzleSpec') or '').strip() in NOZZLE_DEFAULT
+                       else (mp.get('NozzleSpec') or '').strip() or None) if mp is not None else None,
             'fields': fields, 'raw': _raw(ch)})
     return out
 
@@ -982,6 +987,8 @@ def _channel_el(port, raw=None, fields=None, speed_mm_min=None, gas=None, gas_ma
     ch = ET.Element('Channel', {'ChannelPort': str(port), 'ParamFlag': '768', 'OEM': '1'})
     made = {}
     for path, attrs, text in raw or []:
+        if path == '@':                 # an .fsm's <Material> attributes (read_fsm) - not a child element
+            continue
         parent_path, _, last = path.rpartition('/')
         el = ET.SubElement(made.get(parent_path, ch), last.split('[')[0], {k: str(v) for k, v in attrs.items()})
         if text:
@@ -1761,3 +1768,131 @@ def write_lxds_plate(pts, name='Остатък'):
     ET.SubElement(el, 'Shape', {'Class': 'LwPolyline', 'Handle': str(sh), 'NestPlate': str(ph)})
     ET.SubElement(el, 'ExtShapes')
     return _lxds_zip(store, h, _new_id(), _lxds_technical(None, None, None), plates=plates_el, counts=(0, 1, 0))
+
+
+# ---------- CypCut library technologies (.fsm) ----------
+# A .fsm is a ZIP with one member, material.lcm, encrypted with the old ZIP 2.0 (ZipCrypto) cipher; the member is a
+# <Material> element laid out like a <Channel> of an .lxd (CamParams, MaterialName, MaterialParams ...). CypCut opens
+# only an encrypted one (owner, 2026-11-24), so the writer encrypts it the same way. The password is not in the code
+# (the repository is public): app.py reads it from the environment. See docs/FSCUT_FORMAT.md.
+
+FSM_MEMBER = 'material.lcm'
+FSM_MAX_BYTES = 1_000_000          # a real member is ~6 KB
+# <Material>'s own attributes as CypCut writes them (kept from an imported .fsm as the '@' row of its raw parameters)
+FSM_ROOT_ATTRS = {'ChannelPort': '1', 'ParamFlag': '768', 'DefPwmFreqFunc': 'true', 'DefPwmRatioFunc': 'true',
+                  'OEM': '1', 'UseDeslag': 'false', 'OEMCode': '16513464'}
+FSM_ORDER = ('CamParams', 'MaterialName', 'MaterialPath', 'PwmFreqFunc', 'PwmRatioFunc', 'MaterialParams', 'Note')
+NOZZLE_DEFAULT = ('默认',)          # MaterialParams NozzleSpec "default" = no nozzle
+_FSM_GAS_WORDS = (('O2', 'oxygen'), ('N2', 'nitrogen'), ('AIR', 'air'))
+
+
+def read_fsm(data, password, name=None):
+    """One CypCut library technology (.fsm bytes) -> the same channel dict as parse()['technology']['channels'][n],
+    with the <Material> attributes kept as the raw row ['@', attrs, '']. `name` (the file name) gives the library
+    name, thickness and nozzle ("8mmCS-D1.2-O2.fsm" -> 8 mm, 1.2d) - the file's own MaterialName / MaterialParams
+    are often left from the technology it was copied from - and the gas when the file has none ("...-O2", "N2",
+    "AIR"). ValueError for a file that is not one, or a wrong password."""
+    import io
+    import re
+    import zlib
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+        if zf.getinfo(FSM_MEMBER).file_size > FSM_MAX_BYTES:
+            raise ValueError('member too large')
+        xml = zf.read(FSM_MEMBER, pwd=(password or '').encode('utf-8'))
+    except (zipfile.BadZipFile, KeyError, RuntimeError, NotImplementedError, OSError, EOFError, zlib.error) as e:
+        raise ValueError(f'not an .fsm: {e}') from None
+    root = _fromstring(xml)
+    if root.tag != 'Material' or root.find('CamParams') is None:
+        raise ValueError('no <Material>')
+    attrs = dict(root.attrib)
+    root.tag = 'Channel'
+    root.set('ChannelPort', '1')
+    tech = ET.Element('Technical')
+    tech.append(root)
+    channels = _technology(tech)['channels']
+    if not channels:
+        raise ValueError('no technology')
+    ch = channels[0]
+    ch['raw'].insert(0, ['@', attrs, ''])
+    if name:
+        ch['library'] = name
+        ch['library_thickness'], ch['library_nozzle'] = library_name_parts(name)
+        if ch['gas'] is None:
+            stem = re.sub(r'\.fsm$', '', name, flags=re.I)
+            ch['gas'] = next((g for word, g in _FSM_GAS_WORDS
+                              if re.search(rf'(?<![A-Za-z]){word}(?![0-9A-Za-z])', stem, re.I)), None)
+    return ch
+
+
+def write_fsm(channel, password, name=None, thickness=None):
+    """A technology (the channel dict app.py's _tech_channel() gives: raw / fields / speed / gas / gas_map) as an
+    encrypted CypCut .fsm, bytes. `name` goes into MaterialName, `thickness` into MaterialParams."""
+    c = channel or {}
+    raw = c.get('raw') or []
+    attrs = next((a for p, a, _ in raw if p == '@'), None) or FSM_ROOT_ATTRS
+    el = _channel_el(1, raw, c.get('fields'), c.get('speed_mm_min'), c.get('gas'), c.get('gas_map'))
+    el.tag = 'Material'
+    el.attrib.clear()
+    el.attrib.update({k: str(v) for k, v in attrs.items()})
+    el.set('ChannelPort', '1')
+    for tag in FSM_ORDER:
+        if el.find(tag) is None:
+            ET.SubElement(el, tag)
+    if name:
+        el.find('MaterialName').text = name
+    mp = el.find('MaterialParams')
+    for k, v in (('MaterialID', '0'), ('MaterialName', ''), ('NozzleSpec', NOZZLE_DEFAULT[0])):
+        if mp.get(k) is None:
+            mp.set(k, v)
+    if thickness:
+        mp.set('Thickness', _num(thickness))
+    kids = list(el)
+    el[:] = sorted(kids, key=lambda k: FSM_ORDER.index(k.tag) if k.tag in FSM_ORDER else len(FSM_ORDER))
+    return _zipcrypto(FSM_MEMBER, _xml_bytes(el), password)
+
+
+def _crc_table():
+    table = []
+    for i in range(256):
+        c = i
+        for _ in range(8):
+            c = (c >> 1) ^ 0xEDB88320 if c & 1 else c >> 1
+        table.append(c)
+    return table
+
+
+_CRC_TABLE = _crc_table()
+
+
+def _zipcrypto(member, data, password):
+    """A one-member ZIP, deflated and encrypted with ZipCrypto (PKWARE APPNOTE 6.1) - what CypCut writes; the
+    stdlib zipfile only decrypts. Header fields as in CypCut's own files (version 2.0, made by 6.3, no extras)."""
+    import os
+    import time
+    import zlib
+    crc = zlib.crc32(data) & 0xFFFFFFFF
+    co = zlib.compressobj(9, zlib.DEFLATED, -15)
+    comp = co.compress(data) + co.flush()
+    keys = [0x12345678, 0x23456789, 0x34567890]
+
+    def update(b):
+        keys[0] = _CRC_TABLE[(keys[0] ^ b) & 0xFF] ^ (keys[0] >> 8)
+        keys[1] = ((keys[1] + (keys[0] & 0xFF)) * 134775813 + 1) & 0xFFFFFFFF
+        keys[2] = _CRC_TABLE[(keys[2] ^ (keys[1] >> 24)) & 0xFF] ^ (keys[2] >> 8)
+    for b in (password or '').encode('utf-8'):
+        update(b)
+    enc = bytearray()
+    for b in os.urandom(11) + bytes([crc >> 24]) + comp:     # 12-byte header, its last byte = the CRC check
+        t = (keys[2] | 2) & 0xFFFF
+        enc.append(b ^ (((t * (t ^ 1)) >> 8) & 0xFF))
+        update(b)
+    y, mo, d, h, mi, s = time.localtime()[:6]
+    dtime, ddate = (h << 11) | (mi << 5) | (s // 2), ((max(y, 1980) - 1980) << 9) | (mo << 5) | d
+    fname = member.encode('utf-8')
+    common = struct.pack('<HHHHHIII', 20, 1, 8, dtime, ddate, crc, len(enc), len(data))
+    local = struct.pack('<I', 0x04034B50) + common + struct.pack('<HH', len(fname), 0) + fname
+    central = (struct.pack('<IH', 0x02014B50, 63) + common
+               + struct.pack('<HHHHHII', len(fname), 0, 0, 0, 0, 0x20, 0) + fname)
+    end = struct.pack('<IHHHHIIH', 0x06054B50, 0, 0, 1, 1, len(central), len(local) + len(enc), 0)
+    return local + bytes(enc) + central + end

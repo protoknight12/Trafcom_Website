@@ -619,7 +619,7 @@ def test_import_library_technologies(s, tmp_path):
     rows = sorted((t.thickness_mm, t.gas, t.nozzle, t.cutting_speed_mm_per_min, t.grade_id)
                   for t in MachineCutTechnology.query.filter_by(machine_id=laser.id))
     assert rows == [(2, 'nitrogen', '1.5s/2.0s', 18000, grade.id), (8, 'oxygen', '1.2d/1.5d', 1800, grade.id)]
-    assert 'Извън границите на дебелината: слой 3 (20 мм)' in c.get(f'/admin/hall/{hall.id}/dossier').get_data(as_text=True)
+    assert 'Извън границите на дебелината: cs copy.lxd, слой 3 (20 мм)' in c.get(f'/admin/hall/{hall.id}/dossier').get_data(as_text=True)
     t = MachineCutTechnology.query.filter_by(machine_id=laser.id, thickness_mm=8).one()
     assert t.source == 'cs copy.lxd / 8mm1.2d1.5d_D.fsm' and t.gas_pressure_bar == 0.8 and t.params_json
     c.post(url, data={'grade_id': grade.id, 'file': (io.BytesIO(doc.encode()), 'cs copy.lxd')},

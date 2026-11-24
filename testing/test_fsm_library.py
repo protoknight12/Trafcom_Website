@@ -1,0 +1,154 @@
+"""
+CypCut library technologies (.fsm, owner's request 2026-11-24): fscut.read_fsm() / write_fsm() and the dossier's
+import (several .fsm at once) / export (one .fsm, all as a ZIP).
+
+An .fsm is a one-member ZIP (material.lcm, a <Material> XML) encrypted with ZipCrypto; CypCut opens only an
+encrypted one, so the writer must produce what the stdlib zipfile decrypts with the password and refuses without it.
+The real password is not in the repository - the tests use their own.
+
+Run: pytest testing/test_fsm_library.py -v
+"""
+import io
+import zipfile
+
+import pytest
+from flask import g
+from werkzeug.security import generate_password_hash
+
+import fscut
+import app as app_module
+from app import (app as flask_app, db, User, Machine, MachineCutTechnology, HallMachine, MaterialGrade, limiter,
+                 seed_material_types)
+
+PW = 'test-only-password'
+MATERIAL = ('<?xml version="1.0" encoding="utf-8"?>\r\n'
+            '<Material ChannelPort="1" ParamFlag="768" OEM="1" OEMCode="42">'
+            '<CamParams WorkSpeed="{speed}" PierceStepCount="1" LiftHeight="30">'
+            '<Cut Focus="{focus}" GasPressure=".5" GasType="{gas}" Height=".6" PeakPower="6000"/>'
+            '<Pierce1 Focus="-6" GasType="2" Height="12" TimeFollow="1000" TimeStay="150"/></CamParams>'
+            '<MaterialName>4mm碳钢-双层1.2.fsm氧气.fsm</MaterialName>'
+            '<MaterialParams MaterialID="0" MaterialName="硅钢" NozzleSpec="默认" Thickness="3"/><Note/></Material>')
+
+
+def _fsm(speed=45, focus=11, gas=2, password=PW):
+    return fscut._zipcrypto(fscut.FSM_MEMBER, MATERIAL.format(speed=speed, focus=focus, gas=gas).encode(), password)
+
+
+def test_zipcrypto_is_what_zipfile_decrypts():
+    data = _fsm()
+    zf = zipfile.ZipFile(io.BytesIO(data))
+    info = zf.getinfo('material.lcm')
+    assert info.flag_bits & 1 and info.compress_type == zipfile.ZIP_DEFLATED
+    assert zf.read('material.lcm', pwd=PW.encode()).startswith(b'<?xml')
+    with pytest.raises(RuntimeError):
+        zipfile.ZipFile(io.BytesIO(data)).read('material.lcm', pwd=b'wrong')
+
+
+def test_read_fsm_takes_the_file_name():
+    ch = fscut.read_fsm(_fsm(), PW, '8mmCS-D1.2-O2.fsm')
+    # thickness / nozzle from the name, not the stale MaterialName / MaterialParams inside
+    assert (ch['library_thickness'], ch['library_nozzle'], ch['gas']) == (8.0, '1.2d', 'oxygen')
+    assert ch['speed_mm_min'] == 2700 and ch['focus_mm'] == 11 and ch['nozzle'] is None       # 默认 = no nozzle
+    assert ch['raw'][0] == ['@', {'ChannelPort': '1', 'ParamFlag': '768', 'OEM': '1', 'OEMCode': '42'}, '']
+    assert fscut.library_name_parts('10mm SS-N2 S4.fsm') == (10.0, '4s')
+    assert fscut.library_name_parts('1mm CS S2.0.fsm') == (1.0, '2.0s')
+    assert fscut.library_name_parts('8mm1.2d1.5d_D.fsm') == (8.0, '1.2d/1.5d')                # old style unchanged
+    # no gas in the file (GasType 0): from the name; none there either -> None
+    assert fscut.read_fsm(_fsm(gas=0), PW, '25mmCS-D1.6-O2.fsm')['gas'] == 'oxygen'
+    assert fscut.read_fsm(_fsm(gas=0), PW, '10mmSS-S3.5.fsm')['gas'] is None
+    assert fscut.read_fsm(_fsm(gas=0), PW, '1mm CS AIR S2.0.fsm')['gas'] == 'air'
+    for bad in (_fsm(password='other'), b'not a zip', fscut._zipcrypto('other.xml', b'<a/>', PW),
+                fscut._zipcrypto('material.lcm', b'<Other/>', PW)):
+        with pytest.raises(ValueError):
+            fscut.read_fsm(bad, PW, 'x.fsm')
+
+
+def test_write_fsm_round_trip():
+    ch = fscut.read_fsm(_fsm(gas=0), PW, '25mmCS-D1.6-O2.fsm')
+    ch['fields']['focus_mm'] = 17
+    out = fscut.write_fsm(ch, PW, name='25mm1.6d_O2.fsm', thickness=25)
+    back = fscut.read_fsm(out, PW, '25mm1.6d_O2.fsm')
+    assert back['fields']['focus_mm'] == 17 and back['gas'] == 'oxygen' and back['speed_mm_min'] == 2700
+    assert back['raw'][0][1]['OEMCode'] == '42'                                     # <Material> attributes kept
+    xml = zipfile.ZipFile(io.BytesIO(out)).read('material.lcm', pwd=PW.encode()).decode()
+    assert '<MaterialName>25mm1.6d_O2.fsm</MaterialName>' in xml and 'Thickness="25"' in xml
+    assert xml.index('<CamParams') < xml.index('<MaterialName') < xml.index('<MaterialParams')
+    assert '\r\n' in xml and 'GasType="2"' in xml
+    # a technology that never came from an .fsm (no '@' row) still gets CypCut's <Material> attributes
+    plain = fscut.write_fsm({'speed_mm_min': 1200, 'gas': 'nitrogen', 'fields': {'focus_mm': -3}}, PW)
+    p = fscut.read_fsm(plain, PW, '3mm2.0s_N2.fsm')
+    assert p['raw'][0][1]['OEMCode'] == fscut.FSM_ROOT_ATTRS['OEMCode'] and p['gas'] == 'nitrogen'
+    assert p['library_thickness'] == 3 and p['library_nozzle'] == '2.0s'
+
+
+@pytest.fixture
+def s(monkeypatch):
+    monkeypatch.setattr(app_module, 'FSCUT_FSM_PASSWORD', PW)
+    flask_app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
+    limiter.reset()
+    with flask_app.app_context():
+        db.create_all()
+        seed_material_types()
+        pw = generate_password_hash('irrelevant123')
+        db.session.add_all([User(username='fsm_admin', password=pw, role='admin'),
+                            User(username='fsm_worker', password=pw, role='worker')])
+        db.session.commit()
+        yield
+        db.session.remove()
+        db.drop_all()
+
+
+def _login(username):
+    g.pop('_login_user', None)
+    c = flask_app.test_client()
+    c.post('/login', data={'username': username, 'password': 'irrelevant123'})
+    return c
+
+
+def test_dossier_import_and_export(s, monkeypatch):
+    laser = Machine(name='PG3015 FSM', is_laser=True)
+    db.session.add(laser)
+    db.session.flush()
+    hall = HallMachine(name=laser.name, machine_id=laser.id)
+    grade = MaterialGrade(name='Черна стомана FSM', density_kg_dm3=7.85)
+    db.session.add_all([hall, grade])
+    db.session.commit()
+    c = _login('fsm_admin')
+    url = f'/admin/hall/{hall.id}/cut-tech/import'
+    files = [(io.BytesIO(_fsm(speed=45, focus=11)), '8mmCS-D1.2-O2.fsm'),
+             (io.BytesIO(_fsm(speed=40, focus=12)), '10mmCS-D1.2-O2.fsm'),
+             (io.BytesIO(_fsm(password='other')), '12mmCS-D1.2-O2.fsm'),          # unreadable: listed, skipped
+             (io.BytesIO(_fsm(gas=0)), '5mmSS-S3.5.fsm')]                          # no gas anywhere: skipped
+    r = c.post(url, data={'grade_id': grade.id, 'file': files}, content_type='multipart/form-data',
+               follow_redirects=True)
+    page = r.get_data(as_text=True)
+    assert 'Внесени технологии: 2.' in page and '12mmCS-D1.2-O2.fsm' in page and '5mmSS-S3.5.fsm' in page
+    rows = sorted((t.thickness_mm, t.gas, t.nozzle, t.cutting_speed_mm_per_min, t.focus_mm, t.source)
+                  for t in MachineCutTechnology.query.filter_by(machine_id=laser.id))
+    assert rows == [(8, 'oxygen', '1.2d', 2700, 11, '8mmCS-D1.2-O2.fsm'),
+                    (10, 'oxygen', '1.2d', 2400, 12, '10mmCS-D1.2-O2.fsm')]
+    assert 'Изтегли всички като .fsm' in page
+
+    t = MachineCutTechnology.query.filter_by(machine_id=laser.id, thickness_mm=8).one()
+    r = c.get(f'/admin/hall/{hall.id}/cut-tech/{t.id}/fsm')
+    assert r.status_code == 200 and '8mm1.2d_O2.fsm' in r.headers['Content-Disposition']
+    back = fscut.read_fsm(r.data, PW, '8mm1.2d_O2.fsm')
+    assert back['speed_mm_min'] == 2700 and back['focus_mm'] == 11 and back['raw'][0][1]['OEMCode'] == '42'
+    assert (back['library_thickness'], back['library_nozzle'], back['gas']) == (8, '1.2d', 'oxygen')
+
+    z = zipfile.ZipFile(io.BytesIO(c.get(f'/admin/hall/{hall.id}/cut-tech/fsm.zip').data))
+    assert sorted(z.namelist()) == ['Черна стомана FSM Кислород/10mm1.2d_O2.fsm',
+                                    'Черна стомана FSM Кислород/8mm1.2d_O2.fsm']
+    assert fscut.read_fsm(z.read('Черна стомана FSM Кислород/10mm1.2d_O2.fsm'), PW, 'x.fsm')['focus_mm'] == 12
+
+    # admin only; without a password the feature is off
+    w = _login('fsm_worker')
+    assert w.get(f'/admin/hall/{hall.id}/cut-tech/{t.id}/fsm').status_code == 302
+    monkeypatch.setattr(app_module, 'FSCUT_FSM_PASSWORD', None)
+    c = _login('fsm_admin')
+    assert 'Изтегли всички като .fsm' not in c.get(f'/admin/hall/{hall.id}/dossier').get_data(as_text=True)
+    r = c.post(url, data={'grade_id': grade.id, 'file': [(io.BytesIO(_fsm()), '6mmCS-D1.2-O2.fsm')]},
+               content_type='multipart/form-data', follow_redirects=True)
+    assert 'FSCUT_FSM_PASSWORD' in r.get_data(as_text=True)
+    assert c.get(f'/admin/hall/{hall.id}/cut-tech/{t.id}/fsm').status_code == 302
+    assert MachineCutTechnology.query.filter_by(machine_id=laser.id).count() == 2

@@ -10721,7 +10721,7 @@ def admin_hall_dossier(machine_id):
                            services=Service.query.order_by(Service.name).all(), known_machine_types=_known_machine_types(),
                            grades=MaterialGrade.query.order_by(MaterialGrade.sort_order, MaterialGrade.name).all(),
                            cut_techs=cut_techs, cut_gases=CUT_GASES, tech_cols=tech_cols, tech_values=tech_values,
-                           fscut_formats=FSCUT_FORMATS,
+                           fscut_formats=FSCUT_FORMATS, fsm_enabled=bool(FSCUT_FSM_PASSWORD),
                            tech_raw=tech_raw, thickness_ranges=ranges, tech_outside=tech_outside,
                            free_machines=[x for x in Machine.query.order_by(Machine.name) if x.hall_record is None])
 
@@ -16262,6 +16262,9 @@ def view_detail_step_mesh(file_id):
 
 
 FSCUT_EXTENSIONS = ('.lxd', '.lxds')     # FSCUT / CypCutE nesting files ("разкрой"), read by fscut.py
+# password of CypCut's .fsm library technologies (fscut.read_fsm / write_fsm); unset = .fsm import/export disabled.
+# Not in the code: the repository is public.
+FSCUT_FSM_PASSWORD = os.environ.get('FSCUT_FSM_PASSWORD') or None
 
 
 @app.route('/details/files/<int:file_id>/nest')
@@ -16602,48 +16605,115 @@ def admin_hall_cut_tech_import(machine_id):
     nozzle from the library name the layer keeps ("8mm1.2d1.5d_D.fsm" -> 8 mm, 1.2d/1.5d; CypCut overwrites the
     layer's own MaterialParams with the document's), gas and every parameter from the layer. A layer without a
     library name or without a gas is skipped; one outside the machine's thickness range is refused (listed); the same
-    key is overwritten. The uploaded file is not kept."""
+    key is overwritten. The uploaded file is not kept.
+    CypCut library technologies themselves (.fsm, owner's request 2026-11-24) are taken too, several at once: each
+    is one technology, thickness / nozzle / gas from its FILE NAME ("8mmCS-D1.2-O2.fsm", fscut.read_fsm()), decrypted
+    with FSCUT_FSM_PASSWORD."""
     hm = HallMachine.query.get_or_404(machine_id)
     mc = hm.machine
     if mc is None or not mc.is_laser:
         return _dossier_back(hm.id, 'Технологии се внасят само в машина за лазерно рязане.', 'danger')
-    upload = request.files.get('file')
-    ext = os.path.splitext(upload.filename or '')[1].lower() if upload else ''
-    if ext not in FSCUT_EXTENSIONS:
-        return _dossier_back(hm.id, 'Изберете файл от FSCUT (.lxd или .lxds).', 'danger')
+    uploads = [u for u in request.files.getlist('file') if u and u.filename]
+    exts = [os.path.splitext(u.filename)[1].lower() for u in uploads]
+    if not uploads or any(e not in FSCUT_EXTENSIONS + ('.fsm',) for e in exts):
+        return _dossier_back(hm.id, 'Изберете файлове от FSCUT (.lxd, .lxds) или технологии от CypCut (.fsm).',
+                             'danger')
+    if '.fsm' in exts and not FSCUT_FSM_PASSWORD:
+        return _dossier_back(hm.id, 'Внасянето на .fsm не е настроено (FSCUT_FSM_PASSWORD в .env).', 'danger')
     grade_raw = request.form.get('grade_id', '')
     grade_id = int(grade_raw) if grade_raw.isdigit() and db.session.get(MaterialGrade, int(grade_raw)) else None
-    tmp = os.path.join(app.config['UPLOAD_FOLDER'], f'techimport_{uuid.uuid4().hex}{ext}')
-    upload.save(tmp)
-    try:
-        channels = fscut.parse(tmp)['technology']['channels']
-    except ValueError:
-        return _dossier_back(hm.id, 'Файлът не може да се прочете.', 'danger')
-    finally:
-        os.remove(tmp)
-    saved, skipped, refused = [], [], []
-    for ch in channels:
-        thickness, nozzle = ch['library_thickness'], ch['library_nozzle'] or ch['nozzle']
-        if not ch['library'] or thickness is None or not ch['gas'] or not ch['speed_mm_min']:
-            skipped.append(str(ch['port']))
+    saved, skipped, refused, unreadable = [], [], [], []
+    for upload, ext in zip(uploads, exts):
+        try:
+            if ext == '.fsm':
+                channels = [fscut.read_fsm(upload.read(), FSCUT_FSM_PASSWORD, upload.filename)]
+            else:
+                tmp = os.path.join(app.config['UPLOAD_FOLDER'], f'techimport_{uuid.uuid4().hex}{ext}')
+                upload.save(tmp)
+                try:
+                    channels = fscut.parse(tmp)['technology']['channels']
+                finally:
+                    os.remove(tmp)
+        except ValueError:
+            unreadable.append(upload.filename)
             continue
-        refusal = _thickness_refusal(mc, grade_id, thickness)
-        if refusal:
-            refused.append(f'слой {ch["port"]} ({thickness:g} мм)')
-            continue
-        gas = _real_gas(mc, ch['gas'], request.form.get(f'real_gas_{ch["gas"]}')) or ch['gas']
-        tech = _save_channel_technology(mc, grade_id, thickness, nozzle, ch, f'{upload.filename} / {ch["library"]}',
-                                        gas)
-        saved.append(_cut_tech_label(tech))
+        for ch in channels:
+            label = upload.filename if ext == '.fsm' else f'{upload.filename}, слой {ch["port"]}'
+            thickness, nozzle = ch['library_thickness'], ch['library_nozzle'] or ch['nozzle']
+            if not ch['library'] or thickness is None or not ch['gas'] or not ch['speed_mm_min']:
+                skipped.append(label)
+                continue
+            if _thickness_refusal(mc, grade_id, thickness):
+                refused.append(f'{label} ({thickness:g} мм)')
+                continue
+            gas = _real_gas(mc, ch['gas'], request.form.get(f'real_gas_{ch["gas"]}')) or ch['gas']
+            source = upload.filename if ext == '.fsm' else f'{upload.filename} / {ch["library"]}'
+            tech = _save_channel_technology(mc, grade_id, thickness, nozzle, ch, source, gas)
+            saved.append(_cut_tech_label(tech))
     db.session.commit()
+    names = ', '.join(u.filename for u in uploads)
     if saved:
-        log_action(f'Внесени технологии в "{mc.name}" от "{upload.filename}": {len(saved)}', details='\n'.join(saved))
+        log_action(f'Внесени технологии в "{mc.name}" от "{names}"'[:250] + f': {len(saved)}', details='\n'.join(saved))
     message = f'Внесени технологии: {len(saved)}.'
     if skipped:
-        message += f' Пропуснати слоеве без технология от библиотеката: {", ".join(skipped)}.'
+        message += f' Пропуснати (без технология от библиотеката, дебелина, газ или скорост): {", ".join(skipped)}.'
     if refused:
         message += f' Извън границите на дебелината: {", ".join(refused)}.'
-    return _dossier_back(hm.id, message, 'success' if saved and not refused else 'warning')
+    if unreadable:
+        message += f' Не могат да се прочетат: {", ".join(unreadable)}.'
+    return _dossier_back(hm.id, message, 'success' if saved and not (refused or unreadable) else 'warning')
+
+
+def _fsm_name(tech):
+    """A technology's .fsm file name in the CypCut library style read back by fscut.library_name_parts():
+    "8mm1.2d_O2.fsm" (thickness, nozzle, gas)."""
+    nozzle = re.sub(r'[^0-9A-Za-z.]+', '', tech.nozzle or '')
+    gas = {'oxygen': 'O2', 'nitrogen': 'N2', 'air': 'AIR'}.get(tech.gas, '')
+    return f'{tech.thickness_mm:g}mm{nozzle}' + (f'_{gas}' if gas else '') + '.fsm'
+
+
+def _fsm_bytes(tech, machine):
+    ch = _tech_channel(tech)
+    ch['gas_map'] = machine.gas_channel_map
+    return fscut.write_fsm(ch, FSCUT_FSM_PASSWORD, name=_fsm_name(tech), thickness=tech.thickness_mm)
+
+
+@app.route('/admin/hall/<int:machine_id>/cut-tech/<int:tech_id>/fsm')
+@role_required('admin')
+def admin_hall_cut_tech_fsm(machine_id, tech_id):
+    """One technology as a CypCut library technology (.fsm, encrypted like CypCut's own - fscut.write_fsm()), gases
+    on the machine's channels (Machine.gas_channels) like every other FSCUT download."""
+    hm = HallMachine.query.get_or_404(machine_id)
+    tech = MachineCutTechnology.query.filter_by(id=tech_id, machine_id=hm.machine_id).first_or_404()
+    if not FSCUT_FSM_PASSWORD:
+        return _dossier_back(hm.id, 'Изтеглянето на .fsm не е настроено (FSCUT_FSM_PASSWORD в .env).', 'danger')
+    log_action(f'Изтеглена технология .fsm на "{hm.name}": {_cut_tech_label(tech)}')
+    return _fscut_download(_fsm_bytes(tech, hm.machine), _fsm_name(tech)[:-4], '.fsm')
+
+
+@app.route('/admin/hall/<int:machine_id>/cut-tech/fsm.zip')
+@role_required('admin')
+def admin_hall_cut_tech_fsm_all(machine_id):
+    """Every technology of the machine as .fsm files in one ZIP, a folder per Вид + gas (like CypCut's library)."""
+    hm = HallMachine.query.get_or_404(machine_id)
+    if not FSCUT_FSM_PASSWORD:
+        return _dossier_back(hm.id, 'Изтеглянето на .fsm не е настроено (FSCUT_FSM_PASSWORD в .env).', 'danger')
+    techs = MachineCutTechnology.query.filter_by(machine_id=hm.machine_id).all()
+    if not techs:
+        return _dossier_back(hm.id, 'Машината няма технологии.', 'warning')
+    import zipfile
+    buf, used = io.BytesIO(), set()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_STORED) as zf:
+        for t in techs:
+            folder = re.sub(r'[\\/:*?"<>|]+', '_', f'{t.grade.name if t.grade else "без вид"} {CUT_GASES.get(t.gas, "без газ")}')
+            path, n = f'{folder}/{_fsm_name(t)}', 1
+            while path in used:                      # same thickness + nozzle + gas in one folder: never overwrite
+                n += 1
+                path = f'{folder}/{_fsm_name(t)[:-4]}_{n}.fsm'
+            used.add(path)
+            zf.writestr(path, _fsm_bytes(t, hm.machine))
+    log_action(f'Изтеглени технологии .fsm на "{hm.name}": {len(techs)}')
+    return _fscut_download(buf.getvalue(), f'{hm.name} технологии', '.zip')
 
 
 def _fscut_download(data, name, ext):

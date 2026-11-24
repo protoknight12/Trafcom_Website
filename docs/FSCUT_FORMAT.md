@@ -128,7 +128,25 @@ A layer loaded from a CypCut library technology keeps its file name as a `<Mater
 ("8mm1.2d1.5d_D.fsm" - thickness, nozzles, after "_" the user's own suffix); CypCut overwrites the layer's own
 `MaterialParams` with the document's material / thickness / nozzle, so the library name is the only per-layer
 thickness (`fscut.library_name_parts()`, channel keys `library`, `library_thickness`, `library_nozzle`). The library
-`.fsm` files themselves are a password-protected ZIP and are not read.
+`.fsm` files themselves are read and written too - see below.
+
+## Library technologies (`.fsm`, `fscut.read_fsm()` / `write_fsm()`)
+
+A ZIP with one member, `material.lcm`, deflated and encrypted with ZipCrypto (ZIP 2.0, general-purpose flag bit 0;
+version needed 2.0, made by 6.3, no extra fields). The password is CypCut's and is set as `FSCUT_FSM_PASSWORD` in
+`.env` - never in the code, the repository is public. CypCut does not open an unencrypted `.fsm` (owner,
+2026-11-24), so `fscut._zipcrypto()` writes the same encryption (the stdlib `zipfile` only decrypts).
+
+`material.lcm` is UTF-8 XML, CRLF, tab-indented: `<Material ChannelPort="1" ParamFlag="768" DefPwmFreqFunc
+DefPwmRatioFunc OEM UseDeslag OEMCode>` with the children of a technology channel - `CamParams`, `MaterialName`,
+`MaterialPath`, `PwmFreqFunc`, `PwmRatioFunc`, `MaterialParams`, `Note` - so it is parsed as a `Channel`
+(`_technology()`); the `<Material>` attributes are kept as the raw row `['@', attrs, '']`, which `_channel_el()`
+skips and `write_fsm()` writes back (default `FSM_ROOT_ATTRS`). `MaterialName` / `MaterialParams` inside are often
+stale (left from the technology the file was copied from: "8mmCS-D1.2-O2.fsm" says 4 mm, thickness 3), so thickness,
+nozzle and - when `Cut[GasType]` is 0 - the gas come from the FILE NAME. Names seen: our own "8mm1.2d1.5d_D.fsm"
+style and the machine maker's "8mmCS-D1.2-O2.fsm", "10mm SS-N2 S4.fsm", "1mm CS S2.0.fsm" (type letter S/D/E before
+the size -> "1.2d", "4s"; gas word O2 / N2 / AIR). `NozzleSpec` "默认" = default = no nozzle. Export names a file
+"<thickness>mm<nozzle>_<O2|N2|AIR>.fsm", which reads back the same.
 
 What a machine's technology stores (`MachineCutTechnology`, key Вид + thickness + gas + nozzle): speed, pierce time
 (sum of `TimeFollow + TimeStay` over the used pierce steps), the fields of `fscut.CUT_FIELDS` (pressure, peak power,
