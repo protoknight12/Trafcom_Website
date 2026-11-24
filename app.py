@@ -16664,12 +16664,25 @@ def admin_hall_cut_tech_import(machine_id):
     return _dossier_back(hm.id, message, 'success' if saved and not (refused or unreadable) else 'warning')
 
 
+# Вид на материала -> the material code of the machine maker's .fsm names ("8mmCS-D1.2-O2.fsm"), by the grade name;
+# first match wins (неръждаема / поцинкована before стомана)
+FSM_GRADE_CODES = (('неръжд', 'SS'), ('инокс', 'SS'), ('stainless', 'SS'), ('алум', 'AL'), ('месинг', 'BR'),
+                   ('бронз', 'BZ'), ('мед', 'CU'), ('титан', 'TI'), ('поцинк', 'GI'), ('стомана', 'CS'),
+                   ('желязо', 'CS'), ('steel', 'CS'))
+
+
 def _fsm_name(tech):
-    """A technology's .fsm file name in the CypCut library style read back by fscut.library_name_parts():
-    "8mm1.2d_O2.fsm" (thickness, nozzle, gas)."""
-    nozzle = re.sub(r'[^0-9A-Za-z.]+', '', tech.nozzle or '')
+    """A technology's .fsm file name in the machine maker's style, read back by fscut.library_name_parts():
+    "8mmCS-D1.2-O2.fsm" = thickness, material (FSM_GRADE_CODES), nozzle (S/D/E first; several joined by "-"), gas.
+    A part that is not known is left out ("8mm-D1.2-O2.fsm")."""
+    name = (tech.grade.name if tech.grade else '').lower()
+    code = next((c for word, c in FSM_GRADE_CODES if word in name), '')
+    nozzles = []
+    for part in (tech.nozzle or '').split('/'):
+        m = re.fullmatch(r'\s*(\d+(?:\.\d+)?)\s*([SsDdEe])\s*', part)
+        nozzles.append(m.group(2).upper() + m.group(1) if m else re.sub(r'[^0-9A-Za-z.]+', '', part))
     gas = {'oxygen': 'O2', 'nitrogen': 'N2', 'air': 'AIR'}.get(tech.gas, '')
-    return f'{tech.thickness_mm:g}mm{nozzle}' + (f'_{gas}' if gas else '') + '.fsm'
+    return f'{tech.thickness_mm:g}mm{code}-' + '-'.join(p for p in nozzles + [gas] if p) + '.fsm'
 
 
 def _fsm_bytes(tech, machine):

@@ -81,6 +81,21 @@ def test_write_fsm_round_trip():
     assert p['library_thickness'] == 3 and p['library_nozzle'] == '2.0s'
 
 
+def test_export_name_has_the_material_and_reads_back():
+    """The exported name says the material (owner, 2026-11-24): "8mmCS-D1.2-O2.fsm", like the machine maker's."""
+    from types import SimpleNamespace as NS
+    from app import _fsm_name
+    cases = [(NS(name='Черна стомана'), 8, '1.2d', 'oxygen', '8mmCS-D1.2-O2.fsm', '1.2d'),
+             (NS(name='Неръждаема стомана'), 10, '4s', 'nitrogen', '10mmSS-S4-N2.fsm', '4s'),
+             (NS(name='Алуминий'), 3, '1.2d/1.5d', 'air', '3mmAL-D1.2-D1.5-AIR.fsm', '1.2d/1.5d'),
+             (NS(name='Поцинкована стомана'), 1.5, '1.4E', None, '1.5mmGI-E1.4.fsm', '1.4E'),
+             (None, 8, None, 'oxygen', '8mm-O2.fsm', None)]
+    for grade, t, nozzle, gas, name, back in cases:
+        got = _fsm_name(NS(grade=grade, thickness_mm=t, nozzle=nozzle, gas=gas))
+        assert got == name, got
+        assert fscut.library_name_parts(got) == (t, back), got
+
+
 @pytest.fixture
 def s(monkeypatch):
     monkeypatch.setattr(app_module, 'FSCUT_FSM_PASSWORD', PW)
@@ -131,15 +146,15 @@ def test_dossier_import_and_export(s, monkeypatch):
 
     t = MachineCutTechnology.query.filter_by(machine_id=laser.id, thickness_mm=8).one()
     r = c.get(f'/admin/hall/{hall.id}/cut-tech/{t.id}/fsm')
-    assert r.status_code == 200 and '8mm1.2d_O2.fsm' in r.headers['Content-Disposition']
-    back = fscut.read_fsm(r.data, PW, '8mm1.2d_O2.fsm')
+    assert r.status_code == 200 and '8mmCS-D1.2-O2.fsm' in r.headers['Content-Disposition']
+    back = fscut.read_fsm(r.data, PW, '8mmCS-D1.2-O2.fsm')
     assert back['speed_mm_min'] == 2700 and back['focus_mm'] == 11 and back['raw'][0][1]['OEMCode'] == '42'
     assert (back['library_thickness'], back['library_nozzle'], back['gas']) == (8, '1.2d', 'oxygen')
 
     z = zipfile.ZipFile(io.BytesIO(c.get(f'/admin/hall/{hall.id}/cut-tech/fsm.zip').data))
-    assert sorted(z.namelist()) == ['Черна стомана FSM Кислород/10mm1.2d_O2.fsm',
-                                    'Черна стомана FSM Кислород/8mm1.2d_O2.fsm']
-    assert fscut.read_fsm(z.read('Черна стомана FSM Кислород/10mm1.2d_O2.fsm'), PW, 'x.fsm')['focus_mm'] == 12
+    assert sorted(z.namelist()) == ['Черна стомана FSM Кислород/10mmCS-D1.2-O2.fsm',
+                                    'Черна стомана FSM Кислород/8mmCS-D1.2-O2.fsm']
+    assert fscut.read_fsm(z.read('Черна стомана FSM Кислород/10mmCS-D1.2-O2.fsm'), PW, 'x.fsm')['focus_mm'] == 12
 
     # admin only; without a password the feature is off
     w = _login('fsm_worker')

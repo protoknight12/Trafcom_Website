@@ -146,7 +146,9 @@ stale (left from the technology the file was copied from: "8mmCS-D1.2-O2.fsm" sa
 nozzle and - when `Cut[GasType]` is 0 - the gas come from the FILE NAME. Names seen: our own "8mm1.2d1.5d_D.fsm"
 style and the machine maker's "8mmCS-D1.2-O2.fsm", "10mm SS-N2 S4.fsm", "1mm CS S2.0.fsm" (type letter S/D/E before
 the size -> "1.2d", "4s"; gas word O2 / N2 / AIR). `NozzleSpec` "默认" = default = no nozzle. Export names a file
-"<thickness>mm<nozzle>_<O2|N2|AIR>.fsm", which reads back the same.
+in the maker's style, "<thickness>mm<material>-<nozzle(s)>-<O2|N2|AIR>.fsm" ("8mmCS-D1.2-O2.fsm",
+"3mmAL-D1.2-D1.5-AIR.fsm"; material code from the Вид name, `FSM_GRADE_CODES` in app.py: CS, SS, AL, BR, BZ, CU, TI,
+GI), which reads back the same.
 
 What a machine's technology stores (`MachineCutTechnology`, key Вид + thickness + gas + nozzle): speed, pierce time
 (sum of `TimeFollow + TimeStay` over the used pierce steps), the fields of `fscut.CUT_FIELDS` (pressure, peak power,
