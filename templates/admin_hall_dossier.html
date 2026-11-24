@@ -97,6 +97,15 @@
                         </select>
                     </div>
                     {% endfor %}
+                    {#- the machine PC's shared CypCut library folder (SMB, by IP) - read / written from "Технологии на рязане" #}
+                    <label>Папка с технологиите на машината (мрежова, по IP)</label>
+                    <input type="text" name="tech_folder" value="{{ machine.tech_folder or '' }}" placeholder="\\192.168.18.140\technology">
+                    <div style="display:flex; gap:8px;">
+                        <div style="flex:1;"><label>Потребител</label><input type="text" name="tech_folder_user" value="{{ machine.tech_folder_user or '' }}" autocomplete="off"></div>
+                        <div style="flex:1;"><label>Парола {{ '(записана ✓ - празно = без промяна)' if machine.tech_folder_password_encrypted else '' }}</label>
+                            <input type="password" name="tech_folder_password" value="" autocomplete="new-password"></div>
+                    </div>
+                    {% if machine.tech_folder_password_encrypted %}<label class="dz-inline"><input type="checkbox" name="tech_folder_password_clear" value="1"> Изтрий записаната парола</label>{% endif %}
                     {% endif %}
                     <label class="dz-inline"><input type="checkbox" name="on_plan" value="1" {{ 'checked' if m.on_plan }}> Показва се в 3D халето</label>
                     <button class="btn btn-primary" type="submit" style="margin-top:12px">Запази</button>
@@ -206,16 +215,36 @@
         <h2>Технологии на рязане ({{ cut_techs|length }}{% set _untested = cut_techs|selectattr('needs_test')|list|length %}{{ ', за тест: ' ~ _untested if _untested }})</h2>
         <p class="dz-muted" style="margin-top:0">Технологията по вид материал, дебелина, газ и дюза: скорост, пробиване и всички параметри от FSCUT. Попълват детайла при избор на тази машина; записват се от детайла („Запиши като технология на машината“) и от разкрой FSCUT на детайла.</p>
         {% if cut_techs %}
+        {#- filters over the tree below (remember_filters.js keeps them per page) #}
+        <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px;">
+            <input type="search" id="ctSearch" placeholder="Търсене (дюза, източник...)" style="flex:1 1 180px;">
+            <select id="filterCtGrade" data-picker="off"><option value="">Всички видове</option>
+                {% for g, _ in tech_tree %}<option value="{{ g }}">{{ g }}</option>{% endfor %}</select>
+            <select id="filterCtThick" data-picker="off"><option value="">Всички дебелини</option>
+                {% for mm in cut_techs|map(attribute='thickness_mm')|unique|sort %}<option value="{{ mm }}">{{ mm|num3 }} мм</option>{% endfor %}</select>
+            <select id="filterCtGas" data-picker="off"><option value="">Всички газове</option>
+                {% for g, glabel in cut_gases.items() %}<option value="{{ g }}">{{ glabel }}</option>{% endfor %}<option value="-">без газ</option></select>
+            <select id="filterCtStatus" data-picker="off"><option value="">Всички</option><option value="test">За тест</option>
+                <option value="ok">Потвърдени</option><option value="out">Извън границата</option></select>
+            <button type="button" class="btn" data-tree-all="expand">Разгъни</button>
+            <button type="button" class="btn" data-tree-all="collapse">Сгъни</button>
+        </div>
         <div style="overflow-x:auto;">
         <table class="dz-table dz-files" data-table-tools="off">
-            <thead><tr><th>Вид</th><th>Дебелина</th><th>Газ</th><th>Дюза</th><th>Скорост мм/мин</th><th>Пробиване сек</th>
+            <thead><tr><th>Дюза</th><th>Скорост мм/мин</th><th>Пробиване сек</th>
                 <th>Мощност W</th><th>Налягане bar</th><th>Фокус мм</th><th>Височина мм</th><th>Източник</th><th></th></tr></thead>
-            <tbody>
-            {% for t in cut_techs %}
-            <tr>
-                <td>{{ t.grade.name if t.grade else 'без вид' }}</td><td>{{ t.thickness_mm|num3 }} мм{% if tech_outside[t.id] %}
+            <tbody id="ctTree" data-tree>
+            {% for g_name, by_mm in tech_tree %}{% set g_node = 'ctg' ~ loop.index %}
+            <tr class="tree-head" data-node="{{ g_node }}"><td colspan="9"><span class="tree-chevron">▶</span>{{ g_name }}<span class="tree-meta">(<span data-sum="n" data-dec="0"></span> техн.)</span></td></tr>
+            {% for mm, by_gas in by_mm %}{% set mm_node = g_node ~ 't' ~ loop.index %}
+            <tr class="tree-head tree-l1" data-node="{{ mm_node }}" data-parent="{{ g_node }}"><td colspan="9"><span class="tree-chevron">▶</span>{{ mm|num3 }} мм<span class="tree-meta">(<span data-sum="n" data-dec="0"></span>)</span></td></tr>
+            {% for gas, techs in by_gas %}{% set gas_node = mm_node ~ 'g' ~ loop.index %}
+            <tr class="tree-head tree-l2" data-node="{{ gas_node }}" data-parent="{{ mm_node }}"><td colspan="9"><span class="tree-chevron">▶</span>{{ cut_gases.get(gas, 'без газ') }}<span class="tree-meta">(<span data-sum="n" data-dec="0"></span>)</span></td></tr>
+            {% for t in techs %}
+            {% set ct_attrs %}data-parent="{{ gas_node }}" data-grade="{{ g_name }}" data-mm="{{ t.thickness_mm }}" data-gas="{{ t.gas or '-' }}" data-test="{{ 1 if t.needs_test else 0 }}" data-out="{{ 1 if tech_outside[t.id] else 0 }}" data-search="{{ ((t.nozzle or '') ~ ' ' ~ (t.source or 'ръчно'))|lower }}"{% endset %}
+            <tr class="tree-indent-3" {{ ct_attrs }} data-n="1">
+                <td>{{ t.nozzle or '-' }}{% if tech_outside[t.id] %}
                     <div class="alert alert-warning" style="margin:4px 0 0; padding:2px 6px; font-size:0.78rem;" title="{{ tech_outside[t.id] }}">извън границата</div>{% endif %}</td>
-                <td>{{ cut_gases.get(t.gas, '-') }}</td><td>{{ t.nozzle or '-' }}</td>
                 <td>{{ t.cutting_speed_mm_per_min|num3 if t.cutting_speed_mm_per_min else '-' }}</td>
                 <td>{{ t.pierce_time_sec|num3 if t.pierce_time_sec else '-' }}</td>
                 <td>{{ t.peak_power_w|num3 if t.peak_power_w is not none else '-' }}</td>
@@ -243,7 +272,7 @@
                 </td>
             </tr>
             {% if tech_raw[t.id] %}
-            <tr><td colspan="12">
+            <tr class="tree-indent-3" {{ ct_attrs }} data-n="0"><td colspan="9">
                 <details><summary class="dz-muted">Всички параметри от файла ({{ tech_raw[t.id]|length }} групи)</summary>
                     <table class="dz-table" data-table-tools="off" style="font-size:0.8rem;">
                     {% for path, attrs, text in tech_raw[t.id] %}{% if attrs or text %}
@@ -254,11 +283,40 @@
                 </details>
             </td></tr>
             {% endif %}
-            {% endfor %}
+            {% endfor %}{% endfor %}{% endfor %}{% endfor %}
             </tbody>
         </table>
         </div>
-        {% if fsm_enabled %}<p style="margin:8px 0 0;"><a class="btn" href="{{ url_for('admin_hall_cut_tech_fsm_all', machine_id=m.id) }}">Изтегли всички като .fsm (ZIP)</a></p>{% endif %}
+        <script src="{{ url_for('static', filename='js/tree_table.js') }}"></script>
+        <script>
+        (function () {
+            const tb = document.getElementById('ctTree');
+            const q = document.getElementById('ctSearch'), fG = document.getElementById('filterCtGrade'),
+                  fT = document.getElementById('filterCtThick'), fGas = document.getElementById('filterCtGas'),
+                  fS = document.getElementById('filterCtStatus');
+            function apply() {
+                const text = q.value.trim().toLowerCase();
+                const on = !!(text || fG.value || fT.value || fGas.value || fS.value);
+                treeFilter(tb, function (r) {
+                    if (text && r.dataset.search.indexOf(text) === -1) return false;
+                    if (fG.value && r.dataset.grade !== fG.value) return false;
+                    if (fT.value && parseFloat(r.dataset.mm) !== parseFloat(fT.value)) return false;
+                    if (fGas.value && r.dataset.gas !== fGas.value) return false;
+                    if (fS.value === 'test' && r.dataset.test !== '1') return false;
+                    if (fS.value === 'ok' && r.dataset.test !== '0') return false;
+                    if (fS.value === 'out' && r.dataset.out !== '1') return false;
+                    return true;
+                }, on);
+            }
+            initTrees();
+            [q, fG, fT, fGas, fS].forEach(function (el) { el.addEventListener('input', apply); el.addEventListener('change', apply); });
+            apply();
+        })();
+        </script>
+        <p style="margin:8px 0 0; display:flex; gap:8px; flex-wrap:wrap;">
+        {% if fsm_enabled %}<a class="btn" href="{{ url_for('admin_hall_cut_tech_fsm_all', machine_id=m.id) }}">Изтегли всички като .fsm (ZIP)</a>{% endif %}
+        {% if fsm_enabled and machine.tech_folder %}<a class="btn" href="{{ url_for('admin_hall_tech_folder', machine_id=m.id) }}">Папка с технологии на машината</a>{% endif %}
+        </p>
         {% else %}
         <p class="dz-muted">Няма записани технологии.</p>
         {% endif %}

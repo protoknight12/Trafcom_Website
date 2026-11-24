@@ -2289,6 +2289,12 @@ class Machine(db.Model):
     # keys, e.g. {"air": "nitrogen"} = compressed air on the N2 channel. FSCUT files for the machine are written with
     # the channel's GasType (fscut.gas_codes()). NULL / a gas left out = on its own channel.
     gas_channels = db.Column(db.Text, nullable=True)
+    # The laser's technology folder (owner, 2026-11-24): the machine PC's shared CypCut library folder, by IP
+    # (\\192.168.18.140\technology), read and written over SMB (smbclient) with this user / password; the password is
+    # Fernet-encrypted (_encrypt_secret, NETWORK_API_ENCRYPTION_KEY) and never shown again. NULL = not set.
+    tech_folder = db.Column(db.String(255), nullable=True)
+    tech_folder_user = db.Column(db.String(100), nullable=True)
+    tech_folder_password_encrypted = db.Column(db.Text, nullable=True)
 
     @property
     def gas_channel_map(self):
@@ -10712,7 +10718,12 @@ def admin_hall_dossier(machine_id):
     ranges = sorted(m.machine.thickness_ranges, key=lambda r: (r.grade is None, r.grade.name if r.grade else '')) \
         if m.machine else []
     tech_outside = {t.id: _thickness_refusal(m.machine, t.grade_id, t.thickness_mm, ranges) for t in cut_techs}
-    return render_template('admin_hall_dossier.html', m=m, card=m.card, files=m.files, categories=HALL_FILE_CATEGORIES,
+    # "Технологии на рязане" as a tree (owner, 2026-11-24): Вид -> thickness -> gas -> the technologies
+    from itertools import groupby
+    tech_tree = [(g, [(mm, [(gas, list(r3)) for gas, r3 in groupby(r2, key=lambda t: t.gas or '')])
+                      for mm, r2 in groupby(r1, key=lambda t: t.thickness_mm)])
+                 for g, r1 in groupby(cut_techs, key=lambda t: t.grade.name if t.grade else 'Без вид')]
+    return render_template('admin_hall_dossier.html', tech_tree=tech_tree, m=m, card=m.card, files=m.files, categories=HALL_FILE_CATEGORIES,
                            models=HALL_MODELS, acc_sides=HALL_ACC_SIDES, active_page='machines',
                            conn_kinds=HALL_CONN_KINDS, net_hosts=NetworkHost.query.order_by(NetworkHost.hostname, NetworkHost.ip_address).all(),
                            net_devices=NetworkDevice.query.order_by(NetworkDevice.name).all(),
@@ -10782,6 +10793,22 @@ def admin_hall_dossier_system(machine_id):
                                   if (c := request.form.get(f'gas_channel_{g}')) in CUT_GASES and c != g}) or None
     if mc.gas_channels == '{}':
         mc.gas_channels = None
+    if 'tech_folder' in request.form:                       # the laser's technology folder (only on a laser's form)
+        folder = (request.form.get('tech_folder') or '').strip().replace('/', '\\').rstrip('\\')
+        if folder and not TECH_FOLDER_RE.match(folder):
+            return _dossier_back(hm.id, 'Папката с технологии: мрежов път като \\\\192.168.18.140\\technology.',
+                                 'danger')
+        mc.tech_folder = folder[:255] or None
+        mc.tech_folder_user = (request.form.get('tech_folder_user') or '').strip()[:100] or None
+        password = request.form.get('tech_folder_password') or ''
+        if request.form.get('tech_folder_password_clear') == '1':
+            mc.tech_folder_password_encrypted = None
+        elif password:
+            token = _encrypt_secret(password)
+            if token is None:
+                return _dossier_back(hm.id, 'Паролата не може да се запише: липсва NETWORK_API_ENCRYPTION_KEY.',
+                                     'danger')
+            mc.tech_folder_password_encrypted = token
     maint = (request.form.get('last_maintenance') or '').strip()
     if maint:
         try:
@@ -16622,7 +16649,7 @@ def admin_hall_cut_tech_import(machine_id):
         return _dossier_back(hm.id, 'Внасянето на .fsm не е настроено (FSCUT_FSM_PASSWORD в .env).', 'danger')
     grade_raw = request.form.get('grade_id', '')
     grade_id = int(grade_raw) if grade_raw.isdigit() and db.session.get(MaterialGrade, int(grade_raw)) else None
-    saved, skipped, refused, unreadable = [], [], [], []
+    res = {'saved': [], 'skipped': [], 'refused': [], 'unreadable': []}
     for upload, ext in zip(uploads, exts):
         try:
             if ext == '.fsm':
@@ -16635,33 +16662,46 @@ def admin_hall_cut_tech_import(machine_id):
                 finally:
                     os.remove(tmp)
         except ValueError:
-            unreadable.append(upload.filename)
+            res['unreadable'].append(upload.filename)
             continue
         for ch in channels:
-            label = upload.filename if ext == '.fsm' else f'{upload.filename}, слой {ch["port"]}'
-            thickness, nozzle = ch['library_thickness'], ch['library_nozzle'] or ch['nozzle']
-            if not ch['library'] or thickness is None or not ch['gas'] or not ch['speed_mm_min']:
-                skipped.append(label)
-                continue
-            if _thickness_refusal(mc, grade_id, thickness):
-                refused.append(f'{label} ({thickness:g} мм)')
-                continue
-            gas = _real_gas(mc, ch['gas'], request.form.get(f'real_gas_{ch["gas"]}')) or ch['gas']
-            source = upload.filename if ext == '.fsm' else f'{upload.filename} / {ch["library"]}'
-            tech = _save_channel_technology(mc, grade_id, thickness, nozzle, ch, source, gas)
-            saved.append(_cut_tech_label(tech))
+            if ext == '.fsm':
+                _import_tech_channel(mc, grade_id, ch, upload.filename, upload.filename, res)
+            else:
+                _import_tech_channel(mc, grade_id, ch, f'{upload.filename}, слой {ch["port"]}',
+                                     f'{upload.filename} / {ch["library"]}', res)
     db.session.commit()
-    names = ', '.join(u.filename for u in uploads)
-    if saved:
-        log_action(f'Внесени технологии в "{mc.name}" от "{names}"'[:250] + f': {len(saved)}', details='\n'.join(saved))
-    message = f'Внесени технологии: {len(saved)}.'
-    if skipped:
-        message += f' Пропуснати (без технология от библиотеката, дебелина, газ или скорост): {", ".join(skipped)}.'
-    if refused:
-        message += f' Извън границите на дебелината: {", ".join(refused)}.'
-    if unreadable:
-        message += f' Не могат да се прочетат: {", ".join(unreadable)}.'
-    return _dossier_back(hm.id, message, 'success' if saved and not (refused or unreadable) else 'warning')
+    return _tech_import_done(hm, mc, ', '.join(u.filename for u in uploads), res)
+
+
+def _import_tech_channel(mc, grade_id, ch, label, source, res):
+    """One read technology channel -> the machine's MachineCutTechnology (thickness / nozzle from its library name),
+    or a note in res (skipped / refused). The real gas of a shared channel comes from the form's real_gas_<gas>."""
+    thickness, nozzle = ch['library_thickness'], ch['library_nozzle'] or ch['nozzle']
+    if not ch['library'] or thickness is None or not ch['gas'] or not ch['speed_mm_min']:
+        res['skipped'].append(label)
+        return
+    if _thickness_refusal(mc, grade_id, thickness):
+        res['refused'].append(f'{label} ({thickness:g} мм)')
+        return
+    gas = _real_gas(mc, ch['gas'], request.form.get(f'real_gas_{ch["gas"]}')) or ch['gas']
+    res['saved'].append(_cut_tech_label(_save_channel_technology(mc, grade_id, thickness, nozzle, ch, source, gas)))
+
+
+def _tech_import_done(hm, mc, names, res):
+    if res['saved']:
+        log_action(f'Внесени технологии в "{mc.name}" от "{names}"'[:250] + f': {len(res["saved"])}',
+                   details='\n'.join(res['saved']))
+    message = f'Внесени технологии: {len(res["saved"])}.'
+    if res['skipped']:
+        message += (' Пропуснати (без технология от библиотеката, дебелина, газ или скорост): '
+                    + ', '.join(res['skipped']) + '.')
+    if res['refused']:
+        message += f' Извън границите на дебелината: {", ".join(res["refused"])}.'
+    if res['unreadable']:
+        message += f' Не могат да се прочетат: {", ".join(res["unreadable"])}.'
+    return _dossier_back(hm.id, message,
+                         'success' if res['saved'] and not (res['refused'] or res['unreadable']) else 'warning')
 
 
 # Вид на материала -> the material code of the machine maker's .fsm names ("8mmCS-D1.2-O2.fsm"), by the grade name;
@@ -16671,12 +16711,17 @@ FSM_GRADE_CODES = (('неръжд', 'SS'), ('инокс', 'SS'), ('stainless', '
                    ('желязо', 'CS'), ('steel', 'CS'))
 
 
+def _grade_code(grade_name):
+    """Вид name -> the .fsm material code (FSM_GRADE_CODES), '' when not known."""
+    name = (grade_name or '').lower()
+    return next((c for word, c in FSM_GRADE_CODES if word in name), '')
+
+
 def _fsm_name(tech):
     """A technology's .fsm file name in the machine maker's style, read back by fscut.library_name_parts():
     "8mmCS-D1.2-O2.fsm" = thickness, material (FSM_GRADE_CODES), nozzle (S/D/E first; several joined by "-"), gas.
     A part that is not known is left out ("8mm-D1.2-O2.fsm")."""
-    name = (tech.grade.name if tech.grade else '').lower()
-    code = next((c for word, c in FSM_GRADE_CODES if word in name), '')
+    code = _grade_code(tech.grade.name if tech.grade else '')
     nozzles = []
     for part in (tech.nozzle or '').split('/'):
         m = re.fullmatch(r'\s*(\d+(?:\.\d+)?)\s*([SsDdEe])\s*', part)
@@ -16727,6 +16772,174 @@ def admin_hall_cut_tech_fsm_all(machine_id):
             zf.writestr(path, _fsm_bytes(t, hm.machine))
     log_action(f'Изтеглени технологии .fsm на "{hm.name}": {len(techs)}')
     return _fscut_download(buf.getvalue(), f'{hm.name} технологии', '.zip')
+
+
+# ----- the laser's technology folder on its PC (SMB) -----
+TECH_FOLDER_RE = re.compile(r'^\\\\[^\\/]+(\\[^\\/]+)+$')      # \\host\share[\sub...]
+TECH_FOLDER_EXPORT = 'Trafcom'          # our .fsm files go into this sub-folder - the machine's own files are never touched
+TECH_FOLDER_MAX_FILES = 2000
+# folder name -> material code (a short token must be a whole word; the rest may be part of the name)
+FOLDER_GRADE_WORDS = (('不锈钢', 'SS'), ('stainless', 'SS'), ('inox', 'SS'), ('неръжд', 'SS'), ('ss', 'SS'),
+                      ('黄铜', 'BR'), ('brass', 'BR'), ('mesing', 'BR'), ('месинг', 'BR'), ('紫铜', 'CU'),
+                      ('copper', 'CU'), ('cu', 'CU'), ('镀锌', 'GI'), ('galv', 'GI'), ('zink', 'GI'), ('zn', 'GI'),
+                      ('铝', 'AL'), ('alu', 'AL'), ('al', 'AL'), ('碳钢', 'CS'), ('carbon', 'CS'), ('steel', 'CS'),
+                      ('mild', 'CS'), ('cs', 'CS'), ('стомана', 'CS'))
+
+
+def _folder_grade_id(folder, grades):
+    """The Вид a technology sub-folder ("steel", "ss", "CS O2 氧气碳钢") is for, by FOLDER_GRADE_WORDS -> grade id."""
+    low = (folder or '').lower()
+    tokens = set(re.split(r'[^0-9a-zа-я]+', low))
+    code = next((c for w, c in FOLDER_GRADE_WORDS if (w in tokens if len(w) <= 3 and w.isascii() else w in low)), '')
+    return next((g.id for g in grades if code and _grade_code(g.name) == code), None)
+
+
+def _tech_folder_smb(mc):
+    """smbclient with a session for the machine's technology folder (user / decrypted password). ValueError when
+    the folder is not set or the stored password cannot be decrypted."""
+    import smbclient
+    if not mc.tech_folder:
+        raise ValueError('папката не е зададена')
+    password = None
+    if mc.tech_folder_password_encrypted:
+        password = _decrypt_secret(mc.tech_folder_password_encrypted)
+        if password is None:
+            raise ValueError('записаната парола не може да се разчете (NETWORK_API_ENCRYPTION_KEY)')
+    smbclient.register_session(mc.tech_folder.lstrip('\\').split('\\')[0], username=mc.tech_folder_user,
+                               password=password, connection_timeout=10)
+    return smbclient
+
+
+def _tech_folder_files(mc):
+    """{relative sub-folder ('' = the folder itself): [.fsm names]} under the machine's technology folder."""
+    smb, out, n = _tech_folder_smb(mc), {}, 0
+    for dirpath, _dirs, files in smb.walk(mc.tech_folder):
+        names = sorted(f for f in files if f.lower().endswith('.fsm'))
+        if names:
+            out[dirpath[len(mc.tech_folder):].strip('\\')] = names
+            n += len(names)
+        if n >= TECH_FOLDER_MAX_FILES:
+            break
+    return out
+
+
+def _tech_folder_path(mc, rel, name=''):
+    return '\\'.join(p for p in (mc.tech_folder, rel, name) if p)
+
+
+def _tech_folder_read(mc, rel, name):
+    with _tech_folder_smb(mc).open_file(_tech_folder_path(mc, rel, name), mode='rb') as f:
+        return f.read(fscut.FSM_MAX_BYTES + 1)
+
+
+def _tech_folder_write(mc, rel, name, data):
+    smb = _tech_folder_smb(mc)
+    smb.makedirs(_tech_folder_path(mc, rel), exist_ok=True)
+    with smb.open_file(_tech_folder_path(mc, rel, name), mode='wb') as f:
+        f.write(data)
+
+
+def _tech_folder_error(e):
+    """A short Bulgarian reason for a failed SMB call - never the credentials."""
+    return f'Папката с технологии не е достъпна ({type(e).__name__}: {str(e)[:160]}).'
+
+
+def _laser_with_folder(machine_id):
+    hm = HallMachine.query.get_or_404(machine_id)
+    mc = hm.machine
+    if mc is None or not mc.is_laser:
+        return hm, None, _dossier_back(hm.id, 'Само за машина за лазерно рязане.', 'danger')
+    if not mc.tech_folder:
+        return hm, None, _dossier_back(hm.id, 'Задайте папката с технологии в „Система“.', 'warning')
+    if not FSCUT_FSM_PASSWORD:
+        return hm, None, _dossier_back(hm.id, '.fsm не е настроено (FSCUT_FSM_PASSWORD в .env).', 'danger')
+    return hm, mc, None
+
+
+@app.route('/admin/hall/<int:machine_id>/cut-tech/folder')
+@role_required('admin')
+def admin_hall_tech_folder(machine_id):
+    """"Папка с технологии" (owner, 2026-11-24): the .fsm files of the laser's shared CypCut library folder, by
+    sub-folder, each with the Вид it is for (guessed from the folder name) - the checked ones are imported."""
+    hm, mc, refusal = _laser_with_folder(machine_id)
+    if refusal:
+        return refusal
+    try:
+        files = _tech_folder_files(mc)
+    except Exception as e:          # SMB / network / auth errors have many types
+        return _dossier_back(hm.id, _tech_folder_error(e), 'danger')
+    grades = MaterialGrade.query.order_by(MaterialGrade.sort_order, MaterialGrade.name).all()
+    folders = [{'rel': rel, 'files': names, 'grade_id': _folder_grade_id(rel, grades),
+                'ours': rel.split('\\')[0] == TECH_FOLDER_EXPORT} for rel, names in sorted(files.items())]
+    return render_template('admin_hall_tech_folder.html', m=hm, machine=mc, folders=folders, grades=grades,
+                           cut_gases=CUT_GASES, export_folder=TECH_FOLDER_EXPORT)
+
+
+@app.route('/admin/hall/<int:machine_id>/cut-tech/folder/import', methods=['POST'])
+@role_required('admin')
+def admin_hall_tech_folder_import(machine_id):
+    """Imports every .fsm of the checked sub-folders (use_<i>, rel_<i>) for its Вид (grade_<i>), like the file
+    import: thickness / nozzle / missing gas from the file name, the same key overwritten."""
+    hm, mc, refusal = _laser_with_folder(machine_id)
+    if refusal:
+        return refusal
+    grades = {g.id for g in MaterialGrade.query}
+    picked = []
+    for key in request.form:
+        if key.startswith('use_') and key[4:].isdigit():
+            i = key[4:]
+            g_raw = request.form.get(f'grade_{i}', '')
+            picked.append((request.form.get(f'rel_{i}', ''), int(g_raw) if g_raw.isdigit() and int(g_raw) in grades
+                           else None))
+    if not picked:
+        return redirect(url_for('admin_hall_tech_folder', machine_id=hm.id))
+    res = {'saved': [], 'skipped': [], 'refused': [], 'unreadable': []}
+    try:
+        files = _tech_folder_files(mc)
+        for rel, grade_id in picked:
+            for name in files.get(rel, []):
+                label = f'{rel}\\{name}' if rel else name
+                try:
+                    ch = fscut.read_fsm(_tech_folder_read(mc, rel, name), FSCUT_FSM_PASSWORD, name)
+                except ValueError:
+                    res['unreadable'].append(label)
+                    continue
+                _import_tech_channel(mc, grade_id, ch, label, f'{mc.tech_folder}\\{label}'[-255:], res)
+    except Exception as e:
+        db.session.rollback()
+        return _dossier_back(hm.id, _tech_folder_error(e), 'danger')
+    db.session.commit()
+    return _tech_import_done(hm, mc, mc.tech_folder, res)
+
+
+@app.route('/admin/hall/<int:machine_id>/cut-tech/folder/export', methods=['POST'])
+@role_required('admin')
+def admin_hall_tech_folder_export(machine_id):
+    """Writes every technology of the machine as .fsm into <folder>\\Trafcom\\<Вид> <газ>\\ (TECH_FOLDER_EXPORT) -
+    encrypted like CypCut's, gases on the machine's channels; a file of the same name there is replaced, nothing
+    outside that sub-folder is touched."""
+    hm, mc, refusal = _laser_with_folder(machine_id)
+    if refusal:
+        return refusal
+    techs = MachineCutTechnology.query.filter_by(machine_id=mc.id).all()
+    if not techs:
+        return _dossier_back(hm.id, 'Машината няма технологии.', 'warning')
+    written, used = 0, set()
+    try:
+        for t in techs:
+            folder = re.sub(r'[\\/:*?"<>|]+', '_',
+                            f'{t.grade.name if t.grade else "без вид"} {CUT_GASES.get(t.gas, "без газ")}')
+            name, n = _fsm_name(t), 1
+            while (folder, name) in used:
+                n += 1
+                name = f'{_fsm_name(t)[:-4]}_{n}.fsm'
+            used.add((folder, name))
+            _tech_folder_write(mc, f'{TECH_FOLDER_EXPORT}\\{folder}', name, _fsm_bytes(t, mc))
+            written += 1
+    except Exception as e:
+        return _dossier_back(hm.id, f'Записани {written} от {len(techs)}. ' + _tech_folder_error(e), 'danger')
+    log_action(f'Технологии .fsm на "{hm.name}" записани в {mc.tech_folder}\\{TECH_FOLDER_EXPORT}: {written}')
+    return _dossier_back(hm.id, f'Записани {written} технологии в {mc.tech_folder}\\{TECH_FOLDER_EXPORT}.')
 
 
 def _fscut_download(data, name, ext):

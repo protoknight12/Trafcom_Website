@@ -19,6 +19,7 @@ pymodbus
 flask-babel
 librouteros
 cryptography
+smbprotocol
 netmiko
 onnxruntime
 numpy

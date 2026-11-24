@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="{{ get_locale() }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Папка с технологии - {{ m.name }} - Trafcom</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .tf-panel { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 16px; margin-bottom: 20px; }
+        .tf-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        .tf-table th, .tf-table td { border-bottom: 1px solid var(--border-color); padding: 6px 8px; text-align: left; vertical-align: top; }
+        .tf-table th { color: var(--text-muted); font-weight: normal; }
+        .tf-muted { color: var(--text-muted); font-size: 0.85rem; }
+        .tf-table select { background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-main); padding: 4px 6px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+{% set subnav_current = m.name %}
+{% include 'partials/navbar.html' %}
+<main class="container" style="max-width: 1100px; margin: 20px auto; padding: 0 16px;">
+    <h1 style="font-size: 1.3rem;">Папка с технологии - {{ m.name }}</h1>
+    <p class="tf-muted"><code>{{ machine.tech_folder }}</code> · <a href="{{ url_for('admin_hall_dossier', machine_id=m.id) }}">← досието</a></p>
+
+    {#- admin_hall_tech_folder_import: every .fsm of the checked sub-folders, for the Вид picked per folder #}
+    <div class="tf-panel">
+        <h2 style="margin-top:0; font-size:1.05rem;">Внасяне в машината</h2>
+        {% if folders %}
+        <form method="post" action="{{ url_for('admin_hall_tech_folder_import', machine_id=m.id) }}" data-once>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <p class="tf-muted" style="margin-top:0">Дебелината, дюзата и газът се вземат от името на всеки файл; същият вид, дебелина, газ и дюза се презаписват. Видът е отгатнат от името на папката - проверете го.</p>
+            <table class="tf-table" data-table-tools="off">
+                <thead><tr><th></th><th>Папка</th><th>Файлове</th><th>Вид материал</th></tr></thead>
+                <tbody>
+                {% for f in folders %}
+                <tr>
+                    <td><input type="checkbox" name="use_{{ loop.index }}" value="1" {{ 'checked' if f.grade_id and not f.ours }}>
+                        <input type="hidden" name="rel_{{ loop.index }}" value="{{ f.rel }}"></td>
+                    <td>{{ f.rel or '(основната папка)' }}{% if f.ours %} <span class="tf-muted">- записани от нас</span>{% endif %}</td>
+                    <td><details><summary>{{ f.files|length }}</summary><div class="tf-muted">{{ f.files|join(', ') }}</div></details></td>
+                    <td><select name="grade_{{ loop.index }}" data-picker="off"><option value="">- без вид -</option>
+                        {% for gr in grades %}<option value="{{ gr.id }}" {{ 'selected' if gr.id == f.grade_id }}>{{ gr.name }}</option>{% endfor %}</select></td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {#- gases sharing a channel (Газове по канали): the files only say the channel, the user says the real gas #}
+            {% set gmap = machine.gas_channel_map %}
+            {% for c, clabel in cut_gases.items() %}
+            {% set shared = gmap|dictsort|selectattr('1', 'equalto', c)|map(attribute='0')|list %}
+            {% if shared %}
+            <p><label>Технологиите на канал {{ clabel }} са реално
+                <select name="real_gas_{{ c }}" data-picker="off">
+                    <option value="{{ c }}">{{ clabel }}</option>
+                    {% for g in shared %}<option value="{{ g }}">{{ cut_gases[g] }}</option>{% endfor %}
+                </select></label></p>
+            {% endif %}
+            {% endfor %}
+            <button class="btn btn-primary" type="submit" style="margin-top:12px">Внеси избраните</button>
+        </form>
+        {% else %}
+        <p class="tf-muted">В папката няма .fsm файлове.</p>
+        {% endif %}
+    </div>
+
+    {#- admin_hall_tech_folder_export: our technologies into <folder>\Trafcom\<Вид газ>\ #}
+    <div class="tf-panel">
+        <h2 style="margin-top:0; font-size:1.05rem;">Записване в папката</h2>
+        <p class="tf-muted" style="margin-top:0">Всички технологии на машината се записват като .fsm в <code>{{ machine.tech_folder }}\{{ export_folder }}\&lt;вид&gt; &lt;газ&gt;\</code>. Файл със същото име там се заменя; файловете на машината извън тази папка не се пипат.</p>
+        <form method="post" action="{{ url_for('admin_hall_tech_folder_export', machine_id=m.id) }}" data-once
+              data-confirm="Записване на всички технологии в {{ machine.tech_folder }}\{{ export_folder }}?">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn" type="submit">Запиши в папката</button>
+        </form>
+    </div>
+</main>
+</body>
+</html>

@@ -21,6 +21,7 @@ from app import (app as flask_app, db, User, Machine, MachineCutTechnology, Hall
                  seed_material_types)
 
 PW = 'test-only-password'
+UNC = r'\\192.168.18.140\technology'
 MATERIAL = ('<?xml version="1.0" encoding="utf-8"?>\r\n'
             '<Material ChannelPort="1" ParamFlag="768" OEM="1" OEMCode="42">'
             '<CamParams WorkSpeed="{speed}" PierceStepCount="1" LiftHeight="30">'
@@ -167,3 +168,73 @@ def test_dossier_import_and_export(s, monkeypatch):
     assert 'FSCUT_FSM_PASSWORD' in r.get_data(as_text=True)
     assert c.get(f'/admin/hall/{hall.id}/cut-tech/{t.id}/fsm').status_code == 302
     assert MachineCutTechnology.query.filter_by(machine_id=laser.id).count() == 2
+
+
+def test_folder_grade_guess():
+    from types import SimpleNamespace as NS
+    from app import _folder_grade_id
+    grades = [NS(id=1, name='Стомана'), NS(id=2, name='Неръждаема стомана'), NS(id=3, name='Алуминий'),
+              NS(id=4, name='Месинг')]
+    for folder, gid in (('steel', 1), ('ss', 2), ('al', 3), ('mesing', 4), ('CS O2 氧气碳钢', 1),
+                        ('SS N2 不锈钢氮气', 2), ('6000W切割参数（板机）\\al', 3), ('class', None), ('', None)):
+        assert _folder_grade_id(folder, grades) == gid, folder
+
+
+def test_machine_tech_folder(s, monkeypatch):
+    """The laser's technology folder (SMB, faked here): saved in "Система" with an encrypted password that is never
+    shown; the folder page lists sub-folders with a guessed Вид; import of the checked ones; export into Trafcom\."""
+    from cryptography.fernet import Fernet
+    fernet = Fernet(Fernet.generate_key())
+    monkeypatch.setattr(app_module, '_network_api_fernet', lambda: fernet)
+    disk = {'steel': {'8mm1.2d1.5d.fsm': _fsm(speed=45, focus=13), '10mm1.2d1.5d.fsm': _fsm(speed=33, focus=11)},
+            'ss': {'2mm1.5s2.0s.fsm': _fsm(speed=500, focus=-1, gas=3)}}
+    written = {}
+    monkeypatch.setattr(app_module, '_tech_folder_files', lambda mc: {k: sorted(v) for k, v in disk.items()})
+    monkeypatch.setattr(app_module, '_tech_folder_read', lambda mc, rel, name: disk[rel][name])
+    monkeypatch.setattr(app_module, '_tech_folder_write', lambda mc, rel, name, data: written.update({f'{rel}\\{name}': data}))
+    laser = Machine(name='PG3015 DIR', is_laser=True)
+    db.session.add(laser)
+    db.session.flush()
+    hall = HallMachine(name=laser.name, machine_id=laser.id)
+    db.session.add_all([hall, MaterialGrade(name='Стомана'), MaterialGrade(name='Неръждаема стомана')])
+    db.session.commit()
+    c = _login('fsm_admin')
+    sysurl = f'/admin/hall/{hall.id}/dossier/system'
+    base = {'status': 'idle', 'is_laser': '1'}
+    r = c.post(sysurl, data=dict(base, tech_folder='not a path'), follow_redirects=True)
+    assert 'мрежов път' in r.get_data(as_text=True)
+    c.post(sysurl, data=dict(base, tech_folder=UNC + '\\', tech_folder_user='cnc', tech_folder_password='s3cret-pass'))
+    mc = db.session.get(Machine, laser.id)
+    assert mc.tech_folder == UNC and mc.tech_folder_user == 'cnc'
+    assert mc.tech_folder_password_encrypted and 's3cret' not in mc.tech_folder_password_encrypted
+    assert fernet.decrypt(mc.tech_folder_password_encrypted.encode()).decode() == 's3cret-pass'
+    page = c.get(f'/admin/hall/{hall.id}/dossier').get_data(as_text=True)
+    assert 's3cret' not in page and 'записана ✓' in page and 'Папка с технологии на машината' not in page   # no techs yet
+    c.post(sysurl, data=dict(base, tech_folder=UNC, tech_folder_user='cnc'))
+    db.session.expire_all()
+    assert db.session.get(Machine, laser.id).tech_folder_password_encrypted                 # blank = unchanged
+
+    page = c.get(f'/admin/hall/{hall.id}/cut-tech/folder').get_data(as_text=True)
+    steel_id = MaterialGrade.query.filter_by(name='Стомана').one().id
+    assert 'steel' in page and f'<option value="{steel_id}" selected' in page
+    # import only the steel folder (index 2 = 'steel' in sorted order: ss, steel)
+    c.post(f'/admin/hall/{hall.id}/cut-tech/folder/import', data={'use_2': '1', 'rel_2': 'steel', 'grade_2': steel_id})
+    rows = sorted((t.thickness_mm, t.focus_mm, t.grade_id, t.source)
+                  for t in MachineCutTechnology.query.filter_by(machine_id=laser.id))
+    assert rows == [(8, 13, steel_id, UNC + '\\steel\\8mm1.2d1.5d.fsm'),
+                    (10, 11, steel_id, UNC + '\\steel\\10mm1.2d1.5d.fsm')]
+    page = c.get(f'/admin/hall/{hall.id}/dossier').get_data(as_text=True)
+    assert 'Папка с технологии на машината' in page and 'id="ctTree"' in page and 'data-grade="Стомана"' in page
+
+    c.post(f'/admin/hall/{hall.id}/cut-tech/folder/export')
+    assert sorted(written) == ['Trafcom\\Стомана Кислород\\10mmCS-D1.2-D1.5-O2.fsm',
+                               'Trafcom\\Стомана Кислород\\8mmCS-D1.2-D1.5-O2.fsm']
+    assert fscut.read_fsm(written['Trafcom\\Стомана Кислород\\8mmCS-D1.2-D1.5-O2.fsm'], PW, 'x.fsm')['focus_mm'] == 13
+
+    # an SMB error is a message, not a 500
+    def boom(mc):
+        raise OSError('host unreachable')
+    monkeypatch.setattr(app_module, '_tech_folder_files', boom)
+    r = c.get(f'/admin/hall/{hall.id}/cut-tech/folder', follow_redirects=True)
+    assert r.status_code == 200 and 'не е достъпна' in r.get_data(as_text=True)
+    assert _login('fsm_worker').get(f'/admin/hall/{hall.id}/cut-tech/folder').status_code == 302
