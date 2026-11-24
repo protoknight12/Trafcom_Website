@@ -12,6 +12,16 @@
         .auth-footer { margin-top: 24px; text-align: center; font-size: 0.9rem; color: var(--text-muted); }
         .auth-footer a { color: var(--accent-secondary); text-decoration: none; font-weight: 600; }
         .auth-footer a:hover { text-decoration: underline; color: var(--text-main); }
+        .login-error { background: #c62828; color: #fff; border: 2px solid #8e0000; border-radius: 8px;
+                       padding: 14px 16px; margin-bottom: 18px; font-weight: 700; text-align: center;
+                       animation: login-shake 0.5s ease-in-out 2; }
+        .login-failed input { border-color: #c62828 !important; box-shadow: 0 0 0 2px rgba(198, 40, 40, 0.25); }
+        @keyframes login-shake {
+            0%, 100% { transform: translateX(0); }
+            15%, 55% { transform: translateX(-10px); }
+            35%, 75% { transform: translateX(10px); }
+        }
+        @media (prefers-reduced-motion: reduce) { .login-error { animation: none; } }
     </style>
 </head>
 <body>
@@ -45,7 +55,7 @@
         {% if messages %}
         <div class="flash-messages">
             {% for category, message in messages %}
-            <div class="alert alert-{{ 'danger' if category == 'error' else category }}">
+            <div class="alert alert-{{ 'danger' if category == 'error' else category }}{{ ' login-error' if login_failed and category == 'danger' }}" role="alert">
                 {{ message }}
             </div>
             {% endfor %}
@@ -53,15 +63,15 @@
         {% endif %}
         {% endwith %}
 
-        <form method="POST" action="{{ url_for('login') }}" class="admin-form">
+        <form method="POST" action="{{ url_for('login') }}" class="admin-form{{ ' login-failed' if login_failed }}">
             {% include 'partials/csrf_field.html' %}
             <div class="form-group">
                 <label for="username">{{ _('Потребителско име') }}</label>
-                <input type="text" id="username" name="username" placeholder="{{ _('Въведете потребителско име...') }}" required autofocus autocomplete="off">
+                <input type="text" id="username" name="username" value="{{ username or '' }}" placeholder="{{ _('Въведете потребителско име...') }}" required {{ '' if login_failed else 'autofocus' }} autocomplete="username">
             </div>
             <div class="form-group">
                 <label for="password">{{ _('Парола') }}</label>
-                <input type="password" id="password" name="password" placeholder="{{ _('Въведете вашата парола...') }}" required>
+                <input type="password" id="password" name="password" placeholder="{{ _('Въведете вашата парола...') }}" required autocomplete="current-password" {{ 'autofocus' if login_failed }}>
             </div>
             <button type="submit" class="btn-submit" style="width: 100%; margin-top: 12px; padding: 14px;">
                 {{ _('Влез в системата') }}

@@ -11335,7 +11335,9 @@ def login():
             return redirect(url_for('dashboard'))
         # Logger only, not ActivityLog: a table every bot can append to would grow without bound.
         app.logger.warning('Failed login for %r from %s', username, request.remote_addr)
-        flash(gettext('Невалидно потребителско име или парола.'))
+        flash(gettext('Невалидно потребителско име или парола.'), 'danger')
+        # Keep the typed username (never the password) so only the password must be retyped.
+        return render_template('login.html', username=username, login_failed=True)
     return render_template('login.html')
 
 
