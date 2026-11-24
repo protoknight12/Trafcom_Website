@@ -475,6 +475,22 @@ def test_our_file_settings_and_nozzle_in_name(s, monkeypatch):
     db.session.commit()
     c.post(f'/admin/hall/{hall.id}/cut-tech/{t.id}/folder/push')
     assert sorted(disk[ours]) == ['8mmCS-D1.6-O2.fsm'] and sorted(disk['steel']) == ['8mm1.2d1.5d.fsm']
+    # nozzle changed in CypCut (NozzleSpec), file name left: "Внеси от файла" takes the nozzle and renames our file
+    xml = fscut.fsm_xml_of(disk[ours]['8mmCS-D1.6-O2.fsm'], PW).replace(b'NozzleSpec="1.6d"', b'NozzleSpec="2.0d"')
+    disk[ours]['8mmCS-D1.6-O2.fsm'] = fscut._zipcrypto(fscut.FSM_MEMBER, xml, PW)
+    assert c.get(f'/admin/hall/{hall.id}/cut-tech/folder/status').get_json() == {str(t.id): 'file'}
+    c.post(f'/admin/hall/{hall.id}/cut-tech/{t.id}/folder/pull')
+    db.session.expire_all()
+    t = db.session.get(MachineCutTechnology, t.id)
+    assert t.nozzle == '2.0d' and t.folder_file == ours + '\\8mmCS-D2.0-O2.fsm'
+    assert sorted(disk[ours]) == ['8mmCS-D2.0-O2.fsm']
+    assert c.get(f'/admin/hall/{hall.id}/cut-tech/folder/status').get_json() == {str(t.id): 'same'}
+
+
+def test_nozzle_key():
+    from app import _nozzle_key
+    assert _nozzle_key('S2.5/S3.0') == _nozzle_key('2.5s/3.0s') != _nozzle_key('3.0s')
+    assert _nozzle_key('1.2D') == _nozzle_key('d1.2') and _nozzle_key(None) == _nozzle_key('') == ()
 
 
 def test_full_trees_no_chinese_and_origin_step(s):

@@ -16897,6 +16897,16 @@ def _fsm_name(tech):
     return f'{tech.thickness_mm:g}mm{code}-' + '-'.join(p for p in nozzles + [gas] if p) + '.fsm'
 
 
+def _nozzle_key(nozzle):
+    """A nozzle text compared by its parts: "S2.5/S3.0" == "2.5s/3.0s"; anything else by its letters/digits."""
+    parts = []
+    for part in (nozzle or '').split('/'):
+        m = re.fullmatch(r'\s*([SsDdEe])?\s*(\d+(?:\.\d+)?)\s*([SsDdEe])?\s*', part)
+        parts.append((float(m.group(2)), (m.group(1) or m.group(3) or '').lower()) if m
+                     else re.sub(r'[^0-9a-z.]+', '', part.lower()))
+    return tuple(p for p in parts if p)
+
+
 def _fsm_params(tech, path=None):
     """MaterialParams / MaterialPath of our .fsm for a technology (fscut.fsm_xml): nozzle, the folder it is written to
     (None = a download) and the material = our own Вид name ("Стомана", owner, 2026-11-24). Nothing Chinese goes into
@@ -17314,8 +17324,21 @@ def admin_hall_tech_folder_sync(machine_id, tech_id, direction):
         if direction == 'pull':
             data = _tech_folder_read(mc, rel, name)
             ch = fscut.read_fsm(data, FSCUT_FSM_PASSWORD, name)
+            # the nozzle set in CypCut (MaterialParams NozzleSpec) wins over the key / file name (owner, 2026-11-25)
+            nozzle = ch['nozzle'] if ch['nozzle'] and _nozzle_key(ch['nozzle']) != _nozzle_key(tech.nozzle) \
+                else tech.nozzle
+            if nozzle != tech.nozzle:
+                other = _cut_technology(mc.id, tech.grade_id, tech.thickness_mm, tech.gas, nozzle)
+                if other is not None and other.id != tech.id:
+                    return _dossier_back(hm.id, f'Във файла дюзата е {nozzle}, но вече има такава технология: '
+                                                f'{_cut_tech_label(other)}.', 'warning')
+                tech.nozzle = nozzle
             _save_channel_technology(mc, tech.grade_id, tech.thickness_mm, tech.nozzle, ch, tech.source, tech.gas)
-            _tech_folder_link(tech, mc, tech.folder_file, fscut.fsm_xml_of(data, FSCUT_FSM_PASSWORD))
+            if _in_export_folder(tech.folder_file) and _tech_target_file(tech) != tech.folder_file:
+                old = _tech_push(tech, mc)            # our file renamed by the new nozzle
+                flash(f'Дюзата от файла: {nozzle}. Файлът е преименуван: {old} -> {tech.folder_file}.', 'info')
+            else:
+                _tech_folder_link(tech, mc, tech.folder_file, fscut.fsm_xml_of(data, FSCUT_FSM_PASSWORD))
         else:
             old = _tech_push(tech, mc)                # a changed nozzle renames the file (nozzle part only)
             if old:
