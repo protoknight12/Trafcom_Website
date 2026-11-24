@@ -216,6 +216,13 @@
         <p class="dz-muted" style="margin-top:0">Технологията по вид материал, дебелина, газ и дюза: скорост, пробиване и всички параметри от FSCUT. Попълват детайла при избор на тази машина; записват се от детайла („Запиши като технология на машината“) и от разкрой FSCUT на детайла.</p>
         {% if cut_techs %}
         <div id="ctSyncSummary" class="alert alert-warning" hidden style="margin-bottom:8px;"></div>
+        {% if fsm_enabled and machine and machine.tech_folder %}
+        <form id="ctPushAll" method="post" action="{{ url_for('admin_hall_tech_folder_push_all', machine_id=m.id) }}" hidden data-once
+              style="margin:0 0 8px;" data-confirm="Да се обновят файловете в папката на машината за всички технологии, променени тук? Променените на машината се пропускат.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn" type="submit">Обнови всички файлове</button>
+        </form>
+        {% endif %}
         {#- filters over the tree below (remember_filters.js keeps them per page) #}
         <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px;">
             <input type="search" id="ctSearch" placeholder="Търсене (дюза, източник...)" style="flex:1 1 180px;">
@@ -358,6 +365,8 @@
                         sum.textContent = n + ' технологии се различават от файловете в папката на машината - филтър „Различни от файла на машината“.';
                         sum.hidden = false;
                     }
+                    const pushAll = document.getElementById('ctPushAll');
+                    if (pushAll && document.querySelector('tr[data-sync="app"], tr[data-sync="missing"]')) pushAll.hidden = false;
                     apply();
                 })
                 .catch(function () { /* the folder check is a hint only */ });

@@ -16969,6 +16969,10 @@ def _folder_grade_id(folder, grades):
     return next((g.id for g in grades if code and _grade_code(g.name) == code), None)
 
 
+logging.getLogger('smbprotocol').setLevel(logging.WARNING)   # it logs every SMB request at INFO
+logging.getLogger('smbclient').setLevel(logging.WARNING)
+
+
 def _tech_folder_smb(mc):
     """smbclient with a session for the machine's technology folder (user / decrypted password). ValueError when
     the folder is not set or the stored password cannot be decrypted."""
@@ -17251,6 +17255,63 @@ def admin_hall_tech_folder_status(machine_id):
         return jsonify({'error': _tech_folder_error(e)})
 
 
+def _tech_push(tech, mc):
+    """"Обнови файла" for one technology: writes our .fsm to the file it belongs to (_tech_target_file - a changed
+    nozzle renames it, the old name removed) and links them as synced. -> the old name when it was renamed, else None."""
+    rel, _, name = tech.folder_file.rpartition('\\')
+    xml = _tech_app_xml(tech, mc)
+    target = _tech_target_file(tech)
+    t_rel, _, t_name = target.rpartition('\\')
+    _tech_folder_write(mc, t_rel, t_name, fscut._zipcrypto(fscut.FSM_MEMBER, xml, FSCUT_FSM_PASSWORD))
+    old = None
+    if target != tech.folder_file:
+        _tech_folder_remove(mc, rel, name)
+        old = tech.folder_file
+    _tech_folder_link(tech, mc, target, xml)
+    return old
+
+
+def tech_folder_push_all(mc):
+    """"Обнови всички файлове" (owner, 2026-11-25): every technology changed here ("app") or whose file is gone
+    ("missing") is written to its file; one changed on the machine ("file" / "both") is left for the user to decide.
+    Commits after each file. -> {'written', 'renamed', 'skipped': [files changed on the machine], 'same'}."""
+    out = {'written': 0, 'renamed': 0, 'skipped': [], 'same': 0}
+    for t in MachineCutTechnology.query.filter(MachineCutTechnology.machine_id == mc.id,
+                                               MachineCutTechnology.folder_file.isnot(None)) \
+            .order_by(MachineCutTechnology.id):
+        state = _tech_sync_state(t, mc, _tech_file_xml(mc, t))
+        if state in ('file', 'both'):
+            out['skipped'].append(t.folder_file)
+            continue
+        if state == 'same':
+            out['same'] += 1
+            continue
+        out['renamed'] += bool(_tech_push(t, mc))
+        db.session.commit()
+        out['written'] += 1
+    return out
+
+
+@app.route('/admin/hall/<int:machine_id>/cut-tech/folder/push-all', methods=['POST'])
+@role_required('admin')
+def admin_hall_tech_folder_push_all(machine_id):
+    hm, mc, refusal = _laser_with_folder(machine_id)
+    if refusal:
+        return refusal
+    try:
+        res = tech_folder_push_all(mc)
+    except Exception as e:
+        db.session.rollback()
+        return _dossier_back(hm.id, _tech_folder_error(e), 'danger')
+    log_action(f'Технологии на "{hm.name}" записани в папката: {res["written"]} (преименувани {res["renamed"]})',
+               details='\n'.join(res['skipped'])[:4000] or None)
+    message = f'Обновени файлове: {res["written"]} (преименувани {res["renamed"]}), без промяна: {res["same"]}.'
+    if res['skipped']:
+        message += (f' Пропуснати {len(res["skipped"])} - променени на машината, решете ги поотделно: '
+                    + ', '.join(res['skipped'][:10]) + ('...' if len(res['skipped']) > 10 else ''))
+    return _dossier_back(hm.id, message, 'warning' if res['skipped'] else 'success')
+
+
 @app.route('/admin/hall/<int:machine_id>/cut-tech/<int:tech_id>/folder/<any(pull, push):direction>', methods=['POST'])
 @role_required('admin')
 def admin_hall_tech_folder_sync(machine_id, tech_id, direction):
@@ -17270,14 +17331,9 @@ def admin_hall_tech_folder_sync(machine_id, tech_id, direction):
             _save_channel_technology(mc, tech.grade_id, tech.thickness_mm, tech.nozzle, ch, tech.source, tech.gas)
             _tech_folder_link(tech, mc, tech.folder_file, fscut.fsm_xml_of(data, FSCUT_FSM_PASSWORD))
         else:
-            xml = _tech_app_xml(tech, mc)
-            target = _tech_target_file(tech)          # a changed nozzle renames the file (nozzle part only)
-            t_rel, _, t_name = target.rpartition('\\')
-            _tech_folder_write(mc, t_rel, t_name, fscut._zipcrypto(fscut.FSM_MEMBER, xml, FSCUT_FSM_PASSWORD))
-            if target != tech.folder_file:
-                _tech_folder_remove(mc, rel, name)
-                flash(f'Файлът е преименуван: {tech.folder_file} -> {target}.', 'info')
-            _tech_folder_link(tech, mc, target, xml)
+            old = _tech_push(tech, mc)                # a changed nozzle renames the file (nozzle part only)
+            if old:
+                flash(f'Файлът е преименуван: {old} -> {tech.folder_file}.', 'info')
     except ValueError:
         db.session.rollback()
         return _dossier_back(hm.id, f'Файлът {tech.folder_file} не може да се прочете.', 'danger')

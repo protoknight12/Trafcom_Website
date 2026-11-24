@@ -544,3 +544,44 @@ def test_material_params_follow_the_technology(s):
     db.session.commit()
     t = db.session.get(MachineCutTechnology, t.id)
     assert (mp(t)['NozzleSpec'], mp(t)['Thickness']) == ('1.2d', '8') and apply() == 0
+
+
+def test_push_all_files(s, monkeypatch):
+    """"Обнови всички файлове": every technology changed here is written to its file (a changed nozzle renamed),
+    one changed on the machine is skipped and listed, an unchanged one left alone."""
+    from cryptography.fernet import Fernet
+    fernet = Fernet(Fernet.generate_key())
+    monkeypatch.setattr(app_module, '_network_api_fernet', lambda: fernet)
+    disk = {'steel': {'8mm1.2d1.5d.fsm': _fsm(speed=45, focus=13), '10mm1.2d1.5d.fsm': _fsm(speed=33, focus=11),
+                      '12mm1.2d1.5d.fsm': _fsm(speed=29, focus=12)}}
+    monkeypatch.setattr(app_module, '_tech_folder_files', lambda mc: {k: sorted(v) for k, v in disk.items()})
+
+    def read(mc, rel, name):
+        if name not in disk.get(rel, {}):
+            raise FileNotFoundError(name)
+        return disk[rel][name]
+    monkeypatch.setattr(app_module, '_tech_folder_read', read)
+    monkeypatch.setattr(app_module, '_tech_folder_write', lambda mc, rel, name, data: disk.setdefault(rel, {}).update({name: data}))
+    monkeypatch.setattr(app_module, '_tech_folder_remove', lambda mc, rel, name: disk[rel].pop(name))
+    laser = Machine(name='PG3015 ALL', is_laser=True, tech_folder=UNC)
+    db.session.add(laser)
+    db.session.flush()
+    hall = HallMachine(name=laser.name, machine_id=laser.id)
+    steel = MaterialGrade(name='Стомана')
+    db.session.add_all([hall, steel])
+    db.session.commit()
+    c = _login('fsm_admin')
+    c.post(f'/admin/hall/{hall.id}/cut-tech/folder/import', data={'use_1': '1', 'rel_1': 'steel', 'grade_1': steel.id})
+    by = {t.thickness_mm: t for t in MachineCutTechnology.query.filter_by(machine_id=laser.id)}
+    by[8].nozzle = '1.4d'                                          # changed here, renamed
+    by[10].focus_mm = 10.5                                         # changed here
+    db.session.commit()
+    disk['steel']['12mm1.2d1.5d.fsm'] = _fsm(speed=29, focus=13)   # changed on the machine
+    r = c.post(f'/admin/hall/{hall.id}/cut-tech/folder/push-all', follow_redirects=True)
+    page = r.get_data(as_text=True)
+    assert 'Обновени файлове: 2 (преименувани 1)' in page and '12mm1.2d1.5d.fsm' in page
+    assert sorted(disk['steel']) == ['10mm1.2d1.5d.fsm', '12mm1.2d1.5d.fsm', '8mm1.4d.fsm']
+    assert fscut.read_fsm(disk['steel']['10mm1.2d1.5d.fsm'], PW, 'x.fsm')['focus_mm'] == 10.5
+    assert fscut.read_fsm(disk['steel']['12mm1.2d1.5d.fsm'], PW, 'x.fsm')['focus_mm'] == 13      # machine's kept
+    st = c.get(f'/admin/hall/{hall.id}/cut-tech/folder/status').get_json()
+    assert sorted(st.values()) == ['file', 'same', 'same']
