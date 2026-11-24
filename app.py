@@ -10882,11 +10882,104 @@ def admin_hall_cut_tech_save(machine_id):
     for col, v in fields.items():
         setattr(tech, col, v)
     tech.note = (request.form.get('note') or '').strip()[:2000] or None
+    _tech_raw_from_columns(tech)
     db.session.flush()
     log_action(f'Технология на "{mc.name}": {_cut_tech_label(tech)} - {values[0] or "-"} мм/мин, '
                f'{values[1] or "-"} сек пробиване')
     db.session.commit()
     return _dossier_back(hm.id, 'Технологията е записана.')
+
+
+def _tech_raw(tech):
+    try:
+        raw = json.loads(tech.params_json) if tech.params_json else []
+    except ValueError:
+        raw = []
+    return raw if isinstance(raw, list) else []
+
+
+def _tech_columns_dict(tech):
+    return {c: getattr(tech, c) for c, *_ in fscut.tech_columns()}
+
+
+def _tech_raw_from_columns(tech):
+    """After the fields were edited: write them into the stored parameter tree too (fscut.raw_with_fields), so the
+    tree - every parameter of the file - and the columns agree. A technology without a tree keeps none."""
+    raw = _tech_raw(tech)
+    if raw:
+        tech.params_json = json.dumps(fscut.raw_with_fields(raw, _tech_columns_dict(tech),
+                                                            tech.cutting_speed_mm_per_min, tech.gas),
+                                      ensure_ascii=False)
+
+
+TECH_PARAM_MAX_LEN = 100
+# (CamParams child or '' for CamParams itself, attribute) -> the column's label, to name the known fields on the page
+_TECH_PARAM_LABELS = {**{(el or '', attr): (label, unit) for _c, el, attr, label, unit, _k in fscut.CUT_FIELDS},
+                      ('', 'WorkSpeed'): ('Скорост', 'мм/сек'), ('', 'PierceStepCount'): ('Стъпки пробиване', '')}
+for _n in range(1, fscut.PIERCE_STEPS + 1):
+    for _key, _attr, _label, _unit, _k in fscut.STEP_FIELDS:
+        _TECH_PARAM_LABELS[(f'Pierce{_n}', _attr)] = (f'Пробиване {_n}: {_label}', _unit)
+
+
+@app.route('/admin/hall/<int:machine_id>/cut-tech/<int:tech_id>/params', methods=['GET', 'POST'])
+@role_required('admin')
+def admin_hall_cut_tech_params(machine_id, tech_id):
+    """"Всички параметри" (owner, 2026-11-24): every parameter of the technology's file (the stored tree,
+    params_json - every element and attribute of the CypCut channel / .fsm) editable. A technology made by hand gets
+    the tree its fields make. Saving (POST `changes` = JSON [[row, attr | '#text', value]]) changes only existing
+    attributes (a number stays a number), then reads speed, pierce time and every field column back from the tree
+    (fscut.channel_from_raw) - the technology's Вид, thickness, gas and nozzle (its key) do not change here."""
+    hm = HallMachine.query.get_or_404(machine_id)
+    tech = MachineCutTechnology.query.filter_by(id=tech_id, machine_id=hm.machine_id).first_or_404()
+    # the columns written into the tree first: a column changed without the tree (a data step, an old edit) wins
+    raw = fscut.raw_with_fields(_tech_raw(tech), _tech_columns_dict(tech), tech.cutting_speed_mm_per_min, tech.gas)
+    if request.method == 'POST':
+        try:
+            changes = json.loads(request.form.get('changes') or '[]')
+            if not isinstance(changes, list) or len(changes) > 5000:
+                raise ValueError
+            for i, attr, value in changes:
+                row = raw[int(i)]
+                value = str(value).strip()
+                if len(value) > TECH_PARAM_MAX_LEN or any(ord(ch) < 32 for ch in value):
+                    raise ValueError(f'{row[0]} {attr}: твърде дълга стойност или непозволен знак')
+                if attr == '#text':
+                    row[2] = value
+                    continue
+                if attr not in row[1]:
+                    raise ValueError(f'{row[0]}: няма параметър {attr}')
+                old = str(row[1][attr])
+                if fscut._f(old, None) is not None and fscut._f(value, None) is None:
+                    raise ValueError(f'{row[0]} {attr}: трябва да е число')
+                row[1][attr] = value
+        except ValueError as e:
+            flash(str(e) if str(e) else 'Невалидни промени.', 'danger')
+            return redirect(url_for('admin_hall_cut_tech_params', machine_id=hm.id, tech_id=tech.id))
+        except (TypeError, IndexError):
+            flash('Невалидни промени.', 'danger')
+            return redirect(url_for('admin_hall_cut_tech_params', machine_id=hm.id, tech_id=tech.id))
+        ch = fscut.channel_from_raw(raw)
+        if ch is None:
+            flash('Параметрите нямат CamParams - не са записани.', 'danger')
+            return redirect(url_for('admin_hall_cut_tech_params', machine_id=hm.id, tech_id=tech.id))
+        tech.params_json = json.dumps(raw, ensure_ascii=False)
+        tech.cutting_speed_mm_per_min, tech.pierce_time_sec = ch['speed_mm_min'], ch['pierce_time_sec']
+        for col, v in ch['fields'].items():
+            setattr(tech, col, tech.gas if col.endswith('_gas') and v == ch['gas'] else v)
+        db.session.commit()
+        log_action(f'Технология на "{hm.name}" - параметри от файла: {_cut_tech_label(tech)}',
+                   details='\n'.join(f'{raw[int(i)][0]} {a} = {v}' for i, a, v in changes)[:4000])
+        return _dossier_back(hm.id, f'Параметрите са записани ({len(changes)} промени).')
+    groups = []
+    for i, (path, attrs, text) in enumerate(raw):
+        if path == '@':
+            continue
+        el = path.split('/', 1)[1] if '/' in path else ('' if path == 'CamParams' else None)
+        groups.append({'i': i, 'path': path, 'text': text,
+                       'attrs': [(a, v, _TECH_PARAM_LABELS.get((el, a)) if el is not None else None)
+                                 for a, v in attrs.items()]})
+    return render_template('admin_hall_cut_tech_params.html', m=hm, tech=tech, groups=groups,
+                           label=_cut_tech_label(tech), has_tree=bool(_tech_raw(tech)))
 
 
 @app.route('/admin/hall/<int:machine_id>/cut-tech/<int:tech_id>/tested', methods=['POST'])

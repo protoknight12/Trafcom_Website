@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="{{ get_locale() }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Параметри - {{ label }} - Trafcom</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .tp-group { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 10px 14px; margin-bottom: 10px; }
+        .tp-group h3 { margin: 0 0 8px; font-size: 0.95rem; font-family: monospace; }
+        .tp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px 12px; }
+        .tp-grid label { display: block; font-size: 0.75rem; color: var(--text-muted); font-family: monospace; }
+        .tp-grid label b { font-family: inherit; font-weight: 600; color: var(--text-main); }
+        .tp-grid input { width: 100%; box-sizing: border-box; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-main); padding: 3px 6px; border-radius: 4px; font: inherit; }
+        .tp-grid input.changed { border-color: #f59e0b; box-shadow: 0 0 0 1px #f59e0b; }
+        .tp-bar { position: sticky; top: 0; z-index: 5; background: var(--bg-main, var(--bg-surface)); padding: 8px 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    </style>
+</head>
+<body>
+{% include 'partials/navbar.html' %}
+<main class="container" style="max-width: 1200px; margin: 16px auto; padding: 0 16px;">
+    <h1 style="font-size: 1.2rem; margin-bottom: 4px;">Всички параметри - {{ label }}</h1>
+    <p class="text-muted" style="margin-top:0">Всеки параметър от файла на технологията (CypCut). Скоростта, пробиването и полетата в досието се взимат наново от тези стойности при запис; видът, дебелината, газът и дюзата не се сменят оттук.{% if not has_tree %} Технологията е въведена ръчно - показани са параметрите, които полетата ѝ дават.{% endif %}</p>
+    {#- admin_hall_cut_tech_params: only the changed inputs are posted, as JSON (a tree has hundreds of attributes) #}
+    <form method="post" id="tpForm">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="changes" id="tpChanges" value="[]">
+        <div class="tp-bar">
+            <input type="search" id="tpSearch" placeholder="Търсене на параметър" style="flex: 1 1 200px;">
+            <span id="tpCount" class="text-muted">няма промени</span>
+            <button class="btn btn-primary" type="submit">Запази</button>
+            <a class="btn" href="{{ url_for('admin_hall_dossier', machine_id=m.id) }}">Отказ</a>
+        </div>
+        {% for g in groups %}
+        <div class="tp-group" data-group>
+            <h3>{{ g.path }}</h3>
+            <div class="tp-grid">
+                {% for a, v, known in g.attrs %}
+                <div data-param="{{ (g.path ~ ' ' ~ a ~ ' ' ~ (known[0] if known else ''))|lower }}">
+                    <label>{% if known %}<b>{{ known[0] }}</b>{{ ' (' ~ known[1] ~ ')' if known[1] }} · {% endif %}{{ a }}</label>
+                    <input type="text" value="{{ v }}" data-row="{{ g.i }}" data-attr="{{ a }}" data-orig="{{ v }}" maxlength="100">
+                </div>
+                {% endfor %}
+                {% if g.text %}
+                <div data-param="{{ (g.path ~ ' текст')|lower }}">
+                    <label>текст</label>
+                    <input type="text" value="{{ g.text }}" data-row="{{ g.i }}" data-attr="#text" data-orig="{{ g.text }}" maxlength="100">
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </form>
+</main>
+<script>
+(function () {
+    const inputs = Array.from(document.querySelectorAll('input[data-row]'));
+    const count = document.getElementById('tpCount');
+    function changed() { return inputs.filter(function (el) { return el.value !== el.dataset.orig; }); }
+    inputs.forEach(function (el) {
+        el.addEventListener('input', function () {
+            el.classList.toggle('changed', el.value !== el.dataset.orig);
+            const n = changed().length;
+            count.textContent = n ? n + ' промени' : 'няма промени';
+        });
+    });
+    document.getElementById('tpForm').addEventListener('submit', function () {
+        document.getElementById('tpChanges').value = JSON.stringify(changed().map(function (el) {
+            return [parseInt(el.dataset.row, 10), el.dataset.attr, el.value];
+        }));
+    });
+    const q = document.getElementById('tpSearch');
+    q.addEventListener('input', function () {
+        const t = q.value.trim().toLowerCase();
+        document.querySelectorAll('[data-group]').forEach(function (g) {
+            let any = false;
+            g.querySelectorAll('[data-param]').forEach(function (p) {
+                const show = !t || p.dataset.param.indexOf(t) !== -1;
+                p.hidden = !show;
+                any = any || show;
+            });
+            g.hidden = !any;
+        });
+    });
+})();
+</script>
+</body>
+</html>

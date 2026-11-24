@@ -282,6 +282,7 @@
                     {% endif %}
                     <button class="btn" type="button" data-dialog="ct-form-dialog" data-title="Технология: {{ t.grade.name if t.grade else 'без вид' }}, {{ t.thickness_mm|num3 }} мм"
                             data-action="{{ url_for('admin_hall_cut_tech_save', machine_id=m.id) }}" data-values='{{ tech_values[t.id]|tojson|forceescape }}'>Редактирай</button>
+                    <a class="btn" data-frame href="{{ url_for('admin_hall_cut_tech_params', machine_id=m.id, tech_id=t.id) }}" title="Всеки параметър от файла на технологията">Всички параметри</a>
                     <form method="post" action="{{ url_for('admin_hall_cut_tech_delete', machine_id=m.id, tech_id=t.id) }}" style="display:inline; margin:0;"
                           data-confirm="Изтриване на технологията {{ t.grade.name if t.grade else 'без вид' }}, {{ t.thickness_mm|num3 }} мм, {{ cut_gases.get(t.gas, 'без газ') }}{{ ', дюза ' ~ t.nozzle if t.nozzle }}?">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

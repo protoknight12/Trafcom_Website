@@ -341,3 +341,82 @@ def test_folder_sync_both_ways(s, monkeypatch):
     assert 'Trafcom\\Стомана Кислород' in disk and '8mm1.2d1.5d.fsm' not in disk['steel']
     assert db.session.get(MachineCutTechnology, other.id).folder_file == 'Trafcom\\Стомана Кислород\\10mmCS-D1.2-O2.fsm'
     assert c.get(status).get_json()[str(other.id)] == 'same'
+
+
+def test_all_params_editable(s):
+    """"Всички параметри": every attribute of the file's tree is editable; the columns are read back from the tree,
+    the dossier dialog writes its fields into the tree, a number must stay a number, a hand-made technology gets the
+    tree its fields make; the export carries the edited values."""
+    import json as _json
+    laser = Machine(name='PG3015 PARAMS', is_laser=True)
+    db.session.add(laser)
+    db.session.flush()
+    hall = HallMachine(name=laser.name, machine_id=laser.id)
+    db.session.add_all([hall, MaterialGrade(name='Стомана')])
+    db.session.commit()
+    c = _login('fsm_admin')
+    c.post(f'/admin/hall/{hall.id}/cut-tech/import', data={'file': [(io.BytesIO(_fsm()), '8mmCS-D1.2-O2.fsm')]},
+           content_type='multipart/form-data')
+    t = MachineCutTechnology.query.filter_by(machine_id=laser.id).one()
+    url = f'/admin/hall/{hall.id}/cut-tech/{t.id}/params'
+    page = c.get(url).get_data(as_text=True)
+    assert 'CamParams/Cut' in page and 'data-attr="LiftHeight"' in page and 'Фокус' in page
+    raw = _json.loads(t.params_json)
+    i_cut = next(i for i, r in enumerate(raw) if r[0] == 'CamParams/Cut')
+    i_cam = next(i for i, r in enumerate(raw) if r[0] == 'CamParams')
+    r = c.post(url, data={'changes': _json.dumps([[i_cut, 'Focus', '13'], [i_cam, 'WorkSpeed', '43.3333333'],
+                                                  [i_cut, 'Height', '.7']])}, follow_redirects=True)
+    assert 'Параметрите са записани (3 промени)' in r.get_data(as_text=True)
+    db.session.expire_all()
+    t = db.session.get(MachineCutTechnology, t.id)
+    assert t.focus_mm == 13 and t.height_mm == 0.7 and t.cutting_speed_mm_per_min == 2600
+    assert _json.loads(t.params_json)[i_cut][1]['Focus'] == '13'
+    # a number stays a number; an attribute the file does not have is refused
+    c.post(url, data={'changes': _json.dumps([[i_cut, 'Focus', 'abc']])})
+    c.post(url, data={'changes': _json.dumps([[i_cut, 'NoSuchAttr', '1']])})
+    db.session.expire_all()
+    assert db.session.get(MachineCutTechnology, t.id).focus_mm == 13
+    # the dossier dialog writes its fields into the tree too
+    c.post(f'/admin/hall/{hall.id}/cut-tech', data={'tech_id': t.id, 'thickness_mm': 8, 'gas': 'oxygen',
+                                                   'nozzle': '1.2d', 'cutting_speed_mm_per_min': 2500, 'focus_mm': 12})
+    db.session.expire_all()
+    t = db.session.get(MachineCutTechnology, t.id)
+    raw = _json.loads(t.params_json)
+    assert raw[i_cut][1]['Focus'] == '12' and abs(float(raw[i_cam][1]['WorkSpeed']) * 60 - 2500) < 0.01
+    xml = zipfile.ZipFile(io.BytesIO(c.get(f'/admin/hall/{hall.id}/cut-tech/{t.id}/fsm').data)).read(
+        'material.lcm', pwd=PW.encode()).decode()
+    assert 'Focus="12"' in xml and 'Height=".7"' in xml and 'LiftHeight="30"' in xml
+    # a hand-made technology: the page shows the tree its fields make, saving stores it
+    hand = MachineCutTechnology(machine_id=laser.id, thickness_mm=3, gas='nitrogen', cutting_speed_mm_per_min=20000,
+                                focus_mm=-1.5)
+    db.session.add(hand)
+    db.session.commit()
+    page = c.get(f'/admin/hall/{hall.id}/cut-tech/{hand.id}/params').get_data(as_text=True)
+    assert 'CamParams/Cut' in page and 'въведена ръчно' in page
+    c.post(f'/admin/hall/{hall.id}/cut-tech/{hand.id}/params', data={'changes': '[]'})
+    db.session.expire_all()
+    assert db.session.get(MachineCutTechnology, hand.id).params_json
+    assert _login('fsm_worker').get(url).status_code == 302
+
+
+def test_params_page_keeps_columns_changed_without_the_tree(s):
+    """A column changed without the tree (a data step) wins: the page shows it and saving keeps it."""
+    import json as _json
+    laser = Machine(name='PG3015 STALE', is_laser=True)
+    db.session.add(laser)
+    db.session.flush()
+    hall = HallMachine(name=laser.name, machine_id=laser.id)
+    db.session.add(hall)
+    db.session.commit()
+    c = _login('fsm_admin')
+    c.post(f'/admin/hall/{hall.id}/cut-tech/import', data={'file': [(io.BytesIO(_fsm(focus=5)), '8mmCS-D1.2-O2.fsm')]},
+           content_type='multipart/form-data')
+    t = MachineCutTechnology.query.filter_by(machine_id=laser.id).one()
+    t.focus_mm = 13                                   # like data_pg3015_o2_focus_and_gas_copies
+    db.session.commit()
+    url = f'/admin/hall/{hall.id}/cut-tech/{t.id}/params'
+    assert 'data-attr="Focus" data-orig="13"' in c.get(url).get_data(as_text=True)
+    c.post(url, data={'changes': '[]'})
+    db.session.expire_all()
+    t = db.session.get(MachineCutTechnology, t.id)
+    assert t.focus_mm == 13 and any(r[0] == 'CamParams/Cut' and r[1]['Focus'] == '13' for r in _json.loads(t.params_json))

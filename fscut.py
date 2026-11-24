@@ -1026,6 +1026,23 @@ def _channel_el(port, raw=None, fields=None, speed_mm_min=None, gas=None, gas_ma
     return ch
 
 
+def channel_from_raw(raw):
+    """A stored parameter tree (_raw() rows, an .fsm's '@' row allowed) read back as parse()'s channel dict - so the
+    fields / speed / pierce time always come from the tree when the tree is edited. None without a CamParams."""
+    tech = ET.Element('Technical')
+    tech.append(_channel_el(1, raw))
+    chans = _technology(tech)['channels']
+    return chans[0] if chans and any(p == 'CamParams' for p, _, _ in raw or []) else None
+
+
+def raw_with_fields(raw, fields=None, speed_mm_min=None, gas=None):
+    """The tree with the given fields / speed / gas written into it (what an export writes) - kept as the stored
+    tree when the fields are edited, so the tree and the columns never disagree. The '@' row (an .fsm's <Material>
+    attributes) is kept. An empty tree becomes the minimal one the fields make."""
+    root = [r for r in raw or [] if r[0] == '@']
+    return root + _raw(_channel_el(1, raw, fields, speed_mm_min, gas))
+
+
 def _cam_children(el, cam):
     """LeadIn / ToolCompensation / MicroConnects of an entity, in CypCut's order (ToolCompensation and MicroConnects
     always present, empty when the source had none)."""
