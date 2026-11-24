@@ -268,3 +268,63 @@ def test_cost_settings_mqtt_meter(client):
     r = client.post('/admin/heatpump/cost-settings', data=data, follow_redirects=True)
     with flask_app.app_context():
         assert appmod._heatpump_cost_cfg()['meter'] == 'shellies/tp_em3', r.get_data(as_text=True)[:3000]
+
+
+def test_central_supply_relay_and_fault_banner(client, monkeypatch):
+    """The meter's relay is the pump's central supply: state + switching (Gen1 over HTTP), refused for non-admins, logged; an active pump fault
+    shows a banner on every page for admins."""
+    from app import ShellyDevice, EditableText
+    with flask_app.app_context():
+        if not ShellyDevice.query.filter_by(host='10.9.9.9').first():
+            db.session.add(ShellyDevice(name='Помпа', host='10.9.9.9', connection_type='ip'))
+        row = EditableText.query.filter_by(key='settings.heatpump_meter').first() or EditableText(key='settings.heatpump_meter')
+        row.content = '10.9.9.9'
+        db.session.add(row)
+        db.session.commit()
+    state = {'on': True}
+    seen = []
+    monkeypatch.setattr(appmod, '_shelly_get_status', lambda host, timeout=None: {'relays': [{'ison': state['on']}]})
+    monkeypatch.setitem(appmod._shelly_gen_cache, '10.9.9.9', 'gen1')
+
+    class _R:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b''
+
+    def fake_open(url, timeout=None):
+        seen.append(url)
+        state['on'] = url.endswith('turn=on')
+        return _R()
+    monkeypatch.setattr(appmod.urllib.request, 'urlopen', fake_open)
+    _login(client, 'hp_worker')
+    assert client.post('/admin/heatpump/relay', data={'on': '0'}).status_code == 302
+    client.get('/logout')
+    _login(client, 'hp_admin')
+    assert client.get('/admin/heatpump/relay').get_json() == {'available': True, 'is_on': True, 'error': None}
+    r = client.post('/admin/heatpump/relay', data={'on': '0'})
+    assert r.get_json()['is_on'] is False and seen == ['http://10.9.9.9/relay/0?turn=off']
+    assert client.post('/admin/heatpump/relay', data={'on': '1'}).get_json()['is_on'] is True
+    monkeypatch.setattr(appmod, '_shelly_get_status', lambda host, timeout=None: {'relays': []})
+    assert client.get('/admin/heatpump/relay').get_json()['available'] is False
+    # fault banner on any page
+    monkeypatch.setitem(appmod._heatpump_live, 'online', True)
+    monkeypatch.setitem(appmod._heatpump_live, 'data', {'Stoerung': False})
+    assert 'АВАРИЯ' not in client.get('/admin/heatpump').get_data(as_text=True)
+    monkeypatch.setitem(appmod._heatpump_live, 'data', {'Stoerung': True})
+    monkeypatch.setitem(appmod._heatpump_live, 'slow', {'last_fault': {'text': 'Hochdruck'}})
+    page = client.get('/dashboard').get_data(as_text=True)
+    assert 'Термопомпа: АВАРИЯ - Hochdruck' in page
+
+
+def test_notifications_in_one_field_under_main_menu(client, monkeypatch):
+    """Flash messages and alerts are printed once, in the field under the main menu (above the section bar), never again in the page itself."""
+    _login(client, 'hp_admin')
+    monkeypatch.setitem(appmod._heatpump_live, 'online', True)
+    monkeypatch.setitem(appmod._heatpump_live, 'data', {'Stoerung': True})
+    with client.session_transaction() as s:
+        s['_flashes'] = [('success', 'Тест-съобщение-123')]
+    page = client.get('/admin/heatpump').get_data(as_text=True)
+    assert page.count('Тест-съобщение-123') == 1
+    assert page.index('notify-field') < page.index('Тест-съобщение-123') < page.index('class="subnav"')
+    assert page.index('АВАРИЯ') < page.index('class="subnav"')
+    assert 'Тест-съобщение-123' not in client.get('/admin/heatpump').get_data(as_text=True)      # consumed

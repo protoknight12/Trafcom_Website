@@ -51,8 +51,10 @@
             <p class="section-subtitle" style="margin: 0;">Данни на живо през RS-232 → Ethernet. Само отчитане. <span id="lastUpdate" class="text-muted"></span></p>
         </div>
         <a href="{{ url_for('admin_device_log', kind='heatpump') }}" data-frame="stay" class="btn-secondary" style="padding: 4px 10px; font-size: 0.85rem; text-decoration: none;">Виж лог</a>
+        <button type="button" id="hpRelay" class="btn-secondary" style="padding: 4px 10px; font-size: 0.85rem;" disabled>Централно захранване: …</button>
         <span id="hpState" class="hp-state state-offline">Няма връзка</span>
     </div>
+    <p id="hpRelayMsg" class="text-small" style="margin: 0 0 6px;"></p>
     <p id="hpError" class="text-muted text-small"></p>
 
     <h3 class="hp-section">Температури и налягане</h3>
@@ -427,6 +429,26 @@
     startPoll(loadCost, 60000);
 
     document.getElementById('hoursSel').addEventListener('change', drawChart);
+    // central supply = the relay of the pump's meter
+    var relayBtn = document.getElementById('hpRelay'), relayMsg = document.getElementById('hpRelayMsg'), relayOn = null;
+    function showRelay(j) {
+        relayOn = j.is_on;
+        relayBtn.disabled = !j.available;
+        relayBtn.textContent = 'Централно захранване: ' + (j.is_on === true ? 'ВКЛ. - изключи' : j.is_on === false ? 'ИЗКЛ. - включи' : (j.available ? 'неизвестно' : 'няма реле'));
+        relayMsg.textContent = j.error || '';
+        relayMsg.style.color = j.error ? 'var(--danger-text)' : '';
+    }
+    function loadRelay() { fetch('{{ url_for("admin_heatpump_relay") }}').then(function (r) { return r.json(); }).then(showRelay).catch(function () { }); }
+    relayBtn.addEventListener('click', function () {
+        var turnOn = relayOn !== true;
+        if (!confirm(turnOn ? 'Да се ВКЛЮЧИ централното захранване на термопомпата?' : 'Да се ИЗКЛЮЧИ централното захранване на термопомпата? Отоплението и охлаждането спират, докато не го включиш отново.')) return;
+        relayBtn.disabled = true; relayMsg.textContent = 'Изпраща се…';
+        fetch('{{ url_for("admin_heatpump_relay") }}', {
+            method: 'POST', headers: {'X-CSRFToken': CSRF, 'Content-Type': 'application/x-www-form-urlencoded'},
+            body: new URLSearchParams({on: turnOn ? '1' : '0'})
+        }).then(function (r) { return r.json(); }).then(showRelay).catch(function () { relayMsg.textContent = 'Грешка в заявката.'; relayBtn.disabled = false; });
+    });
+    startPoll(loadRelay, 10000);
     startPoll(poll, 3000);
     startPoll(drawChart, 60000);
 })();

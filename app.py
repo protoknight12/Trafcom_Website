@@ -23984,6 +23984,76 @@ def _heatpump_power():
     return {'w': round(snap['total_power']), 'online': snap['online']}
 
 
+def _heatpump_relay(set_on=None):
+    """State of the relay inside the meter chosen for the pump = the pump's central supply, and with set_on True/False switches it
+    (owner's decision 2026-11-24: the one relay, channel 0, that feeds the whole pump). Over HTTP by the meter's IP (Gen1 /relay/0, Gen2 Switch.*);
+    a meter known only by its MQTT topic is switched through the broker and its state stays unknown. Never raises:
+    {'available', 'is_on' (None = unknown), 'error'}."""
+    meter = _shelly_by_key(get_text(_HP_PREFIX + 'meter', ''))
+    if meter is None:
+        return {'available': False, 'is_on': None, 'error': 'Не е избран електромер (Shelly) за помпата.'}
+    try:
+        if not meter.host:
+            if set_on is None:
+                return {'available': bool(meter.mqtt_topic), 'is_on': None, 'error': None}
+            if not _mqtt_publish(f'{meter.mqtt_topic}/relay/0/command', 'on' if set_on else 'off'):
+                return {'available': True, 'is_on': None, 'error': 'Няма връзка с MQTT брокера.'}
+            return {'available': True, 'is_on': set_on, 'error': None}
+        status = _shelly_get_status(meter.host)
+        gen2 = _shelly_gen_cache.get(meter.host) == 'gen2'
+        if not (status.get('switch:0') if gen2 else status.get('relays')):
+            return {'available': False, 'is_on': None, 'error': 'Електромерът няма реле.'}
+        if set_on is not None:
+            if gen2:
+                shelly_rpc(meter.host, 'Switch.Set', {'id': 0, 'on': 'true' if set_on else 'false'})
+            else:
+                with urllib.request.urlopen(f'http://{meter.host}/relay/0?turn={"on" if set_on else "off"}', timeout=SHELLY_TIMEOUT) as resp:
+                    resp.read()
+            status = _shelly_get_status(meter.host)
+        on = bool(status['switch:0'].get('output')) if gen2 else bool(status['relays'][0].get('ison'))
+        return {'available': True, 'is_on': on, 'error': None}
+    except Exception:
+        return {'available': True, 'is_on': None, 'error': 'Електромерът не отговаря.'}
+
+
+@app.route('/admin/heatpump/relay', methods=['GET', 'POST'])
+@limiter.limit('30 per hour', methods=['POST'])
+@role_required('admin')
+def admin_heatpump_relay():
+    """GET: state of the central supply relay. POST on=1/0: switch it (logged)."""
+    if request.method == 'GET':
+        return jsonify(_heatpump_relay())
+    turn_on = request.form.get('on') == '1'
+    st = _heatpump_relay(turn_on)
+    log_action(f'Термопомпа: централно захранване {"включено" if turn_on else "изключено"}' + ('' if st['error'] is None else f' (грешка: {st["error"]})'))
+    return jsonify(st), (200 if st['error'] is None else 502)
+
+
+@app.context_processor
+def inject_flash_once():
+    """Templates' get_flashed_messages() hands the messages to the FIRST caller of a request only: the notification field of partials/navbar.html
+    (under the main menu) takes them, so a page's own flash block - rendered later - prints nothing a second time."""
+    from flask import get_flashed_messages as real
+
+    def once(with_categories=False, category_filter=()):
+        if g.get('_flash_taken'):
+            return []
+        g._flash_taken = True
+        return real(with_categories=with_categories, category_filter=category_filter)
+    return {'get_flashed_messages': once}
+
+
+@app.context_processor
+def inject_heatpump_fault():
+    """heatpump_fault for the navbar banner on every page (admins): set while the pump reports an active fault (Stoerung)."""
+    if not (current_user.is_authenticated and current_user.is_admin):
+        return {'heatpump_fault': None}
+    if _heatpump_live['online'] and _heatpump_live['data'].get('Stoerung'):
+        last = _heatpump_live['slow'].get('last_fault') or {}
+        return {'heatpump_fault': {'text': last.get('text') or ''}}
+    return {'heatpump_fault': None}
+
+
 @app.route('/admin/heatpump/data')
 @limiter.exempt
 @role_required('admin')

@@ -197,29 +197,51 @@
         </div>
     </div>
 </nav>
-{% include 'partials/subnav.html' %}
-
-{% if vehicle_alerts %}
-<div class="vehicle-alert-banner">
-    <div class="vehicle-alert-banner-inner">
-        <span class="vehicle-alert-icon">&#9888;</span>
+{#- ONE notification field right under the main menu, above the section bar: pump fault, vehicle deadlines and the flash messages of the last
+    action. Pages no longer print their own flash block - this one consumes the messages first (inside a frame the alerts are hidden, the flashes stay
+    for form_dialog.js to carry over). -#}
+{% set _flashes = get_flashed_messages(with_categories=true) %}
+{% if heatpump_fault or vehicle_alerts or _flashes %}
+<div class="notify-field">
+    {% if heatpump_fault %}
+    <div class="notify-alert">
+        <span class="notify-icon">&#9888;</span>
+        <a href="{{ url_for('admin_heatpump') }}" class="notify-item notify-expired">Термопомпа: АВАРИЯ{% if heatpump_fault.text and heatpump_fault.text != 'No Error' %} - {{ heatpump_fault.text }}{% endif %}</a>
+    </div>
+    {% endif %}
+    {% if vehicle_alerts %}
+    <div class="notify-alert">
+        <span class="notify-icon">&#9888;</span>
         {% for a in vehicle_alerts %}
-        <a href="{{ url_for('admin_vehicles') }}" class="vehicle-alert-item vehicle-alert-{{ a.status }}">
+        <a href="{{ url_for('admin_vehicles') }}" class="notify-item notify-{{ a.status }}">
             {{ a.vehicle }} ({{ a.plate }}) - {{ a.label }}{% if a.status == 'expired' %}: изтекла от {{ -a.days }} дни{% else %}: остават {{ a.days }} дни{% endif %}
-        </a>{% if not loop.last %}<span class="vehicle-alert-sep">·</span>{% endif %}
+        </a>{% if not loop.last %}<span class="notify-sep">·</span>{% endif %}
         {% endfor %}
     </div>
+    {% endif %}
+    {% if _flashes %}
+    <div class="flash-messages">
+        {% for category, message in _flashes %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
 </div>
-<style>
-    .vehicle-alert-banner { background-color: rgba(239, 68, 68, 0.1); border-bottom: 1px solid rgba(239, 68, 68, 0.35); padding: 8px 20px; }
-    .vehicle-alert-banner-inner { max-width: 98vw; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 0.85rem; }
-    .vehicle-alert-icon { color: #ef4444; }
-    .vehicle-alert-item { text-decoration: none; font-weight: 600; }
-    .vehicle-alert-item.vehicle-alert-expired { color: #ef4444; }
-    .vehicle-alert-item.vehicle-alert-warning { color: #f59e0b; }
-    .vehicle-alert-sep { color: var(--text-muted); }
-</style>
 {% endif %}
+<style>
+    .notify-field { max-width: 98vw; margin: 0 auto; padding: 6px 20px 0; }
+    .notify-field .flash-messages { margin: 8px 0; }
+    .notify-alert { background-color: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.35); border-radius: 6px; padding: 8px 14px; margin: 6px 0;
+        display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 0.85rem; }
+    .notify-icon { color: #ef4444; }
+    .notify-item { text-decoration: none; font-weight: 600; }
+    .notify-item.notify-expired { color: #ef4444; }
+    .notify-item.notify-warning { color: #f59e0b; }
+    .notify-sep { color: var(--text-muted); }
+    html.embedded .notify-alert { display: none; }
+</style>
+
+{% include 'partials/subnav.html' %}
 
 <script>
     // Read by AJAX POST calls that build FormData() from scratch (i.e. not
