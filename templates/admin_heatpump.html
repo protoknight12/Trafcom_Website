@@ -91,6 +91,10 @@
     <h3 class="hp-section">Състояние</h3>
     <div class="hp-grid" id="gridStates"></div>
 
+    <h3 class="hp-section">Топломер, електромер и COP (от помпата)</h3>
+    <p class="text-muted text-small" style="margin-top: 0;">Четат се всяка минута. Ако помпата няма такъв уред, стойността е 0 или показва грешка.</p>
+    <div class="hp-grid" id="gridMeter"><span class="text-muted text-small">Изчаква се четене…</span></div>
+
     <h3 class="hp-section">Помпа на отоплителния кръг - настройки (само четене)</h3>
     <p class="text-muted text-small" style="margin-top: 0;">Четат се на всеки 10 минути. Номерата са за фърмуер 3.0.20 - ако помпата върне друго име за номера, то се показва под стойността.</p>
     <div class="hp-grid" id="gridHkp"><span class="text-muted text-small">Изчаква се четене…</span></div>
@@ -246,6 +250,7 @@
     var MODES = {{ modes|tojson }};
     var WRITABLE = {{ writable|tojson }};
     var HKP = {{ hkp_params|tojson }};
+    var METER = {{ meter_params|tojson }};
     var CSRF = '{{ csrf_token() }}';
     // --- tabs (kept in location.hash) ---
     var TABS = ['overview', 'schedule', 'faults'];
@@ -437,18 +442,23 @@
                 '<span style="font-size:0.95rem">' + escapeHtml(s.last_fault.text) + '<br><small>' + new Date(s.last_fault.ts).toLocaleString('bg-BG') + '</small></span>', 'last_fault');
         }
         document.getElementById('gridStates').innerHTML = html;
-        if (r.hkp) {
-            document.getElementById('gridHkp').innerHTML = Object.keys(HKP).map(function (n) {
-                var p = HKP[n], v = r.hkp[n] || {}, val;
-                if (v.error) val = '<small class="hp-fault">грешка: ' + escapeHtml(v.error) + '</small>';
-                else if (typeof v.val === 'boolean') val = '<span class="' + (v.val ? 'hp-on' : 'hp-off') + '">' + (v.val ? 'Да' : 'Не') + '</span>';
-                else val = num(v.val, p.unit);
-                if (v.pump_name && v.pump_name !== n) val += '<br><small class="hp-fault">помпата: ' + escapeHtml(v.pump_name) + '</small>';
-                return '<div class="hp-card" title="' + escapeHtml(n + ' (SP ' + p.sp + ')') + '"><div class="hp-label">' + escapeHtml(p.label) +
-                    '</div><div class="hp-value" style="font-size:1.1rem">' + val + '</div></div>';
-            }).join('');
-        }
+        if (r.meter) document.getElementById('gridMeter').innerHTML = paramCards(METER, r.meter, 'MP');
+        if (r.hkp) document.getElementById('gridHkp').innerHTML = paramCards(HKP, r.hkp, 'SP');
         renderControls(s);
+    }
+
+    function paramCards(defs, vals, dp) {
+        function key(s) { return String(s).replace(/[:\s]+$/, ''); }
+        return Object.keys(defs).map(function (n) {
+            var p = defs[n], v = vals[n] || {}, val;
+            if (v.error) val = '<small class="hp-fault">грешка: ' + escapeHtml(v.error) + '</small>';
+            else if (typeof v.val === 'boolean') val = '<span class="' + (v.val ? 'hp-on' : 'hp-off') + '">' + (v.val ? 'Да' : 'Не') + '</span>';
+            else if (v.val === undefined) val = '<small>—</small>';
+            else val = num(v.val, p.unit);
+            if (v.pump_name && key(v.pump_name) !== key(n)) val += '<br><small class="hp-fault">помпата: ' + escapeHtml(v.pump_name) + '</small>';
+            return '<div class="hp-card" title="' + escapeHtml(n + ' (' + dp + ' ' + p.sp + ')') + '"><div class="hp-label">' + escapeHtml(p.label) +
+                '</div><div class="hp-value" style="font-size:1.1rem">' + val + '</div></div>';
+        }).join('');
     }
 
     var ctlBuilt = false;
