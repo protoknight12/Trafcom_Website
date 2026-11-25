@@ -27962,15 +27962,18 @@ def _sensor_reading(sensor):
     """{'temp', 'humidity', 'age_s'}: age from the MQTT cache's last_seen (UTC naive), else the last stored TemperatureReading."""
     if sensor is None:
         return {'temp': None, 'humidity': None, 'age_s': None}
-    snap = _mqtt_temp_snapshot(sensor)
-    if snap.get('last_seen') is not None:
-        age = (datetime.utcnow() - snap['last_seen']).total_seconds()
+    # The raw cache, not _mqtt_temp_snapshot(): that one formats last_seen as a local 'HH:MM:SS' string.
+    with _mqtt_lock:
+        state = dict(_mqtt_temp_state.get(sensor.mqtt_topic) or {})
+    temp, hum, seen = state.get('temperature'), state.get('humidity'), state.get('last_seen')
+    if temp is not None and isinstance(seen, datetime):
+        age = (datetime.utcnow() - seen).total_seconds()
     else:
         row = TemperatureReading.query.filter(TemperatureReading.sensor_id == sensor.id, TemperatureReading.temperature.isnot(None)) \
             .order_by(TemperatureReading.ts.desc()).first()
+        temp, hum = (row.temperature, row.humidity if hum is None else hum) if row else (None, hum)
         age = time.time() - row.ts if row else None
-    return {'temp': snap.get('temperature'), 'humidity': snap.get('humidity'),
-            'age_s': None if age is None else max(0, int(age))}
+    return {'temp': temp, 'humidity': hum, 'age_s': None if age is None else max(0, int(age))}
 
 
 def _thermostat_state(th, now_local, season=None, holidays=None):
@@ -28017,7 +28020,7 @@ def _last_convector_log(conv):
 def _thermostat_tick(now=None):
     """One pass over every enabled thermostat (season heat/cool only). Each convector is switched on its own, only when its
     state differs and its minimum on/off time is over (a stale/missing sensor switches off regardless). A device error is
-    logged and skips just that convector. Automatic switches are not written to the ActivityLog. Commits once."""
+    logged and skips just that convector. Automatic switches are not written to the ActivityLog. Commits after each switch."""
     season = hvac_season()
     if season not in ('heat', 'cool'):
         return
@@ -28047,7 +28050,9 @@ def _thermostat_tick(now=None):
                 if not st['stale'] and last is not None and now_ts - last.ts < th.min_cycle_min * 60:
                     continue
                 _thermostat_switch(conv, want, 'thermostat')
+                db.session.commit()         # per switch: a later DB error cannot drop the row of a relay already switched
             except Exception:
+                db.session.rollback()
                 _poller_failed('thermostat-device')
     db.session.commit()
 
@@ -28069,12 +28074,16 @@ def _hvac_set_season(season):
     db.session.commit()
     failed = []
     if season == 'off':
-        for conv in Convector.query.filter(Convector.thermostat_id.isnot(None)).order_by(Convector.id).all():
+        # Only enabled thermostats: a disabled one leaves its convectors to manual control.
+        convs = Convector.query.join(Thermostat, Convector.thermostat_id == Thermostat.id) \
+            .filter(Thermostat.enabled.is_(True)).order_by(Convector.id).all()
+        for conv in convs:
             try:
                 _thermostat_switch(conv, False, 'thermostat')
+                db.session.commit()
             except Exception:
+                db.session.rollback()
                 failed.append(conv.name)
-        db.session.commit()
     log_action(f'Сезон отопление/охлаждане: {HVAC_SEASON_LABELS[season]}'
                + (f' (неуспешно изключване: {", ".join(failed)})' if failed else ''))
     return {'ok': True, 'season': season, 'failed': failed}

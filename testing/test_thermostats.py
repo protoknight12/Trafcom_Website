@@ -79,11 +79,28 @@ def env(monkeypatch):
     ctx = app.app_context()
     ctx.push()
     db.create_all()
-    for m in (ThermostatInterval, ConvectorLog, Convector, Thermostat, HeatingHoliday):
+    from app import TemperatureReading
+    for m in (ThermostatInterval, ConvectorLog, Convector, Thermostat, HeatingHoliday, TemperatureReading):
         m.query.delete()
     EditableText.query.filter_by(key=HVAC_SEASON_KEY).delete()
     db.session.commit()
-    e = {'status': {}, 'temp': 20.0, 'age': 60, 'sets': [], 'fail': set()}
+    mqtt_state = {}
+    monkeypatch.setattr(app_module, '_mqtt_temp_state', mqtt_state)
+
+    class Env(dict):
+        """Setting temp/age writes the REAL MQTT cache shape (last_seen = UTC naive datetime); age None = nothing received."""
+        def __setitem__(self, k, v):
+            super().__setitem__(k, v)
+            if k in ('temp', 'age') and 'age' in self:
+                mqtt_state.pop('t/hvac-tick', None)
+                if self['age'] is not None:
+                    mqtt_state['t/hvac-tick'] = {
+                        'online': True, 'temperature': self['temp'], 'humidity': 40.0, 'battery': 90,
+                        'last_seen': datetime.datetime.utcnow() - datetime.timedelta(seconds=self['age'])}
+
+    e = Env(status={}, sets=[], fail=set())
+    e['temp'] = 20.0
+    e['age'] = 60
 
     def fake_status(conv):
         return e['status'].get(conv.name, {'online': True, 'is_on': False, 'power_w': None})
@@ -93,13 +110,8 @@ def env(monkeypatch):
             raise MqttNotSent('няма връзка с MQTT брокера')
         e['sets'].append((conv.name, on))
 
-    def fake_snap(sensor):
-        seen = None if e['age'] is None else datetime.datetime.utcnow() - datetime.timedelta(seconds=e['age'])
-        return {'temperature': e['temp'], 'humidity': 40.0, 'battery': 90, 'last_seen': seen, 'online': True}
-
     monkeypatch.setattr(app_module, '_shelly_convector_status', fake_status)
     monkeypatch.setattr(app_module, '_shelly_convector_set', fake_set)
-    monkeypatch.setattr(app_module, '_mqtt_temp_snapshot', fake_snap)
     yield e
     db.session.rollback()
     db.session.remove()
@@ -291,6 +303,9 @@ def test_sensor_reading_falls_back_to_stored_reading(env, monkeypatch):
     db.session.add(s)
     db.session.commit()
     assert app_module._sensor_reading(None) == {'temp': None, 'humidity': None, 'age_s': None}
+    r = app_module._sensor_reading(s)                    # live MQTT cache (UTC datetime last_seen, 60 s old)
+    assert r['temp'] == 20.0 and r['humidity'] == 40.0 and 55 <= r['age_s'] <= 120
+    assert isinstance(app_module._mqtt_temp_snapshot(s)['last_seen'], str)   # why the cache is read raw
     env['age'] = None                                    # restart: MQTT cache empty, value from the DB
     TemperatureReading.query.filter_by(sensor_id=s.id).delete()
     db.session.add(TemperatureReading(sensor_id=s.id, ts=int(time.time()) - 600, temperature=20.0))
@@ -340,6 +355,7 @@ def test_season_off_switches_convectors_off(env, monkeypatch):
     _season('heat')
     _thermo(convs=('К1', 'К2'))
     db.session.add(Convector(name='Свободен'))          # not on a thermostat: untouched
+    _thermo(convs=('Ръчен',), enabled=False)             # disabled thermostat: its convector is left alone
     db.session.commit()
     res = app_module._hvac_set_season('off')
     assert res['ok'] is True and app_module.hvac_season() == 'off'
