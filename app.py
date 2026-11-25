@@ -28047,7 +28047,8 @@ def _thermostat_tick(now=None):
         db.session.commit()
 
 
-def _thermostat_tick_one(th, now, season, holidays):
+def _thermostat_tick_one(th, now, season, holidays, force=False):
+    """force: skip the minimum on/off time (the thermostat was just switched on - it acts at once)."""
     st = _thermostat_state(th, now, season, holidays)
     for conv in th.convectors:
         on_season = _convector_on_season(conv, season)
@@ -28067,7 +28068,8 @@ def _thermostat_tick_one(th, now, season, holidays):
                 resend = last is not None and now_ts - last.ts > THERMOSTAT_RESEND_AFTER
             if cur == want and not resend:
                 continue
-            if on_season and not st['stale'] and last is not None and now_ts - last.ts < th.min_cycle_min * 60:
+            if not force and on_season and not st['stale'] and last is not None \
+                    and now_ts - last.ts < th.min_cycle_min * 60:
                 continue
             _thermostat_switch(conv, want, 'thermostat')
             db.session.commit()         # per switch: a later DB error cannot drop the row of a relay already switched
@@ -28499,6 +28501,14 @@ def admin_thermostat_enabled(th_id):
     th.enabled = request.form.get('enabled') == '1'
     db.session.commit()
     log_action(f'Термостат "{th.name}" {"включен" if th.enabled else "изключен"}')
+    if th.enabled:
+        # Switched on: act now, not at the next poller pass and not after the minimum on/off time
+        # (that time only counts while the thermostat runs).
+        with _hvac_lock:
+            season = hvac_season()
+            if season in ('heat', 'cool'):
+                _thermostat_tick_one(th, datetime.now(APP_TZ).replace(tzinfo=None), season,
+                                     {h.day for h in HeatingHoliday.query}, force=True)
     return jsonify(ok=True, enabled=th.enabled)
 
 

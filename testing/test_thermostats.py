@@ -388,6 +388,22 @@ def test_manual_toggle_logs_source_manual(env):
     assert [(x.is_on, x.source) for x in _logs('Ръчен')] == [(True, 'manual')]
 
 
+def test_enable_acts_at_once_ignoring_min_cycle(adm, env):
+    """Switching a thermostat on decides at once: the minimum on/off time counts only while it runs (a manual switch
+    a minute ago does not hold it back); switching it off sends nothing."""
+    _season('heat')
+    t = _thermo(enabled=False)
+    c = Convector.query.one()
+    db.session.add(ConvectorLog(convector_id=c.id, ts=int(time.time()) - 60, is_on=False, source='manual'))
+    db.session.commit()
+    env['temp'] = 19.0
+    assert adm.post(f'/admin/thermostats/{t.id}/enabled', data={'enabled': '0'}).status_code == 200
+    assert env['sets'] == []
+    assert adm.post(f'/admin/thermostats/{t.id}/enabled', data={'enabled': '1'}).status_code == 200
+    assert env['sets'] == [('К1', True)]
+    assert _logs('К1')[-1].source == 'thermostat'
+
+
 # ---------------- Task 4: menu + Термостати admin page ----------------
 @pytest.fixture
 def adm(env):
