@@ -24248,12 +24248,17 @@ def _heatpump_slow(hp):
     return slow
 
 
+def _heatpump_fault_key(slow):
+    """(count, last entry's time) of a slow read; None parts when the read has no fault data."""
+    return slow.get('fault_count'), (slow.get('last_fault') or {}).get('ts')
+
+
 def _heatpump_fault_sync(hp, slow, fault_key):
     """Fault-list entries to store after a slow read: [] when (count, last entry's time) equals fault_key (the last stored
     sync), else the new indices (count grew) or the last HEATPUMP_FAULT_SYNC_MAX (first sync after a connect, or the list
     shrank / rolled over). A read error is a pump error (raises)."""
-    n = slow['fault_count']
-    key = (n, slow['last_fault']['ts'])
+    n = slow.get('fault_count')
+    key = _heatpump_fault_key(slow)
     if key == fault_key or not n:
         return []
     first = n - HEATPUMP_FAULT_SYNC_MAX
@@ -24345,7 +24350,7 @@ def _heatpump_loop():
                             if mode is not None and mode != saved_mode:     # the last known mode, for a hard restart while offline
                                 _heatpump_save_setting(_HP_PREFIX + 'last_mode', str(mode))
                             db.session.commit()
-                            fault_key, saved_mode = (slow['fault_count'], slow['last_fault']['ts']), mode
+                            fault_key, saved_mode = _heatpump_fault_key(slow), mode
                         except Exception:
                             # Database failure domain: this minute's row is lost, the pump connection stays up.
                             db.session.rollback()
