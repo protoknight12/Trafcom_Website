@@ -11089,7 +11089,8 @@ def _param_page(raw, **ctx):
             return None
         v = str(attrs[attr])
         f = fscut._f(v, None)
-        return i, v, (v if f is None else f'{round(f * k, 6):g}')
+        # plain decimals, never "1.31072e+06" (flags numbers are big); 4 places hide 416.666667 mm/s x 60 = 25000.00002
+        return i, v, (v if f is None else (f'{round(f * k, 4):.4f}'.rstrip('0').rstrip('.') or '0'))
     curves = {tag: fscut.curve_points(raw, tag) for tag in fscut.CURVES}
     return render_template('admin_hall_cut_tech_params.html', groups=groups, pv=pv, curves=curves, **ctx)
 

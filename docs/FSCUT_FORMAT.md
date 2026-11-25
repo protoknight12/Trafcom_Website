@@ -130,7 +130,7 @@ CypCut's "Layer Parameter Settings" dialog -> the file (checked against the prog
 |---|---|
 | Cut: Cut speed (mm/min) | `CamParams[WorkSpeed]` x 60 |
 | Nozzle height, Gas type, Gas pressure, Focus pos, Beam width | `Cut[Height, GasType, GasPressure, Focus, BeamSize]` |
-| Peak power (%), Actual power (W) | `Cut[LaserCurrent]`, `Cut[PeakPower]` (= full power x %) |
+| Peak power (%), Actual power (W) | `Cut[LaserCurrent]`; Actual power is computed (LaserCurrent x the laser's max power / 100), not stored - `Cut[PeakPower]` is another value |
 | Duty cycle (%), Pulse freq | `Cut[PwmRatio]` x 100, `Cut[PwmFreq]` |
 | LaserOn delay / Laser off delay (ms) | `Cut[TimeStay]` / `CamParams[DelayBeforeLaserOff]` |
 | Slow start Length / Speed; Refinemen duty / freq | `CamParams[SlowLeadLength, SlowLeadSpeed x 60]`; `SlowLeadExt[Enable, Ratio x 100, Freq]` |
@@ -139,10 +139,31 @@ CypCut's "Layer Parameter Settings" dialog -> the file (checked against the prog
 | Power curve / Frequency curve | `PwmRatioFunc` / `PwmFreqFunc`: `Knot[X = speed %, Y = %]`, first and last knot written 4 times, `NormalS`, `NormalE`, `Bound`; used while `<Material DefPwmRatioFunc / DefPwmFreqFunc="false">` |
 | Pierce: No Pierce / 1-3 Stage | `CamParams[PierceStepCount]` |
 | Pierce mode, Pierce time (top), height, gas, pressure, power, duty, freq, beam, focus, EndPt focus, Pierce time (lower), Gas blow, Gas type, Pressure | `PierceN[PierceMode, TimeFollow, Height, GasType, GasPressure, LaserCurrent / PeakPower, PwmRatio x 100, PwmFreq, BeamSize, Focus, FocusEnd, TimeStay, TimeBlow, BlowGasType, BlowGasPressure]` |
-| Corner: Vibration suppress, Thin / Thick sheet suppress | `CamParams[UseShakeRes, ShaleResMs, ShakeResLv]` |
-| Leadline: Cut speed, Duty, Freq, Lead height, Stable distance, Lead circle speed | `LeadLineParam[LeadDecSpd x 60, PwmRatio x 100, PwmFreq, LeadCutH, LeadDecLen, LeadHoleSpd x 60]` |
+| Corner: Vibration suppress (on = UseShakeRes or PierceFlags bit 18 / 19), Self = `UseShakeRes="true"`, Custom: Thin sheet (bit 18, `ShaleResMs` ms) / Thick sheet (bit 19, `ShakeResLv`) | `CamParams[UseShakeRes, PierceFlags, ShaleResMs, ShakeResLv]` |
+| Leadline: Cut speed, Duty, Freq, Lead height, Stable distance, Lead circle speed | `LeadLineParam[CurveSpd x 60, PwmRatio x 100, PwmFreq, LeadCutH, LeadDecLen, LeadHoleSpd x 60]` (`LeadDecSpd` has no field in the dialog) |
+| Top row "Mode" / Defilm "Cut Mode" | `CamParams[PierceStyle]`: 0 Follow Cut (Standard), 1 Fixed Height Cut |
+| Smooth MicroJoint, Root ratio %, Smooth speed % | `CamParams[NanoMicro]`, `CamParams[DutyRootRatio]` x 100 (`PeakPowerRootRatio` when `PeakPowerEnable`), `MicroSpeedParams[MicroSpeedRatio]` x 100; CypCut writes `MicroPWMRatio` = (1 - DutyRootRatio) x Cut PwmRatio |
 | Corner QCW: enable, speed, duty, freq, angle, dis before / after | `CornerParams[Enable, Speed x 60, PwmRatio x 100, PwmFreq, Angle, CornerLen, CornerLen1]` |
 | Use MJ Length: MicroJoint | `CamParams[MicroLen]` |
+
+`CamParams[PierceFlags]` bits (CypCut's Delphi RTTI in `materlib.bpl`: indexed properties of
+`TPlateCamParams1610` read through `GetPierceFlag(index)`, index = bit; checked against a file with every tick on =
+91678): 1 Power curve (UseDynamicPwm), 2 Frequency curve (UseDynamicFreq), 3 Defilm (UseCoverCut), 4 Recool
+(UsePathCool), 5 Pre-pierce (UsePrePunch), 9 Blow (AlwaysBlow), 10 Not follow (DisableFollower), 11 DisableGas,
+12 DisableLaser, 13 Slow start (SlowLead), 14 Slow stop (SlowEnd), 16 Smooth Pierce (UseFlashCut), 6 UseShortMove,
+18 Thin sheet suppress (UseSheetRes), 19 Thick sheet suppress (UseThickRes), 20 Use MJ Length (UseMicroLen),
+21 UseCutGap, 22 UsePierceCheck, 23 UsePlasmaCheck, 24 UseSuperFastCut, 25 UseFlashCutLaser, 26 UseCoolDownBlow,
+27 UseEdgePierceCheck, 28 UseMoltenWidthLoop, 29 UseCoverGap, 30 UseExpandHole. `LeadLineParam[Flags]`
+(`TLeadLineParams.GetFlagBit`): bit 1 Use Leadline Technique, 2 Lead Down (needs 1), 3 Lead Circle (needs 1),
+4 Lead Focus. `<Material ParamFlag>` (`TDbTechParam`, model.bpl): bit 2 Locked, 8 Visible, 9 Enabled ("Not cut" clears
+it: 768 -> 256), 10 Independent. Enable precision = `LayerCutParams[Enable]`; "Absolute value" is display only (not in
+the file). Pierce mode (`PierceN[PierceMode]`): 0 Segment, 1 Flash, 2 Incremental (nozzle stepping). The Layer
+Parameter Settings dialog of CypCutE 10.2501 is a Vue page (`resources\webapp\cdn\index.js`, labels in
+`languages\en.json`) - read there 2026-11-25 for the dependencies: Slow start / stop fields need bits 13 / 14 (+ the
+Refinemen tick for its duty / freq), precision fields need `LayerCutParams[Enable]`, Lead Down / Lead Circle and the
+leadline fields need `LeadLineParam` bit 1 (`LeadCutH` / `LeadDecLen` also bit 2, `LeadHoleSpd` bit 3), `MicroLen` needs
+bit 20, Smooth MJ root ratio / speed need `NanoMicro`, Corner fields need `CornerParams[Enable]`, Pre-pierce needs a
+pierce stage. Curves: without knots CypCut uses {10, 50}, {80, 100}; the 4x end knots are what older files carry.
 
 Test files from the machine (2026-11-25, everything ticked at once, so bits are not yet matched to ticks one by one):
 the top row + Slow start / stop + the three curve ticks -> `CamParams[PierceFlags]` 0 -> 91678 (bits 1-4, 9, 10, 13,

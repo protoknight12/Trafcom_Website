@@ -435,6 +435,9 @@ def test_params_page_cypcut_tabs_curves_and_note(s):
     url = f'/admin/hall/{hall.id}/cut-tech/{t.id}/params'
     page = c.get(url).get_data(as_text=True)
     assert 'data-tab="pierce"' in page and 'data-tab="corner"' in page and 'Layer Parameter Settings' in page
+    # ticks = bits: Not cut is <Material ParamFlag> bit 9 inverted (768 = cut), carried by a hidden input; this
+    # file has no PierceFlags, so Smooth Pierce is shown unknown
+    assert 'data-carrier="0|ParamFlag"' in page and 'data-bit="9" data-inv' in page and 'data-bit="16"' not in page
     assert f'value="{t.cutting_speed_mm_per_min:g}"' in page          # Cut speed in mm/min (WorkSpeed x 60)
     r = c.post(url, data={'changes': '[]', 'note': 'Тест бележка',
                           'curves': _json.dumps({'PwmFreqFunc': [[10, 50], [80, 100]]})}, follow_redirects=True)
@@ -703,7 +706,7 @@ def test_machine_defilm_recool(s, monkeypatch):
     assert c.get(f'/admin/hall/{hall.id}/tech-service/other').status_code == 404
     c.post(url + '/pull')
     page = c.get(url).get_data(as_text=True)
-    assert 'value="25000"' in page and 'Fixed Height' in page              # WorkSpeed x 60, PierceStyle 1
+    assert 'value="25000"' in page and 'Fixed Height Cut' in page              # WorkSpeed x 60, PierceStyle 1
     raw = _json.loads(db.session.get(Machine, laser.id).defilm_json)
     i_cut = next(i for i, r in enumerate(raw) if r[0] == 'CamParams/Cut')
     c.post(url, data={'changes': _json.dumps([[i_cut, 'LaserCurrent', '40']]), 'note': 'филм'})

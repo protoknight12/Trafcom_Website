@@ -123,6 +123,31 @@
 {%- set p = pv(path, attr) -%}
 <label class="{{ '' if p else 'cc-off' }}"><input type="checkbox" {% if p %}data-row="{{ p[0] }}" data-attr="{{ attr }}" data-bool data-orig="{{ p[1]|lower }}" {{ 'checked' if p[1]|lower == 'true' }}{% else %}disabled{% endif %}> {{ text }}</label>
 {%- endmacro %}
+{#- one bit of a number attribute (CamParams[PierceFlags] - CypCut's TPlateCamParams1610.GetPierceFlag(bit), read from
+    its Delphi RTTI 2026-11-25): the checkbox flips the bit in a hidden carrier input, which is what gets posted -#}
+{#- "Actual power" (W): CypCut computes it (Peak power % x the laser's full power), it is NOT stored - PeakPower is a
+    different value (checked in CypCut's code 2026-11-25). Shown read-only; the full power is taken from the file's own
+    PeakPower / LaserCurrent pair -#}
+{% macro actual(path) -%}
+{%- set c = pv(path, 'LaserCurrent') -%}{%- set w = pv(path, 'PeakPower') -%}
+{%- set full = (w[2]|float / (c[2]|float / 100)) if c and w and c[2]|float > 0 else 0 -%}
+<input type="text" readonly tabindex="-1" style="background:#eee; color:#777" {% if c and full %}data-power-row="{{ c[0] }}" data-full="{{ full }}" value="{{ (c[2]|float * full / 100)|round|int }}"{% else %}disabled{% endif %}>
+{%- endmacro %}
+{% macro carrier(path, attr) -%}
+{%- set p = pv(path, attr) -%}
+{%- if p and p[2]|int(-1) >= 0 %}<input type="hidden" data-row="{{ p[0] }}" data-attr="{{ attr }}" data-k="1" data-orig="{{ p[2] }}" value="{{ p[2] }}" data-carrier="{{ p[0] }}|{{ attr }}">{% endif -%}
+{%- endmacro %}
+{% macro bit(path, attr, b, text, inv=false) -%}
+{%- set p = pv(path, attr) -%}
+{%- if p and p[2]|int(-1) >= 0 -%}
+<label><input type="checkbox" data-bitof="{{ p[0] }}|{{ attr }}" data-bit="{{ b }}" {{ 'data-inv' if inv }} {{ 'checked' if ((p[2]|int // 2 ** b) % 2 == 1) != inv }}> {{ text }}</label>
+{%- else %}{{ unknown(text) }}{% endif -%}
+{%- endmacro %}
+{#- a 0 / 1 number attribute as a checkbox (CamParams[NanoMicro]) -#}
+{% macro flag01(path, attr, text) -%}
+{%- set p = pv(path, attr) -%}
+<label class="{{ '' if p else 'cc-off' }}"><input type="checkbox" {% if p %}data-row="{{ p[0] }}" data-attr="{{ attr }}" data-k="1" data-on="1" data-off="0" data-orig="{{ p[2] }}" {{ 'checked' if p[2] not in ['0', ''] }}{% else %}disabled{% endif %}> {{ text }}</label>
+{%- endmacro %}
 {% macro unknown(text) -%}
 <label class="cc-off" title="Мястото на тази отметка във файла още не е разпознато"><input type="checkbox" disabled> {{ text }}</label>
 {%- endmacro %}
@@ -131,6 +156,7 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="changes" id="tpChanges" value="[]">
     <input type="hidden" name="curves" id="tpCurves" value="{}">
+    {{ carrier('CamParams', 'PierceFlags') }}{{ carrier('@', 'ParamFlag') }}{{ carrier('CamParams/LeadLineParam', 'Flags') }}
     <div class="cc-title">Layer Parameter Settings - {{ label }}</div>
     <div class="cc-layer">
         <span>Global Parameter</span>
@@ -149,9 +175,16 @@
         <span class="text-muted" style="font-size:11px; color:#777">видът, дебелината, газът и дюзата не се сменят оттук</span>
     </div>
     <div class="cc-flags">
-        {{ unknown('Smooth Pierce') }} {{ unknown('Pre-pierce') }} {{ unknown('Defilm') }} {{ unknown('Recool') }}
-        {{ unknown('Blow') }} {{ unknown('Not cut') }} {{ unknown('Not follow') }}
-        <span class="cc-off">Mode: <select disabled><option>Standard</option></select></span>
+        {{ bit('CamParams', 'PierceFlags', 16, 'Smooth Pierce') }} {{ bit('CamParams', 'PierceFlags', 5, 'Pre-pierce') }}
+        {{ bit('CamParams', 'PierceFlags', 3, 'Defilm') }} {{ bit('CamParams', 'PierceFlags', 4, 'Recool') }}
+        {{ bit('CamParams', 'PierceFlags', 9, 'Blow') }} {{ bit('@', 'ParamFlag', 9, 'Not cut', true) }} {{ bit('CamParams', 'PierceFlags', 10, 'Not follow') }}
+        {#- Mode = CamParams[PierceStyle] ("Cut mode": 0 Follow / Standard, 1 Fixed Height Cut) #}
+        {% set p = pv('CamParams', 'PierceStyle') %}
+        <span class="{{ '' if p else 'cc-off' }}">Mode:
+            <select {% if p %}data-row="{{ p[0] }}" data-attr="PierceStyle" data-k="1" data-orig="{{ p[2] }}"{% else %}disabled{% endif %}>
+                {% for code, name in [('0', 'Standard'), ('1', 'Fixed Height Cut')] %}<option value="{{ code }}" {{ 'selected' if p and p[2] == code }}>{{ name }}</option>{% endfor %}
+                {% if p and p[2] not in ['0', '1'] %}<option value="{{ p[2] }}" selected>{{ p[2] }}</option>{% endif %}
+            </select></span>
     </div>
     <div class="cc-tabs" role="tablist">
         <button type="button" data-tab="cut" class="on">Cut</button>
@@ -170,7 +203,7 @@
                     <div class="cc-row"><label class="b">Gas type:</label>{{ gas('CamParams/Cut') }}<span></span></div>
                     {{ row('Gas pressure', 'CamParams/Cut', 'GasPressure', 'BAR', 1, 'b', 'ib') }}
                     {{ row('Peak power', 'CamParams/Cut', 'LaserCurrent', '%', 1, 'o', 'io') }}
-                    <div class="cc-row"><label class="o">Actual power:</label>{{ num('CamParams/Cut', 'PeakPower', 1, '', extra='readonly data-power') }}<span>W</span></div>
+                    <div class="cc-row"><label class="o">Actual power:</label>{{ actual('CamParams/Cut') }}<span>W</span></div>
                     {{ row('Duty cycle', 'CamParams/Cut', 'PwmRatio', '%', 100, 'o', 'io') }}
                     {{ row('Pulse freq', 'CamParams/Cut', 'PwmFreq', 'Hz', 1, 'o', 'io') }}
                     {{ row('Beam width', 'CamParams/Cut', 'BeamSize', 'x') }}
@@ -178,7 +211,7 @@
                     {{ row('LaserOn delay', 'CamParams/Cut', 'TimeStay', 'ms') }}
                     {{ row('Laser off delay', 'CamParams', 'DelayBeforeLaserOff', 'ms') }}
                 </fieldset>
-                <fieldset class="cc"><legend>{{ flag('CamParams/LayerCutParams', 'Enable', 'Enable precision') }}</legend>
+                <fieldset class="cc dep"><legend>{{ flag('CamParams/LayerCutParams', 'Enable', 'Enable precision') }}</legend>
                     {{ row('LPF', 'CamParams/LayerCutParams', 'FirFreq', 'Hz') }}
                     {{ row('Cutting acc', 'CamParams/LayerCutParams', 'WorkAcc', 'G', 0.0001) }}
                     {{ row('Curve precision', 'CamParams/LayerCutParams', 'ArcTolerance', 'mm') }}
@@ -186,28 +219,28 @@
                 </fieldset>
             </div>
             <div>
-                <fieldset class="cc"><legend>{{ unknown('Slow start') }}</legend>
+                <fieldset class="cc dep"><legend>{{ bit('CamParams', 'PierceFlags', 13, 'Slow start') }}</legend>
                     <div class="cc-grid2">
                         <div>
                             <div class="cc-row" style="visibility:hidden"><label>.</label><span></span><span></span></div>
                             {{ row('Length', 'CamParams', 'SlowLeadLength', 'mm') }}
                             {{ row('Speed', 'CamParams', 'SlowLeadSpeed', 'mm/min', 60) }}
                         </div>
-                        <div>
+                        <div class="dep">
                             <div class="cc-row" style="grid-template-columns:1fr">{{ flag('CamParams/SlowLeadExt', 'Enable', 'Refinemen') }}</div>
                             {{ row('Duty cycle', 'CamParams/SlowLeadExt', 'Ratio', '%', 100, 'o') }}
                             {{ row('Frequency', 'CamParams/SlowLeadExt', 'Freq', 'Hz', 1, 'o') }}
                         </div>
                     </div>
                 </fieldset>
-                <fieldset class="cc"><legend>{{ unknown('Slow stop') }}</legend>
+                <fieldset class="cc dep"><legend>{{ bit('CamParams', 'PierceFlags', 14, 'Slow stop') }}</legend>
                     <div class="cc-grid2">
                         <div>
                             <div class="cc-row" style="grid-template-columns:1fr">{{ flag('CamParams/SmartEndTech', 'SmartEndEn', 'Smart Lase') }}</div>
                             {{ row('Distance', 'CamParams', 'SlowEndLength', 'mm') }}
                             {{ row('Speed', 'CamParams', 'SlowEndSpeed', 'mm/min', 60) }}
                         </div>
-                        <div>
+                        <div class="dep">
                             <div class="cc-row" style="grid-template-columns:1fr">{{ flag('CamParams/SlowEndExt', 'Enable', 'Refinemen') }}</div>
                             {{ row('Duty cycle', 'CamParams/SlowEndExt', 'Ratio', '%', 100, 'o') }}
                             {{ row('Pulse frequency', 'CamParams/SlowEndExt', 'Freq', 'Hz', 1, 'o') }}
@@ -216,7 +249,8 @@
                 </fieldset>
                 <div class="cc-chart">
                     <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center">
-                        {{ unknown('Power curve') }} {{ unknown('Frequency curve') }} {{ unknown('Absolute value') }}
+                        {{ bit('CamParams', 'PierceFlags', 1, 'Power curve') }} {{ bit('CamParams', 'PierceFlags', 2, 'Frequency curve') }}
+                        <label class="cc-off" title="Само начин на показване в CypCut - не се пази във файла"><input type="checkbox" disabled> Absolute value</label>
                         <span id="curveOwn" style="font-size:11px"></span>
                         <button type="button" class="cc-btn" id="curveEdit" style="margin-left:auto; min-width:78px">Edit</button>
                     </div>
@@ -265,10 +299,10 @@
                 {%- if kind == 'gas' %}{{ gas(path, attr) }}
                 {%- elif kind == 'mode' %}{% set p = pv(path, attr) %}
                 <select {% if p %}data-row="{{ p[0] }}" data-attr="{{ attr }}" data-k="1" data-orig="{{ p[2] }}"{% else %}disabled{% endif %}>
-                    {% for code, name in [('0', 'Segment pierce'), ('1', 'Progressive pierce')] %}<option value="{{ code }}" {{ 'selected' if p and p[2] == code }}>{{ name }}</option>{% endfor %}
-                    {% if p and p[2] not in ['0', '1'] %}<option value="{{ p[2] }}" selected>{{ p[2] }}</option>{% endif %}
+                    {% for code, name in [('0', 'Segment Pierce'), ('1', 'Flash Pierce'), ('2', 'Incremental Pierce')] %}<option value="{{ code }}" {{ 'selected' if p and p[2] == code }}>{{ name }}</option>{% endfor %}
+                    {% if p and p[2] not in ['0', '1', '2'] %}<option value="{{ p[2] }}" selected>{{ p[2] }}</option>{% endif %}
                 </select>
-                {%- elif kind == 'power' %}{{ num(path, attr, 1, '', extra='readonly data-power') }}
+                {%- elif kind == 'power' %}{{ actual(path) }}
                 {%- else %}{{ num(path, attr, k, ic) }}{% endif -%}
             </span>
             {% endfor %}
@@ -279,40 +313,46 @@
 
     {# ---------- Corner ---------- #}
     <div class="cc-page" data-page="corner" hidden>
-        <fieldset class="cc"><legend>{{ flag('CamParams', 'UseShakeRes', 'Vibration suppress') }}</legend>
+        {#- Vibration suppress (CypCut's loadShakeResParams): on = UseShakeRes or PierceFlags bit 18 / 19; Self (Adaptive)
+            = UseShakeRes "true"; Custom = UseShakeRes "false" + Thin sheet (bit 18, ShaleResMs) or Thick sheet (bit 19,
+            ShakeResLv). The real attributes are the hidden controls; the visible ones are driven by JS (vibration()) #}
+        {% set vs = pv('CamParams', 'UseShakeRes') %}{% set vf = pv('CamParams', 'PierceFlags') %}
+        <fieldset class="cc dep" id="vib" {% if not (vs and vf) %}data-off="1"{% endif %}>
+            <legend><label class="{{ '' if vs and vf else 'cc-off' }}"><input type="checkbox" id="vibOn" {{ 'disabled' if not (vs and vf) }}> Vibration suppress</label></legend>
+            <span hidden>{{ flag('CamParams', 'UseShakeRes', 'UseShakeRes') }}</span>
             <div class="cc-grid2">
                 <div style="padding-left:24px">
-                    <div class="cc-off"><input type="radio" disabled> Self</div>
-                    <div class="cc-off" style="margin-top:6px"><input type="radio" disabled> Custom config</div>
+                    <div><label><input type="radio" name="vibMode" value="self"> Self</label></div>
+                    <div style="margin-top:6px"><label><input type="radio" name="vibMode" value="custom"> Custom config</label></div>
                 </div>
                 <div>
-                    {{ row('Thin sheet suppress', 'CamParams', 'ShaleResMs', 'ms') }}
-                    {{ row('Thick sheet suppress', 'CamParams', 'ShakeResLv') }}
+                    <div class="cc-row"><label style="text-align:right"><input type="radio" name="vibSheet" value="18"> Thin sheet suppress</label>{{ num('CamParams', 'ShaleResMs') }}<span>ms</span></div>
+                    <div class="cc-row"><label style="text-align:right"><input type="radio" name="vibSheet" value="19"> Thick sheet suppress</label>{{ num('CamParams', 'ShakeResLv') }}<span></span></div>
                 </div>
             </div>
         </fieldset>
-        <fieldset class="cc"><legend>{{ unknown('Use Leadline Technique') }}</legend>
+        <fieldset class="cc dep"><legend>{{ bit('CamParams/LeadLineParam', 'Flags', 1, 'Use Leadline Technique') }}</legend>
             <div style="display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 14px">
                 <div>
                     <div class="cc-row" style="visibility:hidden"><label>.</label><span></span><span></span></div>
-                    {{ row('Cut speed', 'CamParams/LeadLineParam', 'LeadDecSpd', 'mm/min', 60) }}
+                    {{ row('Cut speed', 'CamParams/LeadLineParam', 'CurveSpd', 'mm/min', 60) }}
                     {{ row('Duty cycle', 'CamParams/LeadLineParam', 'PwmRatio', '%', 100) }}
                     {{ row('Pulse freq', 'CamParams/LeadLineParam', 'PwmFreq', 'Hz') }}
                 </div>
-                <div>
-                    <div class="cc-row" style="grid-template-columns:1fr">{{ unknown('Lead Down') }}</div>
+                <div class="dep">
+                    <div class="cc-row" style="grid-template-columns:1fr">{{ bit('CamParams/LeadLineParam', 'Flags', 2, 'Lead Down') }}</div>
                     {{ row('Lead height', 'CamParams/LeadLineParam', 'LeadCutH', 'mm') }}
                     {{ row('Stable distance', 'CamParams/LeadLineParam', 'LeadDecLen', 'mm') }}
                 </div>
-                <div>
-                    <div class="cc-row" style="grid-template-columns:1fr">{{ unknown('Lead Circle') }}</div>
+                <div class="dep">
+                    <div class="cc-row" style="grid-template-columns:1fr">{{ bit('CamParams/LeadLineParam', 'Flags', 3, 'Lead Circle') }}</div>
                     {{ row('Speed', 'CamParams/LeadLineParam', 'LeadHoleSpd', 'mm/min', 60) }}
                 </div>
             </div>
             <div class="cc-off" style="font-size:12px; margin-left:220px">(Slow down from the start point to the end point)</div>
         </fieldset>
         <div style="display:grid; grid-template-columns: 2fr 1fr; gap: 8px">
-            <fieldset class="cc"><legend>{{ flag('CamParams/CornerParams', 'Enable', 'Corner QCW') }}</legend>
+            <fieldset class="cc dep"><legend>{{ flag('CamParams/CornerParams', 'Enable', 'Corner QCW') }}</legend>
                 <div class="cc-grid2">
                     <div>
                         {{ row('Cut speed', 'CamParams/CornerParams', 'Speed', 'mm/min', 60) }}
@@ -326,9 +366,16 @@
                     </div>
                 </div>
             </fieldset>
-            <fieldset class="cc"><legend>{{ unknown('Use MJ Length') }}</legend>
-                {{ row('MicroJoint', 'CamParams', 'MicroLen', 'mm') }}
-                <div class="cc-row" style="grid-template-columns:1fr">{{ unknown('Smooth MicroJoint') }}</div>
+            <fieldset class="cc"><legend>{{ bit('CamParams', 'PierceFlags', 20, 'Use MJ Length') }}</legend>
+                <div class="dep">
+                    <span hidden>{{ bit('CamParams', 'PierceFlags', 20, 'Use MJ Length') }}</span>
+                    {{ row('MicroJoint', 'CamParams', 'MicroLen', 'mm') }}
+                </div>
+                {#- Smooth MicroJoint does not depend on MJ Length (CypCut's code); Root ratio % = DutyRootRatio x 100 #}
+                <div class="dep">
+                    <div class="cc-row" style="grid-template-columns:1fr">{{ flag01('CamParams', 'NanoMicro', 'Smooth MicroJoint') }}</div>
+                    {{ row('Root ratio', 'CamParams', 'DutyRootRatio', '%', 100) }}
+                </div>
             </fieldset>
         </div>
     </div>
@@ -356,7 +403,7 @@
                     {% set p = pv('CamParams', 'PierceStyle') %}
                     <div class="cc-row"><label>Cut Mode:</label>
                         <select {% if p %}data-row="{{ p[0] }}" data-attr="PierceStyle" data-k="1" data-orig="{{ p[2] }}"{% else %}disabled{% endif %}>
-                            {% for code, name in [('0', '0'), ('1', 'Fixed Height')] %}<option value="{{ code }}" {{ 'selected' if p and p[2] == code }}>{{ name }}</option>{% endfor %}
+                            {% for code, name in [('0', 'Follow Cut'), ('1', 'Fixed Height Cut')] %}<option value="{{ code }}" {{ 'selected' if p and p[2] == code }}>{{ name }}</option>{% endfor %}
                             {% if p and p[2] not in ['0', '1'] %}<option value="{{ p[2] }}" selected>{{ p[2] }}</option>{% endif %}
                         </select><span></span></div>
                     {{ row('Cut Speed', 'CamParams', 'WorkSpeed', 'mm/min', 60) }}
@@ -453,7 +500,72 @@
     const form = document.getElementById('tpForm');
     const count = document.getElementById('tpCount');
     const fields = Array.from(form.querySelectorAll('[data-row]'));
-    function val(el) { return el.hasAttribute('data-bool') ? (el.checked ? 'true' : 'false') : el.value; }
+    function val(el) {
+        if (el.hasAttribute('data-bool')) return el.checked ? 'true' : 'false';
+        if (el.hasAttribute('data-on')) return el.checked ? el.dataset.on : el.dataset.off;
+        return el.value;
+    }
+    // dependencies like CypCut: a ".dep" block (a fieldset or a column) is greyed until its first checkbox is ticked
+    // (Slow start -> Length / Speed / Refinemen -> Duty / Frequency, Enable precision, Corner QCW, Vibration suppress).
+    // An unknown control (disabled from the start) blocks nothing. Values stay and are still saved.
+    form.querySelectorAll('input, select, button').forEach(function (el) { if (el.disabled) el.dataset.off0 = '1'; });
+    function deps() {
+        form.querySelectorAll('.dep').forEach(function (box) {
+            const ctl = box.querySelector('input[type=checkbox]');
+            if (!ctl) return;
+            const on = ctl.dataset.off0 ? true : (ctl.checked && !ctl.disabled);
+            box.querySelectorAll('input, select, button').forEach(function (el) {
+                if (el === ctl || el.dataset.off0) return;
+                el.disabled = !on;
+            });
+        });
+    }
+    // Vibration suppress: the visible tick / radios are written into UseShakeRes + PierceFlags bits 18 / 19
+    const vib = document.getElementById('vib'), vibOn = document.getElementById('vibOn');
+    const vibShake = vib && vib.querySelector('[data-attr="UseShakeRes"]');
+    const vibFlags = form.querySelector('[data-carrier$="|PierceFlags"]');
+    function setBit(c, b, on) {
+        const v = Number(c.value) || 0;
+        if (on !== hasBit(v, b)) c.value = String(v + (on ? 1 : -1) * Math.pow(2, b));
+    }
+    function vibRadio(name) { const r = vib.querySelector('input[name=' + name + ']:checked'); return r ? r.value : null; }
+    function vibUi() {
+        if (!vibShake || !vibFlags || vibOn.disabled) return;
+        const on = vibOn.checked, custom = vibRadio('vibMode') === 'custom';
+        vib.querySelectorAll('input[name=vibSheet]').forEach(function (r) { r.disabled = !(on && custom); });
+        vib.querySelectorAll('[data-attr=ShaleResMs], [data-attr=ShakeResLv]').forEach(function (el) { el.disabled = !(on && custom); });
+        vib.classList.toggle('changed-box', false);
+        const ch = vibShake.checked !== (vibShake.dataset.orig === 'true') ||
+                   hasBit(vibFlags.value, 18) !== hasBit(vibFlags.dataset.orig, 18) || hasBit(vibFlags.value, 19) !== hasBit(vibFlags.dataset.orig, 19);
+        vibOn.parentElement.classList.toggle('changed', ch);
+    }
+    if (vibShake && vibFlags && !vibOn.disabled) {
+        const shake = vibShake.checked, b18 = hasBit(vibFlags.value, 18), b19 = hasBit(vibFlags.value, 19);
+        vibOn.checked = shake || b18 || b19;
+        vib.querySelector('input[name=vibMode][value=' + (shake || !(b18 || b19) ? 'self' : 'custom') + ']').checked = true;
+        vib.querySelector('input[name=vibSheet][value="' + (b19 ? 19 : 18) + '"]').checked = true;
+        vib.querySelectorAll('#vibOn, input[name=vibMode], input[name=vibSheet]').forEach(function (el) {
+            el.addEventListener('change', function () {
+                const on = vibOn.checked, custom = vibRadio('vibMode') === 'custom', sheet = vibRadio('vibSheet');
+                vibShake.checked = on && !custom;
+                setBit(vibFlags, 18, on && custom && sheet === '18');
+                setBit(vibFlags, 19, on && custom && sheet === '19');
+                sync(vibShake); sync(vibFlags); refresh();
+            });
+        });
+    }
+    // a bit of a flags number: the checkbox reads / flips bit N of its carrier (2^N arithmetic, no 32-bit sign issue)
+    function hasBit(v, b) { return Math.floor(Number(v) / Math.pow(2, b)) % 2 === 1; }
+    const bits = Array.from(form.querySelectorAll('[data-bitof]'));
+    function carrierOf(cb) { return form.querySelector('[data-carrier="' + cb.dataset.bitof + '"]'); }
+    bits.forEach(function (cb) {
+        cb.addEventListener('change', function () {
+            const c = carrierOf(cb), b = parseInt(cb.dataset.bit, 10), v = Number(c.value) || 0;
+            const want = cb.checked !== cb.hasAttribute('data-inv');          // "Not cut" = Enabled bit cleared
+            if (want !== hasBit(v, b)) c.value = String(v + (want ? 1 : -1) * Math.pow(2, b));
+            sync(c); refresh();
+        });
+    });
     function key(el) { return el.dataset.row + '|' + el.dataset.attr; }
     // the same attribute can be on a tab and in "Всички (XML)": keep both in step
     function twins(el) { return fields.filter(function (o) { return o !== el && key(o) === key(el); }); }
@@ -470,6 +582,13 @@
             el.classList.toggle('changed', ch);
             if (ch && !seen[key(el)]) { seen[key(el)] = 1; n++; }
         });
+        bits.forEach(function (cb) {           // follows the carrier (also when the raw value is typed in "Всички")
+            const c = carrierOf(cb), b = parseInt(cb.dataset.bit, 10);
+            cb.checked = hasBit(c.value, b) !== cb.hasAttribute('data-inv');
+            cb.parentElement.classList.toggle('changed', hasBit(c.value, b) !== hasBit(c.dataset.orig, b));
+        });
+        deps();
+        vibUi();
         n += curveDirty().length;
         const own = document.getElementById('curveOwn');
         if (own) own.classList.toggle('changed', curveDirty().length > 0);
@@ -486,14 +605,14 @@
             else o.value = (ko === k || isNaN(Number(s)) || s.trim() === '') ? val(el) : String(Math.round(Number(s) * ko * 1e6) / 1e6);
         });
     }
-    // "Actual power" (W) follows "Peak power" (%) like in CypCut: the laser's full power = PeakPower / LaserCurrent
-    form.querySelectorAll('input[data-power]').forEach(function (w) {
-        const cur = form.querySelector('[data-row="' + w.dataset.row + '"][data-attr="LaserCurrent"]:not([data-raw])');
-        const full = parseFloat(w.dataset.orig) / (parseFloat(cur && cur.dataset.orig) / 100);
+    // "Actual power" (W) = Peak power % x the laser's full power, display only (not in the file)
+    form.querySelectorAll('input[data-power-row]').forEach(function (w) {
+        const cur = form.querySelector('[data-row="' + w.dataset.powerRow + '"][data-attr="LaserCurrent"]:not([data-raw])');
+        const full = parseFloat(w.dataset.full);
         if (!cur || !isFinite(full)) return;
         cur.addEventListener('input', function () {
             const p = parseFloat(cur.value);
-            if (isFinite(p)) { w.value = String(Math.round(full * p / 100)); sync(w); }
+            if (isFinite(p)) w.value = String(Math.round(full * p / 100));
         });
     });
     fields.forEach(function (el) {
@@ -509,6 +628,8 @@
         r.addEventListener('change', function () { if (step) { step.value = r.value; sync(step); refresh(); stages(); } });
     });
     stages();
+    deps();
+    vibUi();
     // ---> / <---- copy one stage's column into the next / previous
     form.querySelector('textarea[name=note]').addEventListener('input', function () { refresh(); });
     form.querySelectorAll('[data-copy]').forEach(function (b) {
