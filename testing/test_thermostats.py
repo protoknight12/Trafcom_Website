@@ -513,3 +513,27 @@ def test_navbar_has_hvac_section(adm):
     j = html.index('Съоръжения и енергия')
     outer = html[j:i]
     assert 'href="/admin/convectors"' not in outer and 'href="/admin/temperature-sensors"' not in outer
+
+
+def test_remove_room_helper_nulls_thermostat_room(adm):
+    from app import Building, Room, _remove_room
+    b = Building(name='Б2')
+    db.session.add(b)
+    db.session.flush()
+    r = Room(name='Р2', building_id=b.id)
+    db.session.add(r)
+    db.session.flush()
+    t = Thermostat(name='ТР2', room_id=r.id)
+    db.session.add(t)
+    db.session.commit()
+    _remove_room(r)
+    db.session.commit()
+    db.session.expire_all()
+    assert db.session.get(Thermostat, t.id).room_id is None
+
+
+def test_thermostat_save_rejects_nan(adm):
+    for k in ('hysteresis', 'lowered_heat', 'lowered_cool'):
+        d = {'name': 'NaN', 'hysteresis': '0.5', 'min_cycle_min': '5', 'lowered_heat': '16', k: 'nan'}
+        adm.post('/admin/thermostats/save', data=d)
+    assert Thermostat.query.filter_by(name='NaN').count() == 0

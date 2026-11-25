@@ -25629,7 +25629,7 @@ def _delete_panel_row(panel):
 def _remove_room(room):
     """Drops a Room (its map card): machines / convectors / sensors / battery stacks in it are un-placed (they are real equipment),
     its panels are deleted, shapes pointing at it are un-linked. Does not commit."""
-    for model in (Machine, Convector, TemperatureSensor, BatteryStack):
+    for model in (Machine, Convector, TemperatureSensor, BatteryStack, Thermostat):
         model.query.filter_by(room_id=room.id).update({'room_id': None})
     for panel in ElectricalPanel.query.filter_by(room_id=room.id).all():
         _delete_panel_row(panel)
@@ -25649,7 +25649,6 @@ def admin_delete_room(room_id):
     """
     room = Room.query.get_or_404(room_id)
     room_name = room.name
-    Thermostat.query.filter_by(room_id=room.id).update({'room_id': None}, synchronize_session=False)
     _remove_room(room)
     db.session.commit()
     log_action(f'Изтрито помещение "{room_name}"')
@@ -28190,6 +28189,8 @@ def admin_thermostat_save():
         hyst = None
     sensor_id = int(f['sensor_id']) if (f.get('sensor_id') or '').isdigit() else None
     room_id = int(f['room_id']) if (f.get('room_id') or '').isdigit() else None
+    if hyst is not None and not all(math.isfinite(v) for v in (hyst, lh) + (() if lc is None else (lc,))):
+        hyst = None
     if not name or hyst is None or not 0.1 <= hyst <= 3 or not 0 <= mc <= 60:
         flash('Невалидни данни: име, хистерезис 0,1–3 К, минимално време 0–60 мин.', 'error')
         return redirect(url_for('admin_thermostats'))
@@ -28279,7 +28280,12 @@ def admin_hvac_holiday_add():
         flash('Този ден вече е в списъка.', 'error')
         return redirect(url_for('admin_thermostats'))
     db.session.add(HeatingHoliday(day=day, name=(request.form.get('name') or '').strip()[:150] or None))
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        flash('Този ден вече е в списъка.', 'error')
+        return redirect(url_for('admin_thermostats'))
     log_action(f'Почивен ден за термостатите: {day.isoformat()}')
     flash('Почивният ден беше добавен.', 'success')
     return redirect(url_for('admin_thermostats'))
