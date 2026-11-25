@@ -24188,6 +24188,7 @@ HEATPUMP_WRITABLE = {
     'WW Hysterese Normaltemp.': ('БГВ хистерезис нормална', 'K'),
     'WW Minimaltemp.': ('БГВ минимална', '°C'),
     'WW Hysterese Minimaltemp.': ('БГВ хистерезис минимална', 'K'),
+    'HKP_Nachlaufzeit (Sec)': ('Помпа на кръга: работи след спиране', 's'),   # defined in HEATPUMP_HKP_PARAMS (owner, 2026-11-25)
 }
 # SP values read once a minute: everything writable (to show the current value) plus read-only status/counters.
 HEATPUMP_SLOW_PARAMS = tuple(HEATPUMP_WRITABLE) + ('Verdichter_Status', 'BSZ Verdichter Betriebsst. ges',

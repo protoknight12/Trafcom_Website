@@ -100,6 +100,7 @@ def test_set_validation(client, monkeypatch):
     assert _post_set(client, 'HKR Soll_Raum', 'abc').status_code == 400    # not a number
     assert _post_set(client, 'HKR Soll_Raum', '40').status_code == 400     # above pump limit (25)
     assert _post_set(client, 'WW Normaltemp.', '48.5').status_code == 400  # INT parameter
+    assert _post_set(client, 'HKP_Nachlaufzeit (Sec)', '10801').status_code == 400   # HKP run-on: 0..10800 s
     monkeypatch.setitem(appmod._heatpump_live, 'online', False)
     assert _post_set(client, 'HKR Soll_Raum', '22').status_code == 503     # offline: nothing queued
     assert not appmod._heatpump_cmds
