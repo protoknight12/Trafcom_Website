@@ -688,3 +688,13 @@ def test_history_shape(env):
     assert len(d['on']) == 1
     a, b = d['on'][0]
     assert abs(a - (now - 24 * 3600)) < 5 and b == now - 2000          # union of the two overlapping periods
+
+
+def test_history_not_rate_limited(env):
+    """The page loads one history per card (and again every 5 min): past the 300/h default it must not 429."""
+    t = Thermostat(name='Л')
+    db.session.add(t)
+    db.session.commit()
+    c = _login('worker')
+    codes = {c.get(f'/admin/hvac/{t.id}/history?hours=1').status_code for _ in range(305)}
+    assert codes == {200}

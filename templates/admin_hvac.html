@@ -116,8 +116,9 @@
                             animation: hvShimmer 9s linear infinite; }
         @keyframes hvBreathe { 0%, 100% { opacity: calc(var(--glow-a) * .75); transform: scale(.96); } 50% { opacity: var(--glow-a); transform: scale(1.04); } }
         @keyframes hvShimmer { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        .hv-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; touch-action: none; }
-        .hv-track, .hv-arc { fill: none; stroke-width: 14; stroke-linecap: round; }
+        .hv-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; touch-action: pan-y; }
+        .hv-track, .hv-arc { fill: none; stroke-width: 14; stroke-linecap: round; touch-action: none; }
+        .hv-knob { touch-action: none; }
         .hv-track { stroke: var(--track); cursor: pointer; }
         .hv-arc { stroke: var(--c); cursor: pointer; }
         .hv-knob { fill: var(--knob); stroke: var(--c); stroke-width: 5; cursor: grab; filter: drop-shadow(0 1px 3px rgba(0,0,0,.35)); }
@@ -591,8 +592,8 @@
         }
         c.pending++;
         if (opt != null) { c.data.target = opt; setTarget(c, opt, true); }
-        var body = {action: action};
-        if (action === 'set') body.temp = String(temp);
+        // +/- go out as `set` with the optimistic value: two fast taps must give +1.0, not two +0.5 from the same target.
+        var body = opt != null ? {action: 'set', temp: String(opt)} : {action: action};
         post(URL_BASE + c.id + '/override', body).then(function (j) {
             c.pending--;
             delete j.ok;

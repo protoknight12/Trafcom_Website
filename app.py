@@ -28377,6 +28377,7 @@ def admin_hvac_data():
 
 @app.route('/admin/hvac/<int:th_id>/history')
 @role_required(['admin', 'worker'])
+@limiter.exempt
 def admin_hvac_history(th_id):
     """{temps: [[ts, t]], target: [[ts, t]] (the CURRENT schedule sampled every HVAC_HISTORY_STEP), on: [[from, to]]
     (union of the thermostat's convectors' on-periods)} for the last ?hours= (1..168)."""
