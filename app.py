@@ -28330,9 +28330,20 @@ def _hvac_pump_gate():
         return {'active': False, 'reason': 'рестарт на термопомпата'}
     if _heatpump_relay_cache['is_on'] is False:
         return {'active': False, 'reason': 'централното захранване е изключено'}
-    if _heatpump_live['online'] and (_heatpump_live['slow'] or {}).get('Betriebsart') == 0:
+    if _heatpump_pump_mode() == 0:
         return {'active': False, 'reason': 'термопомпата е изключена'}
     return {'active': True, 'reason': None}
+
+
+def _heatpump_pump_mode():
+    """Betriebsart for the gate: the live read when there is one, else the last one the poller saved - right after an app
+    restart the pump is not read yet, and treating that as "unknown = active" switched convectors on for a minute while the
+    pump was off (owner's report 2026-11-25)."""
+    mode = (_heatpump_live['slow'] or {}).get('Betriebsart') if _heatpump_live['online'] else None
+    if mode is None:
+        saved = get_text(_HP_PREFIX + 'last_mode', '').strip()
+        mode = int(saved) if saved.lstrip('-').isdigit() else None
+    return mode
 
 
 def _heatpump_schedule_tick(season, now, holidays):

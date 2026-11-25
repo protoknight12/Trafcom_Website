@@ -87,6 +87,25 @@ def test_gate_unknown_is_active(hp, monkeypatch):
     assert hp['sets'] == [('К1', True)]
 
 
+def test_gate_after_app_restart_uses_last_saved_mode(hp):
+    """Owner's report 2026-11-25: right after an app restart (pump not read yet) the convectors went on for a minute
+    although the pump was off. Before the first read the gate takes the last mode the poller saved."""
+    _season('heat')
+    _thermo()
+    hp['temp'] = 18.0                                    # demand: on
+    _set('last_mode', '0')                               # the pump was off before the restart; live is still offline
+    app_module._thermostat_tick(NOW)
+    assert hp['sets'] == [] and app_module._hvac_pump_gate()['reason'] == 'термопомпата е изключена'
+    _set('last_mode', '1')
+    app_module._thermostat_tick(NOW)
+    assert hp['sets'] == [('К1', True)]
+    hp['sets'].clear()
+    _pump(0)                                             # a live read wins over the saved mode
+    hp['status']['К1'] = {'online': True, 'is_on': True, 'power_w': None}
+    app_module._thermostat_tick(NOW)
+    assert hp['sets'] == [('К1', False)]
+
+
 # ---------------- B. hard restart ----------------
 def _fake_restart_env(hp, monkeypatch, relay):
     calls, sleeps = [], []
