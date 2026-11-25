@@ -202,7 +202,7 @@
     for form_dialog.js to carry over). -#}
 {% set _flashes = get_flashed_messages(with_categories=true) %}
 {% if heatpump_fault or vehicle_alerts or _flashes %}
-<div class="notify-field">
+<div class="notify-field no-print">
     {% if heatpump_fault %}
     <div class="notify-alert">
         <span class="notify-icon">&#9888;</span>
@@ -239,6 +239,7 @@
     .notify-item.notify-warning { color: #f59e0b; }
     .notify-sep { color: var(--text-muted); }
     html.embedded .notify-alert { display: none; }
+    @media print { .notify-field { display: none !important; } }   /* never on a printed document */
 </style>
 
 {% include 'partials/subnav.html' %}

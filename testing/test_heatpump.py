@@ -328,3 +328,6 @@ def test_notifications_in_one_field_under_main_menu(client, monkeypatch):
     assert page.index('notify-field') < page.index('Тест-съобщение-123') < page.index('class="subnav"')
     assert page.index('АВАРИЯ') < page.index('class="subnav"')
     assert 'Тест-съобщение-123' not in client.get('/admin/heatpump').get_data(as_text=True)      # consumed
+    # never printed: hidden for print on every page, print documents included
+    assert '<div class="notify-field no-print">' in page
+    assert '@media print { .notify-field { display: none !important; } }' in page
