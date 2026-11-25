@@ -1924,6 +1924,75 @@ def _no_chinese(text):
     return _CJK.sub('', text.replace(NOZZLE_DEFAULT[0], '')).strip()
 
 
+# CypCut leaves out of an .lxds every attribute equal to its default (WriteDef(node, name, value, DEFAULT) in its
+# SaveToXmlNode), so a tree imported from one is sparse - and the .fsm we write from it too. The defaults below are
+# CypCutE 10.2501's own (read from materlib.bpl by the fscut session 2026-11-25; <Cut> is the same class as
+# <Pierce1..9>, TCamStageParams; -1 = "not set / use the global value"), with the attribute names of an .fsm; they
+# agree with every attribute a full CypCut file has where an .lxds-imported tree has none. Booleans are "true"/"false".
+_STAGE_DEFAULTS = {
+    'Focus': '0', 'MoltenWidth': '0', 'GasPressure': '5', 'GasType': '0', 'Height': '-1', 'LaserCurrent': '-1',
+    'PeakPower': '0', 'LaserMode': '-1', 'PwmFreq': '-1', 'PwmRatio': '-1', 'TimeBlow': '500', 'TimeFocus': '500',
+    'TimeFollow': '1000', 'TimeStay': '200', 'Flags': '0', 'BeamSize': '0', 'SpotShape': '0', 'BlowGasType': '0',
+    'BlowGasPressure': '0', 'SideBlowPressure': '0', 'FocusEnd': '0', 'FreqStart': '-1', 'FreqEnd': '-1',
+    'RatioStart': '-1', 'RatioEnd': '-1', 'CycleTime': '0', 'PierceMode': '0'}
+FSM_DEFAULTS = {
+    'CamParams': {'DelayBeforeLaserOff': '0', 'PathRepeat': '0', 'PierceStyle': '0', 'FlashCutPierctT': '0',
+                  'FlashCutPierceFocus': '0', 'UseCompensateIn': '0', 'UseCompensateOut': '0', 'ScanGap': '0',
+                  'NanoMicro': '0', 'UseShakeRes': 'false', 'PierceFlags': '0'},
+    'CamParams/LeadLineParam': {'Flags': '0', 'PwmFreq': '0', 'PwmRatio': '0', 'CurveSpd': '0', 'LeadDecLen': '0',
+                                'LeadCutH': '0', 'LeadDecSpd': '0', 'LeadHoleSpd': '0', 'LeadFocus': '0',
+                                'LeadFocusLen': '0'},
+    'CamParams/LayerCutParams': {'Enable': 'false', 'ArcTolerance': '0', 'CornerTolerance': '0', 'WorkAcc': '0',
+                                 'FirFreq': '0'},
+    'CamParams/CornerParams': {'Enable': 'false', 'PwmFreq': '0', 'PwmRatio': '0', 'Current': '0', 'Speed': '0',
+                               'CornerLen': '0', 'CornerLen1': '0', 'Angle': '0', 'HppEn': 'false'},
+    'CamParams/CornerParams/CutHeadParams': {'CutHeadEn': 'false', 'Height': '0', 'Focus': '0', 'GasPressure': '0',
+                                             'CurrentRatio': '0'},
+    'CamParams/SuperCut': {'PierceH': '0', 'PierceFocus': '0', 'PierceMs': '0'},
+    'CamParams/SmartEndTech': {'SmartEndEn': 'false', 'InGap': '0', 'InSmartEndFocus': '0', 'ExtSmartEndFocus': '0',
+                               'UseSmartEndFocus': 'false'},
+    'CamParams/SmartEndTech/ExtineLaser': {'Enable': 'false', 'Freq': '0', 'Ratio': '0', 'Current': '0'},
+    'CamParams/SmartEndTech/InnerLaser': {'Enable': 'false', 'Freq': '0', 'Ratio': '0', 'Current': '0'},
+    'CamParams/SlopeCutParams': {'Enable': 'false', 'Angle': '0'},
+    'CamParams/Cut': _STAGE_DEFAULTS,
+    'CamParams/SlowEndExt': {'Enable': 'false', 'Freq': '0', 'Ratio': '0', 'Current': '0'},
+    'CamParams/SlowLeadExt': {'Enable': 'false', 'Freq': '0', 'Ratio': '0', 'Current': '0'},
+    'CamParams/SlowEndHead': {'CutHeadEn': 'false', 'Focus': '0', 'GasPressure': '0'},
+    'CamParams/SlowLeadHead': {'CutHeadEn': 'false', 'Focus': '0', 'GasPressure': '0'},
+    'CamParams/CutModeTypeParam': {'Enable': 'false', 'CutModeType': '0'},
+    'CamParams/MicroSpeedParams': {'MicroSpdEnable': 'false', 'MicroFocus': '0', 'MicroPreciseEnabled': 'false'},
+    'CamParams/RotatingSpotParams': {'Enable': 'false'},
+    **{f'CamParams/Pierce{n}': _STAGE_DEFAULTS for n in range(1, 10)},
+}
+FSM_STAGE_ROWS = 3                    # Pierce1..3 rows added when missing (the dialog's 3 stages)
+BOOL_ATTRS = {'UseShakeRes', 'Enable', 'SmartEndEn', 'HppEn', 'CutHeadEn', 'UseCutHeight', 'UseSmartEndFocus',
+              'MicroSpdEnable', 'MicroPreciseEnabled'}
+
+
+def raw_fsm_defaults(raw):
+    """A stored tree made full like a CypCut .fsm: every attribute the file left out (FSM_DEFAULTS) filled with
+    CypCut's default into the rows that exist, Pierce1..3 added when missing, the <Material> row added when missing
+    (FSM_ROOT_ATTRS) and booleans as "true" / "false". Meaning unchanged - CypCut reads a missing attribute as exactly
+    this default. A tree without CamParams is returned as it is."""
+    out = [[p, dict(a or {}), t] for p, a, t in raw or []]
+    if not any(r[0] == 'CamParams' for r in out):
+        return out
+    if not any(r[0] == '@' for r in out):
+        out.insert(0, ['@', dict(FSM_ROOT_ATTRS), ''])
+    have = {r[0] for r in out}
+    missing = [f'CamParams/Pierce{n}' for n in range(1, FSM_STAGE_ROWS + 1) if f'CamParams/Pierce{n}' not in have]
+    if missing:
+        at = max(i for i, r in enumerate(out) if r[0] == 'CamParams' or r[0].startswith('CamParams/')) + 1
+        out[at:at] = [[p, {}, ''] for p in missing]
+    for r in out:
+        for attr, default in FSM_DEFAULTS.get(r[0], {}).items():
+            r[1].setdefault(attr, default)
+        for attr in BOOL_ATTRS & set(r[1]):
+            if str(r[1][attr]) in ('1', '0'):
+                r[1][attr] = 'true' if str(r[1][attr]) == '1' else 'false'
+    return out
+
+
 def raw_no_chinese(raw):
     """A stored tree (_raw() rows) with every text / attribute through _no_chinese() - what we keep in the database."""
     return [[p, {k: _no_chinese(str(v)) for k, v in (a or {}).items()}, _no_chinese(t) or ''] for p, a, t in raw or []]

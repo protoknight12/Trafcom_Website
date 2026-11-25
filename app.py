@@ -10929,9 +10929,10 @@ def _tech_full_raw(tech):
 def _tech_tree(tech, raw):
     """The tree as we keep it: the technology's fields written in (fscut.raw_with_fields), nothing Chinese, and
     MaterialParams = the technology's own Вид name, nozzle and thickness (owner, 2026-11-25: a copied file kept the
-    source's) - so the stored tree, the columns and an exported file agree."""
-    rows = fscut.raw_no_chinese(fscut.raw_with_fields(raw, _tech_columns_dict(tech), tech.cutting_speed_mm_per_min,
-                                                      tech.gas))
+    source's) - so the stored tree, the columns and an exported file agree. Full like a CypCut .fsm: what an .lxds left
+    out is filled with CypCut's defaults (fscut.raw_fsm_defaults, owner 2026-11-25)."""
+    rows = fscut.raw_no_chinese(fscut.raw_with_fields(fscut.raw_fsm_defaults(raw), _tech_columns_dict(tech),
+                                                      tech.cutting_speed_mm_per_min, tech.gas))
     mp = next((r for r in rows if r[0] == 'MaterialParams'), None)
     if mp is None:
         mp = ['MaterialParams', {'MaterialID': '0'}, '']
@@ -11039,8 +11040,9 @@ def admin_hall_cut_tech_params(machine_id, tech_id):
     (fscut.channel_from_raw) - the technology's Вид, thickness, gas and nozzle (its key) do not change here."""
     hm = HallMachine.query.get_or_404(machine_id)
     tech = MachineCutTechnology.query.filter_by(id=tech_id, machine_id=hm.machine_id).first_or_404()
-    # the columns written into the tree first: a column changed without the tree (a data step, an old edit) wins
-    raw = _tech_tree(tech, _tech_full_raw(tech))
+    # the columns written into the tree first: a column changed without the tree (a data step, an old edit) wins;
+    # the ticks' attributes filled where the file left them out (a tree from an .lxds)
+    raw = fscut.raw_fsm_defaults(_tech_tree(tech, _tech_full_raw(tech)))
     if request.method == 'POST':
         before = copy.deepcopy(raw)
         try:
@@ -11116,6 +11118,7 @@ def admin_hall_tech_service(machine_id, kind):
     """The machine's Defilm / Recool technology in the same CypCut-style page (its own tab); saving edits the stored
     tree like "Всички параметри" (_apply_param_changes), User Notes = its <Note>."""
     hm, mc, raw = _tech_service(machine_id, kind)
+    raw = fscut.raw_fsm_defaults(raw) if raw is not None else None
     back = redirect(url_for('admin_hall_tech_service', machine_id=hm.id, kind=kind))
     if request.method == 'POST':
         if raw is None:
@@ -11162,7 +11165,8 @@ def admin_hall_tech_service_sync(machine_id, kind, direction):
     try:
         if direction == 'pull':
             ch = fscut.read_fsm(_tech_folder_read(mc, TECH_FOLDER_EXPORT, name), FSCUT_FSM_PASSWORD)
-            setattr(mc, f'{kind}_json', json.dumps(fscut.raw_no_chinese(ch['raw']), ensure_ascii=False))
+            setattr(mc, f'{kind}_json', json.dumps(fscut.raw_fsm_defaults(fscut.raw_no_chinese(ch['raw'])),
+                                                   ensure_ascii=False))
         else:
             if raw is None:
                 flash('Още няма данни - внесете ги от папката.', 'warning')

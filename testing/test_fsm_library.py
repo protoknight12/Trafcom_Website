@@ -436,8 +436,14 @@ def test_params_page_cypcut_tabs_curves_and_note(s):
     page = c.get(url).get_data(as_text=True)
     assert 'data-tab="pierce"' in page and 'data-tab="corner"' in page and 'Layer Parameter Settings' in page
     # ticks = bits: Not cut is <Material ParamFlag> bit 9 inverted (768 = cut), carried by a hidden input; this
-    # file has no PierceFlags, so Smooth Pierce is shown unknown
-    assert 'data-carrier="0|ParamFlag"' in page and 'data-bit="9" data-inv' in page and 'data-bit="16"' not in page
+    # file has no PierceFlags (an .lxds leaves defaults out) - it is taken as 0, so Smooth Pierce can be ticked
+    assert 'data-carrier="0|ParamFlag"' in page and 'data-bit="9" data-inv' in page and 'data-bit="16"' in page
+    import re as _re
+    row_cam = int(_re.search(r'data-row="(\d+)" data-attr="PierceFlags"', page).group(1))
+    c.post(url, data={'changes': _json.dumps([[row_cam, 'PierceFlags', str(2 ** 16)]])})
+    db.session.expire_all()
+    cam = next(a for p, a, _ in _json.loads(db.session.get(MachineCutTechnology, t.id).params_json) if p == 'CamParams')
+    assert cam['PierceFlags'] == '65536'
     assert f'value="{t.cutting_speed_mm_per_min:g}"' in page          # Cut speed in mm/min (WorkSpeed x 60)
     r = c.post(url, data={'changes': '[]', 'note': 'Тест бележка',
                           'curves': _json.dumps({'PwmFreqFunc': [[10, 50], [80, 100]]})}, follow_redirects=True)
@@ -537,6 +543,26 @@ def test_our_file_settings_and_nozzle_in_name(s, monkeypatch):
     assert t.nozzle == '2.0d' and t.folder_file == ours + '\\8mmCS-D2.0-O2.fsm'
     assert sorted(disk[ours]) == ['8mmCS-D2.0-O2.fsm']
     assert c.get(f'/admin/hall/{hall.id}/cut-tech/folder/status').get_json() == {str(t.id): 'same'}
+
+
+def test_fsm_defaults_fill_a_sparse_tree():
+    """A tree from an .lxds (defaults left out) made full with CypCut's defaults: ticks, stage times, Pierce1..3,
+    the <Material> row, 1/0 booleans as true/false; values the file has are kept; a full tree is unchanged."""
+    sparse = [['CamParams', {'WorkSpeed': '45', 'UseShakeRes': '1'}, ''],
+              ['CamParams/Cut', {'Focus': '11', 'GasType': '2'}, ''],
+              ['CamParams/Pierce1', {'TimeBlow': '0', 'Height': '12'}, ''],
+              ['MaterialName', {}, 'x.fsm']]
+    full = fscut.raw_fsm_defaults(sparse)
+    rows = {p: a for p, a, _ in full}
+    assert rows['@']['ParamFlag'] == '768' and rows['CamParams']['PierceFlags'] == '0'
+    assert rows['CamParams']['UseShakeRes'] == 'true' and rows['CamParams']['WorkSpeed'] == '45'
+    assert rows['CamParams/Cut']['TimeStay'] == '200' and rows['CamParams/Cut']['Focus'] == '11'
+    assert rows['CamParams/Pierce1']['TimeBlow'] == '0' and rows['CamParams/Pierce1']['TimeFollow'] == '1000'
+    assert 'CamParams/Pierce3' in rows and [p for p, _, _ in full].index('CamParams/Pierce3') < \
+        [p for p, _, _ in full].index('MaterialName')
+    assert fscut.raw_fsm_defaults(full) == full
+    ch = fscut.channel_from_raw(full)
+    assert ch['speed_mm_min'] == 2700 and ch['fields']['focus_mm'] == 11
 
 
 def test_nozzle_key():

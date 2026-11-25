@@ -49,6 +49,7 @@ ONCE = (
     'data_pg3015_o2_focus_and_gas_copies',  # owner, 2026-11-24: steel O2 focus by the machine's library (8 mm +13), N2 <-> air copies
     'data_tech_full_files_and_origin',  # owner, 2026-11-24: every technology a full parameter tree, nothing Chinese, origin in the note
     'data_tech_material_params',      # owner, 2026-11-25: MaterialParams of every stored tree = the technology's Вид, nozzle, thickness
+    'data_tech_fsm_defaults',         # owner, 2026-11-25: trees from an .lxds made full with CypCut's defaults (ticks, TimeStay ...)
 )
 
 
