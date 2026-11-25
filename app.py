@@ -24147,6 +24147,29 @@ class HeatPumpReading(db.Model):
     data_json = db.Column(db.Text, nullable=False)
 
 
+class HeatPumpFault(db.Model):
+    """One entry of the pump's own fault list, copied by the poller (_heatpump_fault_sync()). `ts` = the pump's entry time
+    (its own clock, naive), seen_at = when we first read it (UTC naive). auto_restart = an automatic hard restart was
+    started for this entry (see _heatpump_auto_restart_check())."""
+    __table_args__ = (db.UniqueConstraint('idx', 'ts', name='uq_heat_pump_fault_idx_ts'),)
+    id = db.Column(db.Integer, primary_key=True)
+    idx = db.Column(db.Integer, nullable=False)
+    code = db.Column(db.Integer, nullable=False, index=True)
+    message = db.Column(db.String(255), nullable=True)
+    ts = db.Column(db.DateTime, nullable=False, index=True)
+    seen_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    auto_restart = db.Column(db.Boolean, nullable=False, default=False)
+
+
+class HeatPumpInterval(db.Model):
+    """The pump's weekly schedule: on (season mode) inside an interval, Изключена outside (when settings.heatpump_schedule_on).
+    weekday 0=Mon..6, minutes from midnight, no midnight crossing; a HeatingHoliday follows Sunday."""
+    id = db.Column(db.Integer, primary_key=True)
+    weekday = db.Column(db.Integer, nullable=False)
+    start_min = db.Column(db.Integer, nullable=False)
+    end_min = db.Column(db.Integer, nullable=False)
+
+
 HEATPUMP_HOST_KEY = 'settings.heatpump_host'  # "ip:port" of the RS232->Ethernet converter (EditableText, like the registration lock)
 HEATPUMP_POLL_INTERVAL = 3    # seconds between fast queries (live values)
 HEATPUMP_SLOW_INTERVAL = 60   # seconds between settings/fault reads and DB rows
@@ -24172,7 +24195,8 @@ HEATPUMP_SLOW_PARAMS = tuple(HEATPUMP_WRITABLE) + ('Verdichter_Status', 'BSZ Ver
 HEATPUMP_SET_TIMEOUT = 30  # seconds the page waits for the poller thread to apply a change
 HEATPUMP_MODES = {0: 'Изключена', 1: 'Автоматика', 2: 'Охлаждане', 3: 'Лято', 4: 'Постоянно отопление',
                   5: 'Намалено', 6: 'Отпуск', 7: 'Парти'}  # ponytail: Heliotherm labels from community docs; 1 = Автоматика matches this unit
-_heatpump_live = {'ts': None, 'online': False, 'error': 'още не е свързано', 'data': {}, 'slow': {}}
+_heatpump_live = {'ts': None, 'online': False, 'error': 'още не е свързано', 'data': {}, 'slow': {}, 'slow_ts': None}
+HEATPUMP_FAULT_SYNC_MAX = 100   # fault-list entries read at most per sync (the first one reads the last 100)
 _heatpump_started = False
 _heatpump_cmds = deque()  # pending writes, consumed by the poller thread (the only one talking to the pump)
 
@@ -24224,6 +24248,28 @@ def _heatpump_slow(hp):
     return slow
 
 
+def _heatpump_fault_sync(hp, slow, fault_key):
+    """Fault-list entries to store after a slow read: [] when (count, last entry's time) equals fault_key (the last stored
+    sync), else the new indices (count grew) or the last HEATPUMP_FAULT_SYNC_MAX (first sync after a connect, or the list
+    shrank / rolled over). A read error is a pump error (raises)."""
+    n = slow['fault_count']
+    key = (n, slow['last_fault']['ts'])
+    if key == fault_key or not n:
+        return []
+    first = n - HEATPUMP_FAULT_SYNC_MAX
+    if fault_key is not None and n > fault_key[0]:
+        first = max(first, fault_key[0])
+    return hp.get_fault_list(*range(max(0, first), n))
+
+
+def _heatpump_store_faults(faults):
+    """Add the fault-list entries not stored yet (by index + entry time). No commit."""
+    for f in faults:
+        if not HeatPumpFault.query.filter_by(idx=f['index'], ts=f['datetime']).first():
+            db.session.add(HeatPumpFault(idx=f['index'], code=f['error'], message=(f.get('message') or '')[:255], ts=f['datetime']))
+            db.session.flush()
+
+
 def _heatpump_run_cmds(hp):
     """Apply queued writes on the poller thread, each read back from the pump
     to confirm. A write whose caller already gave up (cancelled / past its
@@ -24254,6 +24300,7 @@ def _heatpump_loop():
     would fight over the single connection; run one worker or add a lock."""
     hp = hp_host = None
     last_slow = 0.0
+    fault_key = saved_mode = None   # last stored fault sync (count, last entry time) / last Betriebsart written to settings
     while True:
         try:
             db_ok = True
@@ -24280,17 +24327,25 @@ def _heatpump_loop():
                     hp = None
                 if hp is None:
                     hp, hp_host = _heatpump_open(host), host
+                    fault_key = None                    # once after each connect: read the fault list again
                 _heatpump_run_cmds(hp)
                 data = _heatpump_fast(hp)
                 now = time.time()
                 if now - last_slow >= HEATPUMP_SLOW_INTERVAL:
-                    _heatpump_live['slow'] = _heatpump_slow(hp)
+                    slow = _heatpump_slow(hp)
+                    faults = _heatpump_fault_sync(hp, slow, fault_key)
+                    _heatpump_live.update(slow=slow, slow_ts=now)
                     last_slow = now
+                    mode = slow.get('Betriebsart')
                     with app.app_context():
                         try:
                             db.session.add(HeatPumpReading(ts=int(now), data_json=json.dumps(
-                                {**data, 'Betriebsart': _heatpump_live['slow'].get('Betriebsart')})))
+                                {**data, 'Betriebsart': mode})))
+                            _heatpump_store_faults(faults)
+                            if mode is not None and mode != saved_mode:     # the last known mode, for a hard restart while offline
+                                _heatpump_save_setting(_HP_PREFIX + 'last_mode', str(mode))
                             db.session.commit()
+                            fault_key, saved_mode = (slow['fault_count'], slow['last_fault']['ts']), mode
                         except Exception:
                             # Database failure domain: this minute's row is lost, the pump connection stays up.
                             db.session.rollback()
@@ -24887,7 +24942,26 @@ def admin_heatpump():
     return render_template('admin_heatpump.html', active_page='admin_heatpump',
                            host=get_text(HEATPUMP_HOST_KEY, ''), modes=HEATPUMP_MODES, writable=writable,
                            meters=[(_shelly_key(m), f'{m.name} - {CONNECTION_TYPES.get(m.connection_type, m.connection_type)}') for m in ShellyDevice.query.order_by(ShellyDevice.name)]
-                           + [(f'{d.host}:{d.port}', f'{d.name} - Modbus') for d in ModbusDevice.query.filter_by(device_type='dtsu666').order_by(ModbusDevice.name)], cost_cfg=_heatpump_cost_cfg())
+                           + [(f'{d.host}:{d.port}', f'{d.name} - Modbus') for d in ModbusDevice.query.filter_by(device_type='dtsu666').order_by(ModbusDevice.name)], cost_cfg=_heatpump_cost_cfg(),
+                           **_heatpump_control_ctx())
+
+
+def _heatpump_control_ctx():
+    """Template data of the "График" and "Грешки и рестарт" tabs."""
+    codes = {}
+    for f in HeatPumpFault.query.order_by(HeatPumpFault.ts):     # ponytail: all rows - the pump's list is a few hundred at most
+        c = codes.setdefault(f.code, {'code': f.code, 'count': 0})
+        c.update(count=c['count'] + 1, message=f.message, last=f.ts)
+    return {'schedule_on': _heatpump_schedule_on(),
+            'pump_schedule': [{'weekday': i.weekday, 'start': f'{i.start_min // 60:02d}:{i.start_min % 60:02d}',
+                               'end': f'{i.end_min // 60:02d}:{i.end_min % 60:02d}'}
+                              for i in HeatPumpInterval.query.order_by(HeatPumpInterval.weekday, HeatPumpInterval.start_min)],
+            'fault_codes': sorted(codes.values(), key=lambda c: c['last'], reverse=True),
+            'faults': HeatPumpFault.query.order_by(HeatPumpFault.ts.desc(), HeatPumpFault.id.desc()).limit(50).all(),
+            'restart_codes': _heatpump_restart_codes(),
+            'protect_cfg': _hvac_protect_cfg(), 'protect_labels': HVAC_PROTECT_LABELS,
+            'auto_max': HEATPUMP_AUTO_RESTART_MAX, 'auto_window_h': HEATPUMP_AUTO_RESTART_WINDOW // 3600,
+            'restart_off_s': HEATPUMP_RESTART_OFF_S}
 
 
 def _heatpump_power():
@@ -24945,6 +25019,8 @@ def admin_heatpump_relay():
         return jsonify(_heatpump_relay())
     turn_on = request.form.get('on') == '1'
     st = _heatpump_relay(turn_on)
+    if st['error'] is None:
+        _heatpump_relay_cache['is_on'] = turn_on if st['is_on'] is None else st['is_on']
     log_action(f'Термопомпа: централно захранване {"включено" if turn_on else "изключено"}' + ('' if st['error'] is None else f' (грешка: {st["error"]})'))
     return jsonify(st), (200 if st['error'] is None else 502)
 
@@ -24980,7 +25056,8 @@ def inject_heatpump_fault():
 @limiter.exempt
 @role_required('admin')
 def admin_heatpump_data():
-    return jsonify({**_heatpump_live, 'power': _heatpump_power()})
+    return jsonify({**_heatpump_live, 'power': _heatpump_power(), 'restart': dict(_heatpump_restart), 'schedule_on': _heatpump_schedule_on(),
+                    'auto_limited': _heatpump_auto_limited(), 'protection': _hvac_protect['reason']})
 
 
 @app.route('/admin/heatpump/history')
@@ -25054,6 +25131,254 @@ def _heatpump_write(name, value):
     if not res['ok']:
         return dict(res, status=502)
     return res
+
+
+# --- hard restart (supply off 30 s, on, wait for the pump, set back its mode) + automatic restart on chosen faults ---
+# Owner's request 2026-11-25: the pump sometimes starts with an error; a supply cycle clears it.
+HEATPUMP_RESTART_OFF_S = 30          # seconds without supply
+HEATPUMP_RESTART_CONNECT_S = 600     # seconds to wait for the poller to see the pump again
+HEATPUMP_RESTART_POLL_S = 5          # seconds between the checks of a running restart (relay retries too)
+HEATPUMP_AUTO_RESTART_MAX = 3        # automatic restarts at most ...
+HEATPUMP_AUTO_RESTART_WINDOW = 6 * 3600   # ... in this many seconds
+HEATPUMP_RESTART_CODES_KEY = _HP_PREFIX + 'restart_codes'   # JSON list of fault codes that restart the pump automatically
+_heatpump_restart = {'running': False, 'step': None, 'started': None, 'finished': None, 'ok': None, 'error': None,
+                     'reason': None, 'mode': None}
+_heatpump_restart_lock = threading.Lock()
+_heatpump_relay_cache = {'is_on': None}   # last known central supply state (None = unknown), see _heatpump_relay_refresh()
+# ponytail: in memory, per process - the restart count of the window starts over after an app restart (the fault row's
+# auto_restart flag still keeps one fault from restarting twice).
+_heatpump_auto = {'trigger': None, 'times': [], 'limit_logged': False}
+_heatpump_sleep = time.sleep         # every wait of a restart goes through this (tests replace it)
+
+
+def _heatpump_spawn(fn, *args):
+    threading.Thread(target=fn, args=args, daemon=True, name='heatpump-restart').start()
+
+
+def _in_app_ctx(fn, *args):
+    """Run fn in its own short app context (a background thread has none; a restart must not hold a DB session for minutes)."""
+    with app.app_context():
+        try:
+            return fn(*args)
+        finally:
+            db.session.remove()
+
+
+def _heatpump_activity(username, role, text):
+    """ActivityLog row written outside a request (the restart thread, the thermostat tick). Never raises."""
+    def add():
+        db.session.add(ActivityLog(username=username[:50], role=role[:20], action=text[:255]))
+        db.session.commit()
+    try:
+        _in_app_ctx(add)
+    except Exception:
+        app.logger.exception('heatpump: activity log row failed')
+
+
+def _heatpump_relay_refresh():
+    """Called once per thermostat tick: the cached supply state the gate reads (the dashboard never calls the relay).
+    No meter = unknown. An MQTT meter answers 'unknown' without an error - then the state set by our last switch stays."""
+    if not get_text(_HP_PREFIX + 'meter', ''):
+        _heatpump_relay_cache['is_on'] = None
+        return
+    r = _heatpump_relay()
+    if r['is_on'] is not None or r['error'] or not r['available']:
+        _heatpump_relay_cache['is_on'] = r['is_on']
+
+
+def _heatpump_restart_start(reason, username, role, log_start=False):
+    """Start a hard restart in its own thread. {'ok': True} or {'ok': False, 'error', 'status': 409 running / 400 no relay}."""
+    if _heatpump_restart['running']:
+        return {'ok': False, 'error': 'Вече тече рестарт на термопомпата.', 'status': 409}
+    rel = _heatpump_relay()
+    if not rel['available']:
+        return {'ok': False, 'error': rel['error'] or 'Няма реле за централното захранване.', 'status': 400}
+    with _heatpump_restart_lock:
+        if _heatpump_restart['running']:
+            return {'ok': False, 'error': 'Вече тече рестарт на термопомпата.', 'status': 409}
+        _heatpump_restart.update(running=True, step='Започва', started=time.time(), finished=None, ok=None, error=None,
+                                 reason=reason, mode=None)
+    if log_start:
+        _heatpump_activity(username, role, f'Термопомпа: твърд рестарт започна ({reason})')
+    _heatpump_spawn(_heatpump_hard_restart, reason, username, role)
+    return {'ok': True}
+
+
+def _heatpump_hard_restart(reason, username, role):
+    """The restart itself (own thread): remember the mode, supply off, HEATPUMP_RESTART_OFF_S, supply on (3 tries), wait for
+    the poller to read the pump again (a slow read after the supply came back), write the mode back if it differs.
+    _heatpump_restart['step'] follows it; the end is written to the ActivityLog."""
+    st, live = _heatpump_restart, _heatpump_live
+    ok, err = False, None
+    try:
+        mode = (live['slow'] or {}).get('Betriebsart') if live['online'] else None
+        if mode is None:
+            saved = _in_app_ctx(get_text, _HP_PREFIX + 'last_mode', '').strip()
+            mode = int(saved) if saved.lstrip('-').isdigit() else None
+        st['mode'] = mode
+        st['step'] = 'Изключване на централното захранване'
+        r = _in_app_ctx(_heatpump_relay, False)
+        if r['error'] or r['is_on'] is True:
+            err = 'Централното захранване не се изключи: ' + (r['error'] or 'релето остана включено') + ' Нищо друго не е направено.'
+            return
+        _heatpump_relay_cache['is_on'] = False
+        st['step'] = f'Без захранване {HEATPUMP_RESTART_OFF_S} s'
+        _heatpump_sleep(HEATPUMP_RESTART_OFF_S)
+        st['step'] = 'Включване на централното захранване'
+        for attempt in range(3):
+            r = _in_app_ctx(_heatpump_relay, True)
+            if not r['error'] and r['is_on'] is not False:
+                break
+            if attempt < 2:
+                _heatpump_sleep(HEATPUMP_RESTART_POLL_S)
+        else:
+            err = 'Централното захранване не се включи (' + (r['error'] or 'релето остана изключено') + \
+                  ') - захранването остава ИЗКЛЮЧЕНО.'
+            return
+        _heatpump_relay_cache['is_on'] = True
+        on_at = time.time()
+        st['step'] = 'Изчакване термопомпата да се свърже'
+        for _ in range(HEATPUMP_RESTART_CONNECT_S // HEATPUMP_RESTART_POLL_S + 1):
+            if live['online'] and (live.get('slow_ts') or 0) > on_at:
+                break
+            _heatpump_sleep(HEATPUMP_RESTART_POLL_S)
+        else:
+            err = f'Термопомпата не се свърза до {HEATPUMP_RESTART_CONNECT_S // 60} мин. след включването.'
+            return
+        if mode is not None and (live['slow'] or {}).get('Betriebsart') != mode:
+            st['step'] = f'Връщане на режима „{HEATPUMP_MODES.get(mode, mode)}“'
+            w = _heatpump_write('Betriebsart', mode)
+            if not w['ok']:
+                err = 'Режимът не беше върнат: ' + w['error']
+                return
+        ok = True
+    except Exception as e:
+        app.logger.exception('heatpump: hard restart failed')
+        err = str(e) or e.__class__.__name__
+    finally:
+        st.update(running=False, finished=time.time(), ok=ok, error=err, step='Готово' if ok else 'Неуспешно')
+        _heatpump_activity(username, role, f'Термопомпа: твърд рестарт ({reason}) ' + ('завършен' if ok else f'неуспешен: {err}'))
+
+
+def _heatpump_restart_codes():
+    try:
+        return {int(c) for c in json.loads(get_text(HEATPUMP_RESTART_CODES_KEY, '[]') or '[]')}
+    except (ValueError, TypeError):
+        return set()
+
+
+def _heatpump_auto_limited(now=None):
+    now = now or time.time()
+    _heatpump_auto['times'] = [t for t in _heatpump_auto['times'] if now - t < HEATPUMP_AUTO_RESTART_WINDOW]
+    return len(_heatpump_auto['times']) >= HEATPUMP_AUTO_RESTART_MAX
+
+
+def _heatpump_auto_restart_check():
+    """From the thermostat tick (every season): an active fault (Stoerung) whose last fault-list entry has a code chosen on
+    the "Грешки и рестарт" tab starts one hard restart per entry, at most HEATPUMP_AUTO_RESTART_MAX per window."""
+    live = _heatpump_live
+    if not (live['online'] and (live['data'] or {}).get('Stoerung')) or _heatpump_restart['running']:
+        return
+    last = (live['slow'] or {}).get('last_fault') or {}
+    if last.get('code') not in _heatpump_restart_codes() or not last.get('ts'):
+        return
+    ts = datetime.fromisoformat(last['ts'])
+    if _heatpump_auto['trigger'] is not None and ts <= _heatpump_auto['trigger']:
+        return
+    row = HeatPumpFault.query.filter_by(ts=ts, code=last['code']).order_by(HeatPumpFault.id.desc()).first()
+    if row is not None and row.auto_restart:
+        return
+    if _heatpump_auto_limited():
+        if not _heatpump_auto['limit_logged']:
+            app.logger.warning('heatpump: fault %s - automatic restart limit (%d in %d h) reached, not restarting',
+                               last['code'], HEATPUMP_AUTO_RESTART_MAX, HEATPUMP_AUTO_RESTART_WINDOW // 3600)
+            _heatpump_auto['limit_logged'] = True
+        return
+    res = _heatpump_restart_start(f'автоматично: грешка {last["code"]} {last.get("text") or ""}'.strip(),
+                                  'автоматично', 'система', log_start=True)
+    if not res['ok']:
+        return
+    _heatpump_auto.update(trigger=ts, limit_logged=False)
+    _heatpump_auto['times'].append(time.time())
+    if row is not None:
+        row.auto_restart = True
+        db.session.commit()
+
+
+@app.route('/admin/heatpump/restart', methods=['POST'])
+@limiter.limit('10 per hour')
+@role_required('admin')
+def admin_heatpump_restart():
+    res = _heatpump_restart_start('ръчно', current_user.username, current_user.role)
+    if not res['ok']:
+        status = res.pop('status')
+        return jsonify(res), status
+    log_action('Термопомпа: твърд рестарт (ръчно)')
+    return jsonify(ok=True, restart=dict(_heatpump_restart))
+
+
+@app.route('/admin/heatpump/restart-codes', methods=['POST'])
+@role_required('admin')
+def admin_heatpump_restart_codes():
+    codes = sorted({int(x) for x in request.form.getlist('codes') if x.strip().lstrip('-').isdigit()})
+    _heatpump_save_setting(HEATPUMP_RESTART_CODES_KEY, json.dumps(codes))
+    db.session.commit()
+    log_action(f'Термопомпа: автоматичен рестарт при грешки {", ".join(map(str, codes)) or "- няма"}')
+    flash('Грешките за автоматичен рестарт са запазени.', 'success')
+    return redirect(url_for('admin_heatpump', _anchor='faults'))
+
+
+@app.route('/admin/heatpump/schedule', methods=['POST'])
+@role_required('admin')
+def admin_heatpump_schedule():
+    rows, err = _parse_schedule_rows(request.form.get('rows_json'), None)
+    if err:
+        flash(err, 'error')
+        return redirect(url_for('admin_heatpump', _anchor='schedule'))
+    HeatPumpInterval.query.delete(synchronize_session=False)
+    db.session.add_all(HeatPumpInterval(weekday=w, start_min=s, end_min=e) for w, s, e, _ in rows)
+    db.session.commit()
+    log_action(f'Термопомпа: график, {len(rows)} интервала')
+    flash('Графикът на термопомпата е запазен.', 'success')
+    return redirect(url_for('admin_heatpump', _anchor='schedule'))
+
+
+def _heatpump_schedule_on():
+    return get_text(_HP_PREFIX + 'schedule_on', '0') == '1'
+
+
+@app.route('/admin/heatpump/schedule/enabled', methods=['POST'])
+@limiter.limit('60 per hour')
+@role_required('admin')
+def admin_heatpump_schedule_enabled():
+    """Quick toggle of the pump schedule (owner's request 2026-11-25): off = the mode is set by hand, the intervals stay."""
+    on = request.form.get('enabled') == '1'
+    _heatpump_save_setting(_HP_PREFIX + 'schedule_on', '1' if on else '0')
+    db.session.commit()
+    log_action(f'Термопомпа: график {"включен" if on else "изключен"}')
+    return jsonify(ok=True, enabled=on)
+
+
+@app.route('/admin/heatpump/protection', methods=['POST'])
+@role_required('admin')
+def admin_heatpump_protection():
+    vals = {}
+    for k in HVAC_PROTECT_KEYS:
+        raw = (request.form.get(k) or '').strip().replace(',', '.')
+        try:
+            v = float(raw) if raw else None
+        except ValueError:
+            v = float('nan')
+        if v is not None and not (math.isfinite(v) and -30 <= v <= 50):
+            flash('Праговете трябва да са числа от -30 до 50 °C (празно = изключено).', 'error')
+            return redirect(url_for('admin_heatpump', _anchor='schedule'))
+        vals[k] = v
+    for k, v in vals.items():
+        _heatpump_save_setting(_HP_PREFIX + 'protect_' + k, '' if v is None else f'{v:g}')
+    db.session.commit()
+    log_action('Термопомпа: защита - ' + ', '.join(f'{k} {"-" if v is None else f"{v:g}"}' for k, v in vals.items()))
+    flash('Защитата е запазена.', 'success')
+    return redirect(url_for('admin_heatpump', _anchor='schedule'))
 
 
 @app.route('/admin/heatpump/host', methods=['POST'])
@@ -27957,11 +28282,73 @@ _thermostat_started = False
 # ponytail: one process - the tick and the season switch never interleave here; several workers would need a DB
 # advisory lock like the detector's.
 _hvac_lock = threading.Lock()
+# Protection thresholds (owner's request 2026-11-25), EditableText settings.heatpump_protect_<key>, blank = off.
+HVAC_PROTECT_KEYS = ('out_heat', 'room_heat', 'out_cool', 'room_cool')
+HVAC_PROTECT_LABELS = {'out_heat': 'Отопление: навън под (°C)', 'room_heat': 'Отопление: помещение под (°C)',
+                       'out_cool': 'Охлаждане: навън над (°C)', 'room_cool': 'Охлаждане: помещение над (°C)'}
+# Result of the last tick (the dashboard and _thermostat_state() read it): reason None = protection off.
+_hvac_protect = {'reason': None, 'cfg': {}}
 
 
 def hvac_season():
     s = get_text(HVAC_SEASON_KEY, 'off')
     return s if s in HVAC_SEASON_MODES else 'off'
+
+
+def _hvac_protect_cfg():
+    cfg = {}
+    for k in HVAC_PROTECT_KEYS:
+        try:
+            cfg[k] = float(get_text(_HP_PREFIX + 'protect_' + k, '') or 'x')
+        except ValueError:
+            cfg[k] = None
+    return cfg
+
+
+def _hvac_protect_update(season, ths):
+    """Once per tick: protection from the outdoor temperature (pump online) and every enabled thermostat's fresh reading."""
+    cfg = _hvac_protect_cfg()
+    rooms = []
+    for th in ths:
+        r = _sensor_reading(th.sensor)
+        if r['temp'] is not None and r['age_s'] is not None and r['age_s'] <= HVAC_SENSOR_STALE:
+            rooms.append((th.name, r['temp']))
+    outdoor = (_heatpump_live['data'] or {}).get('Temp. Aussen') if _heatpump_live['online'] else None
+    reason = hvac.protection(season, outdoor, rooms, cfg, _hvac_protect['reason'] is not None)
+    _hvac_protect.update(reason=reason, cfg=cfg)
+
+
+def _hvac_pump_gate():
+    """Thermostats are inactive while a hard restart runs, the central supply is known to be off or the pump is
+    "Изключена" (owner's request 2026-11-25). Unknown states count as active."""
+    if _heatpump_restart['running']:
+        return {'active': False, 'reason': 'рестарт на термопомпата'}
+    if _heatpump_relay_cache['is_on'] is False:
+        return {'active': False, 'reason': 'централното захранване е изключено'}
+    if _heatpump_live['online'] and (_heatpump_live['slow'] or {}).get('Betriebsart') == 0:
+        return {'active': False, 'reason': 'термопомпата е изключена'}
+    return {'active': True, 'reason': None}
+
+
+def _heatpump_schedule_tick(season, now, holidays):
+    """The pump's schedule (season heat/cool, schedule on or protection active, pump online, no restart): season mode inside
+    an interval (always while protection is active), Изключена outside. Writes only when the pump is in 0 or the season mode
+    - a special mode set by hand (Парти, Отпуск ...) is left alone."""
+    protect = _hvac_protect['reason'] is not None
+    if not (protect or _heatpump_schedule_on()) or not _heatpump_live['online'] \
+            or _heatpump_restart['running']:
+        return
+    mode = HVAC_SEASON_MODES[season]
+    cur = (_heatpump_live['slow'] or {}).get('Betriebsart')
+    if protect:
+        want = mode
+    else:
+        rows = [(i.weekday, i.start_min, i.end_min) for i in HeatPumpInterval.query]
+        want = mode if hvac.in_pump_schedule(rows, now, holidays) else 0
+    if cur in (0, mode) and cur != want:
+        res = _heatpump_write('Betriebsart', want)
+        if not res['ok']:
+            app.logger.warning('heatpump schedule: Betriebsart %s not written: %s', want, res.get('error'))
 
 
 def _sensor_reading(sensor):
@@ -28001,7 +28388,11 @@ def _thermostat_state(th, now_local, season=None, holidays=None):
         target, source = hvac.effective_target(sched, next_change, th.override_temp, until, th.hold, now_local)
         if target is not None:
             target = hvac.clamp(season, target)
-        demand = False if stale else hvac.decide(season, r['temp'], target, th.hysteresis, None)
+        thr = _hvac_protect['cfg'].get('room_' + season) if _hvac_protect['reason'] else None
+        if thr is not None:                 # protection: at least (heat) / at most (cool) the room threshold
+            target = max(target, thr) if season == 'heat' and target is not None else \
+                min(target, thr) if target is not None else thr
+        demand =False if stale else hvac.decide(season, r['temp'], target, th.hysteresis, None)
     return {'temp': r['temp'], 'humidity': r['humidity'], 'age_s': r['age_s'], 'stale': stale,
             'target': target, 'source': source,
             'next_change': next_change.isoformat() if next_change else None,
@@ -28031,25 +28422,44 @@ def _thermostat_tick(now=None):
     A convector whose heatpump_circuit does not fit the season is switched off, also regardless of the minimum time and
     the dead band (it must not run on the wrong circuit, e.g. left on after heat -> cool). A device error skips just that
     convector, an error of one thermostat just that thermostat. Automatic switches are not written to the ActivityLog.
-    Commits after each switch."""
+    Commits after each switch.
+    Before the pass (each step guarded on its own): the cached central-supply state, the automatic restart on chosen faults
+    (every season), protection, the pump's schedule. While _hvac_pump_gate() is inactive every convector of an enabled
+    thermostat that is on is switched off at once and none is switched on."""
     with _hvac_lock:
         season = hvac_season()
+        for step in (_heatpump_relay_refresh, _heatpump_auto_restart_check):
+            try:
+                step()
+            except Exception:
+                db.session.rollback()
+                _poller_failed('heatpump-control')
         if season not in ('heat', 'cool'):
+            _hvac_protect['reason'] = None
             return
         now = now or datetime.now(APP_TZ).replace(tzinfo=None)
         holidays = {h.day for h in HeatingHoliday.query}
-        for th in Thermostat.query.filter_by(enabled=True).order_by(Thermostat.id).all():
+        ths = Thermostat.query.filter_by(enabled=True).order_by(Thermostat.id).all()
+        try:
+            _hvac_protect_update(season, ths)
+            _heatpump_schedule_tick(season, now, holidays)
+        except Exception:
+            db.session.rollback()
+            _poller_failed('heatpump-control')
+        gate = _hvac_pump_gate()
+        for th in ths:
             try:
-                _thermostat_tick_one(th, now, season, holidays)
+                _thermostat_tick_one(th, now, season, holidays, off=not gate['active'])
             except Exception:
                 db.session.rollback()
                 _poller_failed('thermostat-device')
         db.session.commit()
 
 
-def _thermostat_tick_one(th, now, season, holidays, force=False):
-    """force: skip the minimum on/off time (the thermostat was just switched on - it acts at once)."""
-    st = _thermostat_state(th, now, season, holidays)
+def _thermostat_tick_one(th, now, season, holidays, force=False, off=False):
+    """force: skip the minimum on/off time (the thermostat was just switched on - it acts at once).
+    off: the pump gate is closed - every convector goes off, no minimum time."""
+    st = {'demand': False, 'stale': True} if off else _thermostat_state(th, now, season, holidays)
     for conv in th.convectors:
         on_season = _convector_on_season(conv, season)
         want = st['demand'] if on_season else False
@@ -28160,7 +28570,8 @@ def _parse_hhmm(v):
 
 
 def _parse_schedule_rows(raw, season):
-    """rows_json -> ([(weekday, start, end, temp)] clamped, None) or (None, Bulgarian error)."""
+    """rows_json -> ([(weekday, start, end, temp)] clamped, None) or (None, Bulgarian error).
+    season None = no temperature (the heat pump's schedule): temp is 0."""
     bad = 'Невалиден график.'
     try:
         data = json.loads(raw or '[]')
@@ -28169,7 +28580,7 @@ def _parse_schedule_rows(raw, season):
         rows = []
         for d in data:
             wd, s, e = d['weekday'], _parse_hhmm(d['start']), _parse_hhmm(d['end'])
-            temp = float(d['temp'])
+            temp = float(d['temp']) if season else 0.0
             if not isinstance(wd, int) or isinstance(wd, bool) or not 0 <= wd <= 6 or s is None or e is None or temp != temp:
                 return None, bad
             rows.append((wd, s, e, hvac.clamp(season, temp)))
@@ -28350,11 +28761,14 @@ def _hvac_pump_block(season):
     live = _heatpump_live
     d, mode = live['data'] or {}, (live['slow'] or {}).get('Betriebsart')
     power = _heatpump_power()
+    schedule_on = _heatpump_schedule_on()
+    sched_off = mode == 0 and season != 'off' and schedule_on   # switched off by its schedule
     return {'online': bool(live['online']), 'fault': bool(live['online'] and d.get('Stoerung')),
             'mode': mode, 'mode_label': HEATPUMP_MODES.get(mode),
-            'mismatch': bool(live['online'] and mode is not None and mode != HVAC_SEASON_MODES[season]),
+            'mismatch': bool(live['online'] and mode is not None and mode != HVAC_SEASON_MODES[season] and not sched_off),
             'supply': d.get('Temp. Vorlauf'), 'outdoor': d.get('Temp. Aussen'),
-            'power_w': power['w'] if power and power['online'] else None}
+            'power_w': power['w'] if power and power['online'] else None,
+            'restart': dict(_heatpump_restart), 'protection': _hvac_protect['reason'], 'schedule_on': schedule_on}
 
 
 def _hvac_thermostat_json(th, st, season, statuses=None):
@@ -28398,6 +28812,7 @@ def admin_hvac_data():
     cards.sort(key=lambda c: (c['group'] == 'Без помещение', c['group'], c['name']))
     return jsonify(ts=int(time.time()), season=season, season_label=HVAC_SEASON_LABELS[season],
                    pump=_hvac_pump_block(season) if current_user.is_admin else None, thermostats=cards,
+                   pump_gate=_hvac_pump_gate() if season in ('heat', 'cool') else {'active': True, 'reason': None},
                    outdoor=(_heatpump_live['data'] or {}).get('Temp. Aussen') if _heatpump_live['online'] else None,
                    convectors_on=sum(1 for c in cards for v in c['convectors'] if v['is_on']))
 
@@ -28509,7 +28924,7 @@ def admin_thermostat_enabled(th_id):
             season = hvac_season()
             if season in ('heat', 'cool'):
                 _thermostat_tick_one(th, datetime.now(APP_TZ).replace(tzinfo=None), season,
-                                     {h.day for h in HeatingHoliday.query}, force=True)
+                                     {h.day for h in HeatingHoliday.query}, force=True, off=not _hvac_pump_gate()['active'])
     return jsonify(ok=True, enabled=th.enabled)
 
 

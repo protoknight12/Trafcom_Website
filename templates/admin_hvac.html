@@ -268,6 +268,9 @@
                 <span><strong><span class="hv-dot" id="pumpDot"></span><span id="pumpStatus">Термопомпа</span></strong>
                     <small id="pumpLine">—</small></span>
             </a>
+            {% include 'partials/csrf_field.html' %}
+            <button type="button" class="hv-tile tip-below tip-end" style="font: inherit; color: inherit; cursor: pointer;" data-sched-toggle data-on="" data-url="{{ url_for('admin_heatpump_schedule_enabled') }}"
+                    data-tip="Графикът на термопомпата. Изключен = режимът се задава ръчно. При изключен график защитата от замръзване пак действа.">График: …</button>
             {% endif %}
             <div class="hv-tile tip-below tip-end" id="convTile" tabindex="0" data-tip="Конвектори на термостатите, които работят в момента.">
                 <span class="big">{{ icon('fan') }}</span><strong id="convOn">—</strong>
@@ -288,6 +291,9 @@
             {{ icon('triangle-alert') }}<span>Термопомпата не отговаря – сезонът не може да се смени. Изключете термостатите ръчно при нужда.</span>
         </div>
         {% endif %}
+        <div class="hv-banner" id="bnGate" hidden>
+            {{ icon('triangle-alert') }}<span id="bnGateText"></span>
+        </div>
         <div class="hv-banner err" id="bnFault" hidden>
             {{ icon('triangle-alert') }}<span>Термопомпата съобщава авария. <a href="{{ url_for('admin_heatpump') }}">Подробности</a></span>
         </div>
@@ -352,6 +358,7 @@
 <template id="tplChip"><span class="hv-chip" tabindex="0">{{ icon('fan') }}<span class="n"></span><span class="w"></span></span></template>
 
 <script src="{{ url_for('static', filename='js/poll.js') }}"></script>
+{% if current_user.is_admin %}<script src="{{ url_for('static', filename='js/heatpump_schedule.js') }}"></script>{% endif %}
 <script>
 (function () {
     'use strict';
@@ -789,6 +796,9 @@
             if (p.supply != null) parts.push('подаване ' + num(p.supply) + ' °C');
             if (p.outdoor != null) parts.push('навън ' + num(p.outdoor) + ' °C');
             if (p.power_w != null) parts.push((p.power_w / 1000).toFixed(1) + ' kW');
+            if (p.protection) parts.push('Защита: ' + p.protection);
+            if (window.hpScheduleShow) hpScheduleShow(p.schedule_on);
+            if (p.restart && p.restart.running) parts.push('рестарт: ' + (p.restart.step || ''));
             setText(document.getElementById('pumpLine'), parts.join(' · ') || '—');
         }
         document.getElementById('outTemp').hidden = d.outdoor == null;
@@ -799,6 +809,9 @@
                     '“) не съвпада със сезона („' + d.season_label + '“).');
         }
         document.getElementById('bnFault').hidden = !(p && p.fault);
+        var gate = d.pump_gate || {active: true};
+        document.getElementById('bnGate').hidden = gate.active;
+        if (!gate.active) setText(document.getElementById('bnGateText'), 'Термостатите не са активни: ' + gate.reason);
         var bnOff = document.getElementById('bnPumpOffline');
         if (bnOff) bnOff.hidden = !(p && !p.online);
         var n = d.convectors_on;

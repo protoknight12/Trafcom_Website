@@ -37,6 +37,19 @@
         .hp-ctl-msg.ok { color: var(--success-text); }
         .hp-ctl-msg.err { color: var(--danger-text); }
         @media (max-width: 640px) { .hp-ctl { grid-template-columns: 1fr 1fr; } }
+        .hp-tabs { display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid var(--border-color); margin: 6px 0 14px; }
+        .hp-tabs button { background: none; border: 1px solid transparent; border-bottom: 0; padding: 8px 14px; cursor: pointer;
+            color: var(--text-muted); font-size: 0.95rem; border-radius: var(--border-radius-sm) var(--border-radius-sm) 0 0; }
+        .hp-tabs button.on { color: var(--text-main); border-color: var(--border-color); background: var(--bg-input); font-weight: 700; }
+        .hp-notice { padding: 8px 12px; border-radius: var(--border-radius-sm); margin: 0 0 10px; border: 1px solid var(--danger-border); color: var(--danger-text); background: var(--danger-bg); }
+        .hp-notice[hidden] { display: none; }
+        .sch-day { display: flex; gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border-color); flex-wrap: wrap; }
+        .sch-day > strong { width: 36px; }
+        .sch-chips { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; min-width: 120px; }
+        .sch-chip { background: rgba(59, 130, 246, 0.15); color: var(--text-main); border: 1px solid var(--border-color); border-radius: 12px; padding: 2px 4px 2px 10px; font-size: 0.85rem; }
+        .sch-chip button { border: 0; background: none; color: inherit; cursor: pointer; font-size: 1rem; line-height: 1; padding: 0 6px; }
+        .sch-add { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+        .sch-add input { width: auto; padding: 2px 4px; }
     </style>
 </head>
 <body>
@@ -63,7 +76,15 @@
     </div>
     <p id="hpRelayMsg" class="text-small" style="margin: 0 0 6px;"></p>
     <p id="hpError" class="text-muted text-small"></p>
+    <p id="hpProtect" class="hp-notice" hidden></p>
 
+    <nav class="hp-tabs" id="hpTabs">
+        <button type="button" data-tab="overview" class="on">Преглед</button>
+        <button type="button" data-tab="schedule">График</button>
+        <button type="button" data-tab="faults">Грешки и рестарт</button>
+    </nav>
+
+    <div data-panel="overview">
     <h3 class="hp-section">Температури и налягане</h3>
     <div class="hp-grid" id="gridTemps"></div>
 
@@ -71,6 +92,7 @@
     <div class="hp-grid" id="gridStates"></div>
 
     <h3 class="hp-section">Управление</h3>
+    {% include 'partials/heatpump_schedule_toggle.html' %}
     <p class="text-muted text-small" style="margin-top: 0;">Промяната се праща на термопомпата и се потвърждава с прочитане на стойността. Допустимите граници са на самата помпа; всяка промяна се записва в журнала.</p>
     <div id="controls"><span class="text-muted text-small">Изчаква се първо четене на настройките…</span></div>
 
@@ -136,14 +158,149 @@
         </div>
         <button type="submit" class="btn">Запази</button>
     </form>
+    </div>
+
+    <div data-panel="schedule" hidden>
+    <h3 class="hp-section">График на термопомпата</h3>
+    {% include 'partials/heatpump_schedule_toggle.html' %}
+    <p class="text-muted text-small" style="margin-top: 0;">Вътре в интервал помпата е в режима на сезона (Автоматика при отопление, Охлаждане при охлаждане), извън интервалите - „Изключена“, а тогава и термостатите не работят. Помпата има нужда от време да загрее (охлади) водата, затова започвайте интервала по-рано от графиците на термостатите. Почивните дни (празниците от страница „Термостати“) следват графика за неделя. Край 24:00 = до края на деня. Режим, зададен ръчно (Парти, Отпуск …), не се пипа. При изключен сезон графикът не прави нищо.</p>
+    <form action="{{ url_for('admin_heatpump_schedule') }}" method="POST" id="pumpSchForm">
+        {% include 'partials/csrf_field.html' %}
+        <input type="hidden" name="rows_json" id="pumpSchRows">
+        <div id="pumpSchGrid"></div>
+        <button type="submit" class="btn" style="margin-top: 10px;">Запази графика</button>
+    </form>
+
+    <h3 class="hp-section">Защита от замръзване / прегряване (важи независимо от графика)</h3>
+    <p class="text-muted text-small" style="margin-top: 0;">Докато навън или в помещение на включен термостат е под прага (при охлаждане - над него), графикът на помпата не важи: тя остава в режима на сезона, а целта на всеки термостат е поне (при охлаждане - най-много) прагът за помещение. Защитата спира, когато всичко е с 1 °C над (под) прага. Празно = изключено. При изключен сезон защитата не прави нищо - всичко остава изключено.</p>
+    <form action="{{ url_for('admin_heatpump_protection') }}" method="POST" class="admin-form" style="max-width: 520px;">
+        {% include 'partials/csrf_field.html' %}
+        {% for k, lbl in protect_labels.items() %}
+        <div class="form-group"><label>{{ lbl }}</label>
+            <input type="number" name="{{ k }}" step="0.5" min="-30" max="50" value="{{ '%g'|format(protect_cfg[k]) if protect_cfg[k] is not none else '' }}"></div>
+        {% endfor %}
+        <button type="submit" class="btn">Запази</button>
+    </form>
+    </div>
+
+    <div data-panel="faults" hidden>
+    <h3 class="hp-section">Твърд рестарт</h3>
+    <p class="text-muted text-small" style="margin-top: 0;">Изключва централното захранване за {{ restart_off_s }} s, включва го, изчаква помпата да се свърже и връща режима, в който е била. Докато тече, термостатите не работят.</p>
+    <button type="button" class="btn" id="hpRestartBtn" data-confirm="Да се изключи централното захранване на термопомпата за {{ restart_off_s }} s и да се включи отново?">Твърд рестарт</button>
+    <p id="hpRestartState" class="text-small" style="margin: 8px 0;"></p>
+    <p id="hpAutoLimit" class="hp-notice" hidden>Лимитът на автоматичните рестарти е достигнат ({{ auto_max }} за {{ auto_window_h }} ч) - помпата няма да се рестартира сама, докато не изтече.</p>
+
+    <h3 class="hp-section">Грешки за автоматичен рестарт</h3>
+    <p class="text-muted text-small" style="margin-top: 0;">Ако помпата съобщи авария и последната грешка в журнала ѝ е от отметнатите, тя се рестартира сама (веднъж за всеки запис, най-много {{ auto_max }} пъти за {{ auto_window_h }} ч).</p>
+    {% if fault_codes %}
+    <form action="{{ url_for('admin_heatpump_restart_codes') }}" method="POST">
+        {% include 'partials/csrf_field.html' %}
+        <div class="table-responsive"><table class="users-table">
+            <thead><tr><th>Код</th><th>Съобщение</th><th>Брой</th><th>Последно</th><th>Рестартирай автоматично</th></tr></thead>
+            <tbody>
+            {% for c in fault_codes %}
+            <tr><td>{{ c.code }}</td><td>{{ c.message or '' }}</td><td>{{ c.count }}</td><td>{{ c.last.strftime('%d.%m.%Y %H:%M') }}</td>
+                <td><input type="checkbox" name="codes" value="{{ c.code }}" {{ 'checked' if c.code in restart_codes else '' }}></td></tr>
+            {% endfor %}
+            </tbody>
+        </table></div>
+        <button type="submit" class="btn" style="margin-top: 10px;">Запази</button>
+    </form>
+    {% else %}
+    <p class="text-muted text-small">Още няма прочетени грешки от журнала на помпата.</p>
+    {% endif %}
+
+    <h3 class="hp-section">Последни грешки</h3>
+    {% if faults %}
+    <div class="table-responsive"><table class="users-table">
+        <thead><tr><th>Време (на помпата)</th><th>Код</th><th>Съобщение</th><th>Авт. рестарт</th></tr></thead>
+        <tbody>
+        {% for f in faults %}
+        <tr><td>{{ f.ts.strftime('%d.%m.%Y %H:%M') }}</td><td>{{ f.code }}</td><td>{{ f.message or '' }}</td><td>{{ 'авт. рестарт' if f.auto_restart else '' }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table></div>
+    {% else %}
+    <p class="text-muted text-small">Няма записи.</p>
+    {% endif %}
+    </div>
 </main>
 
 <script src="{{ url_for('static', filename='js/poll.js') }}"></script>
+<script src="{{ url_for('static', filename='js/heatpump_schedule.js') }}"></script>
 <script>
 (function () {
     var MODES = {{ modes|tojson }};
     var WRITABLE = {{ writable|tojson }};
     var CSRF = '{{ csrf_token() }}';
+    // --- tabs (kept in location.hash) ---
+    var TABS = ['overview', 'schedule', 'faults'];
+    function showTab(t) {
+        if (TABS.indexOf(t) < 0) t = 'overview';
+        document.querySelectorAll('#hpTabs [data-tab]').forEach(function (b) { b.classList.toggle('on', b.dataset.tab === t); });
+        document.querySelectorAll('[data-panel]').forEach(function (p) { p.hidden = p.dataset.panel !== t; });
+        if (t === 'overview') drawChart();
+    }
+    document.getElementById('hpTabs').addEventListener('click', function (e) {
+        var b = e.target.closest('[data-tab]');
+        if (b) { history.replaceState(null, '', '#' + b.dataset.tab); showTab(b.dataset.tab); }
+    });
+    window.addEventListener('hashchange', function () { showTab(location.hash.slice(1)); });
+
+    // --- pump schedule editor (like the thermostats', without temperature) ---
+    var DAYS = ['Пон', 'Вто', 'Сря', 'Чет', 'Пет', 'Съб', 'Нед'], schRows = {{ pump_schedule|tojson }};
+    function renderSch() {
+        var grid = document.getElementById('pumpSchGrid');
+        grid.textContent = '';
+        DAYS.forEach(function (name, wd) {
+            var day = document.createElement('div'); day.className = 'sch-day';
+            var lab = document.createElement('strong'); lab.textContent = name;
+            var chips = document.createElement('div'); chips.className = 'sch-chips';
+            schRows.filter(function (r) { return r.weekday === wd; }).sort(function (a, b) { return a.start < b.start ? -1 : 1; })
+                .forEach(function (r) {
+                    var chip = document.createElement('span'); chip.className = 'sch-chip';
+                    chip.appendChild(document.createTextNode(r.start + '–' + r.end));
+                    var x = document.createElement('button'); x.type = 'button'; x.textContent = '×'; x.title = 'Премахни';
+                    x.addEventListener('click', function () { schRows.splice(schRows.indexOf(r), 1); renderSch(); });
+                    chip.appendChild(x); chips.appendChild(chip);
+                });
+            var add = document.createElement('span'); add.className = 'sch-add';
+            var f = document.createElement('input'); f.type = 'time'; f.value = '05:00';
+            var t = document.createElement('input'); t.type = 'time'; t.value = '17:00';
+            var btn = document.createElement('button'); btn.type = 'button'; btn.className = 'btn-secondary'; btn.textContent = '+ интервал';
+            btn.style.cssText = 'padding:2px 8px;font-size:0.8rem;';
+            btn.addEventListener('click', function () {
+                if (!f.value || !t.value) return;
+                schRows.push({weekday: wd, start: f.value, end: t.value === '00:00' ? '24:00' : t.value});
+                renderSch();
+            });
+            add.append(f, t, btn); day.append(lab, chips, add); grid.appendChild(day);
+        });
+    }
+    renderSch();
+    document.getElementById('pumpSchForm').addEventListener('submit', function () {
+        document.getElementById('pumpSchRows').value = JSON.stringify(schRows);
+    });
+
+    // --- hard restart (confirmation: data-confirm on the button, form_dialog.js) ---
+    var rsBtn = document.getElementById('hpRestartBtn'), rsState = document.getElementById('hpRestartState');
+    function showRestart(r, autoLimited) {
+        document.getElementById('hpAutoLimit').hidden = !autoLimited;
+        rsBtn.disabled = !!(r && r.running);
+        if (!r || !r.started) { rsState.textContent = ''; return; }
+        var when = new Date(r.started * 1000).toLocaleString('bg-BG');
+        rsState.textContent = r.running ? 'Тече рестарт (' + (r.reason || '') + ', от ' + when + '): ' + (r.step || '')
+            : 'Последен рестарт (' + (r.reason || '') + ', ' + when + '): ' + (r.ok ? 'успешен' : 'неуспешен - ' + (r.error || ''));
+        rsState.style.color = r.running ? '' : r.ok ? 'var(--success-text)' : 'var(--danger-text)';
+    }
+    rsBtn.addEventListener('click', function () {
+        rsBtn.disabled = true;
+        fetch('{{ url_for("admin_heatpump_restart") }}', {method: 'POST', headers: {'X-CSRFToken': CSRF}})
+            .then(function (r) { return r.json(); }).then(function (j) {
+                if (!j.ok) { rsState.textContent = j.error || 'Грешка'; rsState.style.color = 'var(--danger-text)'; rsBtn.disabled = false; }
+                else showRestart(j.restart, false);
+            }).catch(function () { rsState.textContent = 'Грешка в заявката.'; rsBtn.disabled = false; });
+    });
     var TEMPS = [
         ['Temp. Aussen', 'Външна', '°C'], ['Temp. Aussen verzoegert', 'Външна (забавена)', '°C'],
         ['Temp. Vorlauf', 'Подаване', '°C'], ['Temp. Ruecklauf', 'Връщане', '°C'],
@@ -241,6 +398,11 @@
         st.textContent = r.online ? 'Свързана' : 'Няма връзка';
         st.className = 'hp-state ' + (r.online ? 'state-online' : 'state-offline');
         document.getElementById('hpError').textContent = r.online ? '' : (r.error || '');
+        showRestart(r.restart, r.auto_limited);
+        hpScheduleShow(r.schedule_on);
+        var pr = document.getElementById('hpProtect');
+        pr.hidden = !r.protection;
+        pr.textContent = r.protection ? 'Защита: ' + r.protection : '';
         if (r.ts) document.getElementById('lastUpdate').textContent = 'Обновено: ' + new Date(r.ts * 1000).toLocaleTimeString('bg-BG');
         var d = r.data || {}, s = r.slow || {};
         if (!Object.keys(d).length) return;
@@ -459,7 +621,8 @@
     });
     startPoll(loadRelay, 10000);
     startPoll(poll, 3000);
-    startPoll(drawChart, 60000);
+    startPoll(function () { if (!document.querySelector('[data-panel=overview]').hidden) return drawChart(); }, 60000);
+    showTab(location.hash.slice(1));
 })();
 </script>
 </body>

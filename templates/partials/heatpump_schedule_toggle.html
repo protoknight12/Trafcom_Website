@@ -1,0 +1,6 @@
+{# Quick toggle of the heat pump schedule (admins); static/js/heatpump_schedule.js does the rest. #}
+<div class="hp-sched-row" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 10px;">
+    <button type="button" class="btn-secondary" data-sched-toggle data-url="{{ url_for('admin_heatpump_schedule_enabled') }}"
+            data-on="{{ '1' if schedule_on else '0' }}">График: {{ 'вкл.' if schedule_on else 'изкл. (ръчно)' }}</button>
+    <span class="text-muted text-small">При изключен график режимът се задава ръчно. При изключен график защитата от замръзване пак действа.</span>
+</div>

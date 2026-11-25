@@ -92,3 +92,31 @@ def validate_intervals(rows):
             if s2 < e1:
                 return 'Интервалите в един ден не могат да се припокриват.'
     return None
+
+
+def in_pump_schedule(intervals, now, holidays):
+    """intervals: (weekday, start_min, end_min). True when `now` is inside one (a holiday follows Sunday; end 1440 = end of day)."""
+    m = now.hour * 60 + now.minute
+    return any(s <= m < e for s, e, _ in _day_intervals([(w, s, e, None) for w, s, e in intervals], now.date(), holidays))
+
+
+PROTECT_HYST = 1.0
+
+
+def protection(season, outdoor, rooms, cfg, active_before):
+    """Защита от замръзване (heat) / прегряване (cool): текст на причината или None.
+    rooms: [(име, температура)] само пресни; cfg: {'out_heat', 'room_heat', 'out_cool', 'room_cool'} (None = изключено).
+    Включва се под (над) прага; ако е била включена, се изключва чак PROTECT_HYST K над (под) него."""
+    if season not in ('heat', 'cool'):
+        return None
+    hyst = PROTECT_HYST if active_before else 0.0
+    out_t, room_t = cfg.get('out_' + season), cfg.get('room_' + season)
+    checks = ([('навън', outdoor, out_t)] if outdoor is not None else []) + [(n, t, room_t) for n, t in rooms if t is not None]
+    for name, t, thr in checks:
+        if thr is None:
+            continue
+        if season == 'heat' and t < thr + hyst:
+            return f'{name} {t:g} °C < {thr + hyst:g} °C'
+        if season == 'cool' and t > thr - hyst:
+            return f'{name} {t:g} °C > {thr - hyst:g} °C'
+    return None
