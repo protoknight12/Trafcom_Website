@@ -24209,38 +24209,9 @@ HEATPUMP_HKP_PARAMS = {
     'Wartungslaufdauer alle Pumpen': (30, HtDataTypes.INT, 0, 180, 'Профилактично завъртане: продължителност', 's'),
 }
 HEATPUMP_HKP_INTERVAL = 600   # seconds between HKP reads (settings, change rarely)
-# Heat meter / electricity meter / COP measurements (MP, same 3.0.20 table), read one by one once a minute with the slow read.
-HEATPUMP_METER_PARAMS = {
-    'WMZ_Leistung (kW):': (89, HtDataTypes.FLOAT, 0.0, 141006544.0, 'Топлинна мощност', 'kW'),
-    'Stromz_Leistung (W):': (83, HtDataTypes.FLOAT, 0.0, 141006544.0, 'Електрическа мощност', 'W'),
-    'COP': (92, HtDataTypes.FLOAT, 0.0, 10.0, 'COP сега', ''),
-    'WMZ_Gesamt (kWh):': (84, HtDataTypes.FLOAT, 0.0, 141006544.0, 'Топлина общо', 'kWh'),
-    'Stromz_Gesamt (kWh):': (75, HtDataTypes.FLOAT, 0.0, 141006544.0, 'Ток общо', 'kWh'),
-    'WMZ_Heizung (kWh)': (52, HtDataTypes.FLOAT, 0.0, 12157522.0, 'Топлина за отопление', 'kWh'),
-    'Stromz_Heizung (kWh)': (53, HtDataTypes.FLOAT, 0.0, 12157522.0, 'Ток за отопление', 'kWh'),
-    'WMZ_Brauchwasser (kWh)': (54, HtDataTypes.FLOAT, 0.0, 12157522.0, 'Топлина за БГВ', 'kWh'),
-    'Stromz_Brauchwasser (kWh)': (55, HtDataTypes.FLOAT, 0.0, 12157522.0, 'Ток за БГВ', 'kWh'),
-    'WMZ_Durchfluss:': (85, HtDataTypes.INT, 0, 1000000000, 'Дебит (топломер)', ''),
-    'WMZ_Temp. Ein.:': (86, HtDataTypes.FLOAT, 0.0, 100.0, 'Топломер: вход', '°C'),
-    'WMZ_Temp. Aus.:': (87, HtDataTypes.FLOAT, 0.0, 100.0, 'Топломер: изход', '°C'),
-    'Volt L1-N:': (76, HtDataTypes.FLOAT, 0.0, 250.0, 'Напрежение L1', 'V'),
-    'Volt L2-N:': (77, HtDataTypes.FLOAT, 0.0, 250.0, 'Напрежение L2', 'V'),
-    'Volt L3-N:': (78, HtDataTypes.FLOAT, 0.0, 250.0, 'Напрежение L3', 'V'),
-    'Strom L1:': (79, HtDataTypes.FLOAT, 0.0, 100.0, 'Ток L1', 'A'),
-    'Strom L2:': (80, HtDataTypes.FLOAT, 0.0, 100.0, 'Ток L2', 'A'),
-    'Strom L3:': (81, HtDataTypes.FLOAT, 0.0, 100.0, 'Ток L3', 'A'),
-    'Netzfrequenz:': (82, HtDataTypes.FLOAT, 0.0, 60.0, 'Честота', 'Hz'),
-    'n-Soll Verdichter(%)': (90, HtDataTypes.INT, 0, 100, 'Обороти компресор (зад.)', '%'),
-    'OpFrequenz': (88, HtDataTypes.FLOAT, 0.0, 500.0, 'Честота на инвертора', 'Hz'),
-    'AO1 HKP': (47, HtDataTypes.INT, 0, 100, 'Обороти помпа на кръга', '%'),
-}
-# fast_query() with no names reads every MP in HtParams - fix its list BEFORE the extra MP above are registered, so an
-# unknown number can never break the 3-second live read.
-HEATPUMP_FAST_NAMES = tuple(n for n, p in HtParams.items() if p.dp_type == 'MP')
-for _dp, _defs in (('SP', HEATPUMP_HKP_PARAMS), ('MP', HEATPUMP_METER_PARAMS)):
-    for _n, (_nr, _t, _mn, _mx, _l, _u) in _defs.items():
-        if _n not in HtParams:
-            HtParams._params[_n] = HtParam(_dp, _nr, 'r-', _t, _mn, _mx)   # ponytail: private dict - the library has no add API
+for _n, (_nr, _t, _mn, _mx, _l, _u) in HEATPUMP_HKP_PARAMS.items():
+    if _n not in HtParams:
+        HtParams._params[_n] = HtParam('SP', _nr, 'r-', _t, _mn, _mx)   # ponytail: private dict - the library has no add API
 HEATPUMP_SET_TIMEOUT = 30  # seconds the page waits for the poller thread to apply a change
 HEATPUMP_MODES = {0: 'Изключена', 1: 'Автоматика', 2: 'Охлаждане', 3: 'Лято', 4: 'Постоянно отопление',
                   5: 'Намалено', 6: 'Отпуск', 7: 'Парти'}  # ponytail: Heliotherm labels from community docs; 1 = Автоматика matches this unit
@@ -24283,7 +24254,7 @@ def _heatpump_close(hp):
 
 
 def _heatpump_fast(hp):
-    data = hp.fast_query(*HEATPUMP_FAST_NAMES)
+    data = hp.fast_query()
     # -50 on a temperature = sensor not connected.
     return {k: (None if k.startswith('Temp.') and v == -50.0 else v) for k, v in data.items()}
 
@@ -24297,12 +24268,11 @@ def _heatpump_slow(hp):
     return slow
 
 
-def _heatpump_hkp(hp, names=HEATPUMP_HKP_PARAMS):
-    """{name: {'val', 'pump_name'} or {'error'}} for names (HKP settings / meter values), one request each: a number this
-    firmware lacks fails alone. After a failure a late reply may still come - wait and drop it so the next answer is not one
-    behind."""
+def _heatpump_hkp(hp):
+    """{name: {'val', 'pump_name'} or {'error'}} for HEATPUMP_HKP_PARAMS, one request each: a number this firmware lacks
+    fails alone. After a failure a late reply may still come - wait and drop it so the next answer is not one behind."""
     out = {}
-    for name in names:
+    for name in HEATPUMP_HKP_PARAMS:
         try:
             pump_name, _mn, _mx, val = hp._get_param(name)
             out[name] = {'val': val, 'pump_name': pump_name}
@@ -24406,12 +24376,7 @@ def _heatpump_loop():
                     faults = _heatpump_fault_sync(hp, slow, fault_key)
                     _heatpump_live.update(slow=slow, slow_ts=now)
                     last_slow = now
-                    retry = now - (_heatpump_live.get('hkp_ts') or 0) >= HEATPUMP_HKP_INTERVAL
-                    old = _heatpump_live.get('meter') or {}
-                    # a failed number costs ~6 s (timeout + drain): try it again only every HEATPUMP_HKP_INTERVAL
-                    _heatpump_live['meter'] = {**old, **_heatpump_hkp(hp, [n for n in HEATPUMP_METER_PARAMS
-                                                                           if retry or 'error' not in old.get(n, {})])}
-                    if retry:
+                    if now - (_heatpump_live.get('hkp_ts') or 0) >= HEATPUMP_HKP_INTERVAL:
                         _heatpump_live.update(hkp=_heatpump_hkp(hp), hkp_ts=now)
                     mode = slow.get('Betriebsart')
                     with app.app_context():
@@ -25019,7 +24984,6 @@ def admin_heatpump():
     return render_template('admin_heatpump.html', active_page='admin_heatpump',
                            host=get_text(HEATPUMP_HOST_KEY, ''), modes=HEATPUMP_MODES, writable=writable,
                            hkp_params={n: {'label': p[4], 'unit': p[5], 'sp': p[0]} for n, p in HEATPUMP_HKP_PARAMS.items()},
-                           meter_params={n: {'label': p[4], 'unit': p[5], 'sp': p[0]} for n, p in HEATPUMP_METER_PARAMS.items()},
                            meters=[(_shelly_key(m), f'{m.name} - {CONNECTION_TYPES.get(m.connection_type, m.connection_type)}') for m in ShellyDevice.query.order_by(ShellyDevice.name)]
                            + [(f'{d.host}:{d.port}', f'{d.name} - Modbus') for d in ModbusDevice.query.filter_by(device_type='dtsu666').order_by(ModbusDevice.name)], cost_cfg=_heatpump_cost_cfg(),
                            **_heatpump_control_ctx())

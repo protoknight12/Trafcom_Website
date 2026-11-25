@@ -84,7 +84,7 @@ def test_history_series(client):
 
 def test_fast_query_maps_missing_sensor():
     class FakeHp:
-        def fast_query(self, *names):
+        def fast_query(self):
             return {'Temp. Brauchwasser': -50.0, 'Temp. Aussen': 15.3, 'Verdichter': True}
     assert appmod._heatpump_fast(FakeHp()) == {'Temp. Brauchwasser': None, 'Temp. Aussen': 15.3, 'Verdichter': True}
 

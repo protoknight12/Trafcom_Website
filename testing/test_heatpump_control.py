@@ -142,23 +142,6 @@ def test_hkp_read_each_param_alone(monkeypatch):
     assert out['HKP n_min(%)']['pump_name'] == 'Other' and len(out) == len(app_module.HEATPUMP_HKP_PARAMS)
 
 
-def test_fast_read_keeps_default_mp_only():
-    """The meter MP are registered for one-by-one reads, but the 3-second fast_query never asks for them."""
-    from htheatpump import HtParams
-    assert 'COP' in HtParams and HtParams['COP'].dp_type == 'MP'
-    assert not set(app_module.HEATPUMP_METER_PARAMS) & set(app_module.HEATPUMP_FAST_NAMES)
-    assert 'Temp. Vorlauf' in app_module.HEATPUMP_FAST_NAMES
-
-    class FakeHp:
-        def fast_query(self, *names):
-            self.names = names
-            return {}
-
-    f = FakeHp()
-    app_module._heatpump_fast(f)
-    assert f.names == app_module.HEATPUMP_FAST_NAMES
-
-
 def test_gate_after_app_restart_uses_last_saved_mode(hp):
     """Owner's report 2026-11-25: right after an app restart (pump not read yet) the convectors went on for a minute
     although the pump was off. Before the first read the gate takes the last mode the poller saved."""
