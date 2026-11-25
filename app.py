@@ -68,7 +68,7 @@ from pymodbus.client import ModbusTcpClient
 from flask_babel import Babel, gettext
 import librouteros
 import serial as pyserial
-from htheatpump import HtHeatpump, HtParams, HtDataTypes
+from htheatpump import HtHeatpump, HtParams, HtParam, HtDataTypes
 from librouteros.query import Key as RouterosKey
 from cryptography.fernet import Fernet, InvalidToken
 from netmiko import ConnectHandler
@@ -24192,6 +24192,25 @@ HEATPUMP_WRITABLE = {
 # SP values read once a minute: everything writable (to show the current value) plus read-only status/counters.
 HEATPUMP_SLOW_PARAMS = tuple(HEATPUMP_WRITABLE) + ('Verdichter_Status', 'BSZ Verdichter Betriebsst. ges',
                                                     'BSZ Verdichter Betriebsst. WW', 'BSZ Verdichter Betriebsst. HKR')
+# Heating-circuit pump (HKP) settings, read-only (owner's request 2026-11-25). htheatpump's default table does not have
+# them; the numbers come from its own htparams-xxxxxx-3_0_20-273.csv (firmware 3.0.20). Another firmware may number them
+# differently - the pump answers with the real NAME, shown when it differs. name: (SP number, type, min, max, label, unit)
+HEATPUMP_HKP_PARAMS = {
+    'HKP_Modus': (37, HtDataTypes.INT, 0, 2, 'Режим на помпата', ''),
+    'HKP Anforderungsabhaengig': (295, HtDataTypes.BOOL, False, True, 'Само при заявка', ''),
+    'HKP_Vorlaufzeit (sec)': (35, HtDataTypes.INT, 0, 10800, 'Тръгва преди компресора', 's'),
+    'HKP_Nachlaufzeit (Sec)': (36, HtDataTypes.INT, 0, 10800, 'Работи след спиране', 's'),
+    'HKP_Puls_ein (sec)': (33, HtDataTypes.INT, 0, 600, 'Импулс: работи', 's'),
+    'HKP_Puls_aus (sec)': (34, HtDataTypes.INT, 0, 10800, 'Импулс: пауза', 's'),
+    'HKP bei EVU-Sperre': (294, HtDataTypes.BOOL, False, True, 'Работи при спиране от ЕРП', ''),
+    'HKP im Kuehlbetrieb': (388, HtDataTypes.BOOL, False, True, 'Работи при охлаждане', ''),
+    'HKP n_min(%)': (359, HtDataTypes.INT, 20, 100, 'Минимални обороти', '%'),
+    'Wartungslaufdauer alle Pumpen': (30, HtDataTypes.INT, 0, 180, 'Профилактично завъртане: продължителност', 's'),
+}
+HEATPUMP_HKP_INTERVAL = 600   # seconds between HKP reads (settings, change rarely)
+for _n, (_nr, _t, _mn, _mx, _l, _u) in HEATPUMP_HKP_PARAMS.items():
+    if _n not in HtParams:
+        HtParams._params[_n] = HtParam('SP', _nr, 'r-', _t, _mn, _mx)   # ponytail: private dict - the library has no add API
 HEATPUMP_SET_TIMEOUT = 30  # seconds the page waits for the poller thread to apply a change
 HEATPUMP_MODES = {0: 'Изключена', 1: 'Автоматика', 2: 'Охлаждане', 3: 'Лято', 4: 'Постоянно отопление',
                   5: 'Намалено', 6: 'Отпуск', 7: 'Парти'}  # ponytail: Heliotherm labels from community docs; 1 = Автоматика matches this unit
@@ -24246,6 +24265,21 @@ def _heatpump_slow(hp):
     slow['last_fault'] = {'text': last[3], 'code': last[1], 'ts': last[2].isoformat()}
     slow['pump_time'] = hp.get_date_time()[0].isoformat()
     return slow
+
+
+def _heatpump_hkp(hp):
+    """{name: {'val', 'pump_name'} or {'error'}} for HEATPUMP_HKP_PARAMS, one request each: a number this firmware lacks
+    fails alone. After a failure a late reply may still come - wait and drop it so the next answer is not one behind."""
+    out = {}
+    for name in HEATPUMP_HKP_PARAMS:
+        try:
+            pump_name, _mn, _mx, val = hp._get_param(name)
+            out[name] = {'val': val, 'pump_name': pump_name}
+        except Exception as e:
+            out[name] = {'error': (str(e) or e.__class__.__name__)[:120]}
+            time.sleep(1)
+            hp._ser.reset_input_buffer()
+    return out
 
 
 def _heatpump_fault_key(slow):
@@ -24341,6 +24375,8 @@ def _heatpump_loop():
                     faults = _heatpump_fault_sync(hp, slow, fault_key)
                     _heatpump_live.update(slow=slow, slow_ts=now)
                     last_slow = now
+                    if now - (_heatpump_live.get('hkp_ts') or 0) >= HEATPUMP_HKP_INTERVAL:
+                        _heatpump_live.update(hkp=_heatpump_hkp(hp), hkp_ts=now)
                     mode = slow.get('Betriebsart')
                     with app.app_context():
                         try:
@@ -24946,6 +24982,7 @@ def admin_heatpump():
                 for n, (lbl, unit) in HEATPUMP_WRITABLE.items()}
     return render_template('admin_heatpump.html', active_page='admin_heatpump',
                            host=get_text(HEATPUMP_HOST_KEY, ''), modes=HEATPUMP_MODES, writable=writable,
+                           hkp_params={n: {'label': p[4], 'unit': p[5], 'sp': p[0]} for n, p in HEATPUMP_HKP_PARAMS.items()},
                            meters=[(_shelly_key(m), f'{m.name} - {CONNECTION_TYPES.get(m.connection_type, m.connection_type)}') for m in ShellyDevice.query.order_by(ShellyDevice.name)]
                            + [(f'{d.host}:{d.port}', f'{d.name} - Modbus') for d in ModbusDevice.query.filter_by(device_type='dtsu666').order_by(ModbusDevice.name)], cost_cfg=_heatpump_cost_cfg(),
                            **_heatpump_control_ctx())
