@@ -23473,6 +23473,8 @@ def _handle_mqtt_temp_message(prefix, sensor_type, leaf, payload):
         except ValueError:
             return
         state[m.group(1)] = value
+        if m.group(1) == 'temperature':
+            state['temp_seen'] = datetime.utcnow()     # the temperature's own time (last_seen moves on any leaf)
         # Same reasoning as the power side: a reading implies the sensor is
         # awake and online, even without/before an explicit .../online message.
         state['online'] = True
@@ -23490,6 +23492,7 @@ def _apply_gen2_temp_leaf(state, leaf, payload):
             return
         if key.startswith('temperature:') and 'tC' in data:
             state['temperature'] = data['tC']
+            state['temp_seen'] = datetime.utcnow()     # the temperature's own time (last_seen moves on any leaf)
             state['online'] = True
         elif key.startswith('humidity:') and 'rh' in data:
             state['humidity'] = data['rh']
@@ -27951,6 +27954,9 @@ THERMOSTAT_POLLER_INTERVAL = 60     # seconds between ticks
 THERMOSTAT_RESEND_AFTER = 600       # seconds: an unconfirmed (unknown-state) command is sent again after this
 POLLER_STALE_AFTER['thermostat'] = 3 * THERMOSTAT_POLLER_INTERVAL
 _thermostat_started = False
+# ponytail: one process - the tick and the season switch never interleave here; several workers would need a DB
+# advisory lock like the detector's.
+_hvac_lock = threading.Lock()
 
 
 def hvac_season():
@@ -27959,13 +27965,14 @@ def hvac_season():
 
 
 def _sensor_reading(sensor):
-    """{'temp', 'humidity', 'age_s'}: age from the MQTT cache's last_seen (UTC naive), else the last stored TemperatureReading."""
+    """{'temp', 'humidity', 'age_s'}: age from the MQTT cache's temp_seen (UTC naive, set only when a temperature arrives -
+    last_seen moves on any leaf, e.g. a retained 'online'), else the last stored TemperatureReading."""
     if sensor is None:
         return {'temp': None, 'humidity': None, 'age_s': None}
     # The raw cache, not _mqtt_temp_snapshot(): that one formats last_seen as a local 'HH:MM:SS' string.
     with _mqtt_lock:
         state = dict(_mqtt_temp_state.get(sensor.mqtt_topic) or {})
-    temp, hum, seen = state.get('temperature'), state.get('humidity'), state.get('last_seen')
+    temp, hum, seen = state.get('temperature'), state.get('humidity'), state.get('temp_seen')
     if temp is not None and isinstance(seen, datetime):
         age = (datetime.utcnow() - seen).total_seconds()
     else:
@@ -28018,43 +28025,55 @@ def _last_convector_log(conv):
 
 
 def _thermostat_tick(now=None):
-    """One pass over every enabled thermostat (season heat/cool only). Each convector is switched on its own, only when its
-    state differs and its minimum on/off time is over (a stale/missing sensor switches off regardless). A device error is
-    logged and skips just that convector. Automatic switches are not written to the ActivityLog. Commits after each switch."""
-    season = hvac_season()
-    if season not in ('heat', 'cool'):
-        return
-    now = now or datetime.now(APP_TZ).replace(tzinfo=None)
-    holidays = {h.day for h in HeatingHoliday.query}
-    for th in Thermostat.query.filter_by(enabled=True).order_by(Thermostat.id).all():
-        st = _thermostat_state(th, now, season, holidays)
-        want = st['demand']
-        if want is None:                    # inside the dead band: keep whatever each convector does
-            continue
-        for conv in th.convectors:
-            if not _convector_on_season(conv, season):
-                continue
+    """One pass over every enabled thermostat (season heat/cool only), under _hvac_lock (shared with the season switch, so
+    a switch to 'off' cannot interleave with a running pass and leave a convector on). Each convector is switched on its
+    own, only when its state differs and its minimum on/off time is over (a stale/missing sensor switches off regardless).
+    A convector whose heatpump_circuit does not fit the season is switched off, also regardless of the minimum time and
+    the dead band (it must not run on the wrong circuit, e.g. left on after heat -> cool). A device error skips just that
+    convector, an error of one thermostat just that thermostat. Automatic switches are not written to the ActivityLog.
+    Commits after each switch."""
+    with _hvac_lock:
+        season = hvac_season()
+        if season not in ('heat', 'cool'):
+            return
+        now = now or datetime.now(APP_TZ).replace(tzinfo=None)
+        holidays = {h.day for h in HeatingHoliday.query}
+        for th in Thermostat.query.filter_by(enabled=True).order_by(Thermostat.id).all():
             try:
-                status = _shelly_convector_status(conv)
-                last = _last_convector_log(conv)
-                now_ts = time.time()
-                cur, resend = status['is_on'], False
-                if cur is None:
-                    # HTTP: unreachable, skip. MQTT: the state is just unknown - trust our last row, resend when unconfirmed.
-                    if conv.connection_type != 'mqtt':
-                        continue
-                    cur = last.is_on if last else None
-                    resend = last is not None and now_ts - last.ts > THERMOSTAT_RESEND_AFTER
-                if cur == want and not resend:
-                    continue
-                if not st['stale'] and last is not None and now_ts - last.ts < th.min_cycle_min * 60:
-                    continue
-                _thermostat_switch(conv, want, 'thermostat')
-                db.session.commit()         # per switch: a later DB error cannot drop the row of a relay already switched
+                _thermostat_tick_one(th, now, season, holidays)
             except Exception:
                 db.session.rollback()
                 _poller_failed('thermostat-device')
-    db.session.commit()
+        db.session.commit()
+
+
+def _thermostat_tick_one(th, now, season, holidays):
+    st = _thermostat_state(th, now, season, holidays)
+    for conv in th.convectors:
+        on_season = _convector_on_season(conv, season)
+        want = st['demand'] if on_season else False
+        if want is None:                    # inside the dead band: keep whatever the convector does
+            continue
+        try:
+            status = _shelly_convector_status(conv)
+            last = _last_convector_log(conv)
+            now_ts = time.time()
+            cur, resend = status['is_on'], False
+            if cur is None:
+                # HTTP: unreachable, skip. MQTT: the state is just unknown - trust our last row, resend when unconfirmed.
+                if conv.connection_type != 'mqtt':
+                    continue
+                cur = last.is_on if last else None
+                resend = last is not None and now_ts - last.ts > THERMOSTAT_RESEND_AFTER
+            if cur == want and not resend:
+                continue
+            if on_season and not st['stale'] and last is not None and now_ts - last.ts < th.min_cycle_min * 60:
+                continue
+            _thermostat_switch(conv, want, 'thermostat')
+            db.session.commit()         # per switch: a later DB error cannot drop the row of a relay already switched
+        except Exception:
+            db.session.rollback()
+            _poller_failed('thermostat-device')
 
 
 def _hvac_set_season(season):
@@ -28062,6 +28081,11 @@ def _hvac_set_season(season):
     for 'off', switches off every convector on a thermostat. {'ok': True, 'season', 'failed': [names]} or the write's error."""
     if season not in HVAC_SEASON_MODES:
         return {'ok': False, 'error': 'Непознат сезон.', 'status': 400}
+    with _hvac_lock:                # no thermostat pass between storing the season and the off pass
+        return _hvac_set_season_locked(season)
+
+
+def _hvac_set_season_locked(season):
     res = _heatpump_write('Betriebsart', HVAC_SEASON_MODES[season])
     if not res['ok']:
         return res

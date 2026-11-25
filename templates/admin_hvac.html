@@ -253,23 +253,23 @@
                 {% endfor %}
             </div>
             {% else %}
-            <div class="hv-seg"><span class="cur {{ season }}" id="seasonBadge" data-tip="Сезонът се сменя от администратор." tabindex="0">
+            <div class="hv-seg"><span class="cur {{ season }} tip-below" id="seasonBadge" data-tip="Сезонът се сменя от администратор." tabindex="0">
                 <span id="seasonIcons">{% for k, ic in [('heat', 'flame'), ('cool', 'snowflake'), ('off', 'power')] %}<span{% if k != season %} style="display:none"{% endif %} data-s="{{ k }}">{{ icon(ic) }}</span>{% endfor %}</span><span id="seasonLabel">{{ seasons[season] }}</span></span></div>
             {% endif %}
             {% if current_user.is_admin %}
-            <a class="hv-tile" id="pumpTile" href="{{ url_for('admin_heatpump') }}" data-tip="Термопомпа: режим, температура на подаващата вода, навън и моментна мощност. Натиснете за подробности." >
+            <a class="hv-tile tip-below tip-end" id="pumpTile" href="{{ url_for('admin_heatpump') }}" data-tip="Термопомпа: режим, температура на подаващата вода, навън и моментна мощност. Натиснете за подробности." >
                 <span class="big">{{ icon('gauge') }}</span>
                 <span><strong><span class="hv-dot" id="pumpDot"></span><span id="pumpStatus">Термопомпа</span></strong>
                     <small id="pumpLine">—</small></span>
             </a>
             {% endif %}
-            <div class="hv-tile" tabindex="0" data-tip="Конвектори на термостатите, които работят в момента.">
+            <div class="hv-tile tip-below tip-end" id="convTile" tabindex="0" data-tip="Конвектори на термостатите, които работят в момента.">
                 <span class="big">{{ icon('fan') }}</span><strong id="convOn">—</strong>
             </div>
             <div class="hv-tools">
-                <button type="button" class="hv-iconbtn tip-end" id="viewGrid" data-tip="Изглед с циферблати" aria-label="Изглед с циферблати" aria-pressed="true">{{ icon('layout-grid') }}</button>
-                <button type="button" class="hv-iconbtn tip-end" id="viewList" data-tip="Компактен списък" aria-label="Компактен списък" aria-pressed="false">{{ icon('list') }}</button>
-                <button type="button" class="hv-iconbtn tip-end" id="themeBtn" data-tip="Светла тема" aria-label="Светла тема">{{ icon('sun') }}{{ icon('moon') }}</button>
+                <button type="button" class="hv-iconbtn tip-end tip-below" id="viewGrid" data-tip="Изглед с циферблати" aria-label="Изглед с циферблати" aria-pressed="true">{{ icon('layout-grid') }}</button>
+                <button type="button" class="hv-iconbtn tip-end tip-below" id="viewList" data-tip="Компактен списък" aria-label="Компактен списък" aria-pressed="false">{{ icon('list') }}</button>
+                <button type="button" class="hv-iconbtn tip-end tip-below" id="themeBtn" data-tip="Светла тема" aria-label="Светла тема">{{ icon('sun') }}{{ icon('moon') }}</button>
             </div>
         </div>
 
@@ -277,6 +277,11 @@
             <span tabindex="0" data-tip="Термопомпата е в друг режим от избрания сезон – вероятно е сменен от нейния панел. Изберете сезона отново, за да я върнете." class="tip-start">{{ icon('triangle-alert') }}</span>
             <span id="bnMismatchText"></span>
         </div>
+        {% if current_user.is_admin %}
+        <div class="hv-banner" id="bnPumpOffline" hidden>
+            {{ icon('triangle-alert') }}<span>Термопомпата не отговаря – сезонът не може да се смени. Изключете термостатите ръчно при нужда.</span>
+        </div>
+        {% endif %}
         <div class="hv-banner err" id="bnFault" hidden>
             {{ icon('triangle-alert') }}<span>Термопомпата съобщава авария. <a href="{{ url_for('admin_heatpump') }}">Подробности</a></span>
         </div>
@@ -399,8 +404,19 @@
     document.getElementById('viewGrid').addEventListener('click', function () { store.set('hvac:view', 'grid'); applyView('grid'); });
     applyView(store.get('hvac:view'));
 
+    // ---------- a tooltip near the top of the screen opens downward (upward it would end under the navbar) ----------
+    function placeTip(e) {
+        var el = e.target.closest && e.target.closest('.hvac-page [data-tip]');
+        if (!el) return;
+        if (el.dataset.tipAuto == null) el.dataset.tipAuto = el.classList.contains('tip-below') ? '0' : '1';
+        if (el.dataset.tipAuto === '1') el.classList.toggle('tip-below', el.getBoundingClientRect().top < 120);
+    }
+    document.addEventListener('mouseover', placeTip);
+    document.addEventListener('focusin', placeTip);
+
     // ---------- tooltips on touch: a tap opens/closes (buttons keep doing their job) ----------
     document.addEventListener('click', function (e) {
+        placeTip(e);
         var el = e.target.closest('.hvac-page [data-tip]');
         var opened = document.querySelectorAll('.hvac-page .tip-open');
         for (var i = 0; i < opened.length; i++) if (opened[i] !== el) opened[i].classList.remove('tip-open');
@@ -775,6 +791,8 @@
                     '“) не съвпада със сезона („' + d.season_label + '“).');
         }
         document.getElementById('bnFault').hidden = !(p && p.fault);
+        var bnOff = document.getElementById('bnPumpOffline');
+        if (bnOff) bnOff.hidden = !(p && !p.online);
         var n = d.convectors_on;
         setText(document.getElementById('convOn'), n === 0 ? 'Няма работещи конвектори' : n === 1 ? '1 конвектор работи' : n + ' конвектора работят');
 

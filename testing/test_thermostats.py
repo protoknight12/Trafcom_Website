@@ -88,15 +88,16 @@ def env(monkeypatch):
     monkeypatch.setattr(app_module, '_mqtt_temp_state', mqtt_state)
 
     class Env(dict):
-        """Setting temp/age writes the REAL MQTT cache shape (last_seen = UTC naive datetime); age None = nothing received."""
+        """Setting temp/age writes the REAL MQTT cache shape (last_seen / temp_seen = UTC naive datetime); age None = nothing received."""
         def __setitem__(self, k, v):
             super().__setitem__(k, v)
             if k in ('temp', 'age') and 'age' in self:
                 mqtt_state.pop('t/hvac-tick', None)
                 if self['age'] is not None:
+                    seen = datetime.datetime.utcnow() - datetime.timedelta(seconds=self['age'])
                     mqtt_state['t/hvac-tick'] = {
                         'online': True, 'temperature': self['temp'], 'humidity': 40.0, 'battery': 90,
-                        'last_seen': datetime.datetime.utcnow() - datetime.timedelta(seconds=self['age'])}
+                        'last_seen': seen, 'temp_seen': seen}
 
     e = Env(status={}, sets=[], fail=set())
     e['temp'] = 20.0
@@ -698,3 +699,110 @@ def test_history_not_rate_limited(env):
     c = _login('worker')
     codes = {c.get(f'/admin/hvac/{t.id}/history?hours=1').status_code for _ in range(305)}
     assert codes == {200}
+
+
+# ---------------- Final review fixes ----------------
+def test_tick_waits_for_hvac_lock(env):
+    """The tick holds _hvac_lock for its whole pass (shared with the season switch), so a season change to 'off' cannot
+    interleave with a running tick and leave a convector on."""
+    import threading
+    _season('heat')
+    _thermo()
+    env['temp'] = 18.0
+    done = []
+
+    def run():
+        with app.app_context():
+            app_module._thermostat_tick(NOW)
+            done.append(1)
+
+    with app_module._hvac_lock:
+        th = threading.Thread(target=run)
+        th.start()
+        th.join(0.5)
+        assert th.is_alive() and env['sets'] == [] and not done
+    th.join(10)
+    assert done and env['sets'] == [('К1', True)]
+
+
+def test_season_switch_holds_hvac_lock(env, monkeypatch):
+    seen = []
+    monkeypatch.setattr(app_module, '_heatpump_write', lambda n, v: seen.append(app_module._hvac_lock.locked()) or {'ok': True})
+    _thermo()
+    orig = app_module._shelly_convector_set
+    monkeypatch.setattr(app_module, '_shelly_convector_set', lambda c, on: seen.append(app_module._hvac_lock.locked()) or orig(c, on))
+    assert app_module._hvac_set_season('off')['ok'] is True
+    assert seen == [True, True] and not app_module._hvac_lock.locked()
+
+
+def test_tick_switches_off_season_convector_off(env):
+    """heat -> cool: a heating-only convector still on is switched off (even inside the minimum on time)."""
+    _season('cool')
+    _thermo(convs=(('Отопл', 'heating'), ('Охл', 'cooling')))
+    c = Convector.query.filter_by(name='Отопл').one()
+    db.session.add(ConvectorLog(convector_id=c.id, ts=int(time.time()) - 60, is_on=True))
+    db.session.commit()
+    env['status']['Отопл'] = {'online': True, 'is_on': True, 'power_w': None}
+    env['temp'] = 24.2                                   # inside the cooling dead band: no demand either way
+    app_module._thermostat_tick(NOW)
+    assert env['sets'] == [('Отопл', False)]
+
+
+def test_tick_one_thermostat_error_does_not_stop_others(env, monkeypatch):
+    _season('heat')
+    bad = _thermo(convs=('Лош',))
+    bad.name = 'Лош термостат'
+    _thermo(convs=('Добър',))
+    db.session.commit()
+    orig = app_module._thermostat_state
+
+    def state(th, *a, **kw):
+        if th.name == 'Лош термостат':
+            raise RuntimeError('boom')
+        return orig(th, *a, **kw)
+
+    monkeypatch.setattr(app_module, '_thermostat_state', state)
+    env['temp'] = 18.0
+    app_module._thermostat_tick(NOW)
+    assert env['sets'] == [('Добър', True)]
+
+
+def test_staleness_uses_temperature_time_not_any_leaf(env):
+    """A retained 'online' (or any other leaf) refreshes last_seen, not the temperature's own time."""
+    env['age'] = None
+    s = TemperatureSensor.query.filter_by(mqtt_topic='t/hvac-tick').first() or TemperatureSensor(name='S', mqtt_topic='t/hvac-tick')
+    db.session.add(s)
+    db.session.commit()
+    app_module._handle_mqtt_temp_message('t/hvac-tick', 'generic_flat', 'temperature', '20.5')
+    st = app_module._mqtt_temp_state['t/hvac-tick']
+    assert isinstance(st.get('temp_seen'), datetime.datetime)
+    st['temp_seen'] -= datetime.timedelta(minutes=50)
+    app_module._handle_mqtt_temp_message('t/hvac-tick', 'generic_flat', 'online', 'true')
+    r = app_module._sensor_reading(s)
+    assert r['temp'] == 20.5 and r['age_s'] >= 50 * 60 - 5
+    app_module._handle_mqtt_temp_message('t/hvac-tick', 'shelly_gen2', 'status/temperature:0', '{"tC": 21.5}')
+    r = app_module._sensor_reading(s)
+    assert r['temp'] == 21.5 and r['age_s'] < 5
+
+
+def test_dashboard_hints_season_locked_when_pump_offline(env, monkeypatch):
+    _season('heat')
+    html = _login('admin').get('/admin/hvac').get_data(as_text=True)
+    assert 'id="bnPumpOffline"' in html and 'сезонът не може да се смени' in html
+    assert 'id="bnPumpOffline"' not in _login('worker').get('/admin/hvac').get_data(as_text=True)
+    monkeypatch.setitem(app_module._heatpump_live, 'online', False)
+    monkeypatch.setattr(app_module, '_heatpump_power', lambda: None)
+    assert _login('admin').get('/admin/hvac/data').get_json()['pump']['online'] is False
+
+
+def test_top_bar_tooltips_open_downward(env):
+    """Upward tooltips of the top bar ended under the navbar: every [data-tip] there opens below (tip-below), and the page
+    flips any tooltip near the top of the screen downward."""
+    _season('heat')
+    html = _login('admin').get('/admin/hvac').get_data(as_text=True)
+    top = html[html.index('class="hv-top"'):html.index('id="bnMismatch"')]
+    tags = re.findall(r'<[^>]*data-tip="[^"]*"[^>]*>', top)
+    assert len(tags) >= 7 and all('tip-below' in t for t in tags), [t for t in tags if 'tip-below' not in t]
+    assert 'id="pumpTile"' in top and 'getBoundingClientRect().top < 120' in html
+    w = _login('worker').get('/admin/hvac').get_data(as_text=True)
+    assert re.search(r'class="cur heat tip-below" id="seasonBadge"', w)
