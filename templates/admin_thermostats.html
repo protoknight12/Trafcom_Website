@@ -19,9 +19,12 @@
         .sch-add input { width: auto; padding: 2px 4px; }
         .sch-add input[type=number] { width: 64px; }
         .sch-tools { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+        .th-ok { color: #16803c; } .th-no { color: #6b7280; }
+        .ic { vertical-align: -0.15em; }
     </style>
 </head>
 <body>
+{% from 'partials/icons.html' import icon %}
 {% set subnav = 'hvac' %}
 {% include 'partials/navbar.html' %}
 
@@ -122,13 +125,14 @@
                     <td class="text-small">{{ t.convectors|map(attribute='name')|join(', ') or '—' }}</td>
                     <td>{{ t.hysteresis|num3 }} К</td>
                     <td>{{ t.min_cycle_min }} мин</td>
-                    <td>{{ 'Да' if t.enabled else 'Не' }}</td>
+                    <td>{% if t.enabled %}<span class="th-ok" title="Термостатът управлява своите конвектори">{{ icon('power') }} Да</span>{% else %}<span class="th-no" title="Изключен – конвекторите се управляват ръчно">{{ icon('power') }} Не</span>{% endif %}</td>
                     {% if current_user.is_admin %}
                     <td class="text-right">
                         <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;" data-dialog="scheduleDialog"
                                 data-action="{{ url_for('admin_thermostat_schedule', th_id=t.id) }}"
                                 data-title="График: {{ t.name }}"
-                                data-values='{{ {"season": "heat"}|tojson|forceescape }}' data-th="{{ t.id }}">График</button>
+                                data-values='{{ {"season": "heat"}|tojson|forceescape }}' data-th="{{ t.id }}"
+                                title="Седмичен график за отопление и охлаждане">{{ icon('calendar-clock') }} График</button>
                         <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;" data-dialog="thermostatForm-dialog"
                                 data-action="{{ url_for('admin_thermostat_save') }}"
                                 data-title="Редакция: {{ t.name }}"
@@ -136,11 +140,12 @@
                                 data-values='{{ {"id": t.id, "name": t.name, "sensor_id": t.sensor_id or "", "room_id": t.room_id or "",
                                                  "hysteresis": t.hysteresis, "min_cycle_min": t.min_cycle_min, "lowered_heat": t.lowered_heat,
                                                  "lowered_cool": t.lowered_cool if t.lowered_cool is not none else "",
-                                                 "enabled": t.enabled, "convector_ids": t.convectors|map(attribute="id")|list}|tojson|forceescape }}'>Редактирай</button>
+                                                 "enabled": t.enabled, "convector_ids": t.convectors|map(attribute="id")|list}|tojson|forceescape }}'
+                                title="Сензор, помещение, конвектори и настройки">{{ icon('pencil') }} Редактирай</button>
                         <form action="{{ url_for('admin_thermostat_delete', th_id=t.id) }}" method="POST" style="display:inline;"
                               data-confirm="Изтриване на термостат &quot;{{ t.name }}&quot;?">
                             {% include 'partials/csrf_field.html' %}
-                            <button type="submit" class="btn-delete">Изтрий</button>
+                            <button type="submit" class="btn-delete" title="Изтрий термостата – конвекторите остават, но без термостат">{{ icon('trash') }} Изтрий</button>
                         </form>
                     </td>
                     {% endif %}

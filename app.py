@@ -28303,6 +28303,180 @@ def admin_hvac_holiday_delete(h_id):
     return redirect(url_for('admin_thermostats'))
 
 
+# ----- Отопление и охлаждане: табло -----
+HVAC_HISTORY_STEP = 900     # seconds between the target samples of the history chart
+
+
+def _hvac_now():
+    return datetime.now(APP_TZ).replace(tzinfo=None)
+
+
+def _local_to_utc_naive(dt):
+    return dt.replace(tzinfo=APP_TZ).astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _thermostat_group(th):
+    room = th.room or (th.sensor.room if th.sensor else None)
+    return f'{room.building.name} / {room.name}' if room else None
+
+
+def _hvac_pump_block(season):
+    live = _heatpump_live
+    d, mode = live['data'] or {}, (live['slow'] or {}).get('Betriebsart')
+    power = _heatpump_power()
+    return {'online': bool(live['online']), 'fault': bool(live['online'] and d.get('Stoerung')),
+            'mode': mode, 'mode_label': HEATPUMP_MODES.get(mode),
+            'mismatch': bool(live['online'] and mode is not None and mode != HVAC_SEASON_MODES[season]),
+            'supply': d.get('Temp. Vorlauf'), 'outdoor': d.get('Temp. Aussen'),
+            'power_w': power['w'] if power and power['online'] else None}
+
+
+def _hvac_thermostat_json(th, st, season, statuses=None):
+    """One dashboard card. statuses: {convector_id: live status}; an MQTT relay with an unknown state shows its last logged
+    state as `unconfirmed` (the engine resends such a command every THERMOSTAT_RESEND_AFTER)."""
+    convs = []
+    for c in th.convectors:
+        s = (statuses or {}).get(c.id) or {'online': False, 'is_on': None, 'power_w': None}
+        is_on, unconfirmed = s['is_on'], False
+        if is_on is None and c.connection_type == 'mqtt':
+            last = _last_convector_log(c)
+            if last is not None:
+                is_on, unconfirmed = last.is_on, True
+        convs.append({'id': c.id, 'name': c.name, 'online': bool(s['online']), 'is_on': is_on, 'power_w': s['power_w'],
+                      'unconfirmed': unconfirmed, 'on_season': _convector_on_season(c, season)})
+    return {'id': th.id, 'name': th.name, 'group': _thermostat_group(th) or 'Без помещение', 'enabled': th.enabled,
+            'hold': th.hold, **st, 'convectors': convs}
+
+
+@app.route('/admin/hvac')
+@role_required(['admin', 'worker'])
+def admin_hvac():
+    return render_template('admin_hvac.html', season=hvac_season(), seasons=HVAC_SEASON_LABELS,
+                           ranges={'heat': hvac.HEAT_RANGE, 'cool': hvac.COOL_RANGE}, active_page='admin_hvac')
+
+
+@app.route('/admin/hvac/data')
+@role_required(['admin', 'worker'])
+@limiter.exempt
+def admin_hvac_data():
+    season = hvac_season()
+    now = _hvac_now()
+    holidays = {h.day for h in HeatingHoliday.query}
+    ths = Thermostat.query.order_by(Thermostat.name).all()
+    convs = [c for th in ths for c in th.convectors]
+    statuses = {}
+    if convs:
+        with ThreadPoolExecutor(max_workers=min(len(convs), 16)) as pool:
+            statuses = dict(zip([c.id for c in convs], pool.map(_shelly_convector_status, convs)))
+    cards = [_hvac_thermostat_json(th, _thermostat_state(th, now, season, holidays), season, statuses) for th in ths]
+    cards.sort(key=lambda c: (c['group'] == 'Без помещение', c['group'], c['name']))
+    return jsonify(ts=int(time.time()), season=season, season_label=HVAC_SEASON_LABELS[season],
+                   pump=_hvac_pump_block(season) if current_user.is_admin else None, thermostats=cards,
+                   convectors_on=sum(1 for c in cards for v in c['convectors'] if v['is_on']))
+
+
+@app.route('/admin/hvac/<int:th_id>/history')
+@role_required(['admin', 'worker'])
+def admin_hvac_history(th_id):
+    """{temps: [[ts, t]], target: [[ts, t]] (the CURRENT schedule sampled every HVAC_HISTORY_STEP), on: [[from, to]]
+    (union of the thermostat's convectors' on-periods)} for the last ?hours= (1..168)."""
+    th = Thermostat.query.get_or_404(th_id)
+    hours = min(max(request.args.get('hours', 24, type=int), 1), 168)
+    now = int(time.time())
+    since = now - hours * 3600
+    temps = []
+    if th.sensor_id:
+        temps = [[ts, t] for ts, t in db.session.query(TemperatureReading.ts, TemperatureReading.temperature)
+                 .filter(TemperatureReading.sensor_id == th.sensor_id, TemperatureReading.ts >= since,
+                         TemperatureReading.temperature.isnot(None)).order_by(TemperatureReading.ts)]
+    season, target = hvac_season(), []
+    if season in ('heat', 'cool'):
+        rows = [(i.weekday, i.start_min, i.end_min, i.temp) for i in th.intervals if i.season == season]
+        lowered = th.lowered_heat if season == 'heat' else th.lowered_cool
+        holidays = {h.day for h in HeatingHoliday.query}
+        for ts in list(range(since, now, HVAC_HISTORY_STEP)) + [now]:
+            local = datetime.fromtimestamp(ts, APP_TZ).replace(tzinfo=None)
+            t = hvac._target_at(rows, lowered, local, holidays)
+            target.append([ts, None if t is None else hvac.clamp(season, t)])
+    periods = []
+    for c in th.convectors:
+        before = ConvectorLog.query.filter(ConvectorLog.convector_id == c.id, ConvectorLog.ts < since) \
+            .order_by(ConvectorLog.ts.desc(), ConvectorLog.id.desc()).first()
+        start = since if before and before.is_on else None
+        for row in ConvectorLog.query.filter(ConvectorLog.convector_id == c.id, ConvectorLog.ts >= since) \
+                .order_by(ConvectorLog.ts, ConvectorLog.id):
+            if row.is_on and start is None:
+                start = row.ts
+            elif not row.is_on and start is not None:
+                periods.append([start, row.ts])
+                start = None
+        if start is not None:
+            periods.append([start, now])
+    on = []
+    for a, b in sorted(periods):
+        if on and a <= on[-1][1]:
+            on[-1][1] = max(on[-1][1], b)
+        else:
+            on.append([a, b])
+    return jsonify(temps=temps, target=target, on=on)
+
+
+@app.route('/admin/hvac/<int:th_id>/override', methods=['POST'])
+@limiter.limit('120 per hour')
+@role_required(['admin', 'worker'])
+def admin_hvac_override(th_id):
+    """action plus|minus (0.5 °C from the current target), set (temp), hold (keep the current target until released),
+    release (back to the schedule). A temporary change lasts until the schedule's next change, at most 24 h.
+    The reply's convectors carry no live status (not polled here) - the page keeps its own."""
+    th = Thermostat.query.get_or_404(th_id)
+    season = hvac_season()
+    if season not in ('heat', 'cool'):
+        return jsonify(ok=False, error='Сезонът е изключен - няма какво да се променя.'), 400
+    action, now = request.form.get('action'), _hvac_now()
+    st = _thermostat_state(th, now, season)
+    cur = st['target']
+    if action in ('plus', 'minus', 'set'):
+        if action == 'set':
+            try:
+                new = float(request.form.get('temp', ''))
+            except ValueError:
+                new = float('nan')
+            if not math.isfinite(new):
+                return jsonify(ok=False, error='Невалидна температура.'), 400
+        elif cur is None:
+            return jsonify(ok=False, error='Няма зададена температура (охлаждането е изключено по график).'), 400
+        else:
+            new = cur + (0.5 if action == 'plus' else -0.5)
+        th.override_temp = hvac.clamp(season, round(new * 2) / 2)
+        if not th.hold:
+            nc = datetime.fromisoformat(st['next_change']) if st['next_change'] else None
+            th.override_until = _local_to_utc_naive(hvac.override_until(nc, now))
+        what = f'{th.override_temp:g} °C'
+    elif action == 'hold':
+        if cur is None:
+            return jsonify(ok=False, error='Няма температура за задържане.'), 400
+        th.override_temp, th.override_until, th.hold = cur, None, True
+        what = f'задържане на {cur:g} °C'
+    elif action == 'release':
+        th.override_temp, th.override_until, th.hold = None, None, False
+        what = 'обратно по график'
+    else:
+        return jsonify(ok=False, error='Непознато действие.'), 400
+    db.session.commit()
+    log_action(f'Термостат "{th.name}": {what}')
+    return jsonify(ok=True, **_hvac_thermostat_json(th, _thermostat_state(th, now, season), season))
+
+
+@app.route('/admin/thermostats/<int:th_id>/enabled', methods=['POST'])
+@role_required('admin')
+def admin_thermostat_enabled(th_id):
+    th = Thermostat.query.get_or_404(th_id)
+    th.enabled = request.form.get('enabled') == '1'
+    db.session.commit()
+    log_action(f'Термостат "{th.name}" {"включен" if th.enabled else "изключен"}')
+    return jsonify(ok=True, enabled=th.enabled)
+
+
 # ----------------- АВТОМОБИЛНО СТОПАНСТВО -----------------
 # Company vehicle fleet - tracks 3 recurring legal deadlines per vehicle
 # (insurance/ГО, vignette, technical inspection). See Vehicle/

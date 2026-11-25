@@ -10,7 +10,7 @@
                 ('Материали', 'admin_materials', True), ('Склад материали', 'storage_materials', False),
                 ('Доставки', 'admin_delivery_notes', False), ('Протоколи с клиент', 'admin_client_delivery_notes', False),
                 ('Прехвърляния', 'admin_material_transfers', True)],
-    'hvac': [('Термостати', 'admin_thermostats', False), ('Температурни сензори', 'admin_temperature_sensors', False),
+    'hvac': [('Табло', 'admin_hvac', False), ('Термостати', 'admin_thermostats', False), ('Температурни сензори', 'admin_temperature_sensors', False),
              ('Конвектори', 'admin_convectors', False), ('Термопомпа', 'admin_heatpump', True)],
 } %}
 {% set subnav_items = SUBNAV_GROUPS.get(subnav) if subnav is defined else none %}

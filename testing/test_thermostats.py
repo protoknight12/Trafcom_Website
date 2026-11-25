@@ -506,9 +506,9 @@ def test_navbar_has_hvac_section(adm):
     html = adm.get('/admin/thermostats').get_data(as_text=True)
     i = html.index('dropdown-sub-trigger">Отопление и охлаждане')
     block = html[i:html.index('</div>', i)]
-    for label in ('Термостати', 'Температурни сензори', 'Конвектори', 'Термопомпа'):
+    for label in ('Табло', 'Термостати', 'Температурни сензори', 'Конвектори', 'Термопомпа'):
         assert label in block
-    assert 'admin_hvac' not in html
+    assert block.index('href="/admin/hvac"') < block.index('href="/admin/thermostats"')   # the dashboard comes first
     # old standalone links are no longer direct children of "Съоръжения и енергия"
     j = html.index('Съоръжения и енергия')
     outer = html[j:i]
@@ -537,3 +537,154 @@ def test_thermostat_save_rejects_nan(adm):
         d = {'name': 'NaN', 'hysteresis': '0.5', 'min_cycle_min': '5', 'lowered_heat': '16', k: 'nan'}
         adm.post('/admin/thermostats/save', data=d)
     assert Thermostat.query.filter_by(name='NaN').count() == 0
+
+
+# ---------------- Task 5: dashboard /admin/hvac ----------------
+def _login(role):
+    """Fresh client logged in as hvac_admin / hvac_worker (drops the user cached on the shared app context)."""
+    from flask import g
+    _admin_client()
+    g.pop('_login_user', None)
+    c = app.test_client()
+    c.post('/login', data={'username': f'hvac_{role}', 'password': 'x123456'})
+    return c
+
+
+def test_dashboard_loads_for_worker_and_admin(env):
+    _season('heat')
+    _thermo()
+    a = _login('admin').get('/admin/hvac')
+    assert a.status_code == 200
+    html = a.get_data(as_text=True)
+    assert 'data-season-btn="cool"' in html and 'startPoll' in html
+    w = _login('worker').get('/admin/hvac')
+    assert w.status_code == 200
+    assert '<button type="button" data-season-btn=' not in w.get_data(as_text=True)    # no season buttons
+
+
+def test_data_hides_pump_from_worker(env, monkeypatch):
+    _season('heat')
+    _thermo(convs=('К1', 'К2'))
+    env['status']['К1'] = {'online': True, 'is_on': True, 'power_w': 850.0}
+    monkeypatch.setitem(app_module._heatpump_live, 'online', True)
+    monkeypatch.setitem(app_module._heatpump_live, 'slow', {'Betriebsart': 1})
+    monkeypatch.setitem(app_module._heatpump_live, 'data', {'Temp. Vorlauf': 35.0, 'Temp. Aussen': 4.0})
+    monkeypatch.setattr(app_module, '_heatpump_power', lambda: {'w': 2100, 'online': True})
+    d = _login('admin').get('/admin/hvac/data').get_json()
+    assert d['season'] == 'heat' and d['season_label'] == 'Отопление'
+    assert d['pump']['supply'] == 35.0 and d['pump']['outdoor'] == 4.0 and d['pump']['power_w'] == 2100
+    assert d['pump']['mismatch'] is False and d['pump']['mode_label'] == 'Автоматика'
+    t = d['thermostats'][0]
+    assert t['name'] == 'Цех' and t['target'] == 21.0 and t['group'] == 'Без помещение' and t['enabled'] is True
+    assert {c['name']: (c['is_on'], c['power_w']) for c in t['convectors']} == {'К1': (True, 850.0), 'К2': (False, None)}
+    assert d['convectors_on'] == 1
+    w = _login('worker').get('/admin/hvac/data').get_json()
+    assert w['pump'] is None and w['thermostats'][0]['name'] == 'Цех'
+
+
+def test_data_mismatch_flag(env, monkeypatch):
+    _season('heat')
+    monkeypatch.setitem(app_module._heatpump_live, 'online', True)
+    monkeypatch.setitem(app_module._heatpump_live, 'slow', {'Betriebsart': 2})
+    monkeypatch.setattr(app_module, '_heatpump_power', lambda: None)
+    c = _login('admin')
+    assert c.get('/admin/hvac/data').get_json()['pump']['mismatch'] is True
+    monkeypatch.setitem(app_module._heatpump_live, 'online', False)
+    assert c.get('/admin/hvac/data').get_json()['pump']['mismatch'] is False
+
+
+def test_override_plus_minus_clamped_and_capped(env):
+    _season('heat')
+    t = _thermo(heat=29.8)                               # whole-week 29.8 schedule: no next change -> 24 h cap
+    tid = t.id
+    c = _login('worker')
+    url = f'/admin/hvac/{tid}/override'
+    st = c.post(url, data={'action': 'plus'}).get_json()
+    assert st['target'] == 30.0 and st['source'] == 'override'
+    assert c.post(url, data={'action': 'plus'}).get_json()['target'] == 30.0    # clamped
+    assert c.post(url, data={'action': 'minus'}).get_json()['target'] == 29.5
+    db.session.expire_all()
+    t = db.session.get(Thermostat, tid)
+    left = t.override_until - datetime.datetime.utcnow()
+    assert datetime.timedelta(hours=23, minutes=58) < left <= datetime.timedelta(hours=24)
+    assert c.post(url, data={'action': 'set', 'temp': '2'}).get_json()['target'] == 5.0
+    assert c.post(url, data={'action': 'set', 'temp': 'nan'}).status_code == 400
+    assert c.post(url, data={'action': 'hold'}).get_json()['source'] == 'hold'
+    db.session.expire_all()
+    assert db.session.get(Thermostat, tid).hold is True
+    st = c.post(url, data={'action': 'release'}).get_json()
+    assert (st['target'], st['source']) == (29.8, 'schedule')
+    db.session.expire_all()
+    t = db.session.get(Thermostat, tid)
+    assert t.override_temp is None and t.override_until is None and t.hold is False
+    _season('off')
+    assert c.post(url, data={'action': 'plus'}).status_code == 400
+
+
+def test_override_until_next_schedule_change(env):
+    _season('heat')
+    t = Thermostat(name='Г')
+    now = datetime.datetime.now(APP_TZ).replace(tzinfo=None)
+    end = now.hour * 60 + now.minute + 90
+    if end >= 1440:
+        return                                           # too close to midnight for this check
+    t.intervals.append(ThermostatInterval(season='heat', weekday=now.weekday(), start_min=0, end_min=end, temp=21))
+    db.session.add(t)
+    db.session.commit()
+    _login('worker').post(f'/admin/hvac/{t.id}/override', data={'action': 'plus'})
+    db.session.expire_all()
+    until_local = app_module.to_local(db.session.get(Thermostat, t.id).override_until).replace(tzinfo=None)
+    expected = datetime.datetime.combine(now.date(), datetime.time()) + datetime.timedelta(minutes=end)
+    assert abs((until_local - expected).total_seconds()) < 2
+
+
+def test_enabled_toggle_admin_only(env):
+    t = _thermo()
+    tid = t.id
+    assert _login('worker').post(f'/admin/thermostats/{tid}/enabled', data={'enabled': '0'}).status_code == 302
+    db.session.expire_all()
+    assert db.session.get(Thermostat, tid).enabled is True
+    r = _login('admin').post(f'/admin/thermostats/{tid}/enabled', data={'enabled': '0'})
+    assert r.status_code == 200 and r.get_json()['enabled'] is False
+    db.session.expire_all()
+    assert db.session.get(Thermostat, tid).enabled is False
+
+
+def test_worker_cannot_change_season_or_schedule(env, monkeypatch):
+    writes = []
+    monkeypatch.setattr(app_module, '_heatpump_write', lambda n, v: writes.append((n, v)) or {'ok': True, 'value': v})
+    _season('heat')
+    t = _thermo()
+    tid = t.id
+    w = _login('worker')
+    assert w.post('/admin/hvac/season', data={'season': 'cool'}).status_code == 302
+    assert w.post('/admin/thermostats/save', data={'id': tid, 'name': 'Хак', 'hysteresis': '1', 'min_cycle_min': '5',
+                                                   'lowered_heat': '16'}).status_code == 302
+    assert w.post(f'/admin/thermostats/{tid}/schedule',
+                  data={'season': 'heat', 'rows_json': _rows((0, '07:00', '08:00', 25))}).status_code == 302
+    db.session.expire_all()
+    assert writes == [] and app_module.hvac_season() == 'heat'
+    t = db.session.get(Thermostat, tid)
+    assert t.name == 'Цех' and len([i for i in t.intervals if i.season == 'heat']) == 7
+
+
+def test_history_shape(env):
+    from app import TemperatureReading
+    _season('heat')
+    t = _thermo(convs=('К1', 'К2'))
+    now = int(time.time())
+    k1, k2 = (Convector.query.filter_by(name=n).one().id for n in ('К1', 'К2'))
+    db.session.add_all([TemperatureReading(sensor_id=t.sensor_id, ts=now - 7200, temperature=19.5),
+                        TemperatureReading(sensor_id=t.sensor_id, ts=now - 3600, temperature=20.5),
+                        TemperatureReading(sensor_id=t.sensor_id, ts=now - 100 * 3600, temperature=10.0),
+                        ConvectorLog(convector_id=k1, ts=now - 30 * 3600, is_on=True),      # on since before the window
+                        ConvectorLog(convector_id=k1, ts=now - 5000, is_on=False),
+                        ConvectorLog(convector_id=k2, ts=now - 6000, is_on=True),
+                        ConvectorLog(convector_id=k2, ts=now - 2000, is_on=False)])
+    db.session.commit()
+    d = _login('worker').get(f'/admin/hvac/{t.id}/history?hours=24').get_json()
+    assert d['temps'] == [[now - 7200, 19.5], [now - 3600, 20.5]]
+    assert d['target'] and all(v == 21.0 for _, v in d['target'])
+    assert len(d['on']) == 1
+    a, b = d['on'][0]
+    assert abs(a - (now - 24 * 3600)) < 5 and b == now - 2000          # union of the two overlapping periods

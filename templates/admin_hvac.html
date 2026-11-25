@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Отопление и охлаждане - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        /* Page-local theme: dark by default, light from prefers-color-scheme or the toggle (data-theme on .hvac-page). */
+        @property --c { syntax: '<color>'; inherits: true; initial-value: #8e8e93; }
+        .hvac-page {
+            --bg0: #070d1c; --bg1: #0f1a33; --card: #1c1c1e; --card2: #2a2a2e; --track: #35353b; --border: rgba(255,255,255,.08);
+            --text: #f2f2f4; --muted: #a8a8b0; --knob: #f8f8fa; --shadow: 0 10px 30px rgba(0,0,0,.35);
+            --heat: #ff6b4a; --cool: #3ba7ff; --idle: #4cc38a; --off: #8e8e93; --alert: #ff5a5f; --warn: #f5b83d; --hum: #6ea8ff;
+            --glow-a: .55; --tip-bg: #2c2c30; --tip-fg: #f2f2f4;
+            --wash-heat: rgba(255,120,60,.16); --wash-cool: rgba(40,170,255,.16); --blob: rgba(90,110,255,.10);
+            color-scheme: dark;
+        }
+        .hvac-page[data-theme="light"] {
+            --bg0: #e6ecf5; --bg1: #f8fafd; --card: #ffffff; --card2: #eef1f6; --track: #e1e5ec; --border: rgba(15,23,42,.10);
+            --text: #111827; --muted: #4b5563; --knob: #ffffff; --shadow: 0 6px 22px rgba(30,41,59,.10);
+            --heat: #d4401f; --cool: #1a6cc8; --idle: #137a4d; --off: #6b7280; --alert: #c8231a; --warn: #a96a07; --hum: #2563eb;
+            --glow-a: .28; --tip-bg: #1f2937; --tip-fg: #f9fafb;
+            --wash-heat: rgba(255,140,60,.13); --wash-cool: rgba(60,160,255,.13); --blob: rgba(120,140,255,.08);
+            color-scheme: light;
+        }
+        @media (prefers-color-scheme: light) {
+            .hvac-page:not([data-theme]) {
+                --bg0: #e6ecf5; --bg1: #f8fafd; --card: #ffffff; --card2: #eef1f6; --track: #e1e5ec; --border: rgba(15,23,42,.10);
+                --text: #111827; --muted: #4b5563; --knob: #ffffff; --shadow: 0 6px 22px rgba(30,41,59,.10);
+                --heat: #d4401f; --cool: #1a6cc8; --idle: #137a4d; --off: #6b7280; --alert: #c8231a; --warn: #a96a07; --hum: #2563eb;
+                --glow-a: .28; --tip-bg: #1f2937; --tip-fg: #f9fafb;
+                --wash-heat: rgba(255,140,60,.13); --wash-cool: rgba(60,160,255,.13); --blob: rgba(120,140,255,.08);
+                color-scheme: light;
+            }
+        }
+        .hvac-page { position: relative; isolation: isolate; min-height: calc(100vh - 110px); color: var(--text); background: var(--bg0); overflow: hidden; }
+        .hvac-page .ic { display: inline-block; vertical-align: -0.15em; flex: none; }
+
+        /* Background: base gradient + season washes cross-faded by opacity (gradients cannot transition themselves). */
+        .hv-bg, .hv-bg > div { position: absolute; inset: 0; pointer-events: none; }
+        .hv-bg { z-index: -1; }
+        .hv-bg .base { background: radial-gradient(60% 50% at 15% 0%, var(--blob), transparent 70%),
+                                   radial-gradient(50% 40% at 90% 30%, var(--blob), transparent 70%),
+                                   linear-gradient(180deg, var(--bg1), var(--bg0) 70%); }
+        .hv-bg .heat { background: radial-gradient(70% 55% at 85% 0%, var(--wash-heat), transparent 70%),
+                                   radial-gradient(50% 40% at 0% 100%, var(--wash-heat), transparent 70%); opacity: 0; transition: opacity .6s; }
+        .hv-bg .cool { background: radial-gradient(70% 55% at 85% 0%, var(--wash-cool), transparent 70%),
+                                   radial-gradient(50% 40% at 0% 100%, var(--wash-cool), transparent 70%); opacity: 0; transition: opacity .6s; }
+        .hvac-page[data-season="heat"] .hv-bg .heat, .hvac-page[data-season="cool"] .hv-bg .cool { opacity: 1; }
+        .hv-wm { position: absolute; right: -60px; bottom: -60px; font-size: 420px; color: var(--text); opacity: 0; transition: opacity .6s; }
+        .hvac-page[data-season="heat"] .hv-wm.heat, .hvac-page[data-season="cool"] .hv-wm.cool { opacity: .04; }
+
+        .hv-wrap { max-width: 1440px; margin: 0 auto; padding: 18px 16px 48px; }
+        .hv-top { display: flex; flex-wrap: wrap; gap: 12px; align-items: stretch; margin-bottom: 16px; }
+        .hv-title { flex: 1 1 220px; display: flex; flex-direction: column; justify-content: center; }
+        .hv-title h1 { margin: 0; font-size: 1.5rem; font-weight: 650; color: var(--text); }
+        .hv-upd { font-size: .82rem; color: var(--muted); }
+        .hv-upd.bad { color: var(--alert); }
+        .hv-tile { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 10px 14px; display: flex;
+                   gap: 10px; align-items: center; box-shadow: var(--shadow); color: var(--text); text-decoration: none; }
+        .hv-tile .big { font-size: 1.35rem; color: var(--muted); }
+        .hv-tile small { display: block; color: var(--muted); font-size: .8rem; }
+        .hv-tile strong { font-weight: 600; }
+        .hv-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--off); display: inline-block; margin-right: 4px; }
+        .hv-dot.on { background: var(--idle); }
+        .hv-seg { display: inline-flex; gap: 4px; padding: 4px; background: var(--card); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow); }
+        .hv-seg button, .hv-seg span.cur { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border: 0; border-radius: 12px;
+                         background: transparent; color: var(--muted); font: inherit; font-size: .98rem; font-weight: 600; cursor: pointer;
+                         transition: background .3s, color .3s; }
+        .hv-seg button:hover { color: var(--text); }
+        .hv-seg button[data-season-btn="heat"] .ic, .hv-seg .cur.heat .ic { color: var(--heat); }
+        .hv-seg button[data-season-btn="cool"] .ic, .hv-seg .cur.cool .ic { color: var(--cool); }
+        .hv-seg button.on, .hv-seg span.cur { color: var(--text); background: var(--card2); }
+        .hv-seg button.on[data-season-btn="heat"] { background: color-mix(in srgb, var(--heat) 20%, var(--card)); }
+        .hv-seg button.on[data-season-btn="cool"] { background: color-mix(in srgb, var(--cool) 20%, var(--card)); }
+        .hv-seg button:disabled { cursor: wait; opacity: .6; }
+        .hv-tools { display: flex; gap: 6px; align-items: center; }
+        .hv-iconbtn { width: 42px; height: 42px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); color: var(--muted);
+                      display: inline-flex; align-items: center; justify-content: center; font-size: 1.15rem; cursor: pointer; box-shadow: var(--shadow); }
+        .hv-iconbtn[aria-pressed="true"] { color: var(--text); background: var(--card2); }
+        #themeBtn[data-eff="dark"] [data-icon="moon"], #themeBtn[data-eff="light"] [data-icon="sun"] { display: none; }
+
+        .hv-banner { display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-radius: 12px; margin-bottom: 12px;
+                     border: 1px solid var(--warn); background: color-mix(in srgb, var(--warn) 14%, var(--card)); color: var(--text); }
+        .hv-banner .ic { color: var(--warn); font-size: 1.2rem; }
+        .hv-banner[hidden] { display: none; }
+        .hv-banner.err { border-color: var(--alert); background: color-mix(in srgb, var(--alert) 14%, var(--card)); }
+        .hv-banner.err .ic { color: var(--alert); }
+        .hv-banner a { color: inherit; font-weight: 600; }
+
+        .hv-group h2 { font-size: 1.02rem; font-weight: 600; color: var(--muted); margin: 18px 0 10px; letter-spacing: .02em; }
+        .hv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 16px; }
+        .hv-empty { color: var(--muted); padding: 30px 0; text-align: center; }
+        .hv-empty a { color: var(--text); }
+
+        /* Card */
+        .hv-card { --c: var(--off); position: relative; background: var(--card); border: 1px solid var(--border); border-radius: 22px;
+                   box-shadow: var(--shadow); padding: 14px 16px 16px; transition: --c .5s, border-color .5s, box-shadow .5s; }
+        .hv-card.st-heat { --c: var(--heat); } .hv-card.st-cool { --c: var(--cool); } .hv-card.st-idle { --c: var(--idle); }
+        .hv-card.st-off, .hv-card.st-stale { --c: var(--off); }
+        .hv-card.alert { border-color: var(--alert); box-shadow: var(--shadow), inset 0 0 0 1px var(--alert); }
+        .hv-head { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 24px; }
+        .hv-name { font-weight: 600; font-size: 1rem; text-align: center; color: var(--text); }
+        .hv-warn { color: var(--alert); font-size: 1.1rem; display: inline-flex; cursor: help; }
+        .hv-warn[hidden] { display: none; }
+        .hv-dial { position: relative; width: min(250px, 100%); aspect-ratio: 1; margin: 2px auto 0; }
+        .hv-glow { position: absolute; inset: 18%; border-radius: 50%; pointer-events: none;
+                   background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--c) 55%, transparent), transparent 68%);
+                   opacity: var(--glow-a); transition: opacity .5s; }
+        .st-off .hv-glow { opacity: calc(var(--glow-a) * .35); }
+        .st-heat .hv-glow { animation: hvBreathe 4.5s ease-in-out infinite; }
+        .st-cool .hv-glow { background: radial-gradient(circle at 38% 40%, color-mix(in srgb, var(--c) 60%, transparent), transparent 62%),
+                                        radial-gradient(circle at 64% 62%, color-mix(in srgb, var(--c) 40%, transparent), transparent 60%);
+                            animation: hvShimmer 9s linear infinite; }
+        @keyframes hvBreathe { 0%, 100% { opacity: calc(var(--glow-a) * .75); transform: scale(.96); } 50% { opacity: var(--glow-a); transform: scale(1.04); } }
+        @keyframes hvShimmer { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .hv-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; touch-action: none; }
+        .hv-track, .hv-arc { fill: none; stroke-width: 14; stroke-linecap: round; }
+        .hv-track { stroke: var(--track); cursor: pointer; }
+        .hv-arc { stroke: var(--c); cursor: pointer; }
+        .hv-knob { fill: var(--knob); stroke: var(--c); stroke-width: 5; cursor: grab; filter: drop-shadow(0 1px 3px rgba(0,0,0,.35)); }
+        .hv-knob:focus-visible { outline: none; stroke-width: 8; }
+        .hv-card.dragging .hv-knob { cursor: grabbing; }
+        .hv-cur { fill: var(--text); opacity: .75; pointer-events: none; }
+        .hv-card.locked .hv-knob, .hv-card.locked .hv-arc, .hv-card.locked .hv-track { cursor: default; }
+        .hv-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; }
+        .hv-center [data-tip] { pointer-events: auto; }
+        .hv-state { font-weight: 600; font-size: 1.02rem; color: var(--c); min-height: 1.3em; }
+        .hv-target { display: flex; align-items: flex-start; line-height: 1; color: var(--text); font-variant-numeric: tabular-nums; margin: 2px 0 6px; }
+        .hv-int { font-size: 3.9rem; font-weight: 300; letter-spacing: -.02em; }
+        .hv-unit { display: flex; flex-direction: column; justify-content: space-between; height: 3.4rem; padding-left: 2px; }
+        .hv-unit sup { font-size: 1rem; color: var(--muted); }
+        .hv-dec { font-size: 1.4rem; font-weight: 400; }
+        .hv-target.pop { animation: hvPop .25s ease-out; }
+        .hv-target.shake { animation: hvShake .35s ease-in-out; }
+        @keyframes hvPop { 50% { transform: scale(1.07); } }
+        @keyframes hvShake { 20%, 60% { transform: translateX(-5px); } 40%, 80% { transform: translateX(5px); } }
+        .hv-now { display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: .95rem; font-variant-numeric: tabular-nums; }
+        .hv-temp { color: var(--c); font-weight: 600; display: inline-flex; gap: 4px; align-items: center; }
+        .hv-temp .ic.pulse { animation: hvPulse .6s ease-out; }
+        @keyframes hvPulse { 40% { transform: scale(1.4); } }
+        .hv-hum { color: var(--hum); display: inline-flex; gap: 4px; align-items: center; }
+        .hv-toast { position: absolute; bottom: 14%; left: 50%; transform: translateX(-50%); background: var(--tip-bg); color: var(--tip-fg);
+                    font-size: .78rem; padding: 5px 10px; border-radius: 8px; white-space: nowrap; max-width: 90%; overflow: hidden; text-overflow: ellipsis;
+                    opacity: 0; transition: opacity .2s; }
+        .hv-toast.show { opacity: 1; }
+        .hv-src { text-align: center; font-size: .82rem; color: var(--muted); min-height: 1.2em; margin-top: -6px; }
+        .hv-pm { display: flex; justify-content: space-between; width: min(210px, 80%); margin: 6px auto 12px; }
+        .hv-round { position: relative; width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--border); background: var(--card2);
+                    color: var(--text); font-size: 1.25rem; display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+                    transition: transform .12s, background .2s; }
+        .hv-round:active, .hv-sq:active, .hv-pill:active { transform: scale(.92); }
+        .hv-round.rip::after, .hv-sq.rip::after { content: ''; position: absolute; inset: -1px; border-radius: inherit; animation: hvRipple .45s ease-out; pointer-events: none; }
+        @keyframes hvRipple { from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c) 60%, transparent); } to { box-shadow: 0 0 0 14px transparent; } }
+        .hv-card button:disabled { opacity: .4; cursor: not-allowed; }
+        .hv-pills { display: flex; gap: 8px; }
+        .hv-pill { flex: 1; height: 40px; border-radius: 12px; border: 1px solid var(--border); background: var(--card2); color: var(--muted);
+                   display: inline-flex; align-items: center; justify-content: center; gap: 6px; font: inherit; font-size: .84rem; cursor: pointer;
+                   transition: background .3s, color .3s, border-color .3s, transform .12s; }
+        .hv-pill:hover { color: var(--text); }
+        .hv-pill.on { color: var(--text); background: color-mix(in srgb, var(--c) 20%, var(--card2)); border-color: color-mix(in srgb, var(--c) 55%, transparent); }
+        .hv-pill.on .ic { color: var(--c); }
+        .hv-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+        .hv-chip { display: inline-flex; align-items: center; gap: 5px; font-size: .78rem; padding: 4px 9px; border-radius: 999px; cursor: help;
+                   border: 1px solid var(--border); background: var(--card2); color: var(--muted); }
+        .hv-chip.on { color: var(--text); border-color: color-mix(in srgb, var(--c) 55%, transparent); }
+        .hv-chip.on .ic { color: var(--c); animation: hvSpin 3s linear infinite; }
+        .hv-chip.offline { color: var(--alert); border-color: var(--alert); }
+        .hv-chip.unconfirmed .ic { color: var(--warn); }
+        .hv-chip.offseason { opacity: .55; }
+        .hv-chip .w { color: var(--muted); }
+        @keyframes hvSpin { to { transform: rotate(360deg); } }
+        .hv-sparkbox { margin-top: 10px; border-radius: 8px; }
+        .hv-spark { display: block; width: 100%; height: 56px; }
+
+        /* Compact list view */
+        .hv-mini { display: none; align-items: center; gap: 10px; }
+        .hvac-page.view-list .hv-grid { grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 10px; }
+        .hvac-page.view-list .hv-full { display: none; }
+        .hvac-page.view-list .hv-mini { display: flex; }
+        .hvac-page.view-list .hv-card { padding: 10px 12px; border-radius: 16px; }
+        .hv-badge { position: relative; width: 38px; height: 38px; border-radius: 50%; flex: none; display: inline-flex; align-items: center; justify-content: center;
+                    color: var(--c); background: color-mix(in srgb, var(--c) 18%, transparent); font-size: 1.1rem; cursor: help; }
+        .hv-badge .ic { display: none; }
+        .hv-badge[data-badge="flame"] [data-icon="flame"], .hv-badge[data-badge="snowflake"] [data-icon="snowflake"],
+        .hv-badge[data-badge="power"] [data-icon="power"], .hv-badge[data-badge="triangle-alert"] [data-icon="triangle-alert"] { display: inline-block; }
+        .hv-mtext { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+        .hv-mname { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .hv-msum { font-size: .82rem; color: var(--muted); }
+        .hv-mctl { display: flex; align-items: center; gap: 2px; background: var(--card2); border-radius: 12px; padding: 3px; }
+        .hv-sq { position: relative; width: 34px; height: 34px; border-radius: 10px; border: 0; background: transparent; color: var(--text); cursor: pointer;
+                 display: inline-flex; align-items: center; justify-content: center; transition: transform .12s; }
+        .hv-mval { min-width: 46px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+        /* Tooltips: hover, keyboard focus, or a tap on touch screens (.tip-open). */
+        .hvac-page [data-tip] { position: relative; }
+        .hvac-page [data-tip]::after { content: attr(data-tip); position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translate(-50%, 4px);
+            width: max-content; max-width: 240px; white-space: normal; background: var(--tip-bg); color: var(--tip-fg); border: 1px solid var(--border);
+            padding: 6px 9px; border-radius: 8px; font-size: .78rem; font-weight: 400; line-height: 1.35; text-align: left; letter-spacing: 0;
+            box-shadow: 0 6px 20px rgba(0,0,0,.25); opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; z-index: 60; }
+        .hvac-page [data-tip].tip-start::after { left: 0; transform: translate(0, 4px); }
+        .hvac-page [data-tip].tip-end::after { left: auto; right: 0; transform: translate(0, 4px); }
+        .hvac-page [data-tip].tip-below::after { bottom: auto; top: calc(100% + 8px); }
+        .hvac-page [data-tip]:hover::after, .hvac-page [data-tip]:focus-visible::after, .hvac-page [data-tip].tip-open::after { opacity: 1; transform: translate(-50%, 0); }
+        .hvac-page [data-tip].tip-start:hover::after, .hvac-page [data-tip].tip-start:focus-visible::after, .hvac-page [data-tip].tip-start.tip-open::after,
+        .hvac-page [data-tip].tip-end:hover::after, .hvac-page [data-tip].tip-end:focus-visible::after, .hvac-page [data-tip].tip-end.tip-open::after { transform: none; }
+        .hvac-page :focus-visible { outline: 2px solid var(--cool); outline-offset: 2px; }
+
+        @media (max-width: 700px) {
+            .hv-grid, .hvac-page.view-list .hv-grid { grid-template-columns: 1fr; }
+            .hv-seg button { padding: 9px 11px; font-size: .9rem; }
+            .hv-top > * { flex: 1 1 100%; }
+            .hv-seg { justify-content: space-between; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .hvac-page, .hvac-page *, .hvac-page *::before, .hvac-page *::after { animation: none !important; transition: none !important; }
+        }
+    </style>
+</head>
+<body>
+{% from 'partials/icons.html' import icon %}
+{% set subnav = 'hvac' %}
+{% include 'partials/navbar.html' %}
+
+<main class="hvac-page" id="hvacPage" data-season="{{ season }}">
+    <div class="hv-bg" aria-hidden="true">
+        <div class="base"></div><div class="heat"></div><div class="cool"></div>
+        <span class="hv-wm heat">{{ icon('flame') }}</span><span class="hv-wm cool">{{ icon('snowflake') }}</span>
+    </div>
+    <div class="hv-wrap">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}<div class="flash-messages">{% for category, message in messages %}<div class="alert alert-{{ category }}">{{ message }}</div>{% endfor %}</div>{% endif %}
+        {% endwith %}
+
+        <div class="hv-top">
+            <div class="hv-title">
+                <h1>Отопление и охлаждане</h1>
+                <span class="hv-upd" id="updated">Зареждане…</span>
+            </div>
+            {% if current_user.is_admin %}
+            <div class="hv-seg" role="group" aria-label="Сезон">
+                {% for key, ic, tip in [('heat', 'flame', 'Отопление: термопомпата грее, термостатите управляват конвекторите по графика за отопление.'),
+                                        ('cool', 'snowflake', 'Охлаждане: термопомпата охлажда, термостатите следват графика за охлаждане.'),
+                                        ('off', 'power', 'Изключено: термопомпата спира, конвекторите на термостатите се изключват.')] %}
+                <button type="button" data-season-btn="{{ key }}" class="{{ 'on' if season == key }}{{ ' tip-start' if loop.first }}{{ ' tip-end' if loop.last }} tip-below"
+                        aria-pressed="{{ 'true' if season == key else 'false' }}" data-tip="{{ tip }}" aria-label="{{ seasons[key] }}. {{ tip }}"
+                        data-confirm="Превключване на сезона на „{{ seasons[key] }}“? Термопомпата минава в съответния режим и ръчните промени на всички термостати се изчистват.{{ ' Конвекторите на термостатите ще бъдат изключени.' if key == 'off' }}">
+                    {{ icon(ic) }}<span>{{ seasons[key] }}</span>
+                </button>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="hv-seg"><span class="cur {{ season }}" id="seasonBadge" data-tip="Сезонът се сменя от администратор." tabindex="0">
+                <span id="seasonIcons">{% for k, ic in [('heat', 'flame'), ('cool', 'snowflake'), ('off', 'power')] %}<span{% if k != season %} style="display:none"{% endif %} data-s="{{ k }}">{{ icon(ic) }}</span>{% endfor %}</span><span id="seasonLabel">{{ seasons[season] }}</span></span></div>
+            {% endif %}
+            {% if current_user.is_admin %}
+            <a class="hv-tile" id="pumpTile" href="{{ url_for('admin_heatpump') }}" data-tip="Термопомпа: режим, температура на подаващата вода, навън и моментна мощност. Натиснете за подробности." >
+                <span class="big">{{ icon('gauge') }}</span>
+                <span><strong><span class="hv-dot" id="pumpDot"></span><span id="pumpStatus">Термопомпа</span></strong>
+                    <small id="pumpLine">—</small></span>
+            </a>
+            {% endif %}
+            <div class="hv-tile" tabindex="0" data-tip="Конвектори на термостатите, които работят в момента.">
+                <span class="big">{{ icon('fan') }}</span><strong id="convOn">—</strong>
+            </div>
+            <div class="hv-tools">
+                <button type="button" class="hv-iconbtn tip-end" id="viewGrid" data-tip="Изглед с циферблати" aria-label="Изглед с циферблати" aria-pressed="true">{{ icon('layout-grid') }}</button>
+                <button type="button" class="hv-iconbtn tip-end" id="viewList" data-tip="Компактен списък" aria-label="Компактен списък" aria-pressed="false">{{ icon('list') }}</button>
+                <button type="button" class="hv-iconbtn tip-end" id="themeBtn" data-tip="Светла тема" aria-label="Светла тема">{{ icon('sun') }}{{ icon('moon') }}</button>
+            </div>
+        </div>
+
+        <div class="hv-banner" id="bnMismatch" hidden>
+            <span tabindex="0" data-tip="Термопомпата е в друг режим от избрания сезон – вероятно е сменен от нейния панел. Изберете сезона отново, за да я върнете." class="tip-start">{{ icon('triangle-alert') }}</span>
+            <span id="bnMismatchText"></span>
+        </div>
+        <div class="hv-banner err" id="bnFault" hidden>
+            {{ icon('triangle-alert') }}<span>Термопомпата съобщава авария. <a href="{{ url_for('admin_heatpump') }}">Подробности</a></span>
+        </div>
+        <div class="hv-banner err" id="bnMsg" hidden>{{ icon('triangle-alert') }}<span id="bnMsgText"></span></div>
+
+        <div id="groups"></div>
+        <p class="hv-empty" id="empty" hidden>Няма термостати.{% if current_user.is_admin %} <a href="{{ url_for('admin_thermostats') }}">Добавете от страница „Термостати“.</a>{% endif %}</p>
+    </div>
+</main>
+
+<template id="tplCard">
+    <article class="hv-card st-off">
+        <div class="hv-full">
+            <header class="hv-head">
+                <span class="hv-name"></span>
+                <span class="hv-warn" tabindex="0" data-tip="" hidden>{{ icon('triangle-alert') }}</span>
+            </header>
+            <div class="hv-dial">
+                <div class="hv-glow"></div>
+                <svg class="hv-svg" viewBox="0 0 200 200">
+                    <circle class="hv-track" cx="100" cy="100" r="80" transform="rotate(135 100 100)"></circle>
+                    <circle class="hv-arc" cx="100" cy="100" r="80" transform="rotate(135 100 100)"></circle>
+                    <circle class="hv-cur" r="3.5" cx="100" cy="20"></circle>
+                    <circle class="hv-knob" r="10" cx="100" cy="20" tabindex="0" role="slider" aria-label="Желана температура – плъзнете или използвайте стрелките"></circle>
+                </svg>
+                <div class="hv-center">
+                    <div class="hv-state"></div>
+                    <div class="hv-target"><span class="hv-int">--</span><span class="hv-unit"><sup>°C</sup><span class="hv-dec"></span></span></div>
+                    <div class="hv-now">
+                        <span class="hv-temp" tabindex="0" data-tip="Текуща температура от сензора">{{ icon('thermometer') }}<span class="v">—</span></span>
+                        <span class="hv-hum" tabindex="0" data-tip="Влажност на въздуха">{{ icon('droplet') }}<span class="v">—</span></span>
+                    </div>
+                    <div class="hv-toast" role="status"></div>
+                </div>
+            </div>
+            <div class="hv-src"></div>
+            <div class="hv-pm">
+                <button type="button" class="hv-round tip-start" data-act="minus" data-tip="Намали с 0.5 °C (временно, до следващата смяна по график)" aria-label="Намали с 0.5 °C (временно, до следващата смяна по график)">{{ icon('minus') }}</button>
+                <button type="button" class="hv-round tip-end" data-act="plus" data-tip="Увеличи с 0.5 °C (временно, до следващата смяна по график)" aria-label="Увеличи с 0.5 °C (временно, до следващата смяна по график)">{{ icon('plus') }}</button>
+            </div>
+            <div class="hv-pills">
+                <button type="button" class="hv-pill tip-start" data-act="release" data-tip="Върни към графика" aria-label="Върни към графика">{{ icon('calendar-clock') }}<span>График</span></button>
+                <button type="button" class="hv-pill" data-act="hold" data-tip="Задръж тази температура, докато не я освободиш" aria-label="Задръж тази температура, докато не я освободиш">{{ icon('lock') }}<span>Задръж</span></button>
+                {% if current_user.is_admin %}
+                <button type="button" class="hv-pill tip-end" data-act="enabled" data-tip="" aria-label="">{{ icon('power') }}<span class="t">Вкл.</span></button>
+                {% endif %}
+            </div>
+            <div class="hv-chips"></div>
+            <div class="hv-sparkbox" tabindex="0" data-tip="Последните 24 ч: температура (линия), цел по графика (пунктир), работа на конвекторите (оцветено)." aria-label="Графика за последните 24 часа"><canvas class="hv-spark"></canvas></div>
+        </div>
+        <div class="hv-mini">
+            <span class="hv-badge tip-start" tabindex="0" data-tip="">{{ icon('flame') }}{{ icon('snowflake') }}{{ icon('power') }}{{ icon('triangle-alert') }}</span>
+            <div class="hv-mtext"><span class="hv-mname"></span><span class="hv-msum"></span></div>
+            <div class="hv-mctl">
+                <button type="button" class="hv-sq tip-end" data-act="minus" data-tip="Намали с 0.5 °C (временно, до следващата смяна по график)" aria-label="Намали с 0.5 °C">{{ icon('minus') }}</button>
+                <span class="hv-mval">--</span>
+                <button type="button" class="hv-sq tip-end" data-act="plus" data-tip="Увеличи с 0.5 °C (временно, до следващата смяна по график)" aria-label="Увеличи с 0.5 °C">{{ icon('plus') }}</button>
+            </div>
+        </div>
+    </article>
+</template>
+<template id="tplChip"><span class="hv-chip" tabindex="0">{{ icon('fan') }}<span class="n"></span><span class="w"></span></span></template>
+
+<script src="{{ url_for('static', filename='js/poll.js') }}"></script>
+<script>
+(function () {
+    'use strict';
+    var PAGE = document.getElementById('hvacPage');
+    var IS_ADMIN = {{ current_user.is_admin|tojson }};
+    var CSRF = {{ csrf_token()|tojson }};
+    var RANGES = {{ ranges|tojson }};
+    var URL_DATA = {{ url_for('admin_hvac_data')|tojson }};
+    var URL_BASE = {{ url_for('admin_hvac')|tojson }} + '/';
+    var URL_TH = {{ url_for('admin_thermostats')|tojson }} + '/';
+    var URL_SEASON = {{ url_for('admin_hvac_season')|tojson }};
+    var NO_ROOM = 'Без помещение';
+    var R = 80, CIRC = 2 * Math.PI * R, ARC = CIRC * 0.75;
+    var REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)');
+    var season = PAGE.dataset.season;
+    var cards = {};            // id -> card object
+    var groupKey = '';
+
+    var store = {
+        get: function (k) { try { return window.localStorage.getItem(k); } catch (e) { return null; } },
+        set: function (k, v) { try { window.localStorage.setItem(k, v); } catch (e) { /* private mode */ } }
+    };
+    function $(root, sel) { return root.querySelector(sel); }
+    function setText(el, t) { if (el.textContent !== t) el.textContent = t; }
+    function setTip(el, t) { el.setAttribute('data-tip', t); el.setAttribute('aria-label', t); }
+    function restart(el, cls) { el.classList.remove('pop', 'shake', 'pulse', 'rip'); void el.offsetWidth; el.classList.add(cls); }
+    function num(v, d) { return v == null ? '—' : Number(v).toFixed(d === undefined ? 1 : d); }
+    function range() { return RANGES[season] || RANGES.heat; }
+    function clampSnap(v) { var r = range(); return Math.min(r[1], Math.max(r[0], Math.round(v * 2) / 2)); }
+
+    // ---------- theme + view (remembered per browser) ----------
+    var themeBtn = document.getElementById('themeBtn');
+    var lightMq = window.matchMedia('(prefers-color-scheme: light)');
+    function applyTheme(t) {
+        if (t) PAGE.dataset.theme = t; else delete PAGE.dataset.theme;
+        var eff = t || (lightMq.matches ? 'light' : 'dark');
+        themeBtn.dataset.eff = eff;
+        setTip(themeBtn, eff === 'light' ? 'Тъмна тема' : 'Светла тема');
+        Object.keys(cards).forEach(function (id) { drawSpark(cards[id]); });
+    }
+    themeBtn.addEventListener('click', function () {
+        var t = themeBtn.dataset.eff === 'light' ? 'dark' : 'light';
+        store.set('hvac:theme', t);
+        applyTheme(t);
+    });
+    if (lightMq.addEventListener) lightMq.addEventListener('change', function () { applyTheme(store.get('hvac:theme')); });
+    applyTheme(store.get('hvac:theme'));
+
+    function applyView(v) {
+        PAGE.classList.toggle('view-list', v === 'list');
+        document.getElementById('viewList').setAttribute('aria-pressed', v === 'list' ? 'true' : 'false');
+        document.getElementById('viewGrid').setAttribute('aria-pressed', v === 'list' ? 'false' : 'true');
+        if (v !== 'list') Object.keys(cards).forEach(function (id) { drawSpark(cards[id]); });
+    }
+    document.getElementById('viewList').addEventListener('click', function () { store.set('hvac:view', 'list'); applyView('list'); });
+    document.getElementById('viewGrid').addEventListener('click', function () { store.set('hvac:view', 'grid'); applyView('grid'); });
+    applyView(store.get('hvac:view'));
+
+    // ---------- tooltips on touch: a tap opens/closes (buttons keep doing their job) ----------
+    document.addEventListener('click', function (e) {
+        var el = e.target.closest('.hvac-page [data-tip]');
+        var opened = document.querySelectorAll('.hvac-page .tip-open');
+        for (var i = 0; i < opened.length; i++) if (opened[i] !== el) opened[i].classList.remove('tip-open');
+        if (el && !el.closest('button, a')) el.classList.toggle('tip-open');
+    });
+
+    // ---------- tweens (number, arc + knob, current dot); none with reduced motion ----------
+    function tween(st, to, dur, frame, done) {
+        if (REDUCED.matches || st.v == null || to == null || st.v === to) {
+            st.v = to; st.anim = null; frame(to); if (done) done(); return;
+        }
+        var from = st.v, t0 = null, id = {};
+        st.anim = id;
+        function finish() { if (st.anim !== id) return; st.anim = null; st.v = to; frame(to); if (done) done(); }
+        requestAnimationFrame(function step(now) {
+            if (st.anim !== id) return;
+            if (t0 === null) t0 = now;
+            var p = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - p, 3);
+            if (p >= 1) { finish(); return; }
+            st.v = from + (to - from) * e;
+            frame(st.v);
+            requestAnimationFrame(step);
+        });
+        setTimeout(finish, dur + 150);     // a background tab gets no animation frames: land on the value anyway
+    }
+    function point(f) {
+        var a = (135 + 270 * f) * Math.PI / 180;
+        return [100 + R * Math.cos(a), 100 + R * Math.sin(a)];
+    }
+    function frac(v) { var r = range(); return Math.max(0, Math.min(1, (v - r[0]) / (r[1] - r[0]))); }
+
+    function drawTarget(c, v) {
+        var arc = $(c.el, '.hv-arc'), knob = $(c.el, '.hv-knob');
+        if (v == null) {
+            arc.setAttribute('stroke-dasharray', '0 ' + CIRC);
+            knob.style.display = 'none';
+            setText($(c.el, '.hv-int'), '--'); setText($(c.el, '.hv-dec'), ''); setText($(c.el, '.hv-mval'), '--');
+            return;
+        }
+        var f = frac(v), p = point(f);
+        arc.setAttribute('stroke-dasharray', (ARC * f).toFixed(2) + ' ' + CIRC);
+        knob.style.display = '';
+        knob.setAttribute('cx', p[0].toFixed(2)); knob.setAttribute('cy', p[1].toFixed(2));
+        knob.setAttribute('aria-valuenow', v.toFixed(1));
+        var s = (Math.round(v * 10) / 10).toFixed(1).split('.');
+        setText($(c.el, '.hv-int'), s[0]); setText($(c.el, '.hv-dec'), '.' + s[1]);
+        setText($(c.el, '.hv-mval'), s[0] + '.' + s[1] + '°');
+    }
+    function setTarget(c, v, pop) {
+        tween(c.tgt, v, 380, function (x) { drawTarget(c, x); }, function () {
+            if (pop && !REDUCED.matches) restart($(c.el, '.hv-target'), 'pop');
+        });
+    }
+    function drawCur(c, v) {
+        var dot = $(c.el, '.hv-cur');
+        dot.style.display = v == null ? 'none' : '';
+        if (v != null) { var p = point(frac(v)); dot.setAttribute('cx', p[0].toFixed(2)); dot.setAttribute('cy', p[1].toFixed(2)); }
+        setText($(c.el, '.hv-temp .v'), v == null ? '—' : num(v) + ' °C');
+    }
+
+    // ---------- card state ----------
+    function stateOf(d) {
+        if (season === 'off') return ['off', 'Изключен', 'Сезонът е изключен – термостатът не управлява конвекторите.'];
+        if (!d.enabled) return ['off', 'Изключен', 'Термостатът е изключен – конвекторите се управляват ръчно.'];
+        if (d.stale) return ['stale', 'Няма данни', 'Няма свежи данни от сензора – конвекторите са изключени.'];
+        if (d.target == null) return ['off', 'Изключен', 'По график няма охлаждане в момента.'];
+        var on = d.convectors.some(function (v) { return v.is_on && v.on_season; });
+        if (on) return season === 'heat' ? ['heat', 'Грее', 'Конвекторите греят до желаната температура.']
+                                         : ['cool', 'Охлажда', 'Конвекторите охлаждат до желаната температура.'];
+        if (d.demand) return ['idle', 'Изчаква', 'Трябва да се включи, но минималното време между превключванията още не е изтекло.'];
+        if (d.demand === false) return ['idle', 'Достигната', 'Желаната температура е достигната и надмината – конвекторите почиват.'];
+        return ['idle', 'В зоната', 'Температурата е в желаната зона – конвекторите почиват.'];
+    }
+    function fmtLocal(iso) {      // 'YYYY-MM-DDTHH:MM:SS' local -> '17:00' / 'утре 07:00' / '27.11 07:00'
+        if (!iso) return '';
+        var dt = new Date(iso.slice(0, 19)), now = new Date();
+        var hm = ('0' + dt.getHours()).slice(-2) + ':' + ('0' + dt.getMinutes()).slice(-2);
+        var day = function (x) { return new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime(); };
+        var diff = Math.round((day(dt) - day(now)) / 864e5);
+        if (diff === 0) return hm;
+        if (diff === 1) return 'утре ' + hm;
+        return ('0' + dt.getDate()).slice(-2) + '.' + ('0' + (dt.getMonth() + 1)).slice(-2) + ' ' + hm;
+    }
+    function sourceLine(d) {
+        if (season === 'off') return 'Сезонът е изключен';
+        var s = d.source === 'hold' ? 'задържано' : d.source === 'override' ? 'ръчно до ' + fmtLocal(d.override_until)
+              : d.next_change ? 'по график до ' + fmtLocal(d.next_change) : 'по график';
+        if (d.age_s != null) s += ' · отчет ' + (d.age_s < 60 ? 'току-що' : 'преди ' + Math.round(d.age_s / 60) + ' мин');
+        return s;
+    }
+
+    function syncChips(c, d) {
+        var box = $(c.el, '.hv-chips'), seen = {};
+        d.convectors.forEach(function (v) {
+            seen[v.id] = 1;
+            var ch = c.chips[v.id];
+            if (!ch) {
+                ch = document.getElementById('tplChip').content.firstElementChild.cloneNode(true);
+                c.chips[v.id] = ch;
+                box.appendChild(ch);
+            }
+            var cls = !v.on_season ? 'offseason' : v.unconfirmed ? 'unconfirmed' : !v.online ? 'offline' : v.is_on ? 'on' : 'off';
+            ch.className = 'hv-chip ' + cls + (v.is_on && v.on_season ? ' on' : '');
+            setText($(ch, '.n'), v.name);
+            setText($(ch, '.w'), v.power_w != null && v.is_on ? Math.round(v.power_w) + ' W' : '');
+            var tip = cls === 'offseason' ? 'Не е на кръга за този сезон – термостатът не го управлява.'
+                    : cls === 'unconfirmed' ? 'Състоянието не е потвърдено от устройството (последна команда: ' + (v.is_on ? 'вкл.' : 'изкл.') + ').'
+                    : cls === 'offline' ? 'Конвекторът не отговаря'
+                    : v.is_on ? 'Конвекторът работи' + (v.power_w != null ? ' (' + Math.round(v.power_w) + ' W)' : '') : 'Конвекторът е изключен';
+            setTip(ch, v.name + ': ' + tip);
+        });
+        Object.keys(c.chips).forEach(function (id) { if (!seen[id]) { c.chips[id].remove(); delete c.chips[id]; } });
+    }
+
+    function render(c, d) {
+        var prevCur = c.data ? c.data.temp : undefined;
+        c.data = d;
+        var st = stateOf(d);
+        var offline = d.convectors.filter(function (v) { return !v.online && !v.unconfirmed && v.on_season; });
+        var alert = (d.stale && season !== 'off' && d.enabled) || offline.length > 0;
+        c.el.className = 'hv-card st-' + st[0] + (alert ? ' alert' : '') + (c.dragging ? ' dragging' : '') + (season === 'off' ? ' locked' : '');
+        setText($(c.el, '.hv-name'), d.name); setText($(c.el, '.hv-mname'), d.name);
+        setText($(c.el, '.hv-state'), st[1]);
+        var warn = $(c.el, '.hv-warn'), msgs = [];
+        if (d.stale && season !== 'off' && d.enabled) {
+            msgs.push(d.age_s == null ? 'Няма данни от сензора – конвекторите са изключени.'
+                      : 'Сензорът не е пращал данни ' + Math.round(d.age_s / 60) + ' мин – конвекторите са изключени.');
+        }
+        if (offline.length) msgs.push('Конвекторът не отговаря: ' + offline.map(function (v) { return v.name; }).join(', ') + '.');
+        warn.hidden = !msgs.length;
+        if (msgs.length) setTip(warn, msgs.join(' '));
+        // target: not while dragging or while our own request is in flight
+        if (!c.dragging && !c.pending) {
+            var changed = c.tgt.v != null && d.target != null && Math.abs(c.tgt.v - d.target) > 0.01;
+            setTarget(c, d.target, changed);
+        }
+        tween(c.cur, d.temp, 700, function (x) { drawCur(c, x); });
+        if (prevCur !== undefined && prevCur !== d.temp && d.temp != null && !REDUCED.matches) restart($(c.el, '.hv-temp .ic'), 'pulse');
+        setText($(c.el, '.hv-hum .v'), d.humidity == null ? '—' : Math.round(d.humidity) + '%');
+        setText($(c.el, '.hv-src'), sourceLine(d));
+        var badge = $(c.el, '.hv-badge');
+        badge.dataset.badge = alert ? 'triangle-alert' : st[0] === 'off' ? 'power' : season === 'cool' ? 'snowflake' : 'flame';
+        setTip(badge, st[1] + ': ' + (msgs.length ? msgs.join(' ') : st[2]));
+        setTip($(c.el, '.hv-state'), st[2]);
+        setText($(c.el, '.hv-msum'), st[1] + ' · ' + num(d.temp) + ' °C' + (d.humidity == null ? '' : ' · ' + Math.round(d.humidity) + '%'));
+        var locked = season === 'off';
+        c.el.querySelectorAll('[data-act="plus"], [data-act="minus"], [data-act="hold"], [data-act="release"]').forEach(function (b) { b.disabled = locked; });
+        $(c.el, '[data-act="release"]').classList.toggle('on', d.source === 'schedule');
+        $(c.el, '[data-act="hold"]').classList.toggle('on', d.source === 'hold');
+        var en = $(c.el, '[data-act="enabled"]');
+        if (en) {
+            en.classList.toggle('on', d.enabled);
+            setText($(en, '.t'), d.enabled ? 'Вкл.' : 'Изкл.');
+            setTip(en, d.enabled ? 'Термостатът е включен – натиснете, за да го изключите (конвекторите остават както са)'
+                                 : 'Термостатът е изключен – натиснете, за да го включите');
+        }
+        syncChips(c, d);
+    }
+
+    function refuse(c, msg) {
+        if (!REDUCED.matches) restart($(c.el, '.hv-target'), 'shake');
+        var t = $(c.el, '.hv-toast');
+        t.textContent = msg;
+        t.classList.add('show');
+        if (PAGE.classList.contains('view-list')) showMsg(c.data.name + ': ' + msg);
+        clearTimeout(c.toastTimer);
+        c.toastTimer = setTimeout(function () { t.classList.remove('show'); }, 2600);
+    }
+
+    function post(url, body) {
+        return fetch(url, {method: 'POST', headers: {'X-CSRFToken': CSRF, 'Content-Type': 'application/x-www-form-urlencoded'},
+                           body: new URLSearchParams(body)})
+            .then(function (r) {
+                return r.json().catch(function () { return null; }).then(function (j) {
+                    if (!r.ok || !j || j.ok === false) throw new Error((j && j.error) || 'Грешка при записа (' + r.status + ').');
+                    return j;
+                });
+            });
+    }
+
+    function override(c, action, temp) {
+        var prev = c.data.target, opt = null, r = range();
+        if (action === 'plus' || action === 'minus') {
+            if (prev == null) { refuse(c, 'Няма зададена температура'); return; }
+            opt = clampSnap(prev + (action === 'plus' ? 0.5 : -0.5));
+            if (opt === prev) { refuse(c, action === 'plus' ? 'Максимум ' + r[1] + ' °C' : 'Минимум ' + r[0] + ' °C'); return; }
+        } else if (action === 'set') {
+            opt = temp;
+        }
+        c.pending++;
+        if (opt != null) { c.data.target = opt; setTarget(c, opt, true); }
+        var body = {action: action};
+        if (action === 'set') body.temp = String(temp);
+        post(URL_BASE + c.id + '/override', body).then(function (j) {
+            c.pending--;
+            delete j.ok;
+            j.convectors = c.data.convectors;           // the reply has no live relay status
+            render(c, j);
+        }, function (e) {
+            c.pending--;
+            c.data.target = prev;
+            setTarget(c, prev, false);
+            refuse(c, e.message);
+        });
+    }
+
+    function onAction(c, act, btn) {
+        if (btn.classList.contains('hv-round') || btn.classList.contains('hv-sq')) restart(btn, 'rip');
+        if (act === 'enabled') {
+            var want = !c.data.enabled;
+            post(URL_TH + c.id + '/enabled', {enabled: want ? '1' : '0'}).then(function (j) {
+                c.data.enabled = j.enabled; render(c, c.data);
+            }, function (e) { refuse(c, e.message); });
+            return;
+        }
+        override(c, act);
+    }
+
+    // ---------- dragging the knob ----------
+    function valueAt(c, e) {
+        var rc = $(c.el, '.hv-svg').getBoundingClientRect();
+        var x = (e.clientX - rc.left) / rc.width * 200 - 100, y = (e.clientY - rc.top) / rc.height * 200 - 100;
+        var rel = ((Math.atan2(y, x) * 180 / Math.PI) - 135 + 720) % 360;
+        if (rel > 270) rel = rel < 315 ? 270 : 0;
+        var r = range();
+        return clampSnap(r[0] + rel / 270 * (r[1] - r[0]));
+    }
+    function bindDrag(c) {
+        var svg = $(c.el, '.hv-svg');
+        svg.addEventListener('pointerdown', function (e) {
+            if (season === 'off' || c.data.target == null) return;
+            if (!e.target.classList.contains('hv-knob') && !e.target.classList.contains('hv-arc') && !e.target.classList.contains('hv-track')) return;
+            e.preventDefault();
+            c.dragging = true; c.dragV = null; c.tgt.anim = null;
+            c.el.classList.add('dragging');
+            svg.setPointerCapture(e.pointerId);
+            move(e);
+        });
+        function move(e) {
+            if (!c.dragging) return;
+            var v = valueAt(c, e);
+            c.dragV = v; c.tgt.v = v;
+            drawTarget(c, v);
+        }
+        svg.addEventListener('pointermove', move);
+        function end() {
+            if (!c.dragging) return;
+            c.dragging = false;
+            c.el.classList.remove('dragging');
+            if (c.dragV != null && c.dragV !== c.data.target) override(c, 'set', c.dragV);
+        }
+        svg.addEventListener('pointerup', end);
+        svg.addEventListener('pointercancel', end);
+        $(c.el, '.hv-knob').addEventListener('keydown', function (e) {
+            var k = {ArrowUp: 'plus', ArrowRight: 'plus', ArrowDown: 'minus', ArrowLeft: 'minus'}[e.key];
+            if (k && season !== 'off') { e.preventDefault(); override(c, k); }
+        });
+    }
+
+    // ---------- 24 h sparkline ----------
+    function cssVar(el, name) { return getComputedStyle(el).getPropertyValue(name).trim(); }
+    function drawSpark(c) {
+        var cv = $(c.el, '.hv-spark'), h = c.hist;
+        var w = cv.clientWidth, ht = cv.clientHeight;
+        if (!w || !ht) return;
+        var dpr = window.devicePixelRatio || 1;
+        cv.width = w * dpr; cv.height = ht * dpr;
+        var g = cv.getContext('2d');
+        g.setTransform(dpr, 0, 0, dpr, 0, 0);
+        g.clearRect(0, 0, w, ht);
+        var muted = cssVar(PAGE, '--muted'), text = cssVar(PAGE, '--text');
+        var shade = cssVar(PAGE, season === 'cool' ? '--cool' : '--heat');
+        if (!h) return;
+        var t1 = Date.now() / 1000, t0 = t1 - 24 * 3600;
+        var vals = h.temps.map(function (p) { return p[1]; }).concat(h.target.map(function (p) { return p[1]; })).filter(function (v) { return v != null; });
+        g.globalAlpha = 0.2; g.fillStyle = shade;
+        var X = function (ts) { return (ts - t0) / (t1 - t0) * w; };
+        h.on.forEach(function (p) { g.fillRect(X(p[0]), 0, Math.max(1, X(p[1]) - X(p[0])), ht); });
+        g.globalAlpha = 1;
+        if (!vals.length) {
+            g.fillStyle = muted; g.font = '12px system-ui, sans-serif'; g.textAlign = 'center';
+            g.fillText('Няма данни за последните 24 ч', w / 2, ht / 2 + 4);
+            return;
+        }
+        var lo = Math.min.apply(null, vals) - 0.5, hi = Math.max.apply(null, vals) + 0.5;
+        var Y = function (v) { return ht - 3 - (v - lo) / (hi - lo) * (ht - 6); };
+        g.lineWidth = 1.5; g.strokeStyle = muted; g.setLineDash([4, 3]);
+        g.beginPath();
+        var started = false, lastY = null;
+        h.target.forEach(function (p) {
+            if (p[1] == null) { started = false; return; }
+            var x = X(p[0]), y = Y(p[1]);
+            if (!started) { g.moveTo(x, y); started = true; } else { g.lineTo(x, lastY); g.lineTo(x, y); }
+            lastY = y;
+        });
+        g.stroke(); g.setLineDash([]);
+        g.strokeStyle = text; g.lineWidth = 1.8; g.lineJoin = 'round';
+        g.beginPath();
+        h.temps.forEach(function (p, i) { var x = X(p[0]), y = Y(p[1]); if (i) g.lineTo(x, y); else g.moveTo(x, y); });
+        g.stroke();
+    }
+    function loadHistory(c) {
+        return fetch(URL_BASE + c.id + '/history?hours=24').then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (h) { if (h) { c.hist = h; drawSpark(c); } }).catch(function () {});
+    }
+    window.addEventListener('resize', function () { Object.keys(cards).forEach(function (id) { drawSpark(cards[id]); }); });
+
+    // ---------- cards and groups ----------
+    function makeCard(d) {
+        var el = document.getElementById('tplCard').content.firstElementChild.cloneNode(true);
+        var c = {id: d.id, el: el, data: null, tgt: {v: null}, cur: {v: null}, chips: {}, pending: 0, dragging: false, hist: null};
+        $(el, '.hv-track').setAttribute('stroke-dasharray', ARC.toFixed(2) + ' ' + CIRC);
+        var kn = $(el, '.hv-knob');
+        kn.setAttribute('aria-valuemin', range()[0]); kn.setAttribute('aria-valuemax', range()[1]);
+        el.addEventListener('click', function (e) {
+            var b = e.target.closest('[data-act]');
+            if (b && !b.disabled) onAction(c, b.dataset.act, b);
+        });
+        bindDrag(c);
+        return c;
+    }
+    function layout(list) {
+        var key = list.map(function (d) { return d.group + '\u0001' + d.id; }).join('\u0002');
+        if (key === groupKey) return;
+        groupKey = key;
+        var root = document.getElementById('groups'), frag = document.createDocumentFragment(), cur = null, grid = null;
+        list.forEach(function (d) {
+            if (d.group !== cur) {
+                cur = d.group;
+                var sec = document.createElement('section'); sec.className = 'hv-group';
+                var h2 = document.createElement('h2'); h2.textContent = d.group;
+                grid = document.createElement('div'); grid.className = 'hv-grid';
+                sec.appendChild(h2); sec.appendChild(grid); frag.appendChild(sec);
+            }
+            grid.appendChild(cards[d.id].el);
+        });
+        root.replaceChildren(frag);
+    }
+
+    function showMsg(t) {
+        var b = document.getElementById('bnMsg');
+        document.getElementById('bnMsgText').textContent = t;
+        b.hidden = !t;
+    }
+
+    function apply(d) {
+        season = d.season;
+        PAGE.dataset.season = season;
+        document.querySelectorAll('[data-season-btn]').forEach(function (b) {
+            var on = b.dataset.seasonBtn === season;
+            b.classList.toggle('on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+        var badge = document.getElementById('seasonBadge');
+        if (badge) {
+            badge.className = 'cur ' + season;
+            document.getElementById('seasonLabel').textContent = d.season_label;
+            document.querySelectorAll('#seasonIcons [data-s]').forEach(function (i) { i.style.display = i.dataset.s === season ? '' : 'none'; });
+        }
+        var p = d.pump;
+        if (p && document.getElementById('pumpTile')) {
+            document.getElementById('pumpDot').className = 'hv-dot' + (p.online ? ' on' : '');
+            setText(document.getElementById('pumpStatus'), p.online ? 'Термопомпа · ' + (p.mode_label || '—') : 'Термопомпа: няма връзка');
+            var parts = [];
+            if (p.supply != null) parts.push('подаване ' + num(p.supply) + ' °C');
+            if (p.outdoor != null) parts.push('навън ' + num(p.outdoor) + ' °C');
+            if (p.power_w != null) parts.push((p.power_w / 1000).toFixed(1) + ' kW');
+            setText(document.getElementById('pumpLine'), parts.join(' · ') || '—');
+        }
+        document.getElementById('bnMismatch').hidden = !(p && p.mismatch);
+        if (p && p.mismatch) {
+            setText(document.getElementById('bnMismatchText'), 'Режимът на термопомпата („' + (p.mode_label || p.mode) +
+                    '“) не съвпада със сезона („' + d.season_label + '“).');
+        }
+        document.getElementById('bnFault').hidden = !(p && p.fault);
+        var n = d.convectors_on;
+        setText(document.getElementById('convOn'), n === 0 ? 'Няма работещи конвектори' : n === 1 ? '1 конвектор работи' : n + ' конвектора работят');
+
+        var ids = {};
+        d.thermostats.forEach(function (t) {
+            ids[t.id] = 1;
+            if (!cards[t.id]) { cards[t.id] = makeCard(t); loadHistory(cards[t.id]); }
+        });
+        Object.keys(cards).forEach(function (id) { if (!ids[id]) { cards[id].el.remove(); delete cards[id]; } });
+        layout(d.thermostats);
+        d.thermostats.forEach(function (t) { render(cards[t.id], t); });
+        document.getElementById('empty').hidden = d.thermostats.length > 0;
+        var now = new Date();
+        var u = document.getElementById('updated');
+        u.classList.remove('bad');
+        setText(u, 'обновено ' + now.toLocaleTimeString('bg-BG'));
+    }
+
+    function load() {
+        return fetch(URL_DATA, {headers: {'Accept': 'application/json'}})
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(apply)
+            .catch(function () {
+                var u = document.getElementById('updated');
+                u.classList.add('bad');
+                setText(u, 'Няма връзка със сървъра – опитваме отново…');
+            });
+    }
+    startPoll(load, 15000);
+    startPoll(function () {
+        var ids = Object.keys(cards), i = 0;
+        function next() { if (i < ids.length && cards[ids[i]]) return loadHistory(cards[ids[i++]]).then(next); }
+        return next();
+    }, 300000);
+
+    // ---------- season switch (admins; data-confirm asks first) ----------
+    document.querySelectorAll('[data-season-btn]').forEach(function (b) {
+        b.addEventListener('click', function () {
+            var all = document.querySelectorAll('[data-season-btn]');
+            all.forEach(function (x) { x.disabled = true; });
+            showMsg('');
+            post(URL_SEASON, {season: b.dataset.seasonBtn}).then(function (j) {
+                if (j.failed && j.failed.length) showMsg('Не успяхме да изключим: ' + j.failed.join(', '));
+                return load();
+            }, function (e) { showMsg(e.message); })
+                .then(function () { all.forEach(function (x) { x.disabled = false; }); });
+        });
+    });
+})();
+</script>
+</body>
+</html>
