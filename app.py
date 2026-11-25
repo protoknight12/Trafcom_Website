@@ -28800,6 +28800,80 @@ def admin_hvac():
                            ranges={'heat': hvac.HEAT_RANGE, 'cool': hvac.COOL_RANGE}, active_page='admin_hvac')
 
 
+HVAC_WEATHER_URL = 'https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=42.9167&lon=24.2667'
+HVAC_WEATHER_UA = 'hvac-dashboard/1.0'   # met.no wants an identifying User-Agent; generic on purpose (public repo)
+HVAC_WEATHER_MIN_AGE = 1800              # seconds between fetches (met.no: respect Expires, never more often than needed)
+HVAC_WEATHER_RETRY = 600                 # after a failed fetch
+_hvac_weather = {'raw': None, 'next': 0.0, 'busy': False}
+
+
+def _hvac_weather_fetch():
+    """Background refresh (one at a time); a failure keeps the last forecast and retries after HVAC_WEATHER_RETRY."""
+    try:
+        req = urllib.request.Request(HVAC_WEATHER_URL, headers={'User-Agent': HVAC_WEATHER_UA})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            _hvac_weather['raw'] = json.loads(resp.read())
+        _hvac_weather['next'] = time.time() + HVAC_WEATHER_MIN_AGE
+    except Exception:
+        app.logger.warning('weather: met.no fetch failed', exc_info=True)
+        _hvac_weather['next'] = time.time() + HVAC_WEATHER_RETRY
+    finally:
+        _hvac_weather['busy'] = False
+
+
+def _hvac_weather_summary(raw, now_utc=None):
+    """met.no compact -> {'now': {temp, wind, humidity, symbol}, 'hours': [{h, temp, symbol}] (every 3 h, next 12 h),
+    'days': [{date, min, max, symbol}] (next 4 local days, symbol at local noon)}. None for an unusable payload."""
+    try:
+        ts = raw['properties']['timeseries']
+    except (KeyError, TypeError):
+        return None
+    now_utc = now_utc or datetime.utcnow()
+    rows = []
+    for t in ts:
+        when = datetime.strptime(t['time'], '%Y-%m-%dT%H:%M:%SZ')
+        d = t['data']
+        sym = next((d[k]['summary']['symbol_code'] for k in ('next_1_hours', 'next_6_hours', 'next_12_hours') if k in d), None)
+        rows.append((when, d['instant']['details'], sym))
+    rows = [r for r in rows if r[0] >= now_utc - timedelta(hours=1)]
+    if not rows:
+        return None
+    first = rows[0]
+    out = {'now': {'temp': first[1].get('air_temperature'), 'wind': first[1].get('wind_speed'),
+                   'wind_dir': first[1].get('wind_from_direction'),
+                   'humidity': first[1].get('relative_humidity'), 'symbol': first[2]},
+           'hours': [], 'days': []}
+    for when, det, sym in rows[1:]:
+        if when > first[0] + timedelta(hours=12):
+            break
+        if (when - first[0]).total_seconds() % 10800 == 0:
+            out['hours'].append({'h': to_local(when).strftime('%H'), 'temp': det.get('air_temperature'), 'symbol': sym,
+                                 'wind': det.get('wind_speed'), 'wind_dir': det.get('wind_from_direction')})
+    today = to_local(now_utc).date()
+    days = {}
+    for when, det, sym in rows:
+        loc = to_local(when)
+        if loc.date() <= today or det.get('air_temperature') is None:
+            continue
+        day = days.setdefault(loc.date(), {'temps': [], 'symbol': None, 'noon': 99, 'wind': 0.0})
+        day['temps'].append(det['air_temperature'])
+        day['wind'] = max(day['wind'], det.get('wind_speed') or 0.0)
+        if sym and abs(loc.hour - 12) < day['noon']:
+            day['symbol'], day['noon'] = sym, abs(loc.hour - 12)
+    for d in sorted(days)[:4]:
+        out['days'].append({'date': d.isoformat(), 'min': min(days[d]['temps']), 'max': max(days[d]['temps']),
+                            'symbol': days[d]['symbol'], 'wind': days[d]['wind']})
+    return out
+
+
+def _hvac_weather_now():
+    """Forecast for the dashboard from the cache; starts a background refresh when due (never blocks the request)."""
+    if time.time() >= _hvac_weather['next'] and not _hvac_weather['busy']:
+        _hvac_weather['busy'] = True
+        threading.Thread(target=_hvac_weather_fetch, daemon=True, name='weather-fetch').start()
+    return _hvac_weather_summary(_hvac_weather['raw']) if _hvac_weather['raw'] else None
+
+
 def _hvac_sky():
     """Sun or moon on the dashboard's background (owner's request 2026-11-25): day = the sun above the horizon
     (-0.833°, as _sun_rise_set()), with its azimuth/altitude to place it."""
@@ -28836,7 +28910,7 @@ def admin_hvac_data():
                    pump=pump, thermostats=cards, total_power=total_w,
                    pump_gate=_hvac_pump_gate() if season in ('heat', 'cool') else {'active': True, 'reason': None},
                    outdoor=(_heatpump_live['data'] or {}).get('Temp. Aussen') if _heatpump_live['online'] else None,
-                   sky=_hvac_sky(),
+                   sky=_hvac_sky(), weather=_hvac_weather_now(),
                    convectors_on=sum(1 for c in cards for v in c['convectors'] if v['is_on']))
 
 

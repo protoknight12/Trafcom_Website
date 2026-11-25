@@ -52,8 +52,23 @@
         .hv-wm { position: absolute; right: -60px; bottom: -60px; font-size: 420px; color: var(--text); opacity: 0; transition: opacity .6s; }
         .hvac-page[data-season="heat"] .hv-wm.heat, .hvac-page[data-season="cool"] .hv-wm.cool { opacity: .04; }
         /* Outdoor temperature: big digits on the background, fixed to the screen (does not scroll), behind the cards. */
-        .hv-bg > .hv-out { position: fixed; inset: auto 24px 8px auto; text-align: right; line-height: .9; color: var(--text); opacity: .16;
+        .hv-bg > .hv-out { position: fixed; inset: auto 24px 8px auto; text-align: right; line-height: .9; color: var(--text);
                   font-weight: 200; font-variant-numeric: tabular-nums; letter-spacing: -.04em; white-space: nowrap; }
+        .hv-out > b, .hv-out > small { opacity: .16; }
+        /* Weather (met.no) above the outdoor temperature: now, the next 12 h every 3 h, the next 4 days. */
+        /* Weather colours by condition (icon only - the text stays the page's colour). */
+        .hv-fc .ic.wx-sun { color: #f5b83d; } .hv-fc .ic.wx-moon { color: #c9d6f2; } .hv-fc .ic.wx-cloud { color: #9aa3b2; }
+        .hv-fc .ic.wx-partly { color: #e8a948; } .hv-fc .ic.wx-partly-night { color: #aab8d6; } .hv-fc .ic.wx-rain { color: #3ba7ff; }
+        .hv-fc .ic.wx-snow { color: #9fe3ff; } .hv-fc .ic.wx-sleet { color: #7ec8e3; } .hv-fc .ic.wx-thunder { color: #b98cff; }
+        .hv-fc .ic.wx-fog { color: #b8bcc6; } .hv-fc .ic.wx-wind { color: #7fd1b9; }
+        .hv-fc .wdir { display: inline-block; transition: transform .6s; }
+        .hv-fc { opacity: .75; font-size: 15px; font-weight: 400; letter-spacing: 0; line-height: 1.25; margin-bottom: 10px; }
+        .hv-fc .ic { font-size: 1.35em; vertical-align: -.3em; }
+        .hv-fc .now { font-size: 20px; margin-bottom: 6px; }
+        .hv-fc .now .ic { font-size: 1.8em; }
+        .hv-fc .row { display: flex; gap: 14px; justify-content: flex-end; margin-top: 4px; }
+        .hv-fc .row span { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; min-width: 42px; }
+        .hv-fc .row small { font-size: 12px; opacity: .8; text-transform: none; letter-spacing: 0; padding: 0; }
         /* Sun by day (placed by its azimuth/altitude: east left, west right, higher = nearer the top), moon by night. */
         .hv-bg > .hv-sky { position: fixed; inset: auto; border-radius: 50%; opacity: 0; transition: opacity .8s, left 2s, top 2s; }
         .hv-bg > .hv-sky.sun { width: clamp(140px, 18vw, 260px); aspect-ratio: 1;
@@ -251,7 +266,11 @@
         <span class="hv-wm heat">{{ icon('flame') }}</span><span class="hv-wm cool">{{ icon('snowflake') }}</span>
         <div class="hv-sky sun" id="skySun"></div><div class="hv-sky moon"></div>
         <div class="hv-pow" id="totPow" hidden><b>{{ icon('utility-pole') }}<span id="totPowVal"></span></b><small id="totPowNote">отопление и охлаждане</small></div>
-        <div class="hv-out" id="outTemp" hidden><small>навън</small><b id="outTempVal"></b></div>
+        <div class="hv-out" id="outTemp" hidden>
+            <div class="hv-fc" id="wx" hidden><div class="now" id="wxNow"></div><div class="row" id="wxHours"></div><div class="row" id="wxDays"></div></div>
+            <small id="outTempLbl">навън</small><b id="outTempVal"></b>
+        </div>
+        <template id="wxIcons">{% for n in ['wind', 'arrow-up', 'sun', 'moon', 'cloud', 'cloud-sun', 'cloud-moon', 'cloud-rain', 'cloud-drizzle', 'cloud-snow', 'cloud-hail', 'cloud-lightning', 'cloud-fog'] %}{{ icon(n) }}{% endfor %}</template>
     </div>
     <div class="hv-wrap">
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -800,6 +819,88 @@
     window.addEventListener('scroll', placePow, {passive: true});
     window.addEventListener('resize', placePow);
 
+    // ---------- weather (met.no symbol codes -> Lucide icons + Bulgarian words) ----------
+    var WX_WORDS = {clearsky: 'Ясно', fair: 'Предимно ясно', partlycloudy: 'Разкъсана облачност', cloudy: 'Облачно', fog: 'Мъгла',
+                    lightrain: 'Слаб дъжд', rain: 'Дъжд', heavyrain: 'Силен дъжд', lightrainshowers: 'Слаби превалявания',
+                    rainshowers: 'Превалявания', heavyrainshowers: 'Силни превалявания', lightsnow: 'Слаб сняг', snow: 'Сняг',
+                    heavysnow: 'Силен сняг', snowshowers: 'Снеговалежи', lightsleet: 'Слаба суграшица', sleet: 'Суграшица',
+                    heavysleet: 'Силна суграшица', sleetshowers: 'Суграшица'};
+    var WX_DAYS = ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+    function wxBase(code) { return (code || '').replace(/_(day|night|polartwilight)$/, ''); }
+    function wxIconName(code) {
+        var b = wxBase(code), night = /_night$/.test(code || '');
+        if (/thunder/.test(b)) return 'cloud-lightning';
+        if (/snow/.test(b)) return 'cloud-snow';
+        if (/sleet/.test(b)) return 'cloud-hail';
+        if (/^light.*rain/.test(b)) return 'cloud-drizzle';
+        if (/rain/.test(b)) return 'cloud-rain';
+        if (b === 'fog') return 'cloud-fog';
+        if (b === 'clearsky') return night ? 'moon' : 'sun';
+        if (b === 'fair' || b === 'partlycloudy') return night ? 'cloud-moon' : 'cloud-sun';
+        return 'cloud';
+    }
+    function wxWord(code) {
+        var b = wxBase(code);
+        return WX_WORDS[b] || (/thunder/.test(b) ? 'Гръмотевици' : '');
+    }
+    var WX_COLOR = {'sun': 'sun', 'moon': 'moon', 'cloud': 'cloud', 'cloud-sun': 'partly', 'cloud-moon': 'partly-night',
+                    'cloud-rain': 'rain', 'cloud-drizzle': 'rain', 'cloud-snow': 'snow', 'cloud-hail': 'sleet',
+                    'cloud-lightning': 'thunder', 'cloud-fog': 'fog', 'wind': 'wind'};
+    function svgIcon(name, title) {
+        var svg = document.querySelector('#wxIcons').content.querySelector('[data-icon="' + name + '"]').cloneNode(true);
+        if (WX_COLOR[name]) svg.classList.add('wx-' + WX_COLOR[name]);
+        if (title) {
+            var t = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+            t.textContent = title;
+            svg.appendChild(t);
+        }
+        return svg;
+    }
+    function wxIcon(code) { return svgIcon(wxIconName(code), wxWord(code)); }
+    var WX_COMPASS = ['С', 'СИ', 'И', 'ЮИ', 'Ю', 'ЮЗ', 'З', 'СЗ'];
+    function windDir(from) {       // arrow points where the wind blows TO; text = where it comes from
+        var s = document.createElement('span');
+        s.className = 'wdir';
+        s.style.transform = 'rotate(' + ((from + 180) % 360) + 'deg)';
+        s.appendChild(svgIcon('arrow-up', 'вятър от ' + WX_COMPASS[Math.round(from / 45) % 8]));
+        return s;
+    }
+    function windText(w, from) {
+        var s = document.createElement('span');
+        s.append(svgIcon('wind', 'вятър'), ' ' + num(w) + ' m/s ');
+        if (from != null) s.append(windDir(from), ' ' + WX_COMPASS[Math.round(from / 45) % 8]);
+        return s;
+    }
+    function wxCell(top, code, bottom, wind, from) {
+        var s = document.createElement('span'), a = document.createElement('small'), b = document.createElement('small');
+        a.textContent = top; b.textContent = bottom;
+        s.append(a, wxIcon(code), b);
+        if (wind != null) {
+            var c = document.createElement('small');
+            if (from != null) c.append(windDir(from), ' ');
+            c.append(num(wind, 0) + ' m/s');
+            s.append(c);
+        }
+        return s;
+    }
+    function renderWeather(wx) {
+        var box = document.getElementById('wx');
+        box.hidden = !wx;
+        if (!wx) return;
+        var now = document.getElementById('wxNow');
+        now.textContent = '';
+        now.append(wxIcon(wx.now.symbol), ' ' + [wxWord(wx.now.symbol), wx.now.temp != null ? num(wx.now.temp) + '°' : null,
+            wx.now.humidity != null ? num(wx.now.humidity, 0) + ' %' : null].filter(Boolean).join(' · '));
+        if (wx.now.wind != null) now.append(' · ', windText(wx.now.wind, wx.now.wind_dir));
+        var hours = document.getElementById('wxHours'), days = document.getElementById('wxDays');
+        hours.textContent = ''; days.textContent = '';
+        wx.hours.forEach(function (h) { hours.appendChild(wxCell(h.h + ' ч', h.symbol, num(h.temp, 0) + '°', h.wind, h.wind_dir)); });
+        wx.days.forEach(function (d) {
+            days.appendChild(wxCell(WX_DAYS[new Date(d.date + 'T12:00:00').getDay()], d.symbol,
+                                    num(d.min, 0) + '/' + num(d.max, 0) + '°', d.wind));
+        });
+    }
+
     function apply(d) {
         season = d.season;
         PAGE.dataset.season = season;
@@ -841,8 +942,15 @@
             setText(document.getElementById('totPowVal'), tp.w >= 1000 ? (tp.w / 1000).toFixed(1) + ' kW' : tp.w + ' W');
             setText(document.getElementById('totPowNote'), 'отопление и охлаждане' + (tp.unknown ? ' · ' + tp.unknown + ' без данни' : ''));
         }
-        document.getElementById('outTemp').hidden = d.outdoor == null;
-        if (d.outdoor != null) setText(document.getElementById('outTempVal'), num(d.outdoor) + '°');
+        var wx = d.weather, outT = d.outdoor != null ? d.outdoor : (wx && wx.now.temp != null ? wx.now.temp : null);
+        document.getElementById('outTemp').hidden = outT == null && !wx;
+        // style.display, not hidden: .hv-out b / small set display: block, which beats the hidden attribute
+        document.getElementById('outTempVal').style.display = document.getElementById('outTempLbl').style.display = outT == null ? 'none' : '';
+        if (outT != null) {
+            setText(document.getElementById('outTempVal'), num(outT) + '°');
+            setText(document.getElementById('outTempLbl'), d.outdoor != null ? 'навън' : 'навън (прогноза)');
+        }
+        renderWeather(wx);
         document.getElementById('bnMismatch').hidden = !(p && p.mismatch);
         if (p && p.mismatch) {
             setText(document.getElementById('bnMismatchText'), 'Режимът на термопомпата („' + (p.mode_label || p.mode) +

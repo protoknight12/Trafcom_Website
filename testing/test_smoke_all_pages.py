@@ -54,6 +54,7 @@ EXCLUDED = {
     'admin_camera_video': 'proxies a live camera video stream',
     'admin_camera_snapshot': 'fetches a frame from the camera over the network',
     'admin_camera_nvr_channels': 'asks the NVR for its channel list over the network',
+    'admin_hvac_data': 'starts a background fetch of the met.no forecast (test_hvac_weather covers it without network)',
 }
 
 # endpoint -> reason: GETs that return 500 today because of a real application bug. The suite stays
