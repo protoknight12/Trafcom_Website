@@ -181,6 +181,15 @@
         {% endfor %}
         <button type="submit" class="btn">Запази</button>
     </form>
+
+    <h3 class="hp-section">Остатъчна топлина при изключена помпа</h3>
+    <p class="text-muted text-small" style="margin-top: 0;">При отопление: когато помпата е „Изключена“, термостатите продължават да работят, докато температурата на подаващата вода (Temp. Vorlauf) е поне тази стойност. Под нея (или без връзка с помпата, или при изключено централно захранване) спират. Празно = изключено.</p>
+    <form action="{{ url_for('admin_heatpump_residual') }}" method="POST" class="admin-form" style="max-width: 520px;">
+        {% include 'partials/csrf_field.html' %}
+        <div class="form-group"><label>Мин. температура на водата (°C)</label>
+            <input type="number" name="residual_min" step="0.5" min="15" max="70" value="{{ '%g'|format(residual_min) if residual_min is not none else '' }}"></div>
+        <button type="submit" class="btn">Запази</button>
+    </form>
     </div>
 
     <div data-panel="faults" hidden>

@@ -87,6 +87,34 @@ def test_gate_unknown_is_active(hp, monkeypatch):
     assert hp['sets'] == [('К1', True)]
 
 
+def test_gate_residual_heat_min_water(hp):
+    """Owner's request 2026-11-25: pump off, but heating goes on while the supply water is at least the set minimum."""
+    _season('heat')
+    _thermo()
+    hp['temp'] = 18.0                                    # demand: on
+    _pump(0, **{'Temp. Vorlauf': 32.0})
+    app_module._thermostat_tick(NOW)
+    assert hp['sets'] == []                              # no minimum set: inactive as before
+    r = _login('admin').post('/admin/heatpump/residual', data={'residual_min': '30'})
+    assert r.status_code == 302 and app_module._heatpump_residual_min() == 30.0
+    app_module._thermostat_tick(NOW)
+    assert hp['sets'] == [('К1', True)]                  # 32 >= 30: works
+    assert app_module._hvac_pump_gate()['active'] is True
+    app_module._heatpump_live['data'] = {'Temp. Vorlauf': 29.5}
+    assert app_module._hvac_pump_gate()['reason'] == 'термопомпата е изключена'
+    _set('last_mode', '0')
+    app_module._heatpump_live['online'] = False          # no reading (last mode 0): inactive
+    app_module._heatpump_live['data'] = {'Temp. Vorlauf': 40.0}
+    assert app_module._hvac_pump_gate()['active'] is False
+    _pump(0, **{'Temp. Vorlauf': 40.0})
+    _season('cool')                                      # cooling: not used
+    assert app_module._hvac_pump_gate()['active'] is False
+    assert _login('admin').post('/admin/heatpump/residual', data={'residual_min': '99'}).status_code == 302
+    assert app_module._heatpump_residual_min() == 30.0   # out of range refused
+    _login('admin').post('/admin/heatpump/residual', data={'residual_min': ''})
+    assert app_module._heatpump_residual_min() is None
+
+
 def test_gate_after_app_restart_uses_last_saved_mode(hp):
     """Owner's report 2026-11-25: right after an app restart (pump not read yet) the convectors went on for a minute
     although the pump was off. Before the first read the gate takes the last mode the poller saved."""

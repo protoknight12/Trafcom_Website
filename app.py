@@ -24965,6 +24965,7 @@ def _heatpump_control_ctx():
             'faults': HeatPumpFault.query.order_by(HeatPumpFault.ts.desc(), HeatPumpFault.id.desc()).limit(50).all(),
             'restart_codes': _heatpump_restart_codes(),
             'protect_cfg': _hvac_protect_cfg(), 'protect_labels': HVAC_PROTECT_LABELS,
+            'residual_min': _heatpump_residual_min(),
             'auto_max': HEATPUMP_AUTO_RESTART_MAX, 'auto_window_h': HEATPUMP_AUTO_RESTART_WINDOW // 3600,
             'restart_off_s': HEATPUMP_RESTART_OFF_S}
 
@@ -25383,6 +25384,24 @@ def admin_heatpump_protection():
     db.session.commit()
     log_action('Термопомпа: защита - ' + ', '.join(f'{k} {"-" if v is None else f"{v:g}"}' for k, v in vals.items()))
     flash('Защитата е запазена.', 'success')
+    return redirect(url_for('admin_heatpump', _anchor='schedule'))
+
+
+@app.route('/admin/heatpump/residual', methods=['POST'])
+@role_required('admin')
+def admin_heatpump_residual():
+    raw = (request.form.get('residual_min') or '').strip().replace(',', '.')
+    try:
+        v = float(raw) if raw else None
+    except ValueError:
+        v = float('nan')
+    if v is not None and not (math.isfinite(v) and 15 <= v <= 70):
+        flash('Минималната температура на водата трябва да е от 15 до 70 °C (празно = изключено).', 'error')
+        return redirect(url_for('admin_heatpump', _anchor='schedule'))
+    _heatpump_save_setting(_HP_PREFIX + 'residual_min', '' if v is None else f'{v:g}')
+    db.session.commit()
+    log_action(f'Термопомпа: остатъчна топлина - мин. вода {"изключено" if v is None else f"{v:g} °C"}')
+    flash('Запазено.', 'success')
     return redirect(url_for('admin_heatpump', _anchor='schedule'))
 
 
@@ -28331,8 +28350,22 @@ def _hvac_pump_gate():
     if _heatpump_relay_cache['is_on'] is False:
         return {'active': False, 'reason': 'централното захранване е изключено'}
     if _heatpump_pump_mode() == 0:
+        # Residual heat (owner's request 2026-11-25): pump off but the supply water still warm enough - heating goes on
+        # until it drops below the set minimum. Needs a live reading; offline = inactive.
+        vmin = _heatpump_residual_min()
+        flow = (_heatpump_live['data'] or {}).get('Temp. Vorlauf') if _heatpump_live['online'] else None
+        if vmin is not None and flow is not None and flow >= vmin and hvac_season() == 'heat':
+            return {'active': True, 'reason': None, 'residual': flow}
         return {'active': False, 'reason': 'термопомпата е изключена'}
     return {'active': True, 'reason': None}
+
+
+def _heatpump_residual_min():
+    """Minimum supply-water temperature (°C) at which the thermostats keep heating while the pump is off; None = off."""
+    try:
+        return float(get_text(_HP_PREFIX + 'residual_min', '') or 'x')
+    except ValueError:
+        return None
 
 
 def _heatpump_pump_mode():
