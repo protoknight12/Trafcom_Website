@@ -63,7 +63,8 @@
         .hvac-page[data-sky="day"] .hv-sky.sun { opacity: .5; }
         .hvac-page[data-sky="night"] .hv-sky.moon { opacity: .55; }
         /* Total heating/cooling draw: smaller, top right of the page's background (in the free space beside the second row). */
-        .hv-bg > .hv-pow { position: absolute; inset: 64px 24px auto auto; text-align: right; color: var(--text); opacity: .3;
+        /* Fixed like the outdoor temperature; its top follows the page's top until that scrolls away (placeSticky()). */
+        .hv-bg > .hv-pow { position: fixed; inset: 64px 24px auto auto; text-align: right; color: var(--text); opacity: .3;
                            line-height: 1; white-space: nowrap; font-variant-numeric: tabular-nums; }
         .hv-pow b { font-size: clamp(30px, 3.6vw, 52px); font-weight: 300; letter-spacing: -.02em; }
         .hv-pow b .ic { margin-right: .15em; }
@@ -791,6 +792,14 @@
         b.hidden = !t;
     }
 
+    // Total power stays on screen: 64 px below the page's top while that is visible, 16 px from the window's top after
+    // (the navbar above the page is not fixed, so a plain fixed top would sit on it before scrolling).
+    function placePow() {
+        document.getElementById('totPow').style.top = Math.max(16, PAGE.getBoundingClientRect().top + 64) + 'px';
+    }
+    window.addEventListener('scroll', placePow, {passive: true});
+    window.addEventListener('resize', placePow);
+
     function apply(d) {
         season = d.season;
         PAGE.dataset.season = season;
@@ -825,6 +834,7 @@
                 sun.style.top = (55 - Math.min(Math.max(d.sky.altitude, 0), 60) / 60 * 49) + 'vh';
             }
         }
+        placePow();
         var tp = d.total_power;
         document.getElementById('totPow').hidden = !tp;
         if (tp) {
