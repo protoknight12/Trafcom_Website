@@ -25649,6 +25649,7 @@ def admin_delete_room(room_id):
     """
     room = Room.query.get_or_404(room_id)
     room_name = room.name
+    Thermostat.query.filter_by(room_id=room.id).update({'room_id': None}, synchronize_session=False)
     _remove_room(room)
     db.session.commit()
     log_action(f'Изтрито помещение "{room_name}"')
@@ -28117,6 +28118,183 @@ def start_thermostat_poller():
     _thermostat_started = True
     _poller_mark('thermostat')
     threading.Thread(target=_thermostat_loop, daemon=True, name='thermostat-poller').start()
+
+
+
+# ----- Термостати: страница, график, празници -----
+_HHMM = re.compile(r'^(\d{1,2}):(\d{2})$')
+
+
+def _parse_hhmm(v):
+    """'07:30' -> 450, '24:00' -> 1440; None when not a valid time."""
+    m = _HHMM.match(str(v or '').strip())
+    if not m:
+        return None
+    h, mi = int(m.group(1)), int(m.group(2))
+    return h * 60 + mi if mi < 60 and (h < 24 or (h == 24 and mi == 0)) else None
+
+
+def _parse_schedule_rows(raw, season):
+    """rows_json -> ([(weekday, start, end, temp)] clamped, None) or (None, Bulgarian error)."""
+    bad = 'Невалиден график.'
+    try:
+        data = json.loads(raw or '[]')
+        if not isinstance(data, list):
+            return None, bad
+        rows = []
+        for d in data:
+            wd, s, e = d['weekday'], _parse_hhmm(d['start']), _parse_hhmm(d['end'])
+            temp = float(d['temp'])
+            if not isinstance(wd, int) or isinstance(wd, bool) or not 0 <= wd <= 6 or s is None or e is None or temp != temp:
+                return None, bad
+            rows.append((wd, s, e, hvac.clamp(season, temp)))
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None, bad
+    err = hvac.validate_intervals(rows)
+    return (None, err) if err else (rows, None)
+
+
+def _thermostat_schedule_json(th):
+    return {se: [{'weekday': i.weekday, 'start': f'{i.start_min // 60:02d}:{i.start_min % 60:02d}',
+                  'end': f'{i.end_min // 60:02d}:{i.end_min % 60:02d}', 'temp': i.temp}
+                 for i in th.intervals if i.season == se] for se in ('heat', 'cool')}
+
+
+@app.route('/admin/thermostats')
+@role_required(['admin', 'worker'])
+def admin_thermostats():
+    thermostats = Thermostat.query.order_by(Thermostat.name).all()
+    return render_template(
+        'admin_thermostats.html', thermostats=thermostats,
+        convectors=Convector.query.order_by(Convector.name).all(),
+        sensors=TemperatureSensor.query.order_by(TemperatureSensor.name).all(),
+        rooms=Room.query.join(Building).order_by(Building.name, Room.name).all(),
+        holidays=HeatingHoliday.query.order_by(HeatingHoliday.day).all(),
+        circuits=CONVECTOR_CIRCUITS, schedules={t.id: _thermostat_schedule_json(t) for t in thermostats},
+        active_page='admin_thermostats')
+
+
+@app.route('/admin/thermostats/save', methods=['POST'])
+@role_required('admin')
+def admin_thermostat_save():
+    f = request.form
+    th = db.session.get(Thermostat, int(f['id'])) if (f.get('id') or '').isdigit() else None
+    if f.get('id') and th is None:
+        abort(404)
+    name = (f.get('name') or '').strip()
+    try:
+        hyst, mc = float(f.get('hysteresis', '')), int(f.get('min_cycle_min', ''))
+        lh = float(f.get('lowered_heat', ''))
+        lc = float(f['lowered_cool']) if (f.get('lowered_cool') or '').strip() else None
+    except ValueError:
+        hyst = None
+    sensor_id = int(f['sensor_id']) if (f.get('sensor_id') or '').isdigit() else None
+    room_id = int(f['room_id']) if (f.get('room_id') or '').isdigit() else None
+    if not name or hyst is None or not 0.1 <= hyst <= 3 or not 0 <= mc <= 60:
+        flash('Невалидни данни: име, хистерезис 0,1–3 К, минимално време 0–60 мин.', 'error')
+        return redirect(url_for('admin_thermostats'))
+    if (sensor_id and not db.session.get(TemperatureSensor, sensor_id)) or (room_id and not db.session.get(Room, room_id)):
+        flash('Непознат сензор или помещение.', 'error')
+        return redirect(url_for('admin_thermostats'))
+    if th is None:
+        th = Thermostat()
+        db.session.add(th)
+    th.name, th.hysteresis, th.min_cycle_min = name, hyst, mc
+    th.lowered_heat = hvac.clamp('heat', lh)
+    th.lowered_cool = None if lc is None else hvac.clamp('cool', lc)
+    th.sensor_id, th.room_id, th.enabled = sensor_id, room_id, bool(f.get('enabled'))
+    db.session.flush()
+    ids = {int(x) for x in f.getlist('convector_ids') if x.isdigit()}
+    for c in Convector.query.filter((Convector.thermostat_id == th.id) | Convector.id.in_(ids)).all():
+        c.thermostat_id = th.id if c.id in ids else None
+    db.session.commit()
+    log_action(f'Термостат "{th.name}" записан')
+    flash(f'Термостат "{th.name}" беше записан.', 'success')
+    return redirect(url_for('admin_thermostats'))
+
+
+@app.route('/admin/thermostats/<int:th_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_thermostat_delete(th_id):
+    th = Thermostat.query.get_or_404(th_id)
+    name = th.name
+    Convector.query.filter_by(thermostat_id=th.id).update({'thermostat_id': None}, synchronize_session=False)
+    db.session.expire(th, ['convectors'])
+    db.session.delete(th)
+    db.session.commit()
+    log_action(f'Изтрит термостат "{name}"')
+    flash(f'Термостат "{name}" беше изтрит.', 'success')
+    return redirect(url_for('admin_thermostats'))
+
+
+@app.route('/admin/thermostats/<int:th_id>/schedule', methods=['POST'])
+@role_required('admin')
+def admin_thermostat_schedule(th_id):
+    th = Thermostat.query.get_or_404(th_id)
+    season = request.form.get('season')
+    if season not in ('heat', 'cool'):
+        abort(400)
+    rows, err = _parse_schedule_rows(request.form.get('rows_json'), season)
+    if err:
+        flash(err, 'error')
+        return redirect(url_for('admin_thermostats'))
+    ThermostatInterval.query.filter_by(thermostat_id=th.id, season=season).delete(synchronize_session=False)
+    db.session.add_all(ThermostatInterval(thermostat_id=th.id, season=season, weekday=w, start_min=s, end_min=e, temp=t)
+                       for w, s, e, t in rows)
+    db.session.commit()
+    log_action(f'График на термостат "{th.name}" ({HVAC_SEASON_LABELS[season]})')
+    flash(f'Графикът на "{th.name}" беше записан.', 'success')
+    return redirect(url_for('admin_thermostats'))
+
+
+@app.route('/admin/thermostats/<int:th_id>/schedule/copy', methods=['POST'])
+@role_required('admin')
+def admin_thermostat_schedule_copy(th_id):
+    th = Thermostat.query.get_or_404(th_id)
+    season = request.form.get('season')
+    if season not in ('heat', 'cool'):
+        abort(400)
+    ids = {int(x) for x in request.form.getlist('target_ids') if x.isdigit()} - {th.id}
+    targets = Thermostat.query.filter(Thermostat.id.in_(ids)).all()
+    src = [(i.weekday, i.start_min, i.end_min, i.temp) for i in th.intervals if i.season == season]
+    for t in targets:
+        ThermostatInterval.query.filter_by(thermostat_id=t.id, season=season).delete(synchronize_session=False)
+        db.session.add_all(ThermostatInterval(thermostat_id=t.id, season=season, weekday=w, start_min=s, end_min=e, temp=tp)
+                           for w, s, e, tp in src)
+    db.session.commit()
+    log_action(f'График на "{th.name}" ({HVAC_SEASON_LABELS[season]}) копиран към: {", ".join(t.name for t in targets) or "-"}')
+    flash(f'Графикът беше копиран към {len(targets)} термостата.', 'success')
+    return redirect(url_for('admin_thermostats'))
+
+
+@app.route('/admin/hvac/holidays', methods=['POST'])
+@role_required('admin')
+def admin_hvac_holiday_add():
+    try:
+        day = datetime.strptime(request.form.get('day', ''), '%Y-%m-%d').date()
+    except ValueError:
+        flash('Невалидна дата.', 'error')
+        return redirect(url_for('admin_thermostats'))
+    if HeatingHoliday.query.filter_by(day=day).first():
+        flash('Този ден вече е в списъка.', 'error')
+        return redirect(url_for('admin_thermostats'))
+    db.session.add(HeatingHoliday(day=day, name=(request.form.get('name') or '').strip()[:150] or None))
+    db.session.commit()
+    log_action(f'Почивен ден за термостатите: {day.isoformat()}')
+    flash('Почивният ден беше добавен.', 'success')
+    return redirect(url_for('admin_thermostats'))
+
+
+@app.route('/admin/hvac/holidays/<int:h_id>/delete', methods=['POST'])
+@role_required('admin')
+def admin_hvac_holiday_delete(h_id):
+    h = HeatingHoliday.query.get_or_404(h_id)
+    day = h.day.isoformat()
+    db.session.delete(h)
+    db.session.commit()
+    log_action(f'Премахнат почивен ден за термостатите: {day}')
+    flash('Почивният ден беше премахнат.', 'success')
+    return redirect(url_for('admin_thermostats'))
 
 
 # ----------------- АВТОМОБИЛНО СТОПАНСТВО -----------------

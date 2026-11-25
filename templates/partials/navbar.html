@@ -124,10 +124,16 @@
                                             <a href="{{ url_for('admin_hall') }}">Хале 3D (редактор)</a>
                                             <a href="{{ url_for('admin_buildings') }}">Сгради и помещения</a>
                                             <a href="{{ url_for('admin_panels') }}">Ел. табла</a>
-                                            <a href="{{ url_for('admin_temperature_sensors') }}">Температурни сензори</a>
-                                            <a href="{{ url_for('admin_convectors') }}">Конвектори</a>
+                                            <div class="dropdown-sub">
+                                                <span class="dropdown-trigger dropdown-sub-trigger">Отопление и охлаждане <span class="dropdown-arrow">▾</span></span>
+                                                <div class="dropdown-content dropdown-content-sub">
+                                                    <a href="{{ url_for('admin_thermostats') }}">Термостати</a>
+                                                    <a href="{{ url_for('admin_temperature_sensors') }}">Температурни сензори</a>
+                                                    <a href="{{ url_for('admin_convectors') }}">Конвектори</a>
+                                                    {% if current_user.is_admin %}<a href="{{ url_for('admin_heatpump') }}">Термопомпа</a>{% endif %}
+                                                </div>
+                                            </div>
                                             {% if current_user.is_admin %}                                                <a href="{{ url_for('admin_power') }}">Консумация</a>
-                                                <a href="{{ url_for('admin_heatpump') }}">Термопомпа</a>
                                                 <a href="{{ url_for('factory3d') }}#roof">Покрив (соларни панели)</a>
                                                 <a href="{{ url_for('admin_battery_cabinets') }}">Батерийно стопанство</a>
                                             {% endif %}

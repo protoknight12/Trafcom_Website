@@ -385,3 +385,131 @@ def test_manual_toggle_logs_source_manual(env):
     r = c.post(f'/admin/convectors/{conv.id}/toggle')
     assert r.status_code in (302, 303) and env['sets'] == [('Ръчен', True)]
     assert [(x.is_on, x.source) for x in _logs('Ръчен')] == [(True, 'manual')]
+
+
+# ---------------- Task 4: menu + Термостати admin page ----------------
+@pytest.fixture
+def adm(env):
+    from app import User, limiter
+    from werkzeug.security import generate_password_hash
+    limiter.reset()
+    if not User.query.filter_by(username='hvac_admin').first():
+        db.session.add(User(username='hvac_admin', password=generate_password_hash('x123456'), role='admin'))
+        db.session.commit()
+    c = app.test_client()
+    c.post('/login', data={'username': 'hvac_admin', 'password': 'x123456'})
+    return c
+
+
+def _flashes(c):
+    with c.session_transaction() as s:
+        return [m for _, m in s.get('_flashes', [])]
+
+
+def test_thermostat_crud_and_assignment(adm):
+    c1, c2 = Convector(name='А1'), Convector(name='А2')
+    db.session.add_all([c1, c2])
+    db.session.commit()
+    r = adm.post('/admin/thermostats/save', data={'name': 'Цех', 'hysteresis': '0.8', 'min_cycle_min': '7',
+                                                  'lowered_heat': '15', 'lowered_cool': '', 'enabled': '1',
+                                                  'convector_ids': [str(c1.id), str(c2.id)]})
+    assert r.status_code in (302, 303)
+    t = Thermostat.query.filter_by(name='Цех').one()
+    assert (t.hysteresis, t.min_cycle_min, t.lowered_heat, t.lowered_cool, t.enabled) == (0.8, 7, 15.0, None, True)
+    assert {x.name for x in t.convectors} == {'А1', 'А2'}
+    assert 'Цех' in adm.get('/admin/thermostats').get_data(as_text=True)
+    # edit: unchecked convector goes free; bad hysteresis refused
+    adm.post('/admin/thermostats/save', data={'id': t.id, 'name': 'Цех2', 'hysteresis': '0.5', 'min_cycle_min': '5',
+                                              'lowered_heat': '16', 'convector_ids': [str(c1.id)]})
+    db.session.expire_all()
+    assert Thermostat.query.get(t.id).name == 'Цех2' and Convector.query.get(c2.id).thermostat_id is None
+    adm.post('/admin/thermostats/save', data={'id': t.id, 'name': 'X', 'hysteresis': '9', 'min_cycle_min': '5', 'lowered_heat': '16'})
+    db.session.expire_all()
+    assert Thermostat.query.get(t.id).name == 'Цех2'
+    db.session.add(ThermostatInterval(thermostat_id=t.id, season='heat', weekday=0, start_min=0, end_min=60, temp=20))
+    db.session.commit()
+    adm.post(f'/admin/thermostats/{t.id}/delete')
+    db.session.expire_all()
+    assert Thermostat.query.count() == 0 and ThermostatInterval.query.count() == 0
+    assert Convector.query.get(c1.id).thermostat_id is None
+
+
+def _t():
+    t = Thermostat(name='Т')
+    db.session.add(t)
+    db.session.commit()
+    return t
+
+
+def _rows(*r):
+    import json
+    return json.dumps([{'weekday': w, 'start': s, 'end': e, 'temp': tp} for w, s, e, tp in r])
+
+
+def test_schedule_save_validates(adm):
+    t = _t()
+    url = f'/admin/thermostats/{t.id}/schedule'
+    adm.post(url, data={'season': 'heat', 'rows_json': _rows((0, '07:00', '17:00', 21), (1, '07:00', '24:00', 40))})
+    assert ThermostatInterval.query.count() == 2
+    # clamped: 40 -> 30
+    assert sorted(i.temp for i in ThermostatInterval.query) == [21.0, 30.0]
+    # overlap -> nothing replaced
+    adm.post(url, data={'season': 'heat', 'rows_json': _rows((0, '07:00', '12:00', 21), (0, '11:00', '13:00', 21))})
+    assert ThermostatInterval.query.count() == 2 and _flashes(adm)
+    # garbage input
+    for bad in (_rows((9, '07:00', '08:00', 21)), _rows((0, '7h', '08:00', 21)), _rows((0, '07:00', '08:00', 'x')), 'nope'):
+        adm.post(url, data={'season': 'heat', 'rows_json': bad})
+        assert ThermostatInterval.query.count() == 2
+    # another season is untouched by a replace
+    adm.post(url, data={'season': 'cool', 'rows_json': _rows((2, '08:00', '16:00', 24))})
+    adm.post(url, data={'season': 'heat', 'rows_json': '[]'})
+    assert [(i.season, i.weekday) for i in ThermostatInterval.query] == [('cool', 2)]
+
+
+def test_schedule_copy(adm):
+    a, b = _t(), _t()
+    adm.post(f'/admin/thermostats/{a.id}/schedule', data={'season': 'heat', 'rows_json': _rows((0, '07:00', '17:00', 21))})
+    db.session.add(ThermostatInterval(thermostat_id=b.id, season='heat', weekday=3, start_min=0, end_min=60, temp=18))
+    db.session.commit()
+    adm.post(f'/admin/thermostats/{a.id}/schedule/copy', data={'season': 'heat', 'target_ids': [str(b.id)]})
+    assert [(i.weekday, i.start_min, i.end_min, i.temp) for i in ThermostatInterval.query.filter_by(thermostat_id=b.id)] == [(0, 420, 1020, 21.0)]
+
+
+def test_holiday_add_delete(adm):
+    adm.post('/admin/hvac/holidays', data={'day': '2026-12-25', 'name': 'Коледа'})
+    h = HeatingHoliday.query.one()
+    assert h.day == datetime.date(2026, 12, 25)
+    adm.post('/admin/hvac/holidays', data={'day': '2026-12-25', 'name': 'пак'})   # duplicate: no crash
+    assert HeatingHoliday.query.count() == 1
+    assert 'Коледа' in adm.get('/admin/thermostats').get_data(as_text=True)
+    adm.post(f'/admin/hvac/holidays/{h.id}/delete')
+    assert HeatingHoliday.query.count() == 0
+
+
+def test_room_delete_nulls_thermostat_room(adm):
+    from app import Building, Room
+    b = Building(name='Б')
+    db.session.add(b)
+    db.session.flush()
+    r = Room(name='Р', building_id=b.id)
+    db.session.add(r)
+    db.session.flush()
+    t = Thermostat(name='ТР', room_id=r.id)
+    db.session.add(t)
+    db.session.commit()
+    adm.post(f'/admin/rooms/{r.id}/delete')
+    db.session.expire_all()
+    assert Thermostat.query.get(t.id).room_id is None
+
+
+def test_navbar_has_hvac_section(adm):
+    html = adm.get('/admin/thermostats').get_data(as_text=True)
+    i = html.index('dropdown-sub-trigger">Отопление и охлаждане')
+    block = html[i:html.index('</div>', i)]
+    for label in ('Термостати', 'Температурни сензори', 'Конвектори', 'Термопомпа'):
+        assert label in block
+    assert 'admin_hvac' not in html
+    # old standalone links are no longer direct children of "Съоръжения и енергия"
+    j = html.index('Съоръжения и енергия')
+    outer = html[j:i]
+    assert 'href="/admin/convectors"' not in outer and 'href="/admin/temperature-sensors"' not in outer

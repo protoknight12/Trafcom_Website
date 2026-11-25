@@ -96,6 +96,7 @@
                 <tr>
                     <th>Име</th>
                     <th>Място</th>
+                    <th>Термостат</th>
                     <th>Състояние</th>
                     <th>Мощност</th>
                     <th>Адрес</th>
@@ -110,12 +111,14 @@
                 <tr>
                     <td><strong>{{ c.name }}</strong></td>
                     <td>{{ c.place_label }}</td>
+                    <td class="text-small">{% if c.thermostat %}<a href="{{ url_for('admin_thermostats') }}">{{ c.thermostat.name }}</a>{% else %}<span class="text-muted">—</span>{% endif %}</td>
                     <td class="conv-state" data-field="state" data-conv-id="{{ c.id }}">—</td>
                     <td class="text-small text-muted" data-field="power" data-conv-id="{{ c.id }}">—</td>
                     <td class="text-small text-muted">{{ c.mqtt_topic if c.connection_type == 'mqtt' else c.host }}{% if c.relay_channel %} · реле {{ c.relay_channel }}{% endif %}</td>
                     <td class="text-small text-muted">{{ convector_types.get(c.device_type, c.device_type) }}</td>
                     <td class="text-right">
-                        <form action="{{ url_for('admin_convector_toggle', conv_id=c.id) }}" method="POST" style="display:inline;">
+                        <form action="{{ url_for('admin_convector_toggle', conv_id=c.id) }}" method="POST" style="display:inline;"
+                              {% if c.thermostat %}data-confirm="Конвекторът е на термостат „{{ c.thermostat.name }}“ – превключването е временно, термостатът може да го върне."{% endif %}>
                             {% include 'partials/csrf_field.html' %}
                             <button type="submit" class="btn-secondary conv-toggle-btn" data-conv-id="{{ c.id }}">Превключи</button>
                         </form>

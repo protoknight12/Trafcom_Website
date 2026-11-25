@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include 'partials/favicon.html' %}
+    <title>Термостати - Trafcom DXF</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .th-convs { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 12px; width: 100%; }
+        .th-convs label { display: flex; gap: 6px; align-items: baseline; font-weight: 400; }
+        .th-convs .nocircuit { color: var(--text-muted); font-size: 0.8rem; }
+        .sch-day { display: flex; gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border-color, #ddd); flex-wrap: wrap; }
+        .sch-day > strong { width: 36px; }
+        .sch-chips { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; min-width: 120px; }
+        .sch-chip { background: var(--bg-secondary, #eef); border-radius: 12px; padding: 2px 4px 2px 10px; font-size: 0.85rem; white-space: nowrap; }
+        .sch-chip button { border: 0; background: none; cursor: pointer; font-size: 1rem; line-height: 1; padding: 0 6px; }
+        .sch-add { display: flex; gap: 4px; align-items: center; }
+        .sch-add input { width: auto; padding: 2px 4px; }
+        .sch-add input[type=number] { width: 64px; }
+        .sch-tools { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+    </style>
+</head>
+<body>
+{% set subnav = 'hvac' %}
+{% include 'partials/navbar.html' %}
+
+<main class="admin-container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    {% if current_user.is_admin %}
+    <section class="admin-card" id="thermostatForm" data-dialog-section="+ Нов термостат">
+        <h3>Нов термостат</h3>
+        <p class="section-subtitle">Сензор + седмичен график управляват своите конвектори. Конвектор може да е само на един термостат.</p>
+        <form action="{{ url_for('admin_thermostat_save') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <input type="hidden" name="id" value="">
+            <div class="form-group">
+                <label for="th_name">Име</label>
+                <input type="text" id="th_name" name="name" required maxlength="150" placeholder="напр. Цех - север">
+            </div>
+            <div class="form-group">
+                <label for="th_sensor">Температурен сензор</label>
+                <select id="th_sensor" name="sensor_id">
+                    <option value="">-- няма --</option>
+                    {% for s in sensors %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="th_room">Помещение</label>
+                <select id="th_room" name="room_id">
+                    <option value="">-- няма --</option>
+                    {% for r in rooms %}<option value="{{ r.id }}">{{ r.building.name }} / {{ r.name }}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="th_hyst">Хистерезис (К, 0,1–3)</label>
+                <input type="number" id="th_hyst" name="hysteresis" step="0.1" min="0.1" max="3" value="0.5" required>
+            </div>
+            <div class="form-group">
+                <label for="th_min">Минимално време вкл./изкл. (мин, 0–60)</label>
+                <input type="number" id="th_min" name="min_cycle_min" step="1" min="0" max="60" value="5" required>
+            </div>
+            <div class="form-group">
+                <label for="th_lh">Понижена температура – отопление (°C, 5–30)</label>
+                <input type="number" id="th_lh" name="lowered_heat" step="0.5" min="5" max="30" value="16" required>
+            </div>
+            <div class="form-group">
+                <label for="th_lc">Понижена температура – охлаждане (°C, 18–30; празно = изкл.)</label>
+                <input type="number" id="th_lc" name="lowered_cool" step="0.5" min="18" max="30" value="">
+            </div>
+            <div class="form-group">
+                <label><input type="checkbox" name="enabled" value="1" checked> Включен</label>
+            </div>
+            <div class="form-group" style="width: 100%;">
+                <label>Конвектори</label>
+                <div class="th-convs" id="thConvs">
+                    {% for c in convectors %}
+                    <label data-room="{{ c.room_id or '' }}">
+                        <input type="checkbox" name="convector_ids" value="{{ c.id }}">
+                        <span>{{ c.name }}
+                            {% if c.thermostat %}<span class="text-muted text-small">(сега: {{ c.thermostat.name }})</span>{% endif %}
+                            {% if c.heatpump_circuit %}<span class="text-muted text-small">· {{ circuits.get(c.heatpump_circuit, c.heatpump_circuit) }}</span>
+                            {% else %}<span class="nocircuit">· веригата не е описана</span>{% endif %}
+                        </span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+            <button type="submit" class="btn-submit" data-dialog-submit>Добави термостат</button>
+        </form>
+    </section>
+    {% endif %}
+
+    <section class="admin-card">
+        <h3>Термостати</h3>
+        {% if thermostats %}
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead>
+                <tr>
+                    <th>Име</th><th>Сензор</th><th>Помещение</th><th>Конвектори</th>
+                    <th>Хистерезис</th><th>Мин. време</th><th>Включен</th>
+                    {% if current_user.is_admin %}<th class="text-right">Действие</th>{% endif %}
+                </tr>
+                </thead>
+                <tbody>
+                {% for t in thermostats %}
+                <tr>
+                    <td><strong>{{ t.name }}</strong></td>
+                    <td>{{ t.sensor.name if t.sensor else '—' }}</td>
+                    <td>{{ (t.room.building.name ~ ' / ' ~ t.room.name) if t.room else '—' }}</td>
+                    <td class="text-small">{{ t.convectors|map(attribute='name')|join(', ') or '—' }}</td>
+                    <td>{{ t.hysteresis|num3 }} К</td>
+                    <td>{{ t.min_cycle_min }} мин</td>
+                    <td>{{ 'Да' if t.enabled else 'Не' }}</td>
+                    {% if current_user.is_admin %}
+                    <td class="text-right">
+                        <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;" data-dialog="scheduleDialog"
+                                data-action="{{ url_for('admin_thermostat_schedule', th_id=t.id) }}"
+                                data-title="График: {{ t.name }}"
+                                data-values='{{ {"season": "heat"}|tojson|forceescape }}' data-th="{{ t.id }}">График</button>
+                        <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;" data-dialog="thermostatForm-dialog"
+                                data-action="{{ url_for('admin_thermostat_save') }}"
+                                data-title="Редакция: {{ t.name }}"
+                                data-edit-id="{{ t.id }}"
+                                data-values='{{ {"id": t.id, "name": t.name, "sensor_id": t.sensor_id or "", "room_id": t.room_id or "",
+                                                 "hysteresis": t.hysteresis, "min_cycle_min": t.min_cycle_min, "lowered_heat": t.lowered_heat,
+                                                 "lowered_cool": t.lowered_cool if t.lowered_cool is not none else "",
+                                                 "enabled": t.enabled, "convector_ids": t.convectors|map(attribute="id")|list}|tojson|forceescape }}'>Редактирай</button>
+                        <form action="{{ url_for('admin_thermostat_delete', th_id=t.id) }}" method="POST" style="display:inline;"
+                              data-confirm="Изтриване на термостат &quot;{{ t.name }}&quot;?">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                    {% endif %}
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма добавени термостати.</p>
+        {% endif %}
+    </section>
+
+    {% if current_user.is_admin %}
+    <section class="admin-card" data-dialog-section="+ Почивен ден">
+        <h3>Нов почивен ден</h3>
+        <p class="section-subtitle">В такъв ден термостатите следват графика за неделя.</p>
+        <form action="{{ url_for('admin_hvac_holiday_add') }}" method="POST" class="admin-form">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="hol_day">Дата</label>
+                <input type="date" id="hol_day" name="day" required>
+            </div>
+            <div class="form-group">
+                <label for="hol_name">Име</label>
+                <input type="text" id="hol_name" name="name" maxlength="150" placeholder="напр. Коледа">
+            </div>
+            <button type="submit" class="btn-submit">Добави</button>
+        </form>
+    </section>
+    {% endif %}
+
+    <section class="admin-card">
+        <h3>Почивни дни</h3>
+        {% if holidays %}
+        <div class="table-responsive">
+            <table class="users-table">
+                <thead><tr><th>Дата</th><th>Име</th>{% if current_user.is_admin %}<th class="text-right">Изтриване</th>{% endif %}</tr></thead>
+                <tbody>
+                {% for h in holidays %}
+                <tr>
+                    <td>{{ h.day.strftime('%d.%m.%Y') }}</td>
+                    <td>{{ h.name or '—' }}</td>
+                    {% if current_user.is_admin %}
+                    <td class="text-right">
+                        <form action="{{ url_for('admin_hvac_holiday_delete', h_id=h.id) }}" method="POST" style="display:inline;"
+                              data-confirm="Премахване на почивния ден {{ h.day.strftime('%d.%m.%Y') }}?">
+                            {% include 'partials/csrf_field.html' %}
+                            <button type="submit" class="btn-delete">Изтрий</button>
+                        </form>
+                    </td>
+                    {% endif %}
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data text-center">Няма почивни дни.</p>
+        {% endif %}
+    </section>
+
+    {% if current_user.is_admin %}
+    <dialog id="scheduleDialog" class="form-dialog">
+        <h3 data-dialog-title>График</h3>
+        <form method="POST" class="admin-form" id="schForm">
+            {% include 'partials/csrf_field.html' %}
+            <div class="form-group">
+                <label for="sch_season">Сезон</label>
+                <select id="sch_season" name="season">
+                    <option value="heat">Отопление</option>
+                    <option value="cool">Охлаждане</option>
+                </select>
+            </div>
+            <input type="hidden" name="rows_json" id="schRows">
+            <div class="sch-tools">
+                <button type="button" class="btn-secondary" id="schWork">Работни дни 07–17</button>
+                <button type="button" class="btn-secondary" id="schWeekend">Почивни = понижена</button>
+            </div>
+            <div id="schGrid" style="width: 100%;"></div>
+            <p class="text-muted text-small" style="width: 100%;">Извън интервалите важи пониженото ниво на термостата. Празникът следва графика за неделя. Край 24:00 = до края на деня.</p>
+            <button type="submit" class="btn-submit">Запази графика</button>
+        </form>
+        <hr style="width: 100%;">
+        <form method="POST" class="admin-form" id="schCopyForm">
+            {% include 'partials/csrf_field.html' %}
+            <input type="hidden" name="season" id="schCopySeason" value="heat">
+            <div class="form-group" style="width: 100%;">
+                <label>Копирай записания график към…</label>
+                <div class="th-convs">
+                    {% for t in thermostats %}
+                    <label data-th="{{ t.id }}"><input type="checkbox" name="target_ids" value="{{ t.id }}"> {{ t.name }}</label>
+                    {% endfor %}
+                </div>
+            </div>
+            <button type="submit" class="btn-secondary" data-confirm="Графикът на избраните термостати за този сезон ще бъде заменен. Продължаване?">Копирай</button>
+        </form>
+    </dialog>
+    {% endif %}
+
+</main>
+
+<script>
+(function () {
+    var SCHEDULES = {{ schedules|tojson }};
+    var COPY_URL = {{ url_for('admin_thermostat_schedule_copy', th_id=0)|tojson }};
+    var DAYS = ['Пон', 'Вто', 'Сря', 'Чет', 'Пет', 'Съб', 'Нед'];
+    var DEFAULT_TEMP = {heat: 21, cool: 24};
+    var state = {heat: [], cool: []};     // rows of the open thermostat per season: {weekday,start,end,temp}
+    var dlg = document.getElementById('scheduleDialog');
+
+    // --- thermostat edit dialog: convectors of the chosen room first ------
+    var convBox = document.getElementById('thConvs');
+    var roomSel = document.getElementById('th_room');
+    function sortConvs() {
+        if (!convBox || !roomSel) return;
+        var room = roomSel.value;
+        var labels = Array.prototype.slice.call(convBox.children);
+        labels.sort(function (a, b) {
+            return (b.dataset.room === room && room !== '') - (a.dataset.room === room && room !== '');
+        });
+        labels.forEach(function (l) { convBox.appendChild(l); });
+    }
+    if (roomSel) roomSel.addEventListener('change', sortConvs);
+    var thDlg = document.getElementById('thermostatForm-dialog');
+    if (thDlg) thDlg.addEventListener('dialog-open', sortConvs);
+
+    // --- schedule editor ---------------------------------------------------
+    if (!dlg) return;
+    var season = function () { return document.getElementById('sch_season').value; };
+
+    function render() {
+        var grid = document.getElementById('schGrid');
+        grid.textContent = '';
+        var rows = state[season()];
+        DAYS.forEach(function (name, wd) {
+            var day = document.createElement('div');
+            day.className = 'sch-day';
+            var lab = document.createElement('strong');
+            lab.textContent = name;
+            var chips = document.createElement('div');
+            chips.className = 'sch-chips';
+            rows.filter(function (r) { return r.weekday === wd; })
+                .sort(function (a, b) { return a.start < b.start ? -1 : 1; })
+                .forEach(function (r) {
+                    var chip = document.createElement('span');
+                    chip.className = 'sch-chip';
+                    chip.appendChild(document.createTextNode(r.start + '–' + r.end + ' ' + r.temp + '°'));
+                    var x = document.createElement('button');
+                    x.type = 'button';
+                    x.textContent = '×';
+                    x.title = 'Премахни';
+                    x.addEventListener('click', function () { rows.splice(rows.indexOf(r), 1); render(); });
+                    chip.appendChild(x);
+                    chips.appendChild(chip);
+                });
+            var add = document.createElement('span');
+            add.className = 'sch-add';
+            var f = document.createElement('input'); f.type = 'time'; f.value = '07:00';
+            var t = document.createElement('input'); t.type = 'time'; t.value = '17:00';
+            var tp = document.createElement('input'); tp.type = 'number'; tp.step = '0.5'; tp.value = DEFAULT_TEMP[season()];
+            var btn = document.createElement('button');
+            btn.type = 'button'; btn.className = 'btn-secondary'; btn.textContent = '+ интервал';
+            btn.style.cssText = 'padding:2px 8px;font-size:0.8rem;';
+            btn.addEventListener('click', function () {
+                if (!f.value || !t.value || tp.value === '') return;
+                var end = t.value === '00:00' ? '24:00' : t.value;     // 00:00 as an end = end of day
+                rows.push({weekday: wd, start: f.value, end: end, temp: parseFloat(tp.value)});
+                render();
+            });
+            add.append(f, t, tp, btn);
+            day.append(lab, chips, add);
+            grid.appendChild(day);
+        });
+    }
+
+    function load(thId) {
+        var s = SCHEDULES[thId] || {heat: [], cool: []};
+        state = {heat: JSON.parse(JSON.stringify(s.heat)), cool: JSON.parse(JSON.stringify(s.cool))};
+        document.getElementById('schCopyForm').action = COPY_URL.replace(/\/0\//, '/' + thId + '/');
+        dlg.querySelectorAll('#schCopyForm label[data-th]').forEach(function (l) { l.hidden = l.dataset.th === String(thId); });
+        document.getElementById('schCopyForm').reset();
+    }
+
+    dlg.addEventListener('dialog-open', function (e) {
+        load(e.detail.button.dataset.th);
+        document.getElementById('schCopySeason').value = season();
+        render();
+    });
+    document.getElementById('sch_season').addEventListener('change', function () {
+        document.getElementById('schCopySeason').value = season();
+        render();
+    });
+    document.getElementById('schWork').addEventListener('click', function () {
+        var rows = state[season()];
+        state[season()] = rows.filter(function (r) { return r.weekday > 4; });
+        for (var wd = 0; wd < 5; wd++) state[season()].push({weekday: wd, start: '07:00', end: '17:00', temp: DEFAULT_TEMP[season()]});
+        render();
+    });
+    document.getElementById('schWeekend').addEventListener('click', function () {
+        state[season()] = state[season()].filter(function (r) { return r.weekday < 5; });
+        render();
+    });
+    document.getElementById('schForm').addEventListener('submit', function () {
+        document.getElementById('schRows').value = JSON.stringify(state[season()]);
+    });
+})();
+</script>
+
+</body>
+</html>
