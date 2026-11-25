@@ -28795,6 +28795,13 @@ def admin_hvac():
                            ranges={'heat': hvac.HEAT_RANGE, 'cool': hvac.COOL_RANGE}, active_page='admin_hvac')
 
 
+def _hvac_sky():
+    """Sun or moon on the dashboard's background (owner's request 2026-11-25): day = the sun above the horizon
+    (-0.833°, as _sun_rise_set()), with its azimuth/altitude to place it."""
+    pos = _sun_position(datetime.utcnow())
+    return {'day': pos['altitude'] > -0.833, 'azimuth': round(pos['azimuth'], 1), 'altitude': round(pos['altitude'], 1)}
+
+
 @app.route('/admin/hvac/data')
 @role_required(['admin', 'worker'])
 @limiter.exempt
@@ -28814,6 +28821,7 @@ def admin_hvac_data():
                    pump=_hvac_pump_block(season) if current_user.is_admin else None, thermostats=cards,
                    pump_gate=_hvac_pump_gate() if season in ('heat', 'cool') else {'active': True, 'reason': None},
                    outdoor=(_heatpump_live['data'] or {}).get('Temp. Aussen') if _heatpump_live['online'] else None,
+                   sky=_hvac_sky(),
                    convectors_on=sum(1 for c in cards for v in c['convectors'] if v['is_on']))
 
 
