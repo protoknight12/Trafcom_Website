@@ -60,3 +60,312 @@ def test_sensor_delete_nulls_thermostat_sensor():
     assert r.status_code in (302, 303)
     with app.app_context():
         assert db.session.get(Thermostat, tid).sensor_id is None
+
+
+# ---------------- Task 3: the engine (tick, season, poller) ----------------
+# Schedule time is the frozen local `now` passed to _thermostat_tick(); ages (sensor, ConvectorLog) are real time.time().
+import time
+import pytest
+import app as app_module
+from app import EditableText, HVAC_SEASON_KEY, MqttNotSent, APP_TZ
+
+NOW = datetime.datetime(2026, 11, 23, 10, 0)   # local naive
+
+
+@pytest.fixture
+def env(monkeypatch):
+    """Clean thermostat tables + fake devices: status[name], temp, age (s, None = never), sets (name, on), fail (names that raise)."""
+    app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
+    ctx = app.app_context()
+    ctx.push()
+    db.create_all()
+    for m in (ThermostatInterval, ConvectorLog, Convector, Thermostat, HeatingHoliday):
+        m.query.delete()
+    EditableText.query.filter_by(key=HVAC_SEASON_KEY).delete()
+    db.session.commit()
+    e = {'status': {}, 'temp': 20.0, 'age': 60, 'sets': [], 'fail': set()}
+
+    def fake_status(conv):
+        return e['status'].get(conv.name, {'online': True, 'is_on': False, 'power_w': None})
+
+    def fake_set(conv, on):
+        if conv.name in e['fail']:
+            raise MqttNotSent('няма връзка с MQTT брокера')
+        e['sets'].append((conv.name, on))
+
+    def fake_snap(sensor):
+        seen = None if e['age'] is None else datetime.datetime.utcnow() - datetime.timedelta(seconds=e['age'])
+        return {'temperature': e['temp'], 'humidity': 40.0, 'battery': 90, 'last_seen': seen, 'online': True}
+
+    monkeypatch.setattr(app_module, '_shelly_convector_status', fake_status)
+    monkeypatch.setattr(app_module, '_shelly_convector_set', fake_set)
+    monkeypatch.setattr(app_module, '_mqtt_temp_snapshot', fake_snap)
+    yield e
+    db.session.rollback()
+    db.session.remove()
+    ctx.pop()
+
+
+def _season(s):
+    db.session.merge(EditableText(key=HVAC_SEASON_KEY, content=s))
+    db.session.commit()
+
+
+def _thermo(convs=('К1',), heat=21.0, cool=24.0, sensor=True, **kw):
+    s = None
+    if sensor:
+        s = TemperatureSensor.query.filter_by(mqtt_topic='t/hvac-tick').first() or TemperatureSensor(name='S', mqtt_topic='t/hvac-tick')
+        db.session.add(s)
+        db.session.flush()
+    t = Thermostat(name='Цех', sensor_id=s.id if s else None, **kw)
+    for wd in range(7):
+        t.intervals.append(ThermostatInterval(season='heat', weekday=wd, start_min=0, end_min=1440, temp=heat))
+        t.intervals.append(ThermostatInterval(season='cool', weekday=wd, start_min=0, end_min=1440, temp=cool))
+    db.session.add(t)
+    for c in convs:
+        name, circuit = c if isinstance(c, tuple) else (c, None)
+        db.session.add(Convector(name=name, thermostat=t, heatpump_circuit=circuit))
+    db.session.commit()
+    return t
+
+
+def _logs(name):
+    c = Convector.query.filter_by(name=name).one()
+    return ConvectorLog.query.filter_by(convector_id=c.id).order_by(ConvectorLog.id).all()
+
+
+def test_tick_heats_below_band(env):
+    _season('heat')
+    _thermo()
+    env['temp'] = 20.0                                   # target 21, hysteresis 0.5
+    app_module._thermostat_tick(NOW)
+    assert env['sets'] == [('К1', True)]
+
+
+def test_tick_deadband_no_command(env):
+    _season('heat')
+    _thermo()
+    for temp, is_on in ((20.8, False), (21.4, True)):
+        env['temp'] = temp
+        env['status']['К1'] = {'online': True, 'is_on': is_on, 'power_w': None}
+        app_module._thermostat_tick(NOW)
+    assert env['sets'] == []
+    env['temp'] = 21.6
+    app_module._thermostat_tick(NOW)
+    assert env['sets'] == [('К1', False)]
+
+
+def test_tick_cool_season_mirrored(env):
+    _season('cool')
+    _thermo()
+    env['temp'] = 25.0                                   # target 24: too warm -> cool
+    app_module._thermostat_tick(NOW)
+    assert env['sets'] == [('К1', True)]
+    ConvectorLog.query.delete()
+    db.session.commit()
+    env['sets'].clear()
+    env['temp'] = 23.0
+    env['status']['К1'] = {'online': True, 'is_on': True, 'power_w': None}
+    app_module._thermostat_tick(NOW)
+    assert env['sets'] == [('К1', False)]
+
+
+def test_tick_min_cycle_blocks(env):
+    _season('heat')
+    _thermo()
+    c = Convector.query.one()
+    db.session.add(ConvectorLog(convector_id=c.id, ts=int(time.time()) - 60, is_on=False))
+    db.session.commit()
+    env['temp'] = 19.0
+    app_module._thermostat_tick(NOW)
+    assert env['sets'] == []
+    ConvectorLog.query.update({'ts': int(time.time()) - 6 * 60})
+    db.session.commit()
+    app_module._thermostat_tick(NOW)
+    assert env['sets'] == [('К1', True)]
+
+
+def test_tick_sensor_missing_turns_off(env):
+    _season('heat')
+    _thermo(sensor=False)
+    c = Convector.query.one()
+    db.session.add(ConvectorLog(convector_id=c.id, ts=int(time.time()) - 60, is_on=True))   # inside the minimum time
+    db.session.commit()
+    env['status']['К1'] = {'online': True, 'is_on': True, 'power_w': None}
+    app_module._thermostat_tick(NOW)
+    assert env['sets'] == [('К1', False)]
+
+    env['sets'].clear()
+    _thermo(convs=('К2',))
+    env['status']['К2'] = {'online': True, 'is_on': True, 'power_w': None}
+    env['temp'], env['age'] = 15.0, 41 * 60            # cold, but the reading is 41 min old
+    app_module._thermostat_tick(NOW)
+    assert ('К2', False) in env['sets']
+
+
+def test_tick_circuit_filter(env):
+    _season('cool')
+    _thermo(convs=(('Отопл', 'heating'), ('Охл', 'cooling'), ('Двата', 'both')))
+    env['temp'] = 30.0
+    app_module._thermostat_tick(NOW)
+    assert sorted(env['sets']) == [('Двата', True), ('Охл', True)]
+
+
+def test_tick_device_error_is_isolated(env):
+    _season('heat')
+    _thermo(convs=('Лош', 'Добър'))
+    env['fail'].add('Лош')
+    env['temp'] = 18.0
+    app_module._thermostat_tick(NOW)
+    assert env['sets'] == [('Добър', True)]
+    assert _logs('Лош') == [] and len(_logs('Добър')) == 1
+
+
+def test_tick_disabled_or_season_off_no_commands(env):
+    _thermo()                                            # season unset = off
+    env['temp'] = 10.0
+    app_module._thermostat_tick(NOW)
+    _season('off')
+    app_module._thermostat_tick(NOW)
+    _season('heat')
+    Thermostat.query.update({'enabled': False})
+    db.session.commit()
+    app_module._thermostat_tick(NOW)
+    assert env['sets'] == []
+
+
+def test_tick_writes_log_with_source(env):
+    _season('heat')
+    _thermo()
+    env['temp'] = 18.0
+    before = int(time.time())
+    app_module._thermostat_tick(NOW)
+    (row,) = _logs('К1')
+    assert row.source == 'thermostat' and row.is_on is True and row.ts >= before
+
+
+def test_tick_unknown_state_uses_log_and_resends(env):
+    _season('heat')
+    _thermo()
+    c = Convector.query.one()
+    c.connection_type = 'mqtt'
+    db.session.add(ConvectorLog(convector_id=c.id, ts=int(time.time()) - 300, is_on=True, source='thermostat'))
+    db.session.commit()
+    env['status']['К1'] = {'online': False, 'is_on': None, 'power_w': None}
+    env['temp'] = 18.0                                   # wants on, log says on 5 min ago -> nothing
+    app_module._thermostat_tick(NOW)
+    assert env['sets'] == []
+    ConvectorLog.query.update({'ts': int(time.time()) - 700})
+    db.session.commit()
+    app_module._thermostat_tick(NOW)                     # no confirmation for > 10 min -> send again
+    assert env['sets'] == [('К1', True)]
+    c = Convector.query.one()
+    c.connection_type = 'ip'                             # an unreachable HTTP relay is skipped
+    ConvectorLog.query.update({'ts': int(time.time()) - 700})
+    db.session.commit()
+    env['sets'].clear()
+    app_module._thermostat_tick(NOW)
+    assert env['sets'] == []
+
+
+def test_override_until_is_utc_compared_with_local_now(env):
+    _season('heat')
+    t = _thermo()
+    now_local = datetime.datetime.now(APP_TZ).replace(tzinfo=None)
+    t.override_temp, t.override_until = 25.0, datetime.datetime.utcnow() + datetime.timedelta(hours=1)
+    db.session.commit()
+    st = app_module._thermostat_state(t, now_local)
+    assert (st['target'], st['source']) == (25.0, 'override')
+    t.override_until = datetime.datetime.utcnow() - datetime.timedelta(minutes=1)
+    db.session.commit()
+    st = app_module._thermostat_state(t, now_local)
+    assert (st['target'], st['source']) == (21.0, 'schedule')
+    t.override_temp, t.hold = 40.0, True                 # clamped to the heating range
+    db.session.commit()
+    assert app_module._thermostat_state(t, now_local)['target'] == 30.0
+
+
+def test_sensor_reading_falls_back_to_stored_reading(env, monkeypatch):
+    from app import TemperatureReading
+    s = TemperatureSensor.query.filter_by(mqtt_topic='t/hvac-tick').first() or TemperatureSensor(name='S', mqtt_topic='t/hvac-tick')
+    db.session.add(s)
+    db.session.commit()
+    assert app_module._sensor_reading(None) == {'temp': None, 'humidity': None, 'age_s': None}
+    env['age'] = None                                    # restart: MQTT cache empty, value from the DB
+    TemperatureReading.query.filter_by(sensor_id=s.id).delete()
+    db.session.add(TemperatureReading(sensor_id=s.id, ts=int(time.time()) - 600, temperature=20.0))
+    db.session.commit()
+    r = app_module._sensor_reading(s)
+    assert r['temp'] == 20.0 and 590 <= r['age_s'] <= 700
+
+
+def _admin_client():
+    from app import User, limiter
+    from werkzeug.security import generate_password_hash
+    limiter.reset()
+    for name, role in (('hvac_admin', 'admin'), ('hvac_worker', 'worker')):
+        if not User.query.filter_by(username=name).first():
+            db.session.add(User(username=name, password=generate_password_hash('x123456'), role=role))
+    db.session.commit()
+    c = app.test_client()
+    c.post('/login', data={'username': 'hvac_admin', 'password': 'x123456'})
+    return c
+
+
+def test_season_writes_betriebsart_and_clears_overrides(env, monkeypatch):
+    writes = []
+    monkeypatch.setattr(app_module, '_heatpump_write', lambda n, v: writes.append((n, v)) or {'ok': True, 'value': v})
+    t = _thermo(override_temp=25.0, hold=True)
+    tid = t.id
+    c = _admin_client()
+    r = c.post('/admin/hvac/season', data={'season': 'cool'})
+    assert r.status_code == 200 and r.get_json()['ok'] is True
+    assert writes == [('Betriebsart', 2)]
+    db.session.expire_all()
+    assert app_module.hvac_season() == 'cool'
+    t = db.session.get(Thermostat, tid)
+    assert t.override_temp is None and t.override_until is None and t.hold is False
+    assert env['sets'] == []
+    assert c.post('/admin/hvac/season', data={'season': 'лято'}).status_code == 400
+    from flask import g
+    g.pop('_login_user', None)                           # the fixture's app context is shared with requests: drop the admin
+    w = app.test_client()
+    w.post('/login', data={'username': 'hvac_worker', 'password': 'x123456'})
+    assert w.post('/admin/hvac/season', data={'season': 'heat'}).status_code == 302
+    assert writes == [('Betriebsart', 2)]
+
+
+def test_season_off_switches_convectors_off(env, monkeypatch):
+    monkeypatch.setattr(app_module, '_heatpump_write', lambda n, v: {'ok': True, 'value': v})
+    _season('heat')
+    _thermo(convs=('К1', 'К2'))
+    db.session.add(Convector(name='Свободен'))          # not on a thermostat: untouched
+    db.session.commit()
+    res = app_module._hvac_set_season('off')
+    assert res['ok'] is True and app_module.hvac_season() == 'off'
+    assert sorted(env['sets']) == [('К1', False), ('К2', False)]
+    assert [r.source for r in _logs('К1')] == ['thermostat']
+
+
+def test_season_refused_when_pump_offline(env, monkeypatch):
+    monkeypatch.setattr(app_module, '_heatpump_write',
+                        lambda n, v: {'ok': False, 'error': 'Няма връзка с термопомпата.', 'status': 503})
+    _season('heat')
+    t = _thermo(override_temp=25.0, hold=True)
+    tid = t.id
+    c = _admin_client()
+    r = c.post('/admin/hvac/season', data={'season': 'cool'})
+    assert r.status_code == 503 and r.get_json()['ok'] is False
+    db.session.expire_all()
+    assert app_module.hvac_season() == 'heat'
+    assert db.session.get(Thermostat, tid).hold is True
+
+
+def test_manual_toggle_logs_source_manual(env):
+    c = _admin_client()
+    conv = Convector(name='Ръчен')
+    db.session.add(conv)
+    db.session.commit()
+    r = c.post(f'/admin/convectors/{conv.id}/toggle')
+    assert r.status_code in (302, 303) and env['sets'] == [('Ръчен', True)]
+    assert [(x.is_on, x.source) for x in _logs('Ръчен')] == [(True, 'manual')]

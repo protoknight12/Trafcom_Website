@@ -29,6 +29,7 @@ from html import escape as html_escape
 from html.parser import HTMLParser
 from concurrent.futures import ThreadPoolExecutor
 import fscut
+import hvac
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory, send_file, g, session, has_request_context, has_app_context, abort, Response
 from openpyxl import Workbook
 from flask_sqlalchemy import SQLAlchemy
@@ -25024,22 +25025,32 @@ def admin_heatpump_set():
         value = int(value)
     if not param.in_limits(value):
         return jsonify(ok=False, error=f'Допустимият диапазон е {param.min_val} … {param.max_val}.'), 400
-    if not _heatpump_live['online']:
-        return jsonify(ok=False, error='Няма връзка с термопомпата.'), 503
     old = _heatpump_live['slow'].get(name)
+    res = _heatpump_write(name, value)
+    if not res['ok']:
+        status = res.pop('status')
+        return jsonify(res), status
+    log_action(f'Термопомпа: {HEATPUMP_WRITABLE[name][0]} {old} → {res["value"]}')
+    return jsonify(res)
+
+
+def _heatpump_write(name, value):
+    """Queue one already validated write to the poller thread (the only one talking to the pump), wait for it and check the
+    read-back. {'ok': True, 'value'} or {'ok': False, 'error', 'status': HTTP code}. Blocks up to HEATPUMP_SET_TIMEOUT."""
+    if not _heatpump_live['online']:
+        return {'ok': False, 'error': 'Няма връзка с термопомпата.', 'status': 503}
     cmd = {'name': name, 'value': value, 'cancelled': False, 'done': threading.Event(), 'result': None,
            'deadline': time.monotonic() + HEATPUMP_SET_TIMEOUT}
     _heatpump_cmds.append(cmd)
     if not cmd['done'].wait(HEATPUMP_SET_TIMEOUT):
         cmd['cancelled'] = True
-        return jsonify(ok=False, error='Няма потвърждение от термопомпата - провери текущата стойност.'), 504
+        return {'ok': False, 'error': 'Няма потвърждение от термопомпата - провери текущата стойност.', 'status': 504}
     res = cmd['result']
     if res['ok'] and abs(res['value'] - value) > 0.05:
         res = {'ok': False, 'error': f"Термопомпата върна {res['value']} вместо {value}."}
     if not res['ok']:
-        return jsonify(res), 502
-    log_action(f'Термопомпа: {HEATPUMP_WRITABLE[name][0]} {old} → {res["value"]}')
-    return jsonify(res)
+        return dict(res, status=502)
+    return res
 
 
 @app.route('/admin/heatpump/host', methods=['POST'])
@@ -27919,9 +27930,184 @@ def admin_convector_toggle(conv_id):
     except Exception:
         flash(f'Неуспешно превключване на "{conv.name}" - устройството не отговори на командата.', 'danger')
         return redirect(url_for('admin_convectors'))
+    # Its own row, so _convector_log_tick() sees no change and a thermostat counts its minimum time from this switch too.
+    db.session.add(ConvectorLog(convector_id=conv.id, ts=int(time.time()), is_on=turn_on, source='manual'))
+    db.session.commit()
     log_action(f'{"Включен" if turn_on else "Изключен"} конвектор "{conv.name}"')
     flash(f'Конвектор "{conv.name}" беше {"включен" if turn_on else "изключен"}.', 'success')
     return redirect(url_for('admin_convectors'))
+
+
+# ----------------- ОТОПЛЕНИЕ И ОХЛАЖДАНЕ -----------------
+# Thermostats drive their convectors (pure rules in hvac.py); the season is written to the heat pump's Betriebsart.
+# Time: the schedule and overrides are compared in LOCAL naive time (datetime.now(APP_TZ) without tzinfo);
+# Thermostat.override_until is stored UTC naive and converted with to_local() before the comparison.
+# Ages (sensor reading, ConvectorLog.ts for the minimum on/off time) are real unix seconds (time.time()).
+HVAC_SEASON_KEY = 'settings.hvac_season'
+HVAC_SEASON_MODES = {'heat': 1, 'cool': 2, 'off': 0}     # season -> Betriebsart
+HVAC_SEASON_LABELS = {'heat': 'Отопление', 'cool': 'Охлаждане', 'off': 'Изключено'}
+HVAC_SENSOR_STALE = 2400            # seconds: an older reading counts as no reading (convectors go off)
+THERMOSTAT_POLLER_INTERVAL = 60     # seconds between ticks
+THERMOSTAT_RESEND_AFTER = 600       # seconds: an unconfirmed (unknown-state) command is sent again after this
+POLLER_STALE_AFTER['thermostat'] = 3 * THERMOSTAT_POLLER_INTERVAL
+_thermostat_started = False
+
+
+def hvac_season():
+    s = get_text(HVAC_SEASON_KEY, 'off')
+    return s if s in HVAC_SEASON_MODES else 'off'
+
+
+def _sensor_reading(sensor):
+    """{'temp', 'humidity', 'age_s'}: age from the MQTT cache's last_seen (UTC naive), else the last stored TemperatureReading."""
+    if sensor is None:
+        return {'temp': None, 'humidity': None, 'age_s': None}
+    snap = _mqtt_temp_snapshot(sensor)
+    if snap.get('last_seen') is not None:
+        age = (datetime.utcnow() - snap['last_seen']).total_seconds()
+    else:
+        row = TemperatureReading.query.filter(TemperatureReading.sensor_id == sensor.id, TemperatureReading.temperature.isnot(None)) \
+            .order_by(TemperatureReading.ts.desc()).first()
+        age = time.time() - row.ts if row else None
+    return {'temp': snap.get('temperature'), 'humidity': snap.get('humidity'),
+            'age_s': None if age is None else max(0, int(age))}
+
+
+def _thermostat_state(th, now_local, season=None, holidays=None):
+    """Everything the tick and the dashboard need about one thermostat at `now_local` (local naive)."""
+    season = season or hvac_season()
+    if holidays is None:
+        holidays = {h.day for h in HeatingHoliday.query}
+    r = _sensor_reading(th.sensor)
+    stale = r['temp'] is None or r['age_s'] is None or r['age_s'] > HVAC_SENSOR_STALE
+    target = next_change = until = None
+    source = 'schedule'
+    demand = None
+    if season in ('heat', 'cool'):
+        rows = [(i.weekday, i.start_min, i.end_min, i.temp) for i in th.intervals if i.season == season]
+        lowered = th.lowered_heat if season == 'heat' else th.lowered_cool
+        sched, next_change = hvac.scheduled_target(rows, lowered, now_local, holidays)
+        until = to_local(th.override_until).replace(tzinfo=None) if th.override_until else None
+        target, source = hvac.effective_target(sched, next_change, th.override_temp, until, th.hold, now_local)
+        if target is not None:
+            target = hvac.clamp(season, target)
+        demand = False if stale else hvac.decide(season, r['temp'], target, th.hysteresis, None)
+    return {'temp': r['temp'], 'humidity': r['humidity'], 'age_s': r['age_s'], 'stale': stale,
+            'target': target, 'source': source,
+            'next_change': next_change.isoformat() if next_change else None,
+            'override_until': until.isoformat() if until and source == 'override' else None,
+            'demand': demand}
+
+
+def _convector_on_season(conv, season):
+    """heatpump_circuit: 'heating' -> heat only, 'cooling' -> cool only, 'both'/None -> both."""
+    return {'heating': 'heat', 'cooling': 'cool'}.get(conv.heatpump_circuit, season) == season
+
+
+def _thermostat_switch(conv, on, source):
+    """Switch one convector and log it (no commit). Raises on a device error - then nothing is logged."""
+    _shelly_convector_set(conv, on)
+    db.session.add(ConvectorLog(convector_id=conv.id, ts=int(time.time()), is_on=on, source=source))
+
+
+def _last_convector_log(conv):
+    return ConvectorLog.query.filter_by(convector_id=conv.id).order_by(ConvectorLog.ts.desc(), ConvectorLog.id.desc()).first()
+
+
+def _thermostat_tick(now=None):
+    """One pass over every enabled thermostat (season heat/cool only). Each convector is switched on its own, only when its
+    state differs and its minimum on/off time is over (a stale/missing sensor switches off regardless). A device error is
+    logged and skips just that convector. Automatic switches are not written to the ActivityLog. Commits once."""
+    season = hvac_season()
+    if season not in ('heat', 'cool'):
+        return
+    now = now or datetime.now(APP_TZ).replace(tzinfo=None)
+    holidays = {h.day for h in HeatingHoliday.query}
+    for th in Thermostat.query.filter_by(enabled=True).order_by(Thermostat.id).all():
+        st = _thermostat_state(th, now, season, holidays)
+        want = st['demand']
+        if want is None:                    # inside the dead band: keep whatever each convector does
+            continue
+        for conv in th.convectors:
+            if not _convector_on_season(conv, season):
+                continue
+            try:
+                status = _shelly_convector_status(conv)
+                last = _last_convector_log(conv)
+                now_ts = time.time()
+                cur, resend = status['is_on'], False
+                if cur is None:
+                    # HTTP: unreachable, skip. MQTT: the state is just unknown - trust our last row, resend when unconfirmed.
+                    if conv.connection_type != 'mqtt':
+                        continue
+                    cur = last.is_on if last else None
+                    resend = last is not None and now_ts - last.ts > THERMOSTAT_RESEND_AFTER
+                if cur == want and not resend:
+                    continue
+                if not st['stale'] and last is not None and now_ts - last.ts < th.min_cycle_min * 60:
+                    continue
+                _thermostat_switch(conv, want, 'thermostat')
+            except Exception:
+                _poller_failed('thermostat-device')
+    db.session.commit()
+
+
+def _hvac_set_season(season):
+    """Writes the pump's Betriebsart first; only when the pump confirmed: stores the season, clears every override/hold and,
+    for 'off', switches off every convector on a thermostat. {'ok': True, 'season', 'failed': [names]} or the write's error."""
+    if season not in HVAC_SEASON_MODES:
+        return {'ok': False, 'error': 'Непознат сезон.', 'status': 400}
+    res = _heatpump_write('Betriebsart', HVAC_SEASON_MODES[season])
+    if not res['ok']:
+        return res
+    row = db.session.get(EditableText, HVAC_SEASON_KEY)
+    if row:
+        row.content = season
+    else:
+        db.session.add(EditableText(key=HVAC_SEASON_KEY, content=season))
+    Thermostat.query.update({'override_temp': None, 'override_until': None, 'hold': False}, synchronize_session=False)
+    db.session.commit()
+    failed = []
+    if season == 'off':
+        for conv in Convector.query.filter(Convector.thermostat_id.isnot(None)).order_by(Convector.id).all():
+            try:
+                _thermostat_switch(conv, False, 'thermostat')
+            except Exception:
+                failed.append(conv.name)
+        db.session.commit()
+    log_action(f'Сезон отопление/охлаждане: {HVAC_SEASON_LABELS[season]}'
+               + (f' (неуспешно изключване: {", ".join(failed)})' if failed else ''))
+    return {'ok': True, 'season': season, 'failed': failed}
+
+
+@app.route('/admin/hvac/season', methods=['POST'])
+@limiter.limit('30 per hour')
+@role_required('admin')
+def admin_hvac_season():
+    season = request.form.get('season', '')
+    if season not in HVAC_SEASON_MODES:
+        return jsonify(ok=False, error='Непознат сезон.'), 400
+    res = _hvac_set_season(season)
+    status = res.pop('status', 200)
+    return jsonify(res), status
+
+
+def _thermostat_loop():
+    while True:
+        _poller_run_tick('thermostat', _thermostat_tick)
+        time.sleep(THERMOSTAT_POLLER_INTERVAL)
+
+
+def start_thermostat_poller():
+    """Idempotent daemon thread; call from a real entrypoint (app.py __main__, wsgi.py), never at import.
+    ponytail: one thread per process - behind several gunicorn workers each would switch the same relays (harmless, same
+    decision, but doubled commands); run one worker or add an advisory lock like the detector."""
+    global _thermostat_started
+    if _thermostat_started:
+        return
+    _thermostat_started = True
+    _poller_mark('thermostat')
+    threading.Thread(target=_thermostat_loop, daemon=True, name='thermostat-poller').start()
 
 
 # ----------------- АВТОМОБИЛНО СТОПАНСТВО -----------------
@@ -31583,5 +31769,6 @@ if __name__ == '__main__':
         start_mqtt_listener()
         start_detection_worker()
         start_heatpump_poller()
+        start_thermostat_poller()
 
     app.run(debug=debug_mode)

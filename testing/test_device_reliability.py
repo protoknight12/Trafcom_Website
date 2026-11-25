@@ -308,7 +308,7 @@ def test_health_ok_degraded_and_leaks_nothing(client):
     r = client.get('/health')                           # no login
     assert r.status_code == 200
     assert r.get_json() == {'status': 'ok', 'db': 'ok', 'pollers': {n: 'not_started' for n in appmod.POLLER_STALE_AFTER}}
-    assert set(appmod.POLLER_STALE_AFTER) == {'shelly', 'solis', 'mqtt', 'detector', 'heatpump'}
+    assert set(appmod.POLLER_STALE_AFTER) == {'shelly', 'solis', 'mqtt', 'detector', 'heatpump', 'thermostat'}
 
     appmod._poller_mark('shelly')
     appmod._poller_seen['solis'] = time.time() - appmod.POLLER_STALE_AFTER['solis'] - 30
