@@ -24188,14 +24188,10 @@ HEATPUMP_WRITABLE = {
     'WW Hysterese Normaltemp.': ('БГВ хистерезис нормална', 'K'),
     'WW Minimaltemp.': ('БГВ минимална', '°C'),
     'WW Hysterese Minimaltemp.': ('БГВ хистерезис минимална', 'K'),
-    'HKP_Nachlaufzeit (Sec)': ('Помпа на кръга: работи след спиране', 's'),   # defined in HEATPUMP_HKP_PARAMS (owner, 2026-11-25)
 }
-# SP values read once a minute: everything writable (to show the current value) plus read-only status/counters.
-HEATPUMP_SLOW_PARAMS = tuple(HEATPUMP_WRITABLE) + ('Verdichter_Status', 'BSZ Verdichter Betriebsst. ges',
-                                                    'BSZ Verdichter Betriebsst. WW', 'BSZ Verdichter Betriebsst. HKR')
-# Heating-circuit pump (HKP) settings, read-only (owner's request 2026-11-25). htheatpump's default table does not have
-# them; the numbers come from its own htparams-xxxxxx-3_0_20-273.csv (firmware 3.0.20). Another firmware may number them
-# differently - the pump answers with the real NAME, shown when it differs. name: (SP number, type, min, max, label, unit)
+# Heating-circuit pump (HKP) settings, writable (owner's request 2026-11-25). htheatpump's default table does not have
+# them; the numbers come from its own htparams-xxxxxx-3_0_20-273.csv (firmware 3.0.20) - checked on this pump: every NAME
+# it answers matches. name: (SP number, type, min, max, label, unit)
 HEATPUMP_HKP_PARAMS = {
     'HKP_Modus': (37, HtDataTypes.INT, 0, 2, 'Режим на помпата', ''),
     'HKP Anforderungsabhaengig': (295, HtDataTypes.BOOL, False, True, 'Само при заявка', ''),
@@ -24206,12 +24202,14 @@ HEATPUMP_HKP_PARAMS = {
     'HKP bei EVU-Sperre': (294, HtDataTypes.BOOL, False, True, 'Работи при спиране от ЕРП', ''),
     'HKP im Kuehlbetrieb': (388, HtDataTypes.BOOL, False, True, 'Работи при охлаждане', ''),
     'HKP n_min(%)': (359, HtDataTypes.INT, 20, 100, 'Минимални обороти', '%'),
-    'Wartungslaufdauer alle Pumpen': (30, HtDataTypes.INT, 0, 180, 'Профилактично завъртане: продължителност', 's'),
 }
-HEATPUMP_HKP_INTERVAL = 600   # seconds between HKP reads (settings, change rarely)
 for _n, (_nr, _t, _mn, _mx, _l, _u) in HEATPUMP_HKP_PARAMS.items():
     if _n not in HtParams:
         HtParams._params[_n] = HtParam('SP', _nr, 'r-', _t, _mn, _mx)   # ponytail: private dict - the library has no add API
+    HEATPUMP_WRITABLE[_n] = ('Помпа на кръга: ' + _l[0].lower() + _l[1:], _u)
+# SP values read once a minute: everything writable (to show the current value) plus read-only status/counters.
+HEATPUMP_SLOW_PARAMS = tuple(HEATPUMP_WRITABLE) + ('Verdichter_Status', 'BSZ Verdichter Betriebsst. ges',
+                                                    'BSZ Verdichter Betriebsst. WW', 'BSZ Verdichter Betriebsst. HKR')
 HEATPUMP_SET_TIMEOUT = 30  # seconds the page waits for the poller thread to apply a change
 HEATPUMP_MODES = {0: 'Изключена', 1: 'Автоматика', 2: 'Охлаждане', 3: 'Лято', 4: 'Постоянно отопление',
                   5: 'Намалено', 6: 'Отпуск', 7: 'Парти'}  # ponytail: Heliotherm labels from community docs; 1 = Автоматика matches this unit
@@ -24266,21 +24264,6 @@ def _heatpump_slow(hp):
     slow['last_fault'] = {'text': last[3], 'code': last[1], 'ts': last[2].isoformat()}
     slow['pump_time'] = hp.get_date_time()[0].isoformat()
     return slow
-
-
-def _heatpump_hkp(hp):
-    """{name: {'val', 'pump_name'} or {'error'}} for HEATPUMP_HKP_PARAMS, one request each: a number this firmware lacks
-    fails alone. After a failure a late reply may still come - wait and drop it so the next answer is not one behind."""
-    out = {}
-    for name in HEATPUMP_HKP_PARAMS:
-        try:
-            pump_name, _mn, _mx, val = hp._get_param(name)
-            out[name] = {'val': val, 'pump_name': pump_name}
-        except Exception as e:
-            out[name] = {'error': (str(e) or e.__class__.__name__)[:120]}
-            time.sleep(1)
-            hp._ser.reset_input_buffer()
-    return out
 
 
 def _heatpump_fault_key(slow):
@@ -24376,8 +24359,6 @@ def _heatpump_loop():
                     faults = _heatpump_fault_sync(hp, slow, fault_key)
                     _heatpump_live.update(slow=slow, slow_ts=now)
                     last_slow = now
-                    if now - (_heatpump_live.get('hkp_ts') or 0) >= HEATPUMP_HKP_INTERVAL:
-                        _heatpump_live.update(hkp=_heatpump_hkp(hp), hkp_ts=now)
                     mode = slow.get('Betriebsart')
                     with app.app_context():
                         try:
@@ -24979,11 +24960,10 @@ def _heatpump_save_setting(key, value):
 @role_required('admin')
 def admin_heatpump():
     writable = {n: {'label': lbl, 'unit': unit, 'min': HtParams[n].min_val, 'max': HtParams[n].max_val,
-                    'int': HtParams[n].data_type == HtDataTypes.INT}
+                    'int': HtParams[n].data_type == HtDataTypes.INT, 'bool': HtParams[n].data_type == HtDataTypes.BOOL}
                 for n, (lbl, unit) in HEATPUMP_WRITABLE.items()}
     return render_template('admin_heatpump.html', active_page='admin_heatpump',
                            host=get_text(HEATPUMP_HOST_KEY, ''), modes=HEATPUMP_MODES, writable=writable,
-                           hkp_params={n: {'label': p[4], 'unit': p[5], 'sp': p[0]} for n, p in HEATPUMP_HKP_PARAMS.items()},
                            meters=[(_shelly_key(m), f'{m.name} - {CONNECTION_TYPES.get(m.connection_type, m.connection_type)}') for m in ShellyDevice.query.order_by(ShellyDevice.name)]
                            + [(f'{d.host}:{d.port}', f'{d.name} - Modbus') for d in ModbusDevice.query.filter_by(device_type='dtsu666').order_by(ModbusDevice.name)], cost_cfg=_heatpump_cost_cfg(),
                            **_heatpump_control_ctx())
@@ -25147,6 +25127,10 @@ def admin_heatpump_set():
         if value != int(value):
             return jsonify(ok=False, error='Стойността трябва да е цяло число.'), 400
         value = int(value)
+    elif param.data_type == HtDataTypes.BOOL:
+        if value not in (0, 1):
+            return jsonify(ok=False, error='Стойността трябва да е Да или Не.'), 400
+        value = bool(value)
     if not param.in_limits(value):
         return jsonify(ok=False, error=f'Допустимият диапазон е {param.min_val} … {param.max_val}.'), 400
     old = _heatpump_live['slow'].get(name)

@@ -115,31 +115,19 @@ def test_gate_residual_heat_min_water(hp):
     assert app_module._heatpump_residual_min() is None
 
 
-def test_hkp_read_each_param_alone(monkeypatch):
-    """HKP settings: registered in HtParams, one failing number does not stop the others, the pump's NAME is kept."""
+def test_hkp_params_writable_and_read(hp):
+    """HKP settings: registered in HtParams, all writable, read with the minute's slow read; a BOOL takes only 0/1."""
     from htheatpump import HtParams
     assert all(n in HtParams for n in app_module.HEATPUMP_HKP_PARAMS)
-    assert HtParams['HKP_Nachlaufzeit (Sec)'].dp_number == 36
-    monkeypatch.setattr(app_module.time, 'sleep', lambda s: None)
-
-    class Ser:
-        dropped = 0
-
-        def reset_input_buffer(self):
-            Ser.dropped += 1
-
-    class FakeHp:
-        _ser = Ser()
-
-        def _get_param(self, name):
-            if name == 'HKP_Modus':
-                raise IOError('no answer')
-            return ('Other' if name == 'HKP n_min(%)' else name), 0, 1, 7
-
-    out = app_module._heatpump_hkp(FakeHp())
-    assert out['HKP_Modus'] == {'error': 'no answer'} and Ser.dropped == 1
-    assert out['HKP_Nachlaufzeit (Sec)'] == {'val': 7, 'pump_name': 'HKP_Nachlaufzeit (Sec)'}
-    assert out['HKP n_min(%)']['pump_name'] == 'Other' and len(out) == len(app_module.HEATPUMP_HKP_PARAMS)
+    assert HtParams['HKP_Vorlaufzeit (sec)'].dp_number == 35
+    assert set(app_module.HEATPUMP_HKP_PARAMS) <= set(app_module.HEATPUMP_WRITABLE) <= set(app_module.HEATPUMP_SLOW_PARAMS)
+    c = _login('admin')
+    app_module._heatpump_live['online'] = True
+    assert c.post('/admin/heatpump/set', data={'name': 'HKP im Kuehlbetrieb', 'value': '2'}).status_code == 400
+    r = c.post('/admin/heatpump/set', data={'name': 'HKP im Kuehlbetrieb', 'value': '1'})
+    assert r.status_code == 200 and hp['writes'][-1] == ('HKP im Kuehlbetrieb', True)
+    r = c.post('/admin/heatpump/set', data={'name': 'HKP_Vorlaufzeit (sec)', 'value': '120'})
+    assert r.status_code == 200 and hp['writes'][-1] == ('HKP_Vorlaufzeit (sec)', 120)
 
 
 def test_gate_after_app_restart_uses_last_saved_mode(hp):

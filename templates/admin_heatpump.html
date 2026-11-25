@@ -91,9 +91,6 @@
     <h3 class="hp-section">Състояние</h3>
     <div class="hp-grid" id="gridStates"></div>
 
-    <h3 class="hp-section">Помпа на отоплителния кръг - настройки (само четене)</h3>
-    <p class="text-muted text-small" style="margin-top: 0;">Четат се на всеки 10 минути. Номерата са за фърмуер 3.0.20 - ако помпата върне друго име за номера, то се показва под стойността.</p>
-    <div class="hp-grid" id="gridHkp"><span class="text-muted text-small">Изчаква се четене…</span></div>
 
     <h3 class="hp-section">Управление</h3>
     {% include 'partials/heatpump_schedule_toggle.html' %}
@@ -245,7 +242,6 @@
 (function () {
     var MODES = {{ modes|tojson }};
     var WRITABLE = {{ writable|tojson }};
-    var HKP = {{ hkp_params|tojson }};
     var CSRF = '{{ csrf_token() }}';
     // --- tabs (kept in location.hash) ---
     var TABS = ['overview', 'schedule', 'faults'];
@@ -437,17 +433,6 @@
                 '<span style="font-size:0.95rem">' + escapeHtml(s.last_fault.text) + '<br><small>' + new Date(s.last_fault.ts).toLocaleString('bg-BG') + '</small></span>', 'last_fault');
         }
         document.getElementById('gridStates').innerHTML = html;
-        if (r.hkp) {
-            document.getElementById('gridHkp').innerHTML = Object.keys(HKP).map(function (n) {
-                var p = HKP[n], v = r.hkp[n] || {}, val;
-                if (v.error) val = '<small class="hp-fault">грешка: ' + escapeHtml(v.error) + '</small>';
-                else if (typeof v.val === 'boolean') val = '<span class="' + (v.val ? 'hp-on' : 'hp-off') + '">' + (v.val ? 'Да' : 'Не') + '</span>';
-                else val = num(v.val, p.unit);
-                if (v.pump_name && v.pump_name !== n) val += '<br><small class="hp-fault">помпата: ' + escapeHtml(v.pump_name) + '</small>';
-                return '<div class="hp-card" title="' + escapeHtml(n + ' (SP ' + p.sp + ')') + '"><div class="hp-label">' + escapeHtml(p.label) +
-                    '</div><div class="hp-value" style="font-size:1.1rem">' + val + '</div></div>';
-            }).join('');
-        }
         renderControls(s);
     }
 
@@ -460,20 +445,22 @@
                 var w = WRITABLE[n], input;
                 if (n === 'Betriebsart') {
                     input = '<select id="in' + i + '">' + Object.keys(MODES).map(function (k) { return '<option value="' + k + '">' + MODES[k] + '</option>'; }).join('') + '</select>';
+                } else if (w.bool) {
+                    input = '<select id="in' + i + '"><option value="1">Да</option><option value="0">Не</option></select>';
                 } else {
                     input = '<input id="in' + i + '" type="number" min="' + w.min + '" max="' + w.max + '" step="' + (w.int ? 1 : 0.5) + '">';
                 }
-                return '<div class="hp-ctl"><div' + tipAttr(n) + '><span class="hp-tip">' + w.label + '</span><div class="text-muted text-small">' + w.min + ' … ' + w.max + ' ' + w.unit + '</div></div>' +
+                return '<div class="hp-ctl"><div' + tipAttr(n) + '><span class="hp-tip">' + w.label + '</span><div class="text-muted text-small">' + (w.bool ? 'Да / Не' : w.min + ' … ' + w.max + ' ' + w.unit) + '</div></div>' +
                     '<div>сега: <b id="cur' + i + '"></b></div>' + input +
                     '<button type="button" class="btn" data-i="' + i + '" data-n="' + n + '">Задай</button><div class="hp-ctl-msg" id="msg' + i + '"></div></div>';
             }).join('');
-            names.forEach(function (n, i) { document.getElementById('in' + i).value = s[n]; });
+            names.forEach(function (n, i) { document.getElementById('in' + i).value = WRITABLE[n].bool ? (s[n] ? '1' : '0') : s[n]; });
             document.getElementById('controls').addEventListener('click', onSet);
             ctlBuilt = true;
         }
         names.forEach(function (n, i) {
             var w = WRITABLE[n];
-            document.getElementById('cur' + i).textContent = (n === 'Betriebsart' ? (MODES[s[n]] || s[n]) : s[n] + ' ' + w.unit);
+            document.getElementById('cur' + i).textContent = (n === 'Betriebsart' ? (MODES[s[n]] || s[n]) : w.bool ? (s[n] ? 'Да' : 'Не') : s[n] + ' ' + w.unit);
         });
     }
 
@@ -490,7 +477,7 @@
             body: new URLSearchParams({name: n, value: el.value})
         }).then(function (r) { return r.json(); }).then(function (j) {
             msg.className = 'hp-ctl-msg ' + (j.ok ? 'ok' : 'err');
-            msg.textContent = j.ok ? 'Записано: ' + j.value : (j.error || 'Грешка');
+            msg.textContent = j.ok ? 'Записано: ' + (w.bool ? (j.value ? 'Да' : 'Не') : j.value) : (j.error || 'Грешка');
             if (j.ok) poll();
         }).catch(function () { msg.className = 'hp-ctl-msg err'; msg.textContent = 'Грешка в заявката.'; })
           .then(function () { b.disabled = false; });
