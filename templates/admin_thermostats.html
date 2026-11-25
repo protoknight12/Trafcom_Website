@@ -13,12 +13,18 @@
         .sch-day { display: flex; gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border-color, #ddd); flex-wrap: wrap; }
         .sch-day > strong { width: 36px; }
         .sch-chips { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; min-width: 120px; }
-        .sch-chip { background: var(--bg-secondary, #eef); border-radius: 12px; padding: 2px 4px 2px 10px; font-size: 0.85rem; white-space: nowrap; }
-        .sch-chip button { border: 0; background: none; cursor: pointer; font-size: 1rem; line-height: 1; padding: 0 6px; }
+        .sch-chip { background: rgba(59, 130, 246, 0.15); color: var(--text-main); border: 1px solid var(--border-color);
+                    border-radius: 12px; padding: 2px 4px 2px 10px; font-size: 0.85rem; white-space: nowrap; }
+        .sch-chip button { border: 0; background: none; color: inherit; cursor: pointer; font-size: 1rem; line-height: 1; padding: 0 6px; }
         .sch-add { display: flex; gap: 4px; align-items: center; }
         .sch-add input { width: auto; padding: 2px 4px; }
         .sch-add input[type=number] { width: 64px; }
         .sch-tools { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+        /* .admin-form is a grid of 200px columns: the schedule rows must span all of them, or they are squeezed into
+           one column and the dialog grows sideways / too tall to reach the buttons. */
+        #scheduleDialog .admin-form > :not(button) { grid-column: 1 / -1; }
+        #scheduleDialog .sch-add { flex-wrap: wrap; }
+        #scheduleDialog { overflow-y: auto; overflow-x: hidden; }
         .th-ok { color: #16803c; } .th-no { color: #6b7280; }
         .ic { vertical-align: -0.15em; }
     </style>
