@@ -2999,6 +2999,8 @@ class Convector(db.Model):
     pos_y = db.Column(db.Float, nullable=True)
     # Which heat pump circuit feeds it: None = not on the pump, else a key of CONVECTOR_CIRCUITS (pipes layers of the 3D map).
     heatpump_circuit = db.Column(db.String(10), nullable=True)
+    # Thermostat that drives it (NULL = manual only).
+    thermostat_id = db.Column(db.Integer, db.ForeignKey('thermostat.id'), nullable=True, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
     room = db.relationship('Room', backref='convectors')
@@ -3008,6 +3010,48 @@ class Convector(db.Model):
         if self.room:
             return f'{self.room.building.name} / {self.room.name}'
         return self.location_label or '—'
+
+
+class Thermostat(db.Model):
+    """A room thermostat: sensor + weekly schedule per season drive its convectors (see hvac.py).
+    Override fields are UTC-naive; deleting it must NULL its convectors' thermostat_id (route's job)."""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(150), nullable=False)
+    sensor_id = db.Column(db.Integer, db.ForeignKey('temperature_sensor.id'), nullable=True, index=True)
+    room_id = db.Column(db.Integer, db.ForeignKey('room.id'), nullable=True, index=True)
+    hysteresis = db.Column(db.Float, nullable=False, default=0.5)
+    min_cycle_min = db.Column(db.Integer, nullable=False, default=5)
+    enabled = db.Column(db.Boolean, nullable=False, default=True)
+    lowered_heat = db.Column(db.Float, nullable=False, default=16.0)
+    lowered_cool = db.Column(db.Float, nullable=True)  # NULL = cooling off outside the schedule
+    override_temp = db.Column(db.Float, nullable=True)
+    override_until = db.Column(db.DateTime, nullable=True)
+    hold = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    sensor = db.relationship('TemperatureSensor')
+    room = db.relationship('Room')
+    convectors = db.relationship('Convector', backref='thermostat')
+    intervals = db.relationship('ThermostatInterval', cascade='all, delete-orphan',
+                                order_by='(ThermostatInterval.season, ThermostatInterval.weekday, ThermostatInterval.start_min)')
+
+
+class ThermostatInterval(db.Model):
+    """One schedule slot: season 'heat'|'cool', weekday 0=Mon..6, minutes from midnight, no midnight crossing."""
+    id = db.Column(db.Integer, primary_key=True)
+    thermostat_id = db.Column(db.Integer, db.ForeignKey('thermostat.id'), nullable=False, index=True)
+    season = db.Column(db.String(4), nullable=False)
+    weekday = db.Column(db.Integer, nullable=False)
+    start_min = db.Column(db.Integer, nullable=False)
+    end_min = db.Column(db.Integer, nullable=False)
+    temp = db.Column(db.Float, nullable=False)
+
+
+class HeatingHoliday(db.Model):
+    """A day that follows Sunday's schedule."""
+    id = db.Column(db.Integer, primary_key=True)
+    day = db.Column(db.Date, nullable=False, unique=True)
+    name = db.Column(db.String(150), nullable=True)
 
 
 # Official Guarantee Fund (Гаранционен фонд) page for checking whether a vehicle has valid
@@ -3988,6 +4032,7 @@ class ConvectorLog(db.Model):
     ts = db.Column(db.Integer, nullable=False, index=True)
     is_on = db.Column(db.Boolean, nullable=False)
     power_w = db.Column(db.Float)
+    source = db.Column(db.String(12), nullable=True)  # 'thermostat' | 'manual'
     __table_args__ = (db.Index('ix_convector_log_convector_id_ts', 'convector_id', 'ts'),)
 
 
@@ -26779,6 +26824,7 @@ def admin_update_temperature_sensor(sensor_id):
 def admin_delete_temperature_sensor(sensor_id):
     sensor = TemperatureSensor.query.get_or_404(sensor_id)
     name = sensor.name
+    Thermostat.query.filter_by(sensor_id=sensor.id).update({'sensor_id': None})
     db.session.delete(sensor)
     db.session.commit()
     log_action(f'Изтрит температурен сензор "{name}"')
