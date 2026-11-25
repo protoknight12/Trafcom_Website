@@ -28398,6 +28398,7 @@ def admin_hvac_data():
     cards.sort(key=lambda c: (c['group'] == 'Без помещение', c['group'], c['name']))
     return jsonify(ts=int(time.time()), season=season, season_label=HVAC_SEASON_LABELS[season],
                    pump=_hvac_pump_block(season) if current_user.is_admin else None, thermostats=cards,
+                   outdoor=(_heatpump_live['data'] or {}).get('Temp. Aussen') if _heatpump_live['online'] else None,
                    convectors_on=sum(1 for c in cards for v in c['convectors'] if v['is_on']))
 
 
