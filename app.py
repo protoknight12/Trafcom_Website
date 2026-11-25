@@ -28822,8 +28822,18 @@ def admin_hvac_data():
             statuses = dict(zip([c.id for c in convs], pool.map(_shelly_convector_status, convs)))
     cards = [_hvac_thermostat_json(th, _thermostat_state(th, now, season, holidays), season, statuses) for th in ths]
     cards.sort(key=lambda c: (c['group'] == 'Без помещение', c['group'], c['name']))
+    pump = _hvac_pump_block(season) if current_user.is_admin else None
+    if pump is not None:
+        pump_w = pump['power_w']
+    else:
+        p = _heatpump_power()
+        pump_w = p['w'] if p and p['online'] else None
+    # Total draw of heating/cooling (owner's request 2026-11-25): the pump's meter (when one is chosen) + every convector
+    # on a thermostat. Unknown readings are left out and counted, so the page can say the sum is partial.
+    parts = ([pump_w] if get_text(_HP_PREFIX + 'meter', '') else []) + [s.get('power_w') for s in statuses.values()]
+    total_w = {'w': round(sum(w for w in parts if w is not None)), 'unknown': sum(1 for w in parts if w is None)}
     return jsonify(ts=int(time.time()), season=season, season_label=HVAC_SEASON_LABELS[season],
-                   pump=_hvac_pump_block(season) if current_user.is_admin else None, thermostats=cards,
+                   pump=pump, thermostats=cards, total_power=total_w,
                    pump_gate=_hvac_pump_gate() if season in ('heat', 'cool') else {'active': True, 'reason': None},
                    outdoor=(_heatpump_live['data'] or {}).get('Temp. Aussen') if _heatpump_live['online'] else None,
                    sky=_hvac_sky(),
