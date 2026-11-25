@@ -11,6 +11,13 @@
         .hp-state { padding: 4px 12px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; }
         .state-online { background-color: var(--success-bg); color: var(--success-text); border: 1px solid var(--success-border); }
         .state-offline { background-color: var(--danger-bg); color: var(--danger-text); border: 1px solid var(--danger-border); }
+        /* central supply button: its colour is the relay state */
+        .hp-relay { padding: 8px 16px; border-radius: var(--border-radius-sm); font-size: 0.9rem; font-weight: 700; cursor: pointer;
+            border: 1px solid var(--border-color); background: var(--bg-input); color: var(--text-muted); }
+        .hp-relay.relay-on { background: #16a34a; border-color: #15803d; color: #fff; }
+        .hp-relay.relay-off { background: #dc2626; border-color: #b91c1c; color: #fff; }
+        .hp-relay.relay-unknown { background: #f59e0b; border-color: #d97706; color: #1f2937; }
+        .hp-relay:disabled { cursor: default; opacity: 0.75; }
         .hp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 18px; }
         .hp-card { background: var(--bg-input); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); padding: 12px 14px; }
         .hp-label { font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
@@ -51,7 +58,7 @@
             <p class="section-subtitle" style="margin: 0;">Данни на живо през RS-232 → Ethernet. Само отчитане. <span id="lastUpdate" class="text-muted"></span></p>
         </div>
         <a href="{{ url_for('admin_device_log', kind='heatpump') }}" data-frame="stay" class="btn-secondary" style="padding: 4px 10px; font-size: 0.85rem; text-decoration: none;">Виж лог</a>
-        <button type="button" id="hpRelay" class="btn-secondary" style="padding: 4px 10px; font-size: 0.85rem;" disabled>Централно захранване: …</button>
+        <button type="button" id="hpRelay" class="hp-relay" disabled>Централно захранване: …</button>
         <span id="hpState" class="hp-state state-offline">Няма връзка</span>
     </div>
     <p id="hpRelayMsg" class="text-small" style="margin: 0 0 6px;"></p>
@@ -435,6 +442,8 @@
         relayOn = j.is_on;
         relayBtn.disabled = !j.available;
         relayBtn.textContent = 'Централно захранване: ' + (j.is_on === true ? 'ВКЛ. - изключи' : j.is_on === false ? 'ИЗКЛ. - включи' : (j.available ? 'неизвестно' : 'няма реле'));
+        relayBtn.className = 'hp-relay' + (j.is_on === true ? ' relay-on' : j.is_on === false ? ' relay-off' : j.available ? ' relay-unknown' : '');
+        relayBtn.title = j.is_on === true ? 'Включено - натисни, за да изключиш' : j.is_on === false ? 'Изключено - натисни, за да включиш' : '';
         relayMsg.textContent = j.error || '';
         relayMsg.style.color = j.error ? 'var(--danger-text)' : '';
     }
