@@ -565,6 +565,18 @@ def test_fsm_defaults_fill_a_sparse_tree():
     assert ch['speed_mm_min'] == 2700 and ch['fields']['focus_mm'] == 11
 
 
+def test_no_pierce_stays_no_pierce():
+    """PierceStepCount 0 = No Pierce (owner, 2026-11-25: originals without pierce came out with 1); an .lxds leaves it
+    out when 0; writing the fields back keeps 0."""
+    for cam_attr, want in (('PierceStepCount="0" ', 0), ('', 0), ('PierceStepCount="2" ', 2)):
+        xml = MATERIAL.format(speed=45, focus=11, gas=2).replace('PierceStepCount="1" ', cam_attr).encode()
+        ch = fscut.read_fsm(fscut._zipcrypto(fscut.FSM_MEMBER, xml, PW), PW, '1mmCS-N2.fsm')
+        assert ch['fields']['pierce_steps'] == want
+        raw = fscut.raw_with_fields(ch['raw'], ch['fields'])
+        assert next(a for p, a, _ in raw if p == 'CamParams')['PierceStepCount'] == str(want)
+    assert fscut.raw_fsm_defaults([['CamParams', {}, '']])[1][1]['PierceStepCount'] == '0'
+
+
 def test_nozzle_key():
     from app import _nozzle_key
     assert _nozzle_key('S2.5/S3.0') == _nozzle_key('2.5s/3.0s') != _nozzle_key('3.0s')

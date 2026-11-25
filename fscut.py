@@ -391,8 +391,10 @@ def _technology(tech_el):
             continue
         speed = _f(cam.get('WorkSpeed'), None)
         fields = {c: _attr(cam if el is None else cam.find(el), attr, k) for c, el, attr, _, _, k in CUT_FIELDS}
-        steps = _f(cam.get('PierceStepCount'), 1)
-        steps = int(steps) if math.isfinite(steps) and 1 <= steps <= 9 else 1       # CypCut has Pierce1..9
+        # 0 = "No Pierce" (owner, 2026-11-25: originals without pierce came out with 1); an .lxds leaves the
+        # attribute out when it is 0 (CypCut's default)
+        steps = _f(cam.get('PierceStepCount'), 0)
+        steps = int(steps) if math.isfinite(steps) and 0 <= steps <= 9 else 0       # CypCut has Pierce1..9
         fields['pierce_steps'] = steps
         for n in range(1, PIERCE_STEPS + 1):
             p = cam.find(f'Pierce{n}')
@@ -1010,7 +1012,7 @@ def _channel_el(port, raw=None, fields=None, speed_mm_min=None, gas=None, gas_ma
     for col, el, attr, _, _, k in CUT_FIELDS:
         if fields.get(col) is not None:
             (cam if el is None else child(el)).set(attr, _num(fields[col] / k))
-    if fields.get('pierce_steps'):
+    if fields.get('pierce_steps') is not None:          # 0 = No Pierce is a value too
         cam.set('PierceStepCount', str(int(fields['pierce_steps'])))
     for n in range(1, PIERCE_STEPS + 1):
         for key, attr, _, _, k in STEP_FIELDS:
@@ -1938,7 +1940,7 @@ _STAGE_DEFAULTS = {
 FSM_DEFAULTS = {
     'CamParams': {'DelayBeforeLaserOff': '0', 'PathRepeat': '0', 'PierceStyle': '0', 'FlashCutPierctT': '0',
                   'FlashCutPierceFocus': '0', 'UseCompensateIn': '0', 'UseCompensateOut': '0', 'ScanGap': '0',
-                  'NanoMicro': '0', 'UseShakeRes': 'false', 'PierceFlags': '0'},
+                  'NanoMicro': '0', 'UseShakeRes': 'false', 'PierceFlags': '0', 'PierceStepCount': '0'},
     'CamParams/LeadLineParam': {'Flags': '0', 'PwmFreq': '0', 'PwmRatio': '0', 'CurveSpd': '0', 'LeadDecLen': '0',
                                 'LeadCutH': '0', 'LeadDecSpd': '0', 'LeadHoleSpd': '0', 'LeadFocus': '0',
                                 'LeadFocusLen': '0'},

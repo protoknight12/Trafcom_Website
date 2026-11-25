@@ -26,7 +26,7 @@ from app import (app as flask_app, db, User, MaterialPrice, Detail, DetailDxfFil
                  MaterialGrade, HallMachine, limiter, seed_material_types)
 
 TECH = ('<Technical MaterialName="碳钢" Thickness="8"><Channels><Channel ChannelPort="1">'
-        '<CamParams WorkSpeed="50" LiftHeight="30"><Cut GasType="2" GasPressure=".7" PeakPower="6000" Focus="11" '
+        '<CamParams WorkSpeed="50" LiftHeight="30" PierceStepCount="1"><Cut GasType="2" GasPressure=".7" PeakPower="6000" Focus="11" '
         'Height=".6" PwmRatio=".5"/>'
         '<Pierce1 GasType="3" Focus="-6" TimeFollow="500" TimeStay="100"/><Pierce2 GasType="2" PwmFreq="200"/>'
         '<SmartEndTech ExtGap=".6"/><MaterialParams NozzleSpec="S2.0/3.0" Thickness="8"/></CamParams></Channel>'
@@ -177,10 +177,10 @@ def test_parse_both_formats(tmp_path):
     with pytest.raises(ValueError):
         fscut.parse(str(bad))
     # absurd values from the file: no endless loop / crash
-    bad.write_text(LXD.replace('LiftHeight="30"', 'LiftHeight="30" PierceStepCount="1e300"')
+    bad.write_text(LXD.replace('PierceStepCount="1"', 'PierceStepCount="1e300"')
                    .replace('GasType="2"', 'GasType="1e400"'), encoding='utf-8')
     ch = fscut.parse(str(bad))['technology']['channels'][0]
-    assert ch['fields']['pierce_steps'] == 1
+    assert ch['fields']['pierce_steps'] == 0                             # nonsense -> no pierce
     deep = '<CamParams WorkSpeed="1">' + '<X>' * 40 + '</X>' * 40 + '</CamParams>'
     bad.write_text(LXD.replace('<Channel ChannelPort="101"><CamParams WorkSpeed="9"/>',
                                '<Channel ChannelPort="2">' + deep), encoding='utf-8')
