@@ -86,7 +86,7 @@
         @media (prefers-color-scheme: light) { .hvac-page:not([data-theme]) { --cloud: #ffffff; --cloud-dark: #8d97a8; --cloud-a: .9; --drop: rgba(60,100,160,.45); --flake: rgba(255,255,255,.95); --fog: rgba(255,255,255,.45); } }
         .hv-bg > .hv-wx { position: absolute; overflow: hidden; }    /* inside the page only: never over the navbar */
         .hvac-page[data-wx-dark] { --cloud-a: .55; }
-        .hv-cloud { position: absolute; opacity: var(--cloud-a); filter: blur(1px) drop-shadow(0 8px 16px rgba(0,0,0,.18));
+        .hv-cloud { position: absolute; opacity: var(--cloud-a); filter: blur(clamp(5px, .6vw, 10px)) drop-shadow(0 10px 22px rgba(0,0,0,.14));   /* soft edges, like real clouds */
             animation: hv-drift var(--dur, 40s) ease-in-out infinite alternate; transition: left 2s, top 2s; }
         .hv-cloud path { fill: var(--cloud); }
         .hvac-page[data-wx-dark] .hv-cloud path { fill: var(--cloud-dark); }
