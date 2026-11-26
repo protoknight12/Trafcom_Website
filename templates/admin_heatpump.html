@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+{% from 'partials/icons.html' import icon %}<!DOCTYPE html>
 <html lang="bg">
 <head>
     <meta charset="UTF-8">
@@ -22,6 +22,10 @@
         .hp-card { background: var(--bg-input); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); padding: 12px 14px; }
         .hp-label { font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
         .hp-value { font-size: 1.6rem; font-weight: 700; color: var(--text-main); }
+        .hp-src { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 0.85rem; font-weight: 600; margin-top: 6px; align-items: center; }
+        .hp-ic { display: inline-flex; vertical-align: -0.25em; }
+        .hp-ic svg { width: 1.35em; height: 1.35em; }
+        .hp-ic-sun { color: #d4a017; } .hp-ic-grid { color: #6b7a8f; }
         .hp-value small { font-size: 0.9rem; color: var(--text-muted); font-weight: 400; }
         .hp-on { color: var(--success-text); }
         .hp-off { color: var(--text-muted); }
@@ -579,6 +583,8 @@
         });
     }
 
+    var ICON_SUN = '<span class="hp-ic hp-ic-sun">{{ icon("solar-panel") }}{{ icon("battery") }}</span>',
+        ICON_GRID = '<span class="hp-ic hp-ic-grid">{{ icon("utility-pole") }}</span>';
     function loadCost() {
         var period = document.getElementById('costPeriod').value, q = '?period=' + period;
         document.getElementById('costRange').style.display = period === 'custom' ? 'inline' : 'none';
@@ -595,8 +601,13 @@
                 rows.push(['cost_total', 'Общо', {kwh: kwh, cost: eur}]);
                 rows.push(['cost_grid', 'От мрежата', C.grid], ['cost_solar', 'Спестено от слънцето (и батерията)', C.solar]);
                 if (C.src_unknown.kwh > 0) rows.push(['cost_src_unknown', 'Без данни за източника', C.src_unknown]);
+                var SRC = {cost_grid: ICON_GRID, cost_solar: ICON_SUN};
                 grid.innerHTML = rows.map(function (r) {
-                    return card(r[1], r[2].cost.toFixed(2) + ' <small>€</small><div class="text-muted text-small" style="font-weight:400">' + r[2].kwh.toFixed(2) + ' kWh</div>', r[0]);
+                    var d = r[2], src = '';
+                    if (d.grid_kwh || d.solar_kwh)   // where this category's energy came from
+                        src = '<div class="hp-src"><span title="От слънцето (и батерията)">' + ICON_SUN + ' ' + d.solar_kwh.toFixed(2) + '</span>'
+                            + '<span title="От мрежата">' + ICON_GRID + ' ' + d.grid_kwh.toFixed(2) + '</span> <small>kWh</small></div>';
+                    return card((SRC[r[0]] ? SRC[r[0]] + ' ' : '') + r[1], d.cost.toFixed(2) + ' <small>€</small><div class="text-muted text-small" style="font-weight:400">' + d.kwh.toFixed(2) + ' kWh</div>' + src, r[0]);
                 }).join('');
                 var fmt = function (ts) { return new Date(ts * 1000).toLocaleDateString('bg-BG'); };
                 var span = 'Период: ' + fmt(j.since) + ' - ' + fmt(Math.min(j.until, Date.now() / 1000)) + '. ';

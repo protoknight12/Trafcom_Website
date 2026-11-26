@@ -24510,7 +24510,8 @@ def _heatpump_cost(energy_rows, pump_rows, cfg, share_rows=()):
     interval takes the pump state sampled just before its end.
     ponytail: the pump is sampled once a minute, so a compressor that cycles inside one minute is
     attributed to whatever state the sample caught - fine over days, noisy over minutes."""
-    out = {k: {'kwh': 0.0, 'cost': 0.0} for k in ('heating', 'cooling', 'standby', 'unknown', 'grid', 'solar', 'src_unknown')}
+    out = {k: {'kwh': 0.0, 'cost': 0.0} for k in ('grid', 'solar', 'src_unknown')}
+    out.update({k: {'kwh': 0.0, 'cost': 0.0, 'grid_kwh': 0.0, 'solar_kwh': 0.0} for k in ('heating', 'cooling', 'standby', 'unknown')})
     stamps = [t for t, _ in pump_rows]
     share_stamps = [t for t, _ in share_rows]
     for (t0, e0), (t1, e1) in zip(energy_rows, energy_rows[1:]):
@@ -24533,6 +24534,8 @@ def _heatpump_cost(energy_rows, pump_rows, cfg, share_rows=()):
             out['src_unknown']['kwh'] += delta
         else:
             g = share_rows[j][1]
+            out[cat]['grid_kwh'] += delta * g          # per category too: the page shows a pole / a panel + battery next to each
+            out[cat]['solar_kwh'] += delta * (1 - g)
             out['grid']['kwh'] += delta * g
             out['grid']['cost'] += delta * g * _heatpump_tariff(t1, cfg)
             out['solar']['kwh'] += delta * (1 - g)
@@ -24655,7 +24658,7 @@ def admin_heatpump_cost():
     pump = [(ts, json.loads(data)) for ts, data in db.session.query(HeatPumpReading.ts, HeatPumpReading.data_json)
             .filter(HeatPumpReading.ts >= since - HEATPUMP_COST_GAP).order_by(HeatPumpReading.ts).yield_per(2000)]
     res = _heatpump_cost(energy, pump, cfg, _grid_share_rows(since))
-    return jsonify(configured=True, categories={k: {m: round(v, 3 if m == 'kwh' else 2) for m, v in d.items()}
+    return jsonify(configured=True, categories={k: {m: round(v, 3 if m.endswith('kwh') else 2) for m, v in d.items()}
                                                 for k, d in res.items()},
                    since=since, until=until, first_data=pump[0][0] if pump else None, **_cost_notice())
 
