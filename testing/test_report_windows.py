@@ -162,7 +162,14 @@ EXPECTED = {'battery_report': {'cards': [], 'digest': '1867fa2daaeefe8c286a0328b
 def _summary(name, j):
     """Readable numbers + a digest of the whole response."""
     if name == 'heatpump_cost':
-        return {'categories': j['categories'], 'since': j['since'], 'until': j['until'], 'first_data': j['first_data']}
+        # the per-category grid/solar split came later (2026-11-26): it must add up to the grid / solar totals,
+        # the numbers that existed before must stay as captured
+        cats = j['categories']
+        for src in ('grid', 'solar'):
+            split = sum(c.get(src + '_kwh', 0) for c in cats.values())
+            assert abs(split - cats[src]['kwh']) < 0.01, (src, split, cats[src]['kwh'])
+        cats = {k: {m: v for m, v in c.items() if m in ('kwh', 'cost')} for k, c in cats.items()}
+        return {'categories': cats, 'since': j['since'], 'until': j['until'], 'first_data': j['first_data']}
     if 'cost' in j and j['cost']:
         return {'cost': j['cost'], 'points': len(j['series']['power']), 'digest': _digest(j)}
     return {'cards': [[c['cost'], c['kwh']] for c in j.get('cards') or []], 'points': len(next(iter(j['series'].values()))), 'digest': _digest(j)}
