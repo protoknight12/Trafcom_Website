@@ -77,6 +77,28 @@
             box-shadow: inset clamp(16px, 2vw, 28px) clamp(-10px, -1vw, -6px) 0 0 #dfe6f3; filter: drop-shadow(0 0 18px rgba(200,215,255,.35)); }
         .hvac-page[data-sky="day"] .hv-sky.sun { opacity: .5; }
         .hvac-page[data-sky="night"] .hv-sky.moon { opacity: .55; }
+        /* Weather now (met.no symbol, owner's request 2026-11-26): clouds over the sun / moon, rain / snow / fog / lightning
+           over the whole background. setWeather() builds it; data-clouds 0..3 dims the sun / moon behind them. */
+        .hvac-page[data-sky="day"][data-clouds="2"] .hv-sky.sun { opacity: .45; } .hvac-page[data-sky="day"][data-clouds="3"] .hv-sky.sun { opacity: .14; }
+        .hvac-page[data-sky="night"][data-clouds="2"] .hv-sky.moon { opacity: .35; } .hvac-page[data-sky="night"][data-clouds="3"] .hv-sky.moon { opacity: .12; }
+        .hvac-page { --cloud: #9aa4b6; --cloud-dark: #5a6375; --cloud-a: .5; --drop: rgba(170,195,230,.55); --flake: rgba(235,242,255,.85); --fog: rgba(190,200,215,.16); }
+        .hvac-page[data-theme="light"] { --cloud: #ffffff; --cloud-dark: #8d97a8; --cloud-a: .9; --drop: rgba(60,100,160,.45); --flake: rgba(255,255,255,.95); --fog: rgba(255,255,255,.45); }
+        @media (prefers-color-scheme: light) { .hvac-page:not([data-theme]) { --cloud: #ffffff; --cloud-dark: #8d97a8; --cloud-a: .9; --drop: rgba(60,100,160,.45); --flake: rgba(255,255,255,.95); --fog: rgba(255,255,255,.45); } }
+        .hv-bg > .hv-wx { position: absolute; overflow: hidden; }    /* inside the page only: never over the navbar */
+        .hvac-page[data-wx-dark] { --cloud-a: .55; }
+        .hv-cloud { position: absolute; opacity: var(--cloud-a); filter: blur(1px) drop-shadow(0 8px 16px rgba(0,0,0,.18));
+            animation: hv-drift var(--dur, 40s) ease-in-out infinite alternate; transition: left 2s, top 2s; }
+        .hv-cloud path { fill: var(--cloud); }
+        .hvac-page[data-wx-dark] .hv-cloud path { fill: var(--cloud-dark); }
+        @keyframes hv-drift { from { transform: translateX(calc(var(--dx, 3vw) * -1)); } to { transform: translateX(var(--dx, 3vw)); } }
+        .hv-wx canvas { position: sticky; top: 0; display: block; width: 100%; height: 100vh; }
+        .hv-wx .fog { position: absolute; inset: 35% -20% 0; opacity: 0; transition: opacity 1s;
+            background: repeating-linear-gradient(180deg, transparent 0 40px, var(--fog) 70px 120px, transparent 150px 190px);
+            filter: blur(12px); animation: hv-drift 60s ease-in-out infinite alternate; --dx: 8vw; }
+        .hvac-page[data-wx="fog"] .hv-wx .fog { opacity: 1; }
+        .hv-wx .flash { position: absolute; inset: 0; background: #fff; opacity: 0; }
+        .hv-wx .flash.on { animation: hv-flash .9s ease-out; }
+        @keyframes hv-flash { 0%, 30% { opacity: 0; } 8% { opacity: .35; } 18% { opacity: .1; } 24% { opacity: .28; } 100% { opacity: 0; } }
         /* Total heating/cooling draw: smaller, top right of the page's background (in the free space beside the second row). */
         /* Fixed like the outdoor temperature; its top follows the page's top until that scrolls away (placeSticky()). */
         .hv-bg > .hv-pow { position: fixed; inset: 64px 24px auto auto; text-align: right; color: var(--text); opacity: .3;
@@ -266,7 +288,8 @@
     <div class="hv-bg" aria-hidden="true">
         <div class="base"></div><div class="heat"></div><div class="cool"></div>
         <span class="hv-wm heat">{{ icon('flame') }}</span><span class="hv-wm cool">{{ icon('snowflake') }}</span>
-        <div class="hv-sky sun" id="skySun"></div><div class="hv-sky moon"></div>
+        <div class="hv-sky sun" id="skySun"></div><div class="hv-sky moon" id="skyMoon"></div>
+        <div class="hv-wx" id="wxLayer"><canvas id="wxPrecip"></canvas><div class="fog"></div><div class="flash" id="wxFlash"></div></div>
         <div class="hv-pow" id="totPow" hidden><b><span id="totPowSun" class="src-sun" hidden>{{ icon('solar-panel') }}{{ icon('battery') }}</span><span id="totPowGrid">{{ icon('utility-pole') }}</span><span id="totPowVal"></span></b><small id="totPowNote">отопление и охлаждане</small></div>
         <div class="hv-out" id="outTemp" hidden>
             <div class="hv-fc" id="wx" hidden><div class="now" id="wxNow"></div><div class="row" id="wxHours"></div><div class="row" id="wxDays"></div></div>
@@ -859,6 +882,92 @@
         return svg;
     }
     function wxIcon(code) { return svgIcon(wxIconName(code), wxWord(code)); }
+
+    // ---------- the weather now, drawn on the background: clouds over the sun / moon, rain / snow / fog / lightning ----------
+    var WX = {key: null, group: null, parts: [], kind: null, n: 0, raf: 0, thunder: 0};
+    var CLOUD_SVG = '<svg viewBox="1.5 4.5 21.5 15" aria-hidden="true"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>';
+    function wxLevel(b) {          // 0 clear .. 3 overcast; [precipitation kind, how many per 1400 px of width]
+        var heavy = /^heavy/.test(b), light = /^light/.test(b), n = heavy ? 320 : light ? 70 : 160;
+        var precip = /thunder/.test(b) && !/snow|sleet/.test(b) ? 'rain' : /snow/.test(b) ? 'snow' : /sleet/.test(b) ? 'sleet' : /rain/.test(b) ? 'rain' : null;
+        var clouds = b === 'clearsky' ? 0 : b === 'fair' ? 1 : b === 'partlycloudy' || /showers/.test(b) ? 2 : b ? 3 : 0;
+        return {clouds: clouds, precip: precip, n: precip === 'snow' ? Math.round(n * 0.8) : n,
+                dark: !!precip && (heavy || /thunder|rain|sleet/.test(b)), fog: b === 'fog', thunder: /thunder/.test(b)};
+    }
+    function wxCloud(parent, left, top, w, dur, dx) {
+        var c = document.createElement('div');
+        c.className = 'hv-cloud';
+        c.innerHTML = CLOUD_SVG;
+        c.style.cssText = 'left:' + left + ';top:' + top + ';width:' + w + ';--dur:' + dur + 's;--dx:' + dx + 'vw';
+        parent.appendChild(c);
+    }
+    function setWeather(code) {
+        var layer = document.getElementById('wxLayer'), b = wxBase(code), L = wxLevel(b);
+        if (code !== WX.key) {
+            WX.key = code;
+            layer.querySelectorAll('.hv-cloud, .hv-cgroup').forEach(function (e) { e.remove(); });
+            PAGE.dataset.clouds = L.clouds;
+            PAGE.dataset.wx = L.fog ? 'fog' : (L.precip || '');
+            if (L.dark) PAGE.dataset.wxDark = '1'; else delete PAGE.dataset.wxDark;
+            // a group sits on the sun / moon (moved with it below); overcast adds a band of clouds across the top
+            var g = document.createElement('div');
+            g.className = 'hv-cgroup';
+            g.style.cssText = 'position:absolute;width:0;height:0;transition:left 2s,top 2s';
+            layer.insertBefore(g, layer.firstChild);
+            WX.group = g;
+            // [left, top, width] in vw from the sun / moon's centre: the upper-left of the disc stays visible
+            [[0.3, -1.2, 10, 42, 1.2], [-10, -3.5, 7, 55, 1.6], [-5.5, 1.8, 8, 48, 2]].slice(0, Math.min(L.clouds, 3))
+                .forEach(function (p) { wxCloud(g, p[0] + 'vw', p[1] + 'vw', p[2] + 'vw', p[3], p[4]); });
+            if (L.clouds === 3)
+                for (var i = 0; i < 7; i++) wxCloud(layer, (i * 15 - 4) + 'vw', (-4 + (i * 37 % 5) * 2.5) + 'vh', (11 + (i * 53 % 4) * 2) + 'vw', 50 + i * 7, 2 + i % 3);
+            WX.kind = L.precip; WX.n = L.n; WX.parts = [];
+            wxResize();
+            clearTimeout(WX.thunder);
+            if (L.thunder && !REDUCED.matches) wxThunder();
+            if (!WX.raf) WX.raf = requestAnimationFrame(wxFrame);
+        }
+        // follow the sun (placed by its azimuth) or the moon
+        var a = document.getElementById(PAGE.dataset.sky === 'day' ? 'skySun' : 'skyMoon').getBoundingClientRect();
+        var o = layer.getBoundingClientRect();          // the layer is in the page, the sun / moon fixed to the window
+        if (WX.group && a.width) { WX.group.style.left = (a.left - o.left + a.width / 2) + 'px'; WX.group.style.top = (a.top - o.top + a.height / 2) + 'px'; }
+    }
+    function wxThunder() {
+        WX.thunder = setTimeout(function () {
+            var f = document.getElementById('wxFlash');
+            f.classList.remove('on'); void f.offsetWidth; f.classList.add('on');
+            wxThunder();
+        }, 5000 + Math.random() * 10000);
+    }
+    function wxResize() {
+        var cv = document.getElementById('wxPrecip'), r = window.devicePixelRatio || 1;
+        cv.width = innerWidth * r; cv.height = innerHeight * r;
+        cv.getContext('2d').setTransform(r, 0, 0, r, 0, 0);
+        var want = WX.kind ? Math.round(WX.n * innerWidth / 1400) : 0;
+        while (WX.parts.length < want) WX.parts.push(wxPart(true));
+        WX.parts.length = want;
+    }
+    function wxPart(anywhere) {
+        var snow = WX.kind === 'snow' || (WX.kind === 'sleet' && Math.random() < .5);
+        return {x: Math.random() * innerWidth * 1.2 - innerWidth * .1, y: anywhere ? Math.random() * innerHeight : -20,
+                snow: snow, v: snow ? .6 + Math.random() * 1.2 : 9 + Math.random() * 7, r: snow ? 1.2 + Math.random() * 2.4 : 12 + Math.random() * 10,
+                ph: Math.random() * 6.3};
+    }
+    function wxFrame() {
+        var cv = document.getElementById('wxPrecip'), c = cv.getContext('2d'), cs = getComputedStyle(PAGE);
+        c.clearRect(0, 0, innerWidth, innerHeight);
+        if (!WX.parts.length) { WX.raf = 0; return; }
+        c.strokeStyle = cs.getPropertyValue('--drop'); c.fillStyle = cs.getPropertyValue('--flake'); c.lineWidth = 1.2;
+        c.beginPath();
+        WX.parts.forEach(function (p) { if (!p.snow) { c.moveTo(p.x, p.y); c.lineTo(p.x - p.r * .18, p.y + p.r); } });
+        c.stroke();
+        WX.parts.forEach(function (p, i) {
+            if (p.snow) { c.beginPath(); c.arc(p.x + Math.sin(p.ph) * 6, p.y, p.r, 0, 6.3); c.fill(); }
+            if (REDUCED.matches) return;          // a still picture: no motion
+            p.y += p.v; p.x -= p.snow ? .15 : p.v * .18; p.ph += .02;
+            if (p.y > innerHeight + 20) WX.parts[i] = wxPart(false);
+        });
+        WX.raf = REDUCED.matches ? 0 : requestAnimationFrame(wxFrame);
+    }
+    window.addEventListener('resize', function () { if (WX.kind) { wxResize(); if (!WX.raf) WX.raf = requestAnimationFrame(wxFrame); } });
     var WX_COMPASS = ['С', 'СИ', 'И', 'ЮИ', 'Ю', 'ЮЗ', 'З', 'СЗ'];
     function windDir(from) {       // arrow points where the wind blows TO; text = where it comes from
         var s = document.createElement('span');
@@ -937,6 +1046,7 @@
                 sun.style.top = (55 - Math.min(Math.max(d.sky.altitude, 0), 60) / 60 * 49) + 'vh';
             }
         }
+        setWeather(d.weather && d.weather.now ? d.weather.now.symbol : null);
         placePow();
         var tp = d.total_power;
         document.getElementById('totPow').hidden = !tp;
