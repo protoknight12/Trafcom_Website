@@ -595,6 +595,10 @@ def test_data_hides_pump_from_worker(env, monkeypatch):
     assert t['name'] == 'Цех' and t['target'] == 21.0 and t['group'] == 'Без помещение' and t['enabled'] is True
     assert {c['name']: (c['is_on'], c['power_w']) for c in t['convectors']} == {'К1': (True, 850.0), 'К2': (False, None)}
     assert d['convectors_on'] == 1
+    assert d['total_power']['grid_share'] is None          # no Solis log: source unknown, the page keeps the pole
+    import time as _t
+    monkeypatch.setattr(app_module, '_grid_share_rows', lambda since: [(int(_t.time()) - 30, 0.25)])
+    assert _login('admin').get('/admin/hvac/data').get_json()['total_power']['grid_share'] == 0.25
     w = _login('worker').get('/admin/hvac/data').get_json()
     assert w['pump'] is None and w['thermostats'][0]['name'] == 'Цех'
 

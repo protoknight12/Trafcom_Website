@@ -28975,6 +28975,9 @@ def admin_hvac_data():
     # on a thermostat. Unknown readings are left out and counted, so the page can say the sum is partial.
     parts = ([pump_w] if get_text(_HP_PREFIX + 'meter', '') else []) + [s.get('power_w') for s in statuses.values()]
     total_w = {'w': round(sum(w for w in parts if w is not None)), 'unknown': sum(1 for w in parts if w is None)}
+    # where that power comes from right now (the last minute of the Solis log): the page shows a pole / a panel + battery
+    shares = _grid_share_rows(int(time.time()) - 600)
+    total_w['grid_share'] = round(shares[-1][1], 2) if shares and time.time() - shares[-1][0] <= HEATPUMP_COST_GAP else None
     return jsonify(ts=int(time.time()), season=season, season_label=HVAC_SEASON_LABELS[season],
                    pump=pump, thermostats=cards, total_power=total_w,
                    pump_gate=_hvac_pump_gate() if season in ('heat', 'cool') else {'active': True, 'reason': None},

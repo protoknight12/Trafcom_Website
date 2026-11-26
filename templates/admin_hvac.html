@@ -83,6 +83,8 @@
                            line-height: 1; white-space: nowrap; font-variant-numeric: tabular-nums; }
         .hv-pow b { font-size: clamp(30px, 3.6vw, 52px); font-weight: 300; letter-spacing: -.02em; }
         .hv-pow b .ic { margin-right: .15em; }
+        .hv-pow b [hidden] { display: none; }
+        .hv-pow .src-sun .ic { color: #d4a017; }
         .hv-pow small { display: block; margin-top: 4px; font-size: .8rem; letter-spacing: .06em; text-transform: uppercase; }
         .hv-out b { display: block; font-size: clamp(88px, 15vw, 230px); font-weight: inherit; }
         .hv-out small { display: block; font-size: clamp(16px, 1.8vw, 26px); letter-spacing: .08em; text-transform: uppercase; padding-right: .4em; }
@@ -265,7 +267,7 @@
         <div class="base"></div><div class="heat"></div><div class="cool"></div>
         <span class="hv-wm heat">{{ icon('flame') }}</span><span class="hv-wm cool">{{ icon('snowflake') }}</span>
         <div class="hv-sky sun" id="skySun"></div><div class="hv-sky moon"></div>
-        <div class="hv-pow" id="totPow" hidden><b>{{ icon('utility-pole') }}<span id="totPowVal"></span></b><small id="totPowNote">отопление и охлаждане</small></div>
+        <div class="hv-pow" id="totPow" hidden><b><span id="totPowSun" class="src-sun" hidden>{{ icon('solar-panel') }}{{ icon('battery') }}</span><span id="totPowGrid">{{ icon('utility-pole') }}</span><span id="totPowVal"></span></b><small id="totPowNote">отопление и охлаждане</small></div>
         <div class="hv-out" id="outTemp" hidden>
             <div class="hv-fc" id="wx" hidden><div class="now" id="wxNow"></div><div class="row" id="wxHours"></div><div class="row" id="wxDays"></div></div>
             <small id="outTempLbl">навън</small><b id="outTempVal"></b>
@@ -940,7 +942,13 @@
         document.getElementById('totPow').hidden = !tp;
         if (tp) {
             setText(document.getElementById('totPowVal'), tp.w >= 1000 ? (tp.w / 1000).toFixed(1) + ' kW' : tp.w + ' W');
-            setText(document.getElementById('totPowNote'), 'отопление и охлаждане' + (tp.unknown ? ' · ' + tp.unknown + ' без данни' : ''));
+            // source of the power now: sun (panel + battery), grid (pole) or both; unknown = the pole, as before
+            var gs = tp.grid_share;
+            document.getElementById('totPowSun').hidden = gs == null || gs >= 0.9;
+            document.getElementById('totPowGrid').hidden = gs != null && gs <= 0.1;
+            setText(document.getElementById('totPowNote'), 'отопление и охлаждане'
+                + (gs != null ? ' · ' + Math.round((1 - gs) * 100) + '% от слънцето' : '')
+                + (tp.unknown ? ' · ' + tp.unknown + ' без данни' : ''));
         }
         var wx = d.weather, outT = d.outdoor != null ? d.outdoor : (wx && wx.now.temp != null ? wx.now.temp : null);
         document.getElementById('outTemp').hidden = outT == null && !wx;
