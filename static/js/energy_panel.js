@@ -123,7 +123,7 @@ var EnergyPanel = (function () {
     }
 
     function mount(el) {
-        var key = el.dataset.key, S = state[key] || (state[key] = {on: null, period: 'today', from: '', to: '', data: null, at: 0, busy: false});
+        var key = el.dataset.key, S = state[key] || (state[key] = {on: null, period: 'today', from: '', to: '', zoom: null, data: null, at: 0, busy: false});
         var today = new Date().toISOString().slice(0, 10);
         S.from = S.from || today; S.to = S.to || today;
         el.classList.add('ep');
@@ -136,6 +136,12 @@ var EnergyPanel = (function () {
         q('.ep-period').value = S.period; q('.ep-from').value = S.from; q('.ep-to').value = S.to;
         q('.ep-range').style.display = S.period === 'custom' ? 'inline' : 'none';
         hover(q('.ep-plate'), q('canvas'), function () { return layout; });
+        // Drag on the chart = refetch that interval (cards then show its consumption too); "Целият период" = back to S.period.
+        var zoom = ChartZoom.attach(q('canvas'), {
+            map: function () { return layout && {t0: layout.t0, t1: layout.t1, x0: layout.L, x1: layout.w - layout.R}; },
+            onZoom: function (r) { S.zoom = r && [Math.floor(r[0]), Math.ceil(r[1])]; load(true); }
+        });
+        zoom.set(!!S.zoom);
 
         function legend() {
             var lg = q('.ep-legend'), av = S.data && S.data.series ? available(S.data.series, S.data.plabels) : [];
@@ -160,20 +166,24 @@ var EnergyPanel = (function () {
             } else {
                 q('.ep-grid').innerHTML = (j.cards || []).map(function (k) { return card(k.label, k.tip, k.cost, k.kwh); }).join('');
             }
-            q('.ep-note').textContent = (j.priced ? '' : 'Цените на тока не са зададени - задай ги в страницата на термопомпата, за да се изчисляват разходът и спестяването. ') + (j.notice || '');
+            var fmt = function (t) { return new Date(t * 1000).toLocaleString('bg-BG', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'}); };
+            q('.ep-note').textContent = (S.zoom ? 'Увеличен интервал ' + fmt(S.zoom[0]) + ' – ' + fmt(S.zoom[1]) + ' (картите са за него). ' : '') +
+                (j.priced ? '' : 'Цените на тока не са зададени - задай ги в страницата на термопомпата, за да се изчисляват разходът и спестяването. ') + (j.notice || '');
             legend(); layout = draw(q('canvas'), j.series, S.on, j.plabels);
         }
         function load(force) {
-            if (S.busy || (!force && S.data && Date.now() - S.at < STALE_MS)) return;
+            if (!force && (S.busy || (S.data && Date.now() - S.at < STALE_MS))) return;
             var url = el.dataset.url + '?key=' + encodeURIComponent(key) + '&period=' + S.period;
-            if (S.period === 'custom') url += '&from=' + S.from + '&to=' + S.to;
+            if (S.zoom) url = el.dataset.url + '?key=' + encodeURIComponent(key) + '&period=range&start_ts=' + S.zoom[0] + '&end_ts=' + S.zoom[1];
+            else if (S.period === 'custom') url += '&from=' + S.from + '&to=' + S.to;
+            var seq = S.seq = (S.seq || 0) + 1;      // a zoom / period change while a request is out: only the newest answer is drawn
             S.busy = true;
-            fetch(url).then(function (r) { return r.json(); }).then(function (j) { S.data = j; S.at = Date.now(); paint(); })
-                .catch(function () {}).then(function () { S.busy = false; });
+            fetch(url).then(function (r) { return r.json(); }).then(function (j) { if (seq === S.seq) { S.data = j; S.at = Date.now(); paint(); } })
+                .catch(function () {}).then(function () { if (seq === S.seq) S.busy = false; });
         }
         [['.ep-period', 'period'], ['.ep-from', 'from'], ['.ep-to', 'to']].forEach(function (f) {
             q(f[0]).addEventListener('change', function () {
-                S[f[1]] = this.value; q('.ep-range').style.display = S.period === 'custom' ? 'inline' : 'none'; load(true);
+                S[f[1]] = this.value; S.zoom = null; zoom.set(false); q('.ep-range').style.display = S.period === 'custom' ? 'inline' : 'none'; load(true);
             });
         });
         paint(); load(false);

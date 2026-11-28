@@ -24636,8 +24636,13 @@ def _cost_window(cfg):
         if b < a:
             return 'Началната дата е след крайната.'
         start, end = a, b + timedelta(days=1)
-        if end - start > timedelta(days=COST_WINDOW_MAX_DAYS):    # keep the recent end, drop the oldest days
-            start, g.cost_window_clamped = end - timedelta(days=COST_WINDOW_MAX_DAYS), True
+    elif period == 'range':                       # start_ts..end_ts unix seconds - a chart's zoomed interval (static/js/chart_zoom.js)
+        a, b = request.args.get('start_ts', type=int), request.args.get('end_ts', type=int)
+        if a is None or b is None or b <= a:
+            return 'Невалиден интервал.'
+        start, end = datetime.fromtimestamp(a), datetime.fromtimestamp(b)
+    if end - start > timedelta(days=COST_WINDOW_MAX_DAYS):        # keep the recent end, drop the oldest days
+        start, g.cost_window_clamped = end - timedelta(days=COST_WINDOW_MAX_DAYS), True
     return int(start.timestamp()), int(end.timestamp())
 
 
@@ -25092,9 +25097,15 @@ def admin_heatpump_data():
 @limiter.exempt
 @role_required('admin')
 def admin_heatpump_history():
-    """Chart series for the last ?hours= (default 24, max 168), thinned to <= ~600 points."""
+    """Chart series for the last ?hours= (default 24, max 168), or ?start_ts=&end_ts= (a zoomed interval, at most 168 h,
+    see static/js/chart_zoom.js), thinned to <= ~600 points."""
     hours = min(max(request.args.get('hours', 24, type=int), 1), 168)
-    rows = HeatPumpReading.query.filter(HeatPumpReading.ts >= int(time.time()) - hours * 3600) \
+    until = int(time.time())
+    since = until - hours * 3600
+    a, b = request.args.get('start_ts', type=int), request.args.get('end_ts', type=int)
+    if a is not None and b is not None and b > a:
+        since, until = max(a, b - 168 * 3600), b
+    rows = HeatPumpReading.query.filter(HeatPumpReading.ts >= since, HeatPumpReading.ts <= until) \
         .order_by(HeatPumpReading.ts).all()
     step = max(1, len(rows) // 600)
     keys = ('Temp. Aussen', 'Temp. Vorlauf', 'Temp. Ruecklauf', 'Temp. Brauchwasser', 'Temp. Aussen verzoegert', 'HKR_Sollwert', 'Temp. Frischwasser_Istwert',
@@ -25108,7 +25119,7 @@ def admin_heatpump_history():
     series['Power'] = []                                  # W from the chosen meter's local log (empty when no meter is chosen)
     host = get_text(_HP_PREFIX + 'meter', '')
     if host:
-        logs = ShellyReadingLog.query.filter(ShellyReadingLog.host == host, ShellyReadingLog.ts >= int(time.time()) - hours * 3600)             .order_by(ShellyReadingLog.ts).all()
+        logs = ShellyReadingLog.query.filter(ShellyReadingLog.host == host, ShellyReadingLog.ts >= since, ShellyReadingLog.ts <= until)             .order_by(ShellyReadingLog.ts).all()
         series['Power'] = [[g.ts, round(g.total_power)] for g in logs[::max(1, len(logs) // 600)] if g.total_power is not None]
     return jsonify(series)
 

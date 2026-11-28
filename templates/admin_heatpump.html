@@ -502,7 +502,11 @@
         return fetch('{{ url_for("admin_heatpump_data") }}').then(function (r) { return r.json(); }).then(render).catch(function () {});
     }
 
-    var chartHover = null, hpHidden = {};
+    var chartHover = null, hpHidden = {}, hpZoom = null;    // hpZoom: [t0, t1] dragged on the chart (static/js/chart_zoom.js)
+    var hpZoomer = ChartZoom.attach(document.getElementById('chart'), {
+        map: function () { var H = chartHover; return H && {t0: H.t0, t1: H.t1, x0: H.L, x1: H.w - H.R}; },
+        onZoom: function (r) { hpZoom = r && [Math.floor(r[0]), Math.ceil(r[1])]; drawChart(); }
+    });
     (function () {
         var cv = document.getElementById('chart'), tip = document.getElementById('chartTip'), line = document.getElementById('chartLine');
         function hide() { tip.style.display = line.style.display = 'none'; }
@@ -534,7 +538,8 @@
 
     function drawChart() {
         var hours = document.getElementById('hoursSel').value;
-        return fetch('{{ url_for("admin_heatpump_history") }}?hours=' + hours).then(function (r) { return r.json(); }).then(function (series) {
+        var q = hpZoom ? '?start_ts=' + hpZoom[0] + '&end_ts=' + hpZoom[1] : '?hours=' + hours;
+        return fetch('{{ url_for("admin_heatpump_history") }}' + q).then(function (r) { return r.json(); }).then(function (series) {
             var cv = document.getElementById('chart'), dpr = window.devicePixelRatio || 1;
             var w = cv.clientWidth, h = cv.clientHeight;
             cv.width = w * dpr; cv.height = h * dpr;
@@ -558,6 +563,7 @@
 
             var t0 = Math.min.apply(null, pts.map(function (p) { return p[0]; })), t1 = Math.max.apply(null, pts.map(function (p) { return p[0]; }));
             var lo = Math.min.apply(null, pts.map(function (p) { return p[1]; })), hi = Math.max.apply(null, pts.map(function (p) { return p[1]; }));
+            if (hpZoom) { t0 = hpZoom[0]; t1 = hpZoom[1]; }
             lo = Math.floor(lo - 1); hi = Math.ceil(hi + 1);
             var L = 38, B = 20, T = 8, R = power.length ? 44 : 8;
             chartHover = {series: series, power: hpHidden.Power ? [] : power, keys: keys.filter(function (k) { return !hpHidden[k]; }), t0: t0, t1: t1, L: L, R: R, w: w};
@@ -568,7 +574,7 @@
             for (var v = lo; v <= hi; v += step) { c.beginPath(); c.moveTo(L, Y(v)); c.lineTo(w - R, Y(v)); c.stroke(); c.fillText(v, 4, Y(v) + 4); }
             for (var i = 0; i <= 4; i++) {
                 var t = t0 + (t1 - t0) * i / 4;
-                c.fillText(new Date(t * 1000).toLocaleTimeString('bg-BG', {hour: '2-digit', minute: '2-digit'}), X(t) - 14, h - 5);
+                c.fillText(new Date(t * 1000).toLocaleString('bg-BG', t1 - t0 > 86400 * 1.5 ? {day: '2-digit', month: '2-digit'} : {hour: '2-digit', minute: '2-digit'}), X(t) - 14, h - 5);
             }
             keys.forEach(function (k) {
                 if (hpHidden[k]) return;
@@ -632,7 +638,7 @@
     ['costPeriod', 'costFrom', 'costTo'].forEach(function (id) { document.getElementById(id).addEventListener('change', loadCost); });
     startPoll(loadCost, 60000);
 
-    document.getElementById('hoursSel').addEventListener('change', drawChart);
+    document.getElementById('hoursSel').addEventListener('change', function () { hpZoom = null; hpZoomer.set(false); drawChart(); });
     // central supply = the relay of the pump's meter
     var relayBtn = document.getElementById('hpRelay'), relayMsg = document.getElementById('hpRelayMsg'), relayOn = null;
     function showRelay(j) {
