@@ -3025,6 +3025,8 @@ class Thermostat(db.Model):
     enabled = db.Column(db.Boolean, nullable=False, default=True)
     lowered_heat = db.Column(db.Float, nullable=False, default=16.0)
     lowered_cool = db.Column(db.Float, nullable=True)  # NULL = cooling off outside the schedule
+    # heating only: while the thermostat is DISABLED its convectors keep the room above this (NULL = no threshold)
+    guard_temp = db.Column(db.Float, nullable=True)
     override_temp = db.Column(db.Float, nullable=True)
     override_until = db.Column(db.DateTime, nullable=True)
     hold = db.Column(db.Boolean, nullable=False, default=False)
@@ -28577,10 +28579,11 @@ def _thermostat_tick(now=None):
             except Exception:
                 db.session.rollback()
                 _poller_failed('heatpump-control')
+        now = now or datetime.now(APP_TZ).replace(tzinfo=None)
         if season not in ('heat', 'cool'):
             _hvac_protect['reason'] = None
+            _thermostat_guard_pass(now, season, off=True)
             return
-        now = now or datetime.now(APP_TZ).replace(tzinfo=None)
         holidays = {h.day for h in HeatingHoliday.query}
         ths = Thermostat.query.filter_by(enabled=True).order_by(Thermostat.id).all()
         try:
@@ -28596,21 +28599,50 @@ def _thermostat_tick(now=None):
             except Exception:
                 db.session.rollback()
                 _poller_failed('thermostat-device')
+        _thermostat_guard_pass(now, season, off=not gate['active'])
         db.session.commit()
 
 
-def _thermostat_tick_one(th, now, season, holidays, force=False, off=False):
+def _thermostat_guard_pass(now, season, off):
+    """Disabled thermostats with a guard threshold (heating only, owner's request 2026-11-28)."""
+    for th in Thermostat.query.filter_by(enabled=False).order_by(Thermostat.id).all():
+        try:
+            _thermostat_tick_one(th, now, season, None, off=off, guard=True)
+        except Exception:
+            db.session.rollback()
+            _poller_failed('thermostat-device')
+
+
+def _thermostat_guard_state(th, season, off):
+    """A disabled thermostat's guard: on below guard_temp - hysteresis, off above guard_temp + hysteresis. Season not
+    heat, pump gate closed, no threshold or a stale sensor = off at once (stale True skips the minimum time)."""
+    if season != 'heat' or off or th.guard_temp is None:
+        return {'demand': False, 'stale': True}
+    r = _sensor_reading(th.sensor)
+    stale = r['temp'] is None or r['age_s'] is None or r['age_s'] > HVAC_SENSOR_STALE
+    return {'demand': False if stale else hvac.decide('heat', r['temp'], th.guard_temp, th.hysteresis, None),
+            'stale': stale}
+
+
+def _thermostat_tick_one(th, now, season, holidays, force=False, off=False, guard=False):
     """force: skip the minimum on/off time (the thermostat was just switched on - it acts at once).
-    off: the pump gate is closed - every convector goes off, no minimum time."""
-    st = {'demand': False, 'stale': True} if off else _thermostat_state(th, now, season, holidays)
+    off: the pump gate is closed - every convector goes off, no minimum time.
+    guard: a disabled thermostat's threshold - switches on with source 'guard' and switches off only a convector whose
+    last row is its own 'guard' on (manual switching of a disabled thermostat stays manual)."""
+    if guard:
+        st, season = _thermostat_guard_state(th, season, off), 'heat'
+    else:
+        st = {'demand': False, 'stale': True} if off else _thermostat_state(th, now, season, holidays)
     for conv in th.convectors:
         on_season = _convector_on_season(conv, season)
         want = st['demand'] if on_season else False
         if want is None:                    # inside the dead band: keep whatever the convector does
             continue
         try:
-            status = _shelly_convector_status(conv)
             last = _last_convector_log(conv)
+            if guard and not want and not (last and last.is_on and last.source == 'guard'):
+                continue                    # not switched on by the guard: leave it alone (no device read)
+            status = _shelly_convector_status(conv)
             now_ts = time.time()
             cur, resend = status['is_on'], False
             if cur is None:
@@ -28624,7 +28656,7 @@ def _thermostat_tick_one(th, now, season, holidays, force=False, off=False):
             if not force and on_season and not st['stale'] and last is not None \
                     and now_ts - last.ts < th.min_cycle_min * 60:
                 continue
-            _thermostat_switch(conv, want, 'thermostat')
+            _thermostat_switch(conv, want, 'guard' if guard else 'thermostat')
             db.session.commit()         # per switch: a later DB error cannot drop the row of a relay already switched
         except Exception:
             db.session.rollback()
@@ -28765,11 +28797,12 @@ def admin_thermostat_save():
         hyst, mc = float(f.get('hysteresis', '')), int(f.get('min_cycle_min', ''))
         lh = float(f.get('lowered_heat', ''))
         lc = float(f['lowered_cool']) if (f.get('lowered_cool') or '').strip() else None
+        gt = float(f['guard_temp']) if (f.get('guard_temp') or '').strip() else None
     except ValueError:
         hyst = None
     sensor_id = int(f['sensor_id']) if (f.get('sensor_id') or '').isdigit() else None
     room_id = int(f['room_id']) if (f.get('room_id') or '').isdigit() else None
-    if hyst is not None and not all(math.isfinite(v) for v in (hyst, lh) + (() if lc is None else (lc,))):
+    if hyst is not None and not all(math.isfinite(v) for v in (hyst, lh) + tuple(x for x in (lc, gt) if x is not None)):
         hyst = None
     if not name or hyst is None or not 0.1 <= hyst <= 3 or not 0 <= mc <= 60:
         flash('Невалидни данни: име, хистерезис 0,1–3 К, минимално време 0–60 мин.', 'error')
@@ -28783,12 +28816,17 @@ def admin_thermostat_save():
     th.name, th.hysteresis, th.min_cycle_min = name, hyst, mc
     th.lowered_heat = hvac.clamp('heat', lh)
     th.lowered_cool = None if lc is None else hvac.clamp('cool', lc)
+    th.guard_temp = None if gt is None else hvac.clamp('heat', gt)
+    was = th.id is not None and th.enabled
     th.sensor_id, th.room_id, th.enabled = sensor_id, room_id, bool(f.get('enabled'))
     db.session.flush()
     ids = {int(x) for x in f.getlist('convector_ids') if x.isdigit()}
     for c in Convector.query.filter((Convector.thermostat_id == th.id) | Convector.id.in_(ids)).all():
         c.thermostat_id = th.id if c.id in ids else None
     db.session.commit()
+    if was and not th.enabled:
+        db.session.expire(th, ['convectors'])
+        _thermostat_all_off(th)
     log_action(f'Термостат "{th.name}" записан')
     flash(f'Термостат "{th.name}" беше записан.', 'success')
     return redirect(url_for('admin_thermostats'))
@@ -28928,7 +28966,7 @@ def _hvac_thermostat_json(th, st, season, statuses=None):
         convs.append({'id': c.id, 'name': c.name, 'online': bool(s['online']), 'is_on': is_on, 'power_w': s['power_w'],
                       'unconfirmed': unconfirmed, 'on_season': _convector_on_season(c, season)})
     return {'id': th.id, 'name': th.name, 'group': _thermostat_group(th) or 'Без помещение', 'enabled': th.enabled,
-            'hold': th.hold, **st, 'convectors': convs}
+            'guard_temp': th.guard_temp, 'hold': th.hold, **st, 'convectors': convs}
 
 
 @app.route('/admin/hvac')
@@ -29152,9 +29190,12 @@ def admin_hvac_override(th_id):
 @role_required('admin')
 def admin_thermostat_enabled(th_id):
     th = Thermostat.query.get_or_404(th_id)
+    was = th.enabled
     th.enabled = request.form.get('enabled') == '1'
     db.session.commit()
-    log_action(f'Термостат "{th.name}" {"включен" if th.enabled else "изключен"}')
+    failed = _thermostat_all_off(th) if was and not th.enabled else []
+    log_action(f'Термостат "{th.name}" {"включен" if th.enabled else "изключен"}'
+               + (f' (неуспешно изключване: {", ".join(failed)})' if failed else ''))
     if th.enabled:
         # Switched on: act now, not at the next poller pass and not after the minimum on/off time
         # (that time only counts while the thermostat runs).
@@ -29163,7 +29204,22 @@ def admin_thermostat_enabled(th_id):
             if season in ('heat', 'cool'):
                 _thermostat_tick_one(th, datetime.now(APP_TZ).replace(tzinfo=None), season,
                                      {h.day for h in HeatingHoliday.query}, force=True, off=not _hvac_pump_gate()['active'])
-    return jsonify(ok=True, enabled=th.enabled)
+    return jsonify(ok=True, enabled=th.enabled, failed=failed)
+
+
+def _thermostat_all_off(th):
+    """Disabling a thermostat switches its convectors off (owner's request 2026-11-28); the guard may switch them on
+    again at the next pass. Returns the names that could not be switched."""
+    failed = []
+    with _hvac_lock:
+        for conv in th.convectors:
+            try:
+                _thermostat_switch(conv, False, 'thermostat')
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+                failed.append(conv.name)
+    return failed
 
 
 # ----------------- АВТОМОБИЛНО СТОПАНСТВО -----------------

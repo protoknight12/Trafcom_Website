@@ -826,3 +826,73 @@ def test_top_bar_tooltips_open_downward(env):
     assert 'id="pumpTile"' in top and 'getBoundingClientRect().top < 120' in html
     w = _login('worker').get('/admin/hvac').get_data(as_text=True)
     assert re.search(r'class="cur heat tip-below" id="seasonBadge"', w)
+
+
+# ---------------- Guard threshold of a disabled thermostat + disabling switches off (2026-11-28) ----------------
+def test_guard_heats_disabled_thermostat_below_threshold(env):
+    _season('heat')
+    _thermo(enabled=False, guard_temp=12.0)              # hysteresis 0.5
+    env['temp'] = 12.0                                   # inside the band: nothing
+    app_module._thermostat_tick(NOW)
+    assert env['sets'] == []
+    env['temp'] = 11.0
+    app_module._thermostat_tick(NOW)
+    assert env['sets'] == [('К1', True)] and _logs('К1')[-1].source == 'guard'
+    env['sets'].clear()
+    ConvectorLog.query.update({'ts': int(time.time()) - 6 * 60})
+    db.session.commit()
+    env['status']['К1'] = {'online': True, 'is_on': True, 'power_w': None}
+    env['temp'] = 12.6                                   # above threshold + hysteresis: off again
+    app_module._thermostat_tick(NOW)
+    assert env['sets'] == [('К1', False)]
+
+
+def test_guard_never_touches_manual_switching(env):
+    _season('heat')
+    _thermo(enabled=False, guard_temp=12.0)
+    c = Convector.query.one()
+    db.session.add(ConvectorLog(convector_id=c.id, ts=int(time.time()) - 3600, is_on=True, source='manual'))
+    db.session.commit()
+    env['status']['К1'] = {'online': True, 'is_on': True, 'power_w': None}
+    env['temp'] = 20.0                                   # warm: the guard would want off, but it did not switch it on
+    app_module._thermostat_tick(NOW)
+    assert env['sets'] == []
+
+
+def test_guard_heating_only_and_off_when_season_leaves_heat(env):
+    _season('cool')
+    _thermo(enabled=False, guard_temp=12.0)
+    env['temp'] = 8.0
+    app_module._thermostat_tick(NOW)
+    assert env['sets'] == []                             # cooling season: no guard
+    _season('heat')
+    app_module._thermostat_tick(NOW)
+    assert env['sets'] == [('К1', True)]
+    env['sets'].clear()
+    env['status']['К1'] = {'online': True, 'is_on': True, 'power_w': None}
+    _season('off')
+    app_module._thermostat_tick(NOW)                     # its own "on" goes off at once (no minimum time)
+    assert env['sets'] == [('К1', False)]
+
+
+def test_guard_without_threshold_does_nothing(env):
+    _season('heat')
+    _thermo(enabled=False)
+    env['temp'] = 5.0
+    app_module._thermostat_tick(NOW)
+    assert env['sets'] == []
+
+
+def test_disabling_switches_convectors_off(adm, env):
+    t = _thermo(convs=('К1', 'К2'))
+    r = adm.post(f'/admin/thermostats/{t.id}/enabled', data={'enabled': '0'})
+    assert r.status_code == 200 and r.get_json()['failed'] == []
+    assert sorted(env['sets']) == [('К1', False), ('К2', False)]
+    env['sets'].clear()
+    t2 = _thermo(convs=('К3',))
+    adm.post('/admin/thermostats/save', data={'id': t2.id, 'name': 'Цех', 'hysteresis': '0.5', 'min_cycle_min': '5',
+                                              'lowered_heat': '16', 'guard_temp': '10', 'convector_ids': [
+                                                  str(Convector.query.filter_by(name='К3').one().id)]})
+    assert env['sets'] == [('К3', False)]
+    db.session.expire_all()
+    assert db.session.get(Thermostat, t2.id).guard_temp == 10.0
