@@ -101,6 +101,17 @@ def in_pump_schedule(intervals, now, holidays):
 
 
 PROTECT_HYST = 1.0
+SUPPLY_HYST = 2.0
+
+
+def supply_ready(season, flow, limit, was_ready, hyst=SUPPLY_HYST):
+    """Подаваща вода готова ли е за конвекторите: heat >= limit, cool <= limit; веднъж готова, остава така до hyst K
+    преди границата. Няма граница / няма показание / сезон off = готова (непознатото не блокира)."""
+    if season not in ('heat', 'cool') or limit is None or flow is None:
+        return True
+    if season == 'heat':
+        return flow >= limit - (hyst if was_ready else 0.0)
+    return flow <= limit + (hyst if was_ready else 0.0)
 
 
 def protection(season, outdoor, rooms, cfg, active_before):

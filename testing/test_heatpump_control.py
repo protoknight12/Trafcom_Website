@@ -32,6 +32,7 @@ def hp(env, monkeypatch):
     monkeypatch.setattr(app_module, '_heatpump_relay_cache', {'is_on': None})
     monkeypatch.setattr(app_module, '_heatpump_auto', {'trigger': None, 'times': [], 'limit_logged': False})
     monkeypatch.setattr(app_module, '_hvac_protect', {'reason': None, 'cfg': {}})
+    monkeypatch.setattr(app_module, '_hvac_supply_ready', {'heat': False, 'cool': False})
     env['writes'] = []
     monkeypatch.setattr(app_module, '_heatpump_write', lambda n, v: env['writes'].append((n, v)) or {'ok': True, 'value': v})
     monkeypatch.setattr(app_module, '_heatpump_power', lambda: None)
@@ -113,6 +114,73 @@ def test_gate_residual_heat_min_water(hp):
     assert app_module._heatpump_residual_min() == 30.0   # out of range refused
     _login('admin').post('/admin/heatpump/residual', data={'residual_min': ''})
     assert app_module._heatpump_residual_min() is None
+
+
+def test_supply_ready_pure():
+    r = hvac.supply_ready
+    assert not r('heat', 29.9, 30, False) and r('heat', 30, 30, False) and r('heat', 35, 30, False)
+    assert r('heat', 29, 30, True) and r('heat', 28, 30, True) and not r('heat', 27.9, 30, True)
+    assert not r('cool', 20.1, 20, False) and r('cool', 20, 20, False)
+    assert r('cool', 21, 20, True) and r('cool', 22, 20, True) and not r('cool', 22.1, 20, True)
+    assert r('heat', 10, None, False) and r('heat', None, 30, False) and r('off', 10, 30, False)
+
+
+def test_gate_supply_water_heat(hp):
+    """Owner's request 2026-11-28: heating convectors wait until the supply water reaches the minimum (default 30)."""
+    _season('heat')
+    _thermo()
+    hp['temp'] = 18.0
+    hp['status']['К1'] = {'online': True, 'is_on': True, 'power_w': None}
+    _pump(1, **{'Temp. Vorlauf': 25.0})
+    app_module._thermostat_tick(NOW)
+    assert hp['sets'] == [('К1', False)]                 # default 30: not ready, ON convector switched off
+    g = app_module._hvac_pump_gate()
+    assert g['active'] is False and g['reason'] == 'подаващата вода е 25.0 °C – конвекторите чакат ≥ 30 °C'
+    assert _login('worker').get('/admin/hvac/data').get_json()['pump_gate']['reason'] == g['reason']
+    app_module._heatpump_live['data'] = {'Temp. Vorlauf': 27.9}
+    assert app_module._hvac_pump_gate()['active'] is False
+    app_module._heatpump_live['data'] = {'Temp. Vorlauf': 30.0}
+    assert app_module._hvac_pump_gate()['active'] is True
+    app_module._heatpump_live['data'] = {'Temp. Vorlauf': 29.0}
+    assert app_module._hvac_pump_gate()['active'] is True        # latched
+    app_module._heatpump_live['data'] = {'Temp. Vorlauf': 27.9}
+    assert app_module._hvac_pump_gate()['active'] is False
+    app_module._heatpump_live['data'] = {'Temp. Vorlauf': 29.0}
+    assert app_module._hvac_pump_gate()['active'] is False       # not ready again below the limit
+
+
+def test_gate_supply_water_cool_blank_and_unknown(hp):
+    _season('cool')
+    _pump(2, **{'Temp. Vorlauf': 23.0})
+    g = app_module._hvac_pump_gate()
+    assert g['active'] is False and g['reason'].endswith('чакат ≤ 20 °C')
+    app_module._heatpump_live['data'] = {'Temp. Vorlauf': 19.0}
+    assert app_module._hvac_pump_gate()['active'] is True
+    app_module._heatpump_live['data'] = {'Temp. Vorlauf': 21.5}
+    assert app_module._hvac_pump_gate()['active'] is True        # latched
+    app_module._heatpump_live['data'] = {'Temp. Vorlauf': 22.5}
+    assert app_module._hvac_pump_gate()['active'] is False
+    app_module._heatpump_live['online'] = False                  # unknown = active
+    assert app_module._hvac_pump_gate()['active'] is True
+    _set('supply_cool_max', '')                                  # blank = no check
+    _pump(2, **{'Temp. Vorlauf': 40.0})
+    assert app_module._hvac_pump_gate()['active'] is True
+    assert app_module._hvac_supply_limits() == (30.0, None)
+
+
+def test_supply_limits_route(hp):
+    assert app_module._hvac_supply_limits() == (30.0, 20.0)      # missing keys = defaults
+    r = _login('admin').post('/admin/heatpump/supply-limits', data={'supply_heat_min': '32,5', 'supply_cool_max': '18'})
+    assert r.status_code == 302 and app_module._hvac_supply_limits() == (32.5, 18.0)
+    for bad in ({'supply_heat_min': '70', 'supply_cool_max': '18'}, {'supply_heat_min': '30', 'supply_cool_max': '4'},
+                {'supply_heat_min': 'nan', 'supply_cool_max': '18'}, {'supply_heat_min': 'abc', 'supply_cool_max': ''}):
+        _login('admin').post('/admin/heatpump/supply-limits', data=bad)
+        assert app_module._hvac_supply_limits() == (32.5, 18.0)
+    _login('admin').post('/admin/heatpump/supply-limits', data={'supply_heat_min': '', 'supply_cool_max': ''})
+    assert app_module._hvac_supply_limits() == (None, None)
+    assert _login('worker').post('/admin/heatpump/supply-limits', data={'supply_heat_min': '40'}).status_code == 302
+    assert app_module._hvac_supply_limits() == (None, None)
+    assert 'supply_heat_min' in _login('admin').get('/admin/heatpump').get_data(as_text=True)
 
 
 def test_hkp_params_writable_and_read(hp):

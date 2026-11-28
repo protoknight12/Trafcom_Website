@@ -24987,6 +24987,7 @@ def _heatpump_control_ctx():
             'restart_codes': _heatpump_restart_codes(),
             'protect_cfg': _hvac_protect_cfg(), 'protect_labels': HVAC_PROTECT_LABELS,
             'residual_min': _heatpump_residual_min(),
+            'supply_limits': _hvac_supply_limits(),
             'auto_max': HEATPUMP_AUTO_RESTART_MAX, 'auto_window_h': HEATPUMP_AUTO_RESTART_WINDOW // 3600,
             'restart_off_s': HEATPUMP_RESTART_OFF_S}
 
@@ -25426,6 +25427,29 @@ def admin_heatpump_residual():
     _heatpump_save_setting(_HP_PREFIX + 'residual_min', '' if v is None else f'{v:g}')
     db.session.commit()
     log_action(f'Термопомпа: остатъчна топлина - мин. вода {"изключено" if v is None else f"{v:g} °C"}')
+    flash('Запазено.', 'success')
+    return redirect(url_for('admin_heatpump', _anchor='schedule'))
+
+
+@app.route('/admin/heatpump/supply-limits', methods=['POST'])
+@role_required('admin')
+def admin_heatpump_supply_limits():
+    vals = []
+    for field, lo, hi in (('supply_heat_min', 15, 60), ('supply_cool_max', 5, 30)):
+        raw = (request.form.get(field) or '').strip().replace(',', '.')
+        try:
+            v = float(raw) if raw else None
+        except ValueError:
+            v = float('nan')
+        if v is not None and not (math.isfinite(v) and lo <= v <= hi):
+            flash('Границите на подаващата вода: отопление от 15 до 60 °C, охлаждане от 5 до 30 °C (празно = без проверка).', 'error')
+            return redirect(url_for('admin_heatpump', _anchor='schedule'))
+        vals.append(v)
+    for key, v in zip(('supply_heat_min', 'supply_cool_max'), vals):
+        _heatpump_save_setting(_HP_PREFIX + key, '' if v is None else f'{v:g}')
+    db.session.commit()
+    fmt = lambda v: 'без проверка' if v is None else f'{v:g} °C'
+    log_action(f'Термопомпа: подаваща вода за конвекторите - отопление ≥ {fmt(vals[0])}, охлаждане ≤ {fmt(vals[1])}')
     flash('Запазено.', 'success')
     return redirect(url_for('admin_heatpump', _anchor='schedule'))
 
@@ -28323,7 +28347,11 @@ def admin_convector_toggle(conv_id):
 HVAC_SEASON_KEY = 'settings.hvac_season'
 HVAC_SEASON_MODES = {'heat': 1, 'cool': 2, 'off': 0}     # season -> Betriebsart
 HVAC_SEASON_LABELS = {'heat': 'Отопление', 'cool': 'Охлаждане', 'off': 'Изключено'}
-HVAC_SENSOR_STALE = 2400            # seconds: an older reading counts as no reading (convectors go off)
+HVAC_SUPPLY_HEAT_MIN_DEFAULT = 30.0  # supply water (Temp. Vorlauf) the convectors wait for, heating: >= ...
+HVAC_SUPPLY_COOL_MAX_DEFAULT = 20.0  # ... cooling: <= ...
+HVAC_SUPPLY_HYST = 2.0
+_hvac_supply_ready = {'heat': False, 'cool': False}   # latched (in memory): ready stays until HYST past the limit
+HVAC_SENSOR_STALE = 2400           # seconds: an older reading counts as no reading (convectors go off)
 THERMOSTAT_POLLER_INTERVAL = 60     # seconds between ticks
 THERMOSTAT_RESEND_AFTER = 600       # seconds: an unconfirmed (unknown-state) command is sent again after this
 POLLER_STALE_AFTER['thermostat'] = 3 * THERMOSTAT_POLLER_INTERVAL
@@ -28369,20 +28397,50 @@ def _hvac_protect_update(season, ths):
 
 def _hvac_pump_gate():
     """Thermostats are inactive while a hard restart runs, the central supply is known to be off or the pump is
-    "Изключена" (owner's request 2026-11-25). Unknown states count as active."""
+    "Изключена" (owner's request 2026-11-25). Unknown states count as active. Owner's request 2026-11-28: also until
+    the supply water is ready (heat >= min, cool <= max, 2 K hysteresis latched in _hvac_supply_ready)."""
     if _heatpump_restart['running']:
         return {'active': False, 'reason': 'рестарт на термопомпата'}
     if _heatpump_relay_cache['is_on'] is False:
         return {'active': False, 'reason': 'централното захранване е изключено'}
+    flow = (_heatpump_live['data'] or {}).get('Temp. Vorlauf') if _heatpump_live['online'] else None
     if _heatpump_pump_mode() == 0:
         # Residual heat (owner's request 2026-11-25): pump off but the supply water still warm enough - heating goes on
         # until it drops below the set minimum. Needs a live reading; offline = inactive.
         vmin = _heatpump_residual_min()
-        flow = (_heatpump_live['data'] or {}).get('Temp. Vorlauf') if _heatpump_live['online'] else None
         if vmin is not None and flow is not None and flow >= vmin and hvac_season() == 'heat':
-            return {'active': True, 'reason': None, 'residual': flow}
-        return {'active': False, 'reason': 'термопомпата е изключена'}
-    return {'active': True, 'reason': None}
+            res = {'active': True, 'reason': None, 'residual': flow}
+        else:
+            return {'active': False, 'reason': 'термопомпата е изключена'}
+    else:
+        res = {'active': True, 'reason': None}
+    season = hvac_season()
+    if season in _hvac_supply_ready:
+        limit = _hvac_supply_limits()[0 if season == 'heat' else 1]
+        ready = hvac.supply_ready(season, flow, limit, _hvac_supply_ready[season], HVAC_SUPPLY_HYST)
+        if limit is None:
+            _hvac_supply_ready[season] = False
+        elif flow is not None:          # no reading (pump comm blip): keep the latch, do not reset "ready"
+            _hvac_supply_ready[season] = ready
+        if not ready:
+            return {'active': False, 'reason': f'подаващата вода е {flow:.1f} °C – конвекторите чакат '
+                                               f'{"≥" if season == "heat" else "≤"} {limit:g} °C'}
+    return res
+
+
+def _hvac_supply_limits():
+    """(heat_min, cool_max) of the supply water for the convectors (°C); a missing key = the default, stored blank = None (no check)."""
+    out = []
+    for key, default in (('supply_heat_min', HVAC_SUPPLY_HEAT_MIN_DEFAULT), ('supply_cool_max', HVAC_SUPPLY_COOL_MAX_DEFAULT)):
+        raw = get_text(_HP_PREFIX + key, None)
+        if raw is None:
+            out.append(default)
+            continue
+        try:
+            out.append(float(raw.replace(',', '.') or 'x'))
+        except ValueError:
+            out.append(None)
+    return tuple(out)
 
 
 def _heatpump_residual_min():
